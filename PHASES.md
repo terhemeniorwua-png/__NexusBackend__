@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 1 |
+| **Completed** `[x]` | 2 |
 | **In progress** `[/]` | 0 |
-| **Not started** `[ ]` | 23 |
-| **Overall progress** | 4% |
+| **Not started** `[ ]` | 22 |
+| **Overall progress** | 8% |
 
 _Update this table whenever a phase status changes._
 
@@ -104,7 +104,7 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 2 — Database architecture and migrations `[ ]`
+#### Phase 2 — Database architecture and migrations `[x]`
 
 **Objective:** Define the complete relational foundation for the Nexus platform before implementing business logic.
 
@@ -129,7 +129,7 @@ Follow this cycle for every phase, without exception:
 - Uniqueness, foreign-key, and index constraints verified by tests or migration review
 - Rollback of migrations tested in a safe environment
 
-**Blockers / Notes:** _None recorded._
+**Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied.
 
 ---
 
