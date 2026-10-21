@@ -1,0 +1,171 @@
+openapi: 3.1.0
+info:
+  title: Nexus Backend API
+  version: 0.1.0
+  description: |
+    Phase 1 foundation API for the Nexus workspace and project management backend.
+    Feature endpoints are added in later roadmap phases.
+servers:
+  - url: http://localhost:4000/api/v1
+    description: Local development server
+tags:
+  - name: Health
+    description: Application liveness and dependency readiness
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Application liveness
+      description: Returns 200 when the HTTP process is running.
+      responses:
+        '200':
+          description: The application process is alive.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: getLivenessAlias
+      summary: Application liveness
+      responses:
+        '200':
+          description: The application process is alive.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Dependency readiness
+      description: Checks PostgreSQL and Redis with configured timeouts.
+      responses:
+        '200':
+          description: All required dependencies are available.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: One or more required dependencies are unavailable.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+components:
+  headers:
+    XRequestId:
+      description: Request correlation identifier.
+      schema:
+        type: string
+  schemas:
+    HealthResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [status, service, version, environment, uptimeSeconds, timestamp]
+          properties:
+            status:
+              type: string
+              const: ok
+            service:
+              type: string
+              example: Nexus
+            version:
+              type: string
+              example: 0.1.0
+            environment:
+              type: string
+              enum: [development, test, production]
+            uptimeSeconds:
+              type: number
+            timestamp:
+              type: string
+              format: date-time
+        requestId:
+          type: string
+    ReadinessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required: [status, service, version, environment, dependencies, timestamp]
+          properties:
+            status:
+              type: string
+              enum: [ready, not_ready]
+            service:
+              type: string
+            version:
+              type: string
+            environment:
+              type: string
+              enum: [development, test, production]
+            uptimeSeconds:
+              type: number
+            timestamp:
+              type: string
+              format: date-time
+            requestId:
+              type: string
+            dependencies:
+              type: object
+              required: [database, redis]
+              properties:
+                database:
+                  $ref: '#/components/schemas/DependencyStatus'
+                redis:
+                  $ref: '#/components/schemas/DependencyStatus'
+    DependencyStatus:
+      type: object
+      required: [status, latencyMs]
+      properties:
+        status:
+          type: string
+          enum: [up, down]
+        latencyMs:
+          type: number
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              example: NOT_FOUND
+            message:
+              type: string
+            details:
+              description: Optional structured validation details.
+            requestId:
+              type: string
