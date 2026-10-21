@@ -6,7 +6,7 @@ Nexus is a real-time workspace and project management platform combining project
 
 The backend is maintained in a repository separate from the Next.js frontend.
 
-The backend is responsible for authentication, authorization, business logic, data persistence, API contracts, real-time events, AI integrations, caching, background jobs and secure communication with external services.
+The backend is responsible for authentication, authorization, business logic, data persistence, API contracts, real-time events, email provider integrations, AI integrations, caching, background jobs and secure communication with external services.
 
 ## 2. Technology Stack
 

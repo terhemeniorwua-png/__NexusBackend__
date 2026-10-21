@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 2 |
+| **Completed** `[x]` | 3 |
 | **In progress** `[/]` | 0 |
-| **Not started** `[ ]` | 22 |
-| **Overall progress** | 8% |
+| **Not started** `[ ]` | 21 |
+| **Overall progress** | 13% |
 
 _Update this table whenever a phase status changes._
 
@@ -133,7 +133,7 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 3 — Authentication and account lifecycle `[ ]`
+#### Phase 3 — Authentication and account lifecycle `[x]`
 
 **Objective:** Build the complete account system from registration through recovery and deletion.
 
@@ -164,7 +164,7 @@ Follow this cycle for every phase, without exception:
 - Rate limits block brute-force attempts in tests
 - Unverified accounts cannot access protected endpoints
 
-**Blockers / Notes:** _Email delivery depends on Phase 4; stubs required to unblock Phase 3 tests._
+**Blockers / Notes:** Verified on 2026-10-21. Session strategy decided: a short-lived HS256 access token (15 min) returned in the body and sent as `Authorization: Bearer`, plus an opaque 32-byte refresh token delivered in the httpOnly `nexus_rt` cookie whose SHA-256 digest is stored in `Session.refreshTokenHash`. Every authenticated request re-checks the session row, so sign-out, password change and password reset revoke access immediately. The refresh token rotates on every use and keeps `previousRefreshTokenHash`, so a replayed token triggers `SESSION_REUSE_DETECTED` and revokes every session of the account. Cookie-authenticated requests must also send `x-csrf-token` (HMAC of the session id under a key derived from `JWT_ACCESS_SECRET`); body-supplied refresh tokens are exempt. Implemented as `src/modules/auth` (service, controller, routes, session, one-time token, access token, CSRF and security-event modules), `src/modules/users` (profile read/update), `src/middleware/authenticate.ts`, `src/middleware/rate-limit.ts`, `src/services/cache/rate-limit-store.ts` (Redis with in-memory fallback), `src/services/password.ts` (bcrypt, 72-byte limit enforced in the schema and the service) and `src/services/email` (delivery seam with a logging sender; the provider adapter is Phase 4 work). Rate limits cover login, registration, verification and password requests per IP address and per account using `express-rate-limit` v8 with a `RATE_LIMIT_NAMESPACE`-prefixed Redis key. Verification, reset and email-change tokens are single-use, expiring, stored only as digests, and the newest token invalidates older ones of the same purpose. Account events are written to `AuditLog` with a null `workspaceId` and never contain passwords, tokens or links. Schema changes: `AuthToken.targetEmail` made optional, `AuditLog.workspaceId` made nullable with a `createdAt` index, and `Session.previousRefreshTokenHash` added with a unique index — applied through migrations `20261021105314_phase3_auth_lifecycle` and `20261021105500_phase3_session_rotation`. Verification: `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` pass; `npm test` passes 63/63 with `RUN_PHASE2_DB_TESTS=true RUN_PHASE3_DB_TESTS=true DATABASE_URL=postgresql://nexus:nexus@localhost:5433/nexus_test` against an ephemeral PostgreSQL 16 container and local Redis. The suite covers the full register → verify → login → logout flow, expired and reused token rejection, refresh rotation and replay detection, CSRF enforcement, session revocation on sign-out and password reset, rate limiting of brute-force attempts, blocked access for unverified accounts, email change confirmation, deactivation, deletion with anonymisation, profile updates and the audit trail. Phase 4 must replace the logging email sender with the transactional provider adapter; until then the one-time links are delivered by the seam only.
 
 ---
 
@@ -896,7 +896,7 @@ _No issues recorded._
 
 | Decision | Status | Notes |
 |---|---|---|
-| Authentication strategy (JWT vs session) | Not yet determined | To be decided in Phase 3 |
+| Authentication strategy (JWT vs session) | Confirmed — hybrid | 15-minute HS256 access token in the `Authorization` header plus an opaque rotating refresh token in the httpOnly `nexus_rt` cookie. The session row is re-checked on every request, so revocation is immediate. See Phase 3. |
 | Transactional email provider | Not yet determined | To be decided in Phase 4 |
 | Calling / audio-video provider | Not yet determined | To be decided in Phase 17 |
 | AI model provider | Not yet determined | To be decided in Phase 18 |

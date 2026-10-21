@@ -21,6 +21,7 @@ The Nexus backend powers the platform's business logic, data persistence, authen
 - [Database Setup](#database-setup)
 - [Running the Server](#running-the-server)
 - [API Design](#api-design)
+- [Authentication](#authentication)
 - [Real-Time Communication](#real-time-communication)
 - [Redis and Caching](#redis-and-caching)
 - [Email and Notifications](#email-and-notifications)
@@ -247,15 +248,21 @@ nexusbackend/
 │   ├── middleware/
 │   ├── routes/
 │   ├── services/
+│   │   ├── cache/
+│   │   └── email/
 │   ├── repositories/
 │   ├── validators/
 │   ├── types/
 │   ├── utils/
 │   ├── sockets/
 │   ├── integrations/
+│   ├── modules/
+│   │   ├── auth/
+│   │   └── users/
 │   ├── app.ts
 │   └── server.ts
 ├── tests/
+│   └── helpers/
 ├── nexus-database/
 │   └── SKILL.md
 ├── emailing/
@@ -336,6 +343,34 @@ Typical configuration categories include:
 These names are examples, not a guarantee of the repository's current variable names. Inspect the configuration code and `.env.example` before using them.
 
 Use strong secrets in development and production. Never expose backend secrets to the frontend.
+
+### Authentication settings
+
+The variables below are read by `src/config/env.ts`. All of them have defaults except `JWT_ACCESS_SECRET`, which must be at least 32 characters and must not be a placeholder.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JWT_ACCESS_SECRET` | none | Signs the access token and derives the CSRF signing key |
+| `JWT_ACCESS_TTL_SECONDS` | `900` | Access token lifetime |
+| `REFRESH_TOKEN_TTL_SECONDS` | `2592000` | Refresh token and session lifetime |
+| `BCRYPT_SALT_ROUNDS` | `12` | Password hashing cost |
+| `VERIFICATION_TOKEN_TTL_SECONDS` | `3600` | Email verification token lifetime |
+| `PASSWORD_RESET_TOKEN_TTL_SECONDS` | `1800` | Password reset token lifetime |
+| `EMAIL_CHANGE_TOKEN_TTL_SECONDS` | `3600` | Email change token lifetime |
+| `AUTH_COOKIE_SECURE` | `false` (`true` in production) | Marks the session cookies as secure |
+| `AUTH_COOKIE_SAME_SITE` | `lax` | `SameSite` attribute of the session cookies. `none` requires `AUTH_COOKIE_SECURE=true` |
+| `AUTH_COOKIE_DOMAIN` | empty | Optional cookie domain |
+| `AUTH_RATE_LIMIT_WINDOW_MS` | `900000` | Window of the authentication rate limits |
+| `AUTH_LOGIN_RATE_LIMIT_MAX` | `10` | Sign-in attempts per window per IP address and per account |
+| `AUTH_REGISTER_RATE_LIMIT_MAX` | `5` | Registrations per window per IP address and per account |
+| `AUTH_PASSWORD_RATE_LIMIT_MAX` | `5` | Password requests per window per IP address and per account |
+| `AUTH_VERIFICATION_RATE_LIMIT_MAX` | `5` | Verification requests per window per IP address and per account |
+| `AUTH_VERIFICATION_LINK_PATH` | `/verify-email` | Frontend path that receives the verification link |
+| `AUTH_PASSWORD_RESET_LINK_PATH` | `/reset-password` | Frontend path that receives the reset link |
+| `AUTH_EMAIL_CHANGE_LINK_PATH` | `/settings/email` | Frontend path that receives the email change link |
+| `RATE_LIMIT_NAMESPACE` | `nexus` | Prefix for the Redis rate limit keys. Use a different value per environment when they share a Redis instance |
+
+The verification, reset and email change links are built from `FRONTEND_URL` and the configured path, so the frontend contract can change without a backend deployment.
 
 ## Database Setup
 
@@ -422,6 +457,57 @@ These are domain categories, not claims that specific endpoints already exist.
 - Avoid returning sensitive fields unnecessarily.
 
 Maintain API documentation using the documentation approach adopted by the repository.
+
+## Authentication
+
+Phase 3 implements the account lifecycle. The full contract is in `docs/openapi.yaml`.
+
+### Session model
+
+| Credential | Where it lives | Lifetime | Notes |
+|---|---|---|---|
+| Access token | Response body, sent as `Authorization: Bearer <token>` | `JWT_ACCESS_TTL_SECONDS` (default 15 minutes) | Short-lived HS256 JWT. Never stored in a cookie. |
+| Refresh token | httpOnly `nexus_rt` cookie | `REFRESH_TOKEN_TTL_SECONDS` (default 30 days) | Opaque random value. Only its SHA-256 digest is stored in PostgreSQL. |
+| CSRF token | Response body and readable `nexus_csrf` cookie | Same as the refresh token | Sent back in the `x-csrf-token` header. |
+
+Rules that the implementation enforces:
+
+- Every authenticated request is checked against the `Session` row in PostgreSQL, so signing out, changing a password or resetting a password revokes access immediately instead of waiting for the access token to expire.
+- The refresh token rotates on every use. Presenting a token that was already rotated is treated as a compromise and revokes every session of the account (`SESSION_REUSE_DETECTED`).
+- Requests that rely on the `nexus_rt` cookie must also send the `x-csrf-token` header. The header is required: the `nexus_csrf` cookie alone is not accepted, because a browser attaches cookies to cross-site requests automatically. The cookie only gives the frontend a way to read the value. Requests that present the refresh token in the request body are not cookie-authenticated and do not need one.
+- Only cookie-authenticated requests exist, so the business endpoints never accept the access token from a cookie and are therefore not exposed to cross-site request forgery.
+- One-time tokens (email verification, password reset, email change) are single use, expiring, and stored only as digests. The newest token of a purpose invalidates the older ones.
+- Passwords are hashed with bcrypt, are limited to 72 bytes so nothing is silently truncated, and are never logged or emailed.
+- Endpoints that accept an email address (`resend-verification`, `password/forgot`) always return the same response, so they cannot be used to discover which addresses are registered.
+- Sign-in, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and fall back to an in-process counter when Redis is unavailable.
+- Account level security events are written to the `AuditLog` table with a null `workspaceId`. They never contain passwords, tokens or verification links.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/auth/register` | Create an account and send the verification link |
+| `POST` | `/api/v1/auth/verify-email` | Activate the account with the emailed token |
+| `POST` | `/api/v1/auth/resend-verification` | Request a new verification link |
+| `POST` | `/api/v1/auth/login` | Start a session |
+| `POST` | `/api/v1/auth/refresh` | Rotate the session |
+| `POST` | `/api/v1/auth/logout` | End the current session |
+| `POST` | `/api/v1/auth/logout-all` | End every session of the account |
+| `GET` | `/api/v1/auth/sessions` | List the active sessions |
+| `GET` | `/api/v1/auth/me` | The signed-in account |
+| `POST` | `/api/v1/auth/password/forgot` | Request a password reset link |
+| `POST` | `/api/v1/auth/password/reset` | Set a new password with the reset token |
+| `POST` | `/api/v1/auth/password/change` | Change the password of the signed-in account |
+| `POST` | `/api/v1/auth/email/change` | Request an email address change |
+| `POST` | `/api/v1/auth/email/change/confirm` | Confirm the email address change |
+| `POST` | `/api/v1/auth/deactivate` | Deactivate the signed-in account |
+| `POST` | `/api/v1/auth/delete` | Delete the signed-in account |
+| `GET` | `/api/v1/users/me` | The profile of the signed-in account |
+| `PATCH` | `/api/v1/users/me` | Update the profile of the signed-in account |
+
+### Email delivery
+
+`src/services/email` is the delivery seam. The default sender only records delivery metadata and never logs message bodies, links or tokens. The transactional provider adapter is installed with `setEmailSender()` in the phase that adds the provider, so no other module has to change.
 
 ## Real-Time Communication
 
@@ -535,6 +621,31 @@ Test the system at multiple levels:
 - Regression tests for existing functionality.
 
 Run the scripts actually configured in `package.json`. Do not run tests against production data.
+
+### Running the tests
+
+The unit and HTTP contract tests always run:
+
+```bash
+npm test
+```
+
+The database integration tests are opt-in. They create and delete accounts, so they only run when the target database is explicitly marked as a test database. The helper refuses to run against a database whose name does not contain `test`.
+
+```bash
+RUN_PHASE2_DB_TESTS=true \
+RUN_PHASE3_DB_TESTS=true \
+DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus_test" \
+npm test
+```
+
+Apply the migrations to the test database first, or let the test helper apply them:
+
+```bash
+DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus_test" npx prisma migrate deploy
+```
+
+The Phase 3 suite covers registration, verification, sign-in, session rotation, refresh token replay detection, CSRF enforcement, sign-out, password reset and change, email change, deactivation, deletion, profile updates, rate limiting and the audit trail.
 
 ## Frontend Integration
 

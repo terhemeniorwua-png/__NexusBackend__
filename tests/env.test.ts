@@ -20,6 +20,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   REDIS_HEALTH_TIMEOUT_MS: '3000',
   APP_NAME: 'Nexus',
   APP_VERSION: '0.1.0',
+  JWT_ACCESS_SECRET: 'test-only-access-secret-do-not-use-in-production',
 };
 
 test('parseEnv returns normalized configuration', () => {
@@ -54,4 +55,62 @@ test('parseEnv rejects an invalid port and non-PostgreSQL database URL', () => {
 
 test('parseEnv rejects an invalid CORS origin', () => {
   assert.throws(() => parseEnv({ ...baseEnv, CORS_ORIGINS: 'not a url' }), ConfigurationError);
+});
+
+test('parseEnv rejects a missing or weak JWT access secret', () => {
+  const withoutSecret: NodeJS.ProcessEnv = { ...baseEnv };
+  delete withoutSecret.JWT_ACCESS_SECRET;
+
+  assert.throws(
+    () => parseEnv(withoutSecret),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'JWT_ACCESS_SECRET'),
+  );
+
+  assert.throws(() => parseEnv({ ...baseEnv, JWT_ACCESS_SECRET: 'too-short' }), ConfigurationError);
+});
+
+test('parseEnv exposes the authentication settings with their defaults', () => {
+  const config = parseEnv(baseEnv);
+
+  assert.equal(config.jwtAccessTtlSeconds, 900);
+  assert.equal(config.refreshTokenTtlSeconds, 2_592_000);
+  assert.equal(config.bcryptSaltRounds, 12);
+  assert.equal(config.verificationTokenTtlSeconds, 3_600);
+  assert.equal(config.passwordResetTokenTtlSeconds, 1_800);
+  assert.equal(config.emailChangeTokenTtlSeconds, 3_600);
+  assert.equal(config.cookieSecure, false);
+  assert.equal(config.cookieSameSite, 'lax');
+  assert.equal(config.authLoginRateLimitMax, 10);
+  assert.equal(config.authRegisterRateLimitMax, 5);
+  assert.equal(config.frontendUrl, 'https://app.example.com');
+  assert.equal(config.authVerificationLinkPath, '/verify-email');
+});
+
+test('parseEnv forces secure cookies in production', () => {
+  const config = parseEnv({ ...baseEnv, NODE_ENV: 'production' });
+
+  assert.equal(config.cookieSecure, true);
+});
+
+test('parseEnv requires a frontend URL in production', () => {
+  const withoutFrontend: NodeJS.ProcessEnv = { ...baseEnv, NODE_ENV: 'production' };
+  delete withoutFrontend.FRONTEND_URL;
+
+  assert.throws(
+    () => parseEnv(withoutFrontend),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'FRONTEND_URL'),
+  );
+});
+
+test('parseEnv rejects SameSite=None without secure cookies', () => {
+  assert.throws(
+    () => parseEnv({ ...baseEnv, AUTH_COOKIE_SAME_SITE: 'none' }),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'AUTH_COOKIE_SAME_SITE'),
+  );
 });

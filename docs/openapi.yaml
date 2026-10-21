@@ -3,14 +3,34 @@ info:
   title: Nexus Backend API
   version: 0.1.0
   description: |
-    Phase 1 foundation API for the Nexus workspace and project management backend.
-    Feature endpoints are added in later roadmap phases.
+    Nexus workspace and project management backend.
+
+    Phase 1 provides the foundation (health, configuration, error contract).
+    Phase 3 adds the account lifecycle: registration, email verification,
+    sessions, password recovery and profile management.
+
+    Authentication model:
+    - The access token is a short-lived JWT returned in the response body and
+      sent in the `Authorization: Bearer <token>` header. It is never stored
+      in a cookie, so business endpoints are not vulnerable to CSRF.
+    - The refresh token is an opaque random value delivered in the httpOnly
+      `nexus_rt` cookie. Only its SHA-256 digest is stored in PostgreSQL.
+    - The refresh token rotates on every use. Presenting a rotated token
+      revokes every session of the account.
+    - Requests that rely on the `nexus_rt` cookie must also send the CSRF
+      token in the `x-csrf-token` header. The `nexus_csrf` cookie alone is
+      not accepted, because a browser attaches cookies to cross-site requests
+      automatically.
 servers:
   - url: http://localhost:4000/api/v1
     description: Local development server
 tags:
   - name: Health
     description: Application liveness and dependency readiness
+  - name: Authentication
+    description: Account registration, verification, sessions and recovery
+  - name: Users
+    description: The signed-in user's own profile
 paths:
   /health:
     get:
@@ -68,7 +88,523 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
+  /auth/register:
+    post:
+      tags: [Authentication]
+      operationId: register
+      summary: Create an account
+      description: |
+        Creates a `PENDING_VERIFICATION` account and sends a verification link.
+        The password is never echoed back and is never included in an email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: The account was created and is waiting for verification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: An account with this email address already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many accounts were created from this address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/verify-email:
+    post:
+      tags: [Authentication]
+      operationId: verifyEmail
+      summary: Activate an account with an emailed token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: The account is active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: The token is invalid, expired or has already been used.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/resend-verification:
+    post:
+      tags: [Authentication]
+      operationId: resendVerification
+      summary: Request a new verification link
+      description: The response is identical whether or not the address is registered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+      responses:
+        '200':
+          description: The request was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: Start a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: The session was created.
+          headers:
+            Set-Cookie:
+              description: The `nexus_rt` and `nexus_csrf` cookies.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticationResponse'
+        '401':
+          description: The email address or password is incorrect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account is suspended or deactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many sign-in attempts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      operationId: refreshSession
+      summary: Rotate the session
+      description: |
+        The refresh token is read from the `nexus_rt` cookie or from the
+        request body. A cookie authenticated request must also send the
+        `x-csrf-token` header.
+      parameters:
+        - $ref: '#/components/parameters/CsrfHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: A new access token and refresh token were issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticationResponse'
+        '401':
+          description: The refresh token is invalid, expired or was already rotated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The CSRF token is missing or does not match the session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: End the current session
+      parameters:
+        - $ref: '#/components/parameters/CsrfHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: The session was revoked.
+  /auth/logout-all:
+    post:
+      tags: [Authentication]
+      operationId: logoutAll
+      summary: End every session of the account
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Every session was revoked.
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/sessions:
+    get:
+      tags: [Authentication]
+      operationId: listSessions
+      summary: List the active sessions of the account
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The active sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: object
+                    required: [sessions]
+                    properties:
+                      sessions:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Session'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/me:
+    get:
+      tags: [Authentication]
+      operationId: getCurrentUser
+      summary: The signed-in account
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The signed-in account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/password/forgot:
+    post:
+      tags: [Authentication]
+      operationId: requestPasswordReset
+      summary: Request a password reset link
+      description: The response is identical whether or not the address is registered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+      responses:
+        '200':
+          description: The request was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '429':
+          description: Too many password requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/password/reset:
+    post:
+      tags: [Authentication]
+      operationId: resetPassword
+      summary: Set a new password with a reset token
+      description: Every existing session of the account is revoked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '200':
+          description: The password was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          description: The token is invalid, expired or has already been used.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/password/change:
+    post:
+      tags: [Authentication]
+      operationId: changePassword
+      summary: Change the password of the signed-in account
+      description: Every other session of the account is revoked.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+      responses:
+        '200':
+          description: The password was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          description: The current password is incorrect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/email/change:
+    post:
+      tags: [Authentication]
+      operationId: requestEmailChange
+      summary: Request an email address change
+      description: A confirmation link is sent to the new address. The address only changes once it is confirmed.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailChangeRequest'
+      responses:
+        '200':
+          description: The confirmation link was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          description: The current password is incorrect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The new address is already registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/email/change/confirm:
+    post:
+      tags: [Authentication]
+      operationId: confirmEmailChange
+      summary: Confirm an email address change
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: The address was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: The token is invalid, expired or has already been used.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/deactivate:
+    post:
+      tags: [Authentication]
+      operationId: deactivateAccount
+      summary: Deactivate the signed-in account
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CurrentPasswordRequest'
+      responses:
+        '204':
+          description: The account was deactivated and every session was revoked.
+        '401':
+          description: The current password is incorrect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/delete:
+    post:
+      tags: [Authentication]
+      operationId: deleteAccount
+      summary: Delete the signed-in account
+      description: |
+        The account is anonymised: the address is released, the profile is
+        cleared and every session is revoked. The owner of an active workspace
+        must transfer ownership first.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountDeleteRequest'
+      responses:
+        '204':
+          description: The account was deleted.
+        '400':
+          description: The confirmation does not match the email address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: The current password is incorrect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The account still owns an active workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /users/me:
+    get:
+      tags: [Users]
+      operationId: getProfile
+      summary: The profile of the signed-in account
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account has not verified its email address yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags: [Users]
+      operationId: updateProfile
+      summary: Update the profile of the signed-in account
+      description: The email address and the account status cannot be changed here.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: The updated profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account has not verified its email address yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The access token returned by the login and refresh endpoints.
+  parameters:
+    CsrfHeader:
+      name: x-csrf-token
+      in: header
+      required: false
+      description: Required when the refresh token is read from the `nexus_rt` cookie. The value is returned in the login and refresh responses and in the readable `nexus_csrf` cookie.
+      schema:
+        type: string
   headers:
     XRequestId:
       description: Request correlation identifier.
@@ -169,3 +705,302 @@ components:
               description: Optional structured validation details.
             requestId:
               type: string
+    RegisterRequest:
+      type: object
+      required: [email, name, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          example: ada@example.com
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        password:
+          type: string
+          description: |
+            At least 8 characters, at most 128 characters and at most 72 bytes,
+            with at least one letter and one number. Common passwords are
+            rejected.
+          minLength: 8
+          maxLength: 128
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    EmailRequest:
+      type: object
+      required: [email]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+    TokenRequest:
+      type: object
+      required: [token]
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          description: The single-use token from the emailed link.
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        refreshToken:
+          type: string
+          description: Optional when the `nexus_rt` cookie is sent.
+    PasswordResetRequest:
+      type: object
+      required: [token, password]
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+    PasswordChangeRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      additionalProperties: false
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+    EmailChangeRequest:
+      type: object
+      required: [email, currentPassword]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        currentPassword:
+          type: string
+    CurrentPasswordRequest:
+      type: object
+      required: [currentPassword]
+      additionalProperties: false
+      properties:
+        currentPassword:
+          type: string
+    AccountDeleteRequest:
+      type: object
+      required: [currentPassword, confirmation]
+      additionalProperties: false
+      properties:
+        currentPassword:
+          type: string
+        confirmation:
+          type: string
+          description: The email address of the account, typed exactly.
+    UpdateProfileRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        bio:
+          type: [string, 'null']
+          maxLength: 500
+        jobTitle:
+          type: [string, 'null']
+          maxLength: 100
+        avatarUrl:
+          type: [string, 'null']
+          format: uri
+        timeZone:
+          type: string
+          maxLength: 64
+        locale:
+          type: string
+          maxLength: 10
+    User:
+      type: object
+      required: [id, email, name, status, emailVerifiedAt, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        status:
+          type: string
+          enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED]
+        emailVerifiedAt:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    UserResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [user]
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+    RegistrationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [user, verificationRequired]
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            verificationRequired:
+              type: boolean
+              const: true
+    CurrentUserResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [user]
+          properties:
+            user:
+              type: object
+              required: [id, email, name, status, emailVerified]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                email:
+                  type: string
+                  format: email
+                name:
+                  type: string
+                status:
+                  type: string
+                  enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED]
+                emailVerified:
+                  type: boolean
+    AuthenticationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [user, accessToken, tokenType, expiresIn, csrfToken, session]
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            accessToken:
+              type: string
+              description: 'Send this in the Authorization header as a bearer token.'
+            tokenType:
+              type: string
+              const: Bearer
+            expiresIn:
+              type: number
+              description: The lifetime of the access token in seconds.
+            csrfToken:
+              type: string
+              description: Send this in the `x-csrf-token` header.
+            session:
+              type: object
+              required: [id, expiresAt]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                expiresAt:
+                  type: string
+                  format: date-time
+    MessageResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: string
+    Session:
+      type: object
+      required: [id, userAgent, ip, createdAt, lastUsedAt, expiresAt, current]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userAgent:
+          type: [string, 'null']
+        ip:
+          type: [string, 'null']
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+          description: Whether this is the session of the current request.
+    ProfileResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [user, profile]
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            profile:
+              type: object
+              required: [bio, jobTitle, avatarUrl, timeZone, locale]
+              properties:
+                bio:
+                  type: [string, 'null']
+                jobTitle:
+                  type: [string, 'null']
+                avatarUrl:
+                  type: [string, 'null']
+                timeZone:
+                  type: string
+                locale:
+                  type: string

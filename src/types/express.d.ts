@@ -9,6 +9,13 @@ declare global {
         params?: unknown;
         query?: unknown;
       };
+      auth?: {
+        userId: string;
+        sessionId: string;
+        email: string;
+        name: string;
+        status: 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+      };
     }
   }
 }

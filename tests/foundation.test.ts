@@ -25,6 +25,7 @@ function createTestConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfig
     REDIS_HEALTH_TIMEOUT_MS: '1000',
     APP_NAME: 'Nexus',
     APP_VERSION: '0.1.0',
+    JWT_ACCESS_SECRET: 'test-only-access-secret-do-not-use-in-production',
     ...overrides,
   });
 }

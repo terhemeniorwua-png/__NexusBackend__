@@ -168,6 +168,9 @@ model Session {
   id              String    @id @default(uuid())
   userId          String
   refreshTokenHash String   @unique
+  /// Hash of the previous refresh token, kept for one rotation so that a
+  /// replayed (already rotated) token can be detected.
+  previousRefreshTokenHash String? @unique
   userAgent       String?
   ip              String?
   lastUsedAt      DateTime?
@@ -184,14 +187,15 @@ model Session {
 }
 
 model AuthToken {
-  id        String           @id @default(uuid())
-  userId    String
-  purpose   AuthTokenPurpose
-  tokenHash String           @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id          String           @id @default(uuid())
+  userId      String
+  purpose     AuthTokenPurpose
+  tokenHash   String           @unique
+  targetEmail String?
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -502,24 +506,25 @@ model FileAttachment {
 }
 
 model AuditLog {
-  id         String   @id @default(uuid())
-  workspaceId String
-  actorId    String?
-  action     String
-  targetType String
-  targetId   String
-  metadata   Json?
-  ip         String?
-  userAgent  String?
-  createdAt  DateTime @default(now())
+  id          String   @id @default(uuid())
+  workspaceId String?
+  actorId     String?
+  action      String
+  targetType  String
+  targetId    String
+  metadata    Json?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, createdAt])
   @@index([targetType, targetId])
   @@index([actorId])
   @@index([action])
+  @@index([createdAt])
 }
 
 // ---------------------------------------------------------------------------

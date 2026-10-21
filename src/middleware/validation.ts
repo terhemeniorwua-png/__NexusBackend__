@@ -22,7 +22,10 @@ export function validate(schemas: RequestSchemas): RequestHandler {
         continue;
       }
 
-      const result = schema.safeParse(req[target]);
+      // A request without a body is treated as an empty object so that
+      // endpoints with an optional body can be called without one.
+      const source = target === 'body' ? (req.body ?? {}) : req[target];
+      const result = schema.safeParse(source);
 
       if (!result.success) {
         for (const issue of result.error.issues) {
