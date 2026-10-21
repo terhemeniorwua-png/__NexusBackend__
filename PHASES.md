@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 0 |
+| **Completed** `[x]` | 1 |
 | **In progress** `[/]` | 0 |
-| **Not started** `[ ]` | 24 |
-| **Overall progress** | 0% |
+| **Not started** `[ ]` | 23 |
+| **Overall progress** | 4% |
 
 _Update this table whenever a phase status changes._
 
@@ -71,7 +71,7 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 1 — Foundation and infrastructure `[ ]`
+#### Phase 1 — Foundation and infrastructure `[x]`
 
 **Objective:** Create a stable, tested backend application shell that safely supports every future Nexus feature.
 
@@ -100,7 +100,7 @@ Follow this cycle for every phase, without exception:
 - Tests pass in CI
 - No secrets committed to the repository
 
-**Blockers / Notes:** _None recorded._
+**Blockers / Notes:** Verified on 2026-10-21. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `npm test` (14/14 tests) pass. The built server was smoke-tested against an ephemeral PostgreSQL 16 container and local Redis: liveness returned 200, readiness returned 200 with both dependencies up, and `SIGTERM` triggered graceful shutdown. No domain models were created; Phase 2 must add the core Prisma models and first migration. Known advisory note: `npm audit` still reports issues in Prisma 6 CLI tooling (`deepmerge-ts`) and legacy Sequelize (`uuid`); these were not force-fixed because that would require breaking upgrades or unrelated dependency removal outside Phase 1.
 
 ---
 

@@ -41,7 +41,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
       limit: config.rateLimitMax,
       standardHeaders: 'draft-7',
       legacyHeaders: false,
-      skip: (req) => req.path.startsWith(`${config.apiPrefix}/health`),
+      skip: (req) => {
+        const healthPath = `${config.apiPrefix}/health`;
+
+        return req.path === healthPath || req.path.startsWith(`${healthPath}/`);
+      },
       handler: (_req, _res, next) => {
         next(new AppError(429, 'RATE_LIMITED', 'Too many requests. Please try again later.'));
       },
