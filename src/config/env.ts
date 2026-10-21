@@ -1,5 +1,22 @@
-import 'dotenv/config';
+import { config as loadDotenv } from 'dotenv';
+import path from 'node:path';
 import { z } from 'zod';
+
+/**
+ * The project keeps its local environment file in `src/.env`. A deployment can
+ * also provide a `.env` in the working directory, and `src/.env` has the
+ * higher precedence. Values that are already present in `process.env` always
+ * win, so a deployment can override every entry.
+ *
+ * The file is not loaded in the test environment, because the test suite
+ * provides its own database, rate limit and provider configuration and must
+ * never reach a real database or a real mail provider.
+ */
+if (process.env.NODE_ENV !== 'test') {
+  loadDotenv({
+    path: [path.resolve(__dirname, '..', '.env'), path.resolve(process.cwd(), '.env')],
+  });
+}
 
 const nodeEnvironments = ['development', 'test', 'production'] as const;
 const logLevels = ['debug', 'info', 'warn', 'error', 'silent'] as const;
@@ -87,6 +104,23 @@ const envSchema = z
     AUTH_PASSWORD_RESET_LINK_PATH: z.string().trim().startsWith('/').default('/reset-password'),
     AUTH_EMAIL_CHANGE_LINK_PATH: z.string().trim().startsWith('/').default('/settings/email'),
 
+    // --- Workspaces and invitations (Phase 5) ------------------------------
+    //
+    // An invitation is a single use link with a deadline. The lifetime is
+    // generous enough for a person to notice the mail and the path points at
+    // the frontend page that shows the invitation.
+    WORKSPACE_INVITATION_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(2_592_000)
+      .default(604_800),
+    WORKSPACE_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .default('/workspaces/invitations/accept'),
+
     // Prefix for Redis keys. Environments that share a Redis instance must use
     // different namespaces so their rate-limit counters stay separate.
     RATE_LIMIT_NAMESPACE: z
@@ -98,6 +132,77 @@ const envSchema = z
         'RATE_LIMIT_NAMESPACE may only contain letters, digits, ":" "_" and "-"',
       )
       .default('nexus'),
+
+    // --- Transactional email (Phase 4) ---------------------------------------
+    //
+    // The transport is provider agnostic. Resend, Brevo and Amazon SES all
+    // expose an SMTP endpoint, so a single adapter covers all three and only
+    // the connection details change.
+    EMAIL_PROVIDER: z.enum(['smtp', 'console', 'disabled']).default('console'),
+    EMAIL_SMTP_HOST: z.string().trim().default(''),
+    EMAIL_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+    EMAIL_SMTP_SECURE: booleanString,
+    EMAIL_SMTP_USER: z.string().trim().default(''),
+    EMAIL_SMTP_PASSWORD: z.string().default(''),
+    EMAIL_SMTP_TLS_REJECT_UNAUTHORIZED: booleanString.default(true),
+    EMAIL_FROM_ADDRESS: z
+      .string()
+      .trim()
+      .email('EMAIL_FROM_ADDRESS must be a valid email address')
+      .default('no-reply@nexus.local'),
+    EMAIL_FROM_NAME: z.string().trim().default(''),
+    EMAIL_REPLY_TO_ADDRESS: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || z.string().email().safeParse(value).success,
+        'EMAIL_REPLY_TO_ADDRESS must be a valid email address',
+      ),
+    EMAIL_SUPPORT_ADDRESS: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || z.string().email().safeParse(value).success,
+        'EMAIL_SUPPORT_ADDRESS must be a valid email address',
+      ),
+    // Public base URL used for links inside emails. Falls back to the
+    // frontend URL when it is not set explicitly.
+    EMAIL_APP_URL: z.string().trim().default(''),
+    EMAIL_WEBHOOK_SECRET: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || value.length >= 32,
+        'EMAIL_WEBHOOK_SECRET must be at least 32 characters',
+      ),
+    // Providers that do not sign their events, Brevo among them, cannot be
+    // authenticated by a signature. The webhook URL then carries this token
+    // instead, so the endpoint is still protected by a shared secret.
+    EMAIL_WEBHOOK_TOKEN: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || value.length >= 32,
+        'EMAIL_WEBHOOK_TOKEN must be at least 32 characters',
+      ),
+    EMAIL_WEBHOOK_SIGNATURE_HEADER: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9-]+$/, 'EMAIL_WEBHOOK_SIGNATURE_HEADER must be a header name')
+      .default('x-nexus-signature'),
+    EMAIL_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
+    EMAIL_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+    EMAIL_RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().default(30_000),
+    EMAIL_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().default(3_600_000),
+    EMAIL_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+    EMAIL_WORKER_ENABLED: booleanString.default(true),
+    EMAIL_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),
+    EMAIL_WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   })
   .superRefine((values, ctx) => {
     if (values.AUTH_COOKIE_SAME_SITE === 'none' && !values.AUTH_COOKIE_SECURE) {
@@ -134,6 +239,32 @@ const envSchema = z
           message: 'FRONTEND_URL must be an absolute URL',
         });
       }
+    }
+
+    if (values.EMAIL_PROVIDER === 'smtp') {
+      if (!values.EMAIL_SMTP_HOST) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['EMAIL_SMTP_HOST'],
+          message: 'EMAIL_SMTP_HOST is required when EMAIL_PROVIDER is "smtp"',
+        });
+      }
+
+      if (values.EMAIL_SMTP_PORT === 465 && !values.EMAIL_SMTP_SECURE) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['EMAIL_SMTP_SECURE'],
+          message: 'EMAIL_SMTP_SECURE must be true when EMAIL_SMTP_PORT is 465',
+        });
+      }
+    }
+
+    if (values.NODE_ENV === 'production' && values.EMAIL_PROVIDER !== 'smtp') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_PROVIDER'],
+        message: 'EMAIL_PROVIDER must be "smtp" in production',
+      });
     }
   });
 
@@ -177,6 +308,31 @@ export interface AppConfig {
   authPasswordResetLinkPath: string;
   authEmailChangeLinkPath: string;
   rateLimitNamespace: string;
+  workspaceInvitationTtlSeconds: number;
+  workspaceInvitationLinkPath: string;
+  emailProvider: 'smtp' | 'console' | 'disabled';
+  emailSmtpHost: string;
+  emailSmtpPort: number;
+  emailSmtpSecure: boolean;
+  emailSmtpUser: string;
+  emailSmtpPassword: string;
+  emailSmtpTlsRejectUnauthorized: boolean;
+  emailFromAddress: string;
+  emailFromName: string;
+  emailReplyToAddress: string;
+  emailSupportAddress: string;
+  emailAppUrl: string;
+  emailWebhookSecret: string;
+  emailWebhookToken: string;
+  emailWebhookSignatureHeader: string;
+  emailWebhookToleranceSeconds: number;
+  emailMaxAttempts: number;
+  emailRetryBaseDelayMs: number;
+  emailRetryMaxDelayMs: number;
+  emailRequestTimeoutMs: number;
+  emailWorkerEnabled: boolean;
+  emailWorkerPollIntervalMs: number;
+  emailWorkerBatchSize: number;
 }
 
 export class ConfigurationError extends Error {
@@ -263,6 +419,31 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     authPasswordResetLinkPath: values.AUTH_PASSWORD_RESET_LINK_PATH,
     authEmailChangeLinkPath: values.AUTH_EMAIL_CHANGE_LINK_PATH,
     rateLimitNamespace: values.RATE_LIMIT_NAMESPACE,
+    workspaceInvitationTtlSeconds: values.WORKSPACE_INVITATION_TTL_SECONDS,
+    workspaceInvitationLinkPath: values.WORKSPACE_INVITATION_LINK_PATH,
+    emailProvider: values.EMAIL_PROVIDER,
+    emailSmtpHost: values.EMAIL_SMTP_HOST,
+    emailSmtpPort: values.EMAIL_SMTP_PORT,
+    emailSmtpSecure: values.EMAIL_SMTP_SECURE || values.EMAIL_SMTP_PORT === 465,
+    emailSmtpUser: values.EMAIL_SMTP_USER,
+    emailSmtpPassword: values.EMAIL_SMTP_PASSWORD,
+    emailSmtpTlsRejectUnauthorized: values.EMAIL_SMTP_TLS_REJECT_UNAUTHORIZED,
+    emailFromAddress: values.EMAIL_FROM_ADDRESS,
+    emailFromName: values.EMAIL_FROM_NAME || values.APP_NAME,
+    emailReplyToAddress: values.EMAIL_REPLY_TO_ADDRESS,
+    emailSupportAddress: values.EMAIL_SUPPORT_ADDRESS,
+    emailAppUrl: (values.EMAIL_APP_URL || values.FRONTEND_URL).replace(/\/+$/, ''),
+    emailWebhookSecret: values.EMAIL_WEBHOOK_SECRET,
+    emailWebhookToken: values.EMAIL_WEBHOOK_TOKEN,
+    emailWebhookSignatureHeader: values.EMAIL_WEBHOOK_SIGNATURE_HEADER,
+    emailWebhookToleranceSeconds: values.EMAIL_WEBHOOK_TOLERANCE_SECONDS,
+    emailMaxAttempts: values.EMAIL_MAX_ATTEMPTS,
+    emailRetryBaseDelayMs: values.EMAIL_RETRY_BASE_DELAY_MS,
+    emailRetryMaxDelayMs: values.EMAIL_RETRY_MAX_DELAY_MS,
+    emailRequestTimeoutMs: values.EMAIL_REQUEST_TIMEOUT_MS,
+    emailWorkerEnabled: values.EMAIL_WORKER_ENABLED,
+    emailWorkerPollIntervalMs: values.EMAIL_WORKER_POLL_INTERVAL_MS,
+    emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
   };
 }
 

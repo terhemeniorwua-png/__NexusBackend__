@@ -13,6 +13,7 @@ import { generateSecureToken, hashSecret } from '../../utils/crypto';
  */
 
 export interface IssuedAuthToken {
+  id: string;
   token: string;
   expiresAt: Date;
 }
@@ -30,7 +31,7 @@ export async function issueAuthToken(
   const tokenHash = hashSecret(token);
   const expiresAt = new Date(Date.now() + input.ttlSeconds * 1_000);
 
-  await prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     // Only the newest token of a purpose may be used.
     await tx.authToken.deleteMany({
       where: {
@@ -40,7 +41,7 @@ export async function issueAuthToken(
       },
     });
 
-    await tx.authToken.create({
+    return tx.authToken.create({
       data: {
         userId: input.userId,
         purpose: input.purpose,
@@ -51,7 +52,7 @@ export async function issueAuthToken(
     });
   });
 
-  return { token, expiresAt };
+  return { id: created.id, token, expiresAt };
 }
 
 /**

@@ -22,6 +22,7 @@ The Nexus backend powers the platform's business logic, data persistence, authen
 - [Running the Server](#running-the-server)
 - [API Design](#api-design)
 - [Authentication](#authentication)
+- [Workspaces and Invitations](#workspaces-and-invitations)
 - [Real-Time Communication](#real-time-communication)
 - [Redis and Caching](#redis-and-caching)
 - [Email and Notifications](#email-and-notifications)
@@ -57,9 +58,10 @@ The backend and frontend are maintained in separate repositories and communicate
 
 ### 2. Workspaces and Teams
 
-- Workspace creation and management.
-- Team membership and invitations.
-- Member management.
+- Workspace creation, update, archive and deletion. The creator becomes the owner.
+- Membership aware reads: a caller only ever sees the workspaces it belongs to.
+- Member management: adding a registered account, changing a role and removing a member.
+- Invitations with a single use token, an expiry and a mail that carries the workspace, the inviter, the role and the acceptance link.
 - Workspace and project access control.
 - Role-based permissions.
 - Private and shared workspaces according to configured permissions.
@@ -249,7 +251,10 @@ nexusbackend/
 │   ├── routes/
 │   ├── services/
 │   │   ├── cache/
-│   │   └── email/
+│   │   ├── email/
+│   │   │   └── templates/
+│   │   └── providers/
+│   │       └── email/
 │   ├── repositories/
 │   ├── validators/
 │   ├── types/
@@ -258,7 +263,9 @@ nexusbackend/
 │   ├── integrations/
 │   ├── modules/
 │   │   ├── auth/
-│   │   └── users/
+│   │   ├── users/
+│   │   ├── webhooks/
+│   │   └── workspaces/
 │   ├── app.ts
 │   └── server.ts
 ├── tests/
@@ -371,6 +378,43 @@ The variables below are read by `src/config/env.ts`. All of them have defaults e
 | `RATE_LIMIT_NAMESPACE` | `nexus` | Prefix for the Redis rate limit keys. Use a different value per environment when they share a Redis instance |
 
 The verification, reset and email change links are built from `FRONTEND_URL` and the configured path, so the frontend contract can change without a backend deployment.
+
+### Workspace settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WORKSPACE_INVITATION_TTL_SECONDS` | `604800` | Lifetime of an invitation link |
+| `WORKSPACE_INVITATION_LINK_PATH` | `/workspaces/invitations/accept` | Frontend route that receives the acceptance link |
+
+### Email settings
+
+The variables below are read by `src/config/env.ts` and drive the Phase 4 transactional email service.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EMAIL_PROVIDER` | `disabled` in production, `console` otherwise | Transport: `smtp`, `console` or `disabled`. Production requires `smtp` |
+| `EMAIL_SMTP_HOST` | none | SMTP host. Required when the provider is `smtp` |
+| `EMAIL_SMTP_PORT` | `587` | SMTP port. Port `465` requires `EMAIL_SMTP_SECURE=true` |
+| `EMAIL_SMTP_SECURE` | `false` | Use TLS on connect instead of STARTTLS |
+| `EMAIL_SMTP_USER` | empty | SMTP username |
+| `EMAIL_SMTP_PASSWORD` | empty | SMTP password |
+| `EMAIL_SMTP_TLS_REJECT_UNAUTHORIZED` | `true` | Reject untrusted SMTP certificates |
+| `EMAIL_FROM_ADDRESS` | none | Sender address. Its domain needs SPF, DKIM and DMARC |
+| `EMAIL_FROM_NAME` | `Nexus` | Sender display name |
+| `EMAIL_REPLY_TO_ADDRESS` | empty | Optional reply-to address |
+| `EMAIL_SUPPORT_ADDRESS` | empty | Optional support address shown in the email footer |
+| `EMAIL_APP_URL` | falls back to `FRONTEND_URL` | Public base URL used for links in emails |
+| `EMAIL_WEBHOOK_SECRET` | empty | Shared secret for provider webhooks. At least 32 characters. The webhook endpoint is disabled while empty |
+| `EMAIL_WEBHOOK_TOKEN` | empty | Token for providers that do not sign their events, Brevo among them. At least 32 characters. The webhook URL then ends with the token |
+| `EMAIL_WEBHOOK_SIGNATURE_HEADER` | `x-nexus-signature` | Header that carries the provider signature |
+| `EMAIL_WEBHOOK_TOLERANCE_SECONDS` | `300` | Accepted age of a signed webhook timestamp |
+| `EMAIL_MAX_ATTEMPTS` | `5` | Delivery attempts before a message is given up |
+| `EMAIL_RETRY_BASE_DELAY_MS` | `30000` | Base delay of the exponential retry backoff |
+| `EMAIL_RETRY_MAX_DELAY_MS` | `3600000` | Upper bound of the retry delay |
+| `EMAIL_REQUEST_TIMEOUT_MS` | `15000` | Timeout of a single provider request |
+| `EMAIL_WORKER_ENABLED` | `true` | Run the background delivery worker |
+| `EMAIL_WORKER_POLL_INTERVAL_MS` | `5000` | Delay between outbox polls |
+| `EMAIL_WORKER_BATCH_SIZE` | `10` | Maximum rows claimed per poll |
 
 ## Database Setup
 
@@ -507,7 +551,105 @@ Rules that the implementation enforces:
 
 ### Email delivery
 
-`src/services/email` is the delivery seam. The default sender only records delivery metadata and never logs message bodies, links or tokens. The transactional provider adapter is installed with `setEmailSender()` in the phase that adds the provider, so no other module has to change.
+`src/services/email` is the delivery seam. `src/services/providers/email` holds the provider adapter. The default sender only records delivery metadata and never logs message bodies, links or tokens.
+
+Phase 4 installs the transactional sender at startup (`installOutboxEmailSender()` in `src/server.ts`), so application modules only call `sendEmail()` and never touch the provider.
+
+### Provider webhooks
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/webhooks/email` | Provider delivery, bounce and complaint events |
+| `POST` | `/api/v1/webhooks/email/:token` | The same events, authenticated with the URL token |
+
+The endpoint is unauthenticated but protected by a shared secret. Two mechanisms are supported:
+
+- A provider that signs its events sends an HMAC signature in the `x-nexus-signature` header (the header name is configurable).
+- A provider that does not sign its events, Brevo among them, is verified with the token that the webhook URL carries.
+
+The route is mounted before the JSON body parser so the raw payload can be verified. The response is `200` with the processing outcome, `401` for a missing or invalid secret and `503` while neither a webhook secret nor a token is configured.
+
+## Brevo
+
+Brevo is the configured provider. It is reached through its SMTP relay, so no provider specific code is needed in the application.
+
+| Setting | Value |
+|---|---|
+| Host | `smtp-relay.brevo.com` |
+| Port | `587` with STARTTLS, `465` with implicit TLS |
+| User | the account email, or the SMTP key as the user name |
+| Password | the SMTP key of the account |
+
+The deployment also needs:
+
+- The sending address in `EMAIL_FROM_ADDRESS` added as an authorised sender in the Brevo account.
+- SPF, DKIM and DMARC records for the sending domain. Brevo publishes the DKIM record to add.
+- The transactional event webhook configured as `https://<backend-host>/api/v1/webhooks/email/<EMAIL_WEBHOOK_TOKEN>`.
+
+The provider events are mapped onto the stored deliveries:
+
+| Brevo event | Effect |
+|---|---|
+| `delivered` | The delivery is marked `DELIVERED` |
+| `hard_bounce` | The delivery is marked `BOUNCED` and the address is suppressed |
+| `soft_bounce` | Nothing changes. A soft bounce is temporary and must not suppress the address |
+| `blocked` | The delivery is marked `BOUNCED` and the address is suppressed |
+| `spam` | The delivery is marked `COMPLAINED` and the address is suppressed |
+| `unsubscribe` | The delivery is marked `COMPLAINED` and the address is suppressed |
+| `sent`, `queued` | Recorded, but the delivery state does not change |
+
+The application builds the SMTP message id itself, so the local part of the message id is the id of the delivery row. A Brevo event that carries the message id therefore matches the delivery exactly, and the recipient is only used as a fallback.
+
+## Workspaces and Invitations
+
+Phase 5 implements workspaces, their members and the invitations that grant access. The full contract is in `docs/openapi.yaml`.
+
+### Rules that the implementation enforces
+
+- The creator of a workspace becomes its owner. The owner role cannot be handed out, changed or removed, so a workspace always has exactly one owner.
+- Every read and every change is checked against the membership of the caller in the database. A role that a client sends in a request body is never trusted.
+- A workspace that does not exist is reported as missing, a workspace the caller does not belong to is reported as forbidden. The two are kept apart, so the endpoints cannot be used to probe for identifiers.
+- A member that is removed loses the access to the workspace immediately, because the access is decided by the membership row and not by a token.
+- The owner of a workspace may manage every member. A project manager may manage members as well, but not another project manager: a role can only be widened by the owner.
+- An invitation is a single use link. Only the SHA-256 digest of the token is stored, so a database leak does not hand out access.
+- A pending invitation is unique per address and workspace. An accepted, revoked or expired invitation never blocks a new one, so an address can be invited again.
+- The accepting account has to be the one the invitation was meant for: either the account the invitation is bound to, or the account that owns the address it was sent to. An invitation that was sent before the address had an account is bound to that account when it registers.
+- The acceptance is applied once. A second attempt with the same token is rejected, also when it arrives at the same moment as the first one.
+- An expired, revoked or already used token is rejected with a distinct error code, so the frontend can explain what happened.
+- Every change to a workspace, a member or an invitation is written to the `AuditLog` table inside the transaction that performs the change.
+- The inviter is notified when an invitation is accepted, and a member is notified when their role changes or their access is removed.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/workspaces` | Create a workspace. The caller becomes its owner |
+| `GET` | `/api/v1/workspaces` | The workspaces the caller belongs to |
+| `GET` | `/api/v1/workspaces/{workspaceId}` | Read one workspace |
+| `PATCH` | `/api/v1/workspaces/{workspaceId}` | Change the name or the description |
+| `POST` | `/api/v1/workspaces/{workspaceId}/archive` | Archive the workspace |
+| `DELETE` | `/api/v1/workspaces/{workspaceId}` | Delete the workspace. The records keep their history |
+| `POST` | `/api/v1/workspaces/{workspaceId}/switch` | Validate the membership and return the workspace to work in |
+| `GET` | `/api/v1/workspaces/{workspaceId}/members` | List the members |
+| `POST` | `/api/v1/workspaces/{workspaceId}/members` | Add a registered account to the workspace |
+| `PATCH` | `/api/v1/workspaces/{workspaceId}/members/{userId}` | Change the role of a member |
+| `DELETE` | `/api/v1/workspaces/{workspaceId}/members/{userId}` | Remove a member |
+| `GET` | `/api/v1/workspaces/{workspaceId}/invitations` | List the invitations, optionally filtered by state |
+| `POST` | `/api/v1/workspaces/{workspaceId}/invitations` | Invite an address and send the invitation mail |
+| `POST` | `/api/v1/workspaces/{workspaceId}/invitations/{invitationId}/resend` | Send the invitation again with a new token |
+| `DELETE` | `/api/v1/workspaces/{workspaceId}/invitations/{invitationId}` | Revoke an invitation |
+| `GET` | `/api/v1/invitations` | The invitations that are addressed to the signed-in account |
+| `GET` | `/api/v1/invitations/{token}` | The invitation behind the link, without a session |
+| `POST` | `/api/v1/invitations/{token}/accept` | Accept the invitation and join the workspace |
+
+### Invitation states
+
+| State | Meaning |
+|---|---|
+| `PENDING` | The link is live. It can be accepted, resent or revoked |
+| `ACCEPTED` | The link was used. The membership exists |
+| `REVOKED` | The inviter withdrew the invitation. The link no longer works |
+| `EXPIRED` | The deadline passed. The link no longer works |
 
 ## Real-Time Communication
 
@@ -546,16 +688,15 @@ PostgreSQL should remain the authoritative store for persistent relational appli
 
 ## Email and Notifications
 
-Email functionality should use a configured provider through a dedicated service or integration layer.
+Phase 4 implements transactional email as a reusable platform capability.
 
-Potential email use cases include:
-
-- Account verification.
-- Password recovery.
-- Workspace invitations.
-- Task assignment notifications.
-- Relevant project activity.
-- Meeting or collaboration updates.
+- **Provider adapter** — `src/services/providers/email` sends through a provider-agnostic SMTP transport. Resend, Brevo and Amazon SES all expose an SMTP endpoint, so switching provider only changes the connection details. A `console` transport records delivery metadata without sending, and `disabled` accepts messages without sending them. Provider credentials stay server-side. Brevo is the configured provider, see the section below.
+- **Templates** — `src/services/email/templates` renders a responsive branded HTML document and a plain-text alternative from one shared document model. HTML output is escaped. The available templates are `account_verification`, `password_reset`, `password_changed`, `email_change_verification`, `security_notification`, `workspace_invitation`, `team_invitation`, `project_invitation`, `task_assignment`, `mention` and `meeting_invitation`.
+- **Outbox and delivery metadata** — every message is written to `EmailDelivery` with its template, recipient, status, attempt count, provider message id and timestamps. `EmailSuppression` records bounced and complained addresses, `EmailWebhookEvent` records processed provider events.
+- **Background delivery** — a worker polls the outbox and claims due rows with `FOR UPDATE SKIP LOCKED`, so several instances can run it safely. Rows are claimed atomically and the worker stops with the server.
+- **Retries and deduplication** — transient failures are retried with exponential backoff and jitter up to `EMAIL_MAX_ATTEMPTS`; permanent failures stop immediately. A unique idempotency key per logical send prevents duplicate rows and duplicate sends.
+- **Provider webhooks** — `POST /api/v1/webhooks/email` verifies an HMAC signature over the raw payload, then applies delivery, bounce and complaint events. Providers that do not sign their events, Brevo among them, are verified with the token in the webhook URL. Repeated events are applied once.
+- **Logging** — verification tokens, reset links and message bodies are never written to the application log.
 
 Requirements:
 
@@ -567,7 +708,7 @@ Requirements:
 - Use templates consistently.
 - Record delivery status where required and supported.
 
-Do not assume email delivery is working until the provider is configured and tested.
+Do not assume email delivery is working until the provider is configured and tested. The sending domain needs SPF, DKIM and DMARC records before a production deployment sends real mail.
 
 ## Meetings and AI Integration
 
@@ -635,6 +776,8 @@ The database integration tests are opt-in. They create and delete accounts, so t
 ```bash
 RUN_PHASE2_DB_TESTS=true \
 RUN_PHASE3_DB_TESTS=true \
+RUN_PHASE4_DB_TESTS=true \
+RUN_PHASE5_DB_TESTS=true \
 DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus_test" \
 npm test
 ```
@@ -646,6 +789,12 @@ DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus_test" npx prisma mig
 ```
 
 The Phase 3 suite covers registration, verification, sign-in, session rotation, refresh token replay detection, CSRF enforcement, sign-out, password reset and change, email change, deactivation, deletion, profile updates, rate limiting and the audit trail.
+
+The Phase 4 suite covers template rendering in HTML and plain text, configuration validation, transport error classification, outbox enqueue and claiming, idempotent sends, transient retries, permanent failures, the attempt limit, address suppression, webhook verification and idempotency, and that verification tokens never reach the application log. The integration tests talk to a local SMTP capture server, so no provider credentials and no outbound mail are required.
+
+The Phase 5 suite covers the workspace lifecycle, the membership rules and the invitation flow: the content of the invitation mail, an invitee that registers after the invitation was sent, a single use token, expired, revoked and duplicate invitations, an invitation that belongs to another account, a resend that replaces the token, the member rules for the owner and for a project manager, the audit trail of every membership change and the state of the workspace after an archive and a deletion.
+
+With every database integration suite enabled the full suite is 125 tests, and all of them pass.
 
 ## Frontend Integration
 
@@ -716,4 +865,6 @@ Before submitting changes:
 ## Project Status
 
 The precise implementation status of each feature is determined by the source code, tests, configuration, and current roadmap—not by the feature descriptions in this README.
+
+`PHASES.md` is the implementation tracker. Phases 1 to 5 (foundation, infrastructure, authentication, transactional email, workspaces and invitations) are complete. The next phase is Phase 6, roles, permissions and authorization.
 

@@ -1,18 +1,20 @@
 import type { AuthTokenPurpose, PrismaClient, User } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
-import { sendEmail } from '../../services/email';
+import {
+  buildEmailBrand,
+  buildEmailChangeEmail,
+  buildPasswordChangedEmail,
+  buildPasswordResetEmail,
+  buildSecurityNotificationEmail,
+  buildVerificationEmail,
+  sendEmail,
+} from '../../services/email';
 import { assertPasswordLength, hashPassword, verifyPassword } from '../../services/password';
 import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
 import { deriveKey, hashSecret, signValue } from '../../utils/crypto';
 import { signAccessToken } from './access-token.service';
 import { issueAuthToken, consumeAuthToken, invalidateAuthTokens } from './auth-token.service';
-import {
-  buildEmailChangeEmail,
-  buildPasswordResetEmail,
-  buildSecurityNotificationEmail,
-  buildVerificationEmail,
-} from './auth-email-templates';
 import {
   createSession,
   listActiveSessions,
@@ -91,6 +93,7 @@ export interface AuthService {
 export function createAuthService(config: AppConfig, prisma?: PrismaClient): AuthService {
   const client = prisma ?? getPrismaClient();
   const csrfKey = deriveKey(config.jwtAccessSecret, 'csrf');
+  const brand = buildEmailBrand(config);
 
   function csrfTokenFor(sessionId: string): string {
     return signValue(csrfKey, sessionId);
@@ -99,6 +102,11 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
   function buildLink(path: string, token: string): string {
     const base = config.frontendUrl.replace(/\/+$/, '');
     return `${base}${path}?token=${encodeURIComponent(token)}`;
+  }
+
+  function buildPathLink(path: string): string {
+    const base = config.frontendUrl.replace(/\/+$/, '');
+    return `${base}${path}`;
   }
 
   async function findUserByEmail(email: string): Promise<User | null> {
@@ -112,7 +120,11 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       ttlSeconds: number;
       targetEmail?: string | undefined;
     },
-    buildMessage: (token: string, expiresAt: Date) => Parameters<typeof sendEmail>[0],
+    buildMessage: (
+      token: string,
+      expiresAt: Date,
+      tokenId: string,
+    ) => Parameters<typeof sendEmail>[0],
   ): Promise<void> {
     const issued = await issueAuthToken(client, {
       userId: input.user.id,
@@ -121,7 +133,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       targetEmail: input.targetEmail,
     });
 
-    const message = buildMessage(issued.token, issued.expiresAt);
+    const message = buildMessage(issued.token, issued.expiresAt, issued.id);
 
     // A delivery failure must not undo the account change that triggered it.
     const result = await sendEmail(message);
@@ -218,14 +230,23 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           purpose: 'EMAIL_VERIFICATION',
           ttlSeconds: config.verificationTokenTtlSeconds,
         },
-        (token, expiresAt) =>
+        (token, expiresAt, tokenId) =>
           buildVerificationEmail({
             to: user.email,
             name: user.name,
+            brand,
             verificationUrl: buildLink(config.authVerificationLinkPath, token),
             expiresAt,
+            idempotencyKey: `auth:email_verification:${tokenId}`,
           }),
       );
+
+      // An invitation that was sent before the account existed is bound to
+      // it now, so the same link lets the new account join the workspace.
+      await client.invitation.updateMany({
+        where: { email: user.email, status: 'PENDING', forUserId: null },
+        data: { forUserId: user.id },
+      });
 
       await recordSecurityEvent(client, {
         action: SecurityAction.AccountRegistered,
@@ -283,12 +304,14 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           purpose: 'EMAIL_VERIFICATION',
           ttlSeconds: config.verificationTokenTtlSeconds,
         },
-        (token, expiresAt) =>
+        (token, expiresAt, tokenId) =>
           buildVerificationEmail({
             to: user.email,
             name: user.name,
+            brand,
             verificationUrl: buildLink(config.authVerificationLinkPath, token),
             expiresAt,
+            idempotencyKey: `auth:email_verification:${tokenId}`,
           }),
       );
 
@@ -492,12 +515,14 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           purpose: 'PASSWORD_RESET',
           ttlSeconds: config.passwordResetTokenTtlSeconds,
         },
-        (token, expiresAt) =>
+        (token, expiresAt, tokenId) =>
           buildPasswordResetEmail({
             to: user.email,
             name: user.name,
+            brand,
             resetUrl: buildLink(config.authPasswordResetLinkPath, token),
             expiresAt,
+            idempotencyKey: `auth:password_reset:${tokenId}`,
           }),
       );
 
@@ -584,6 +609,19 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         exceptSessionId: input.sessionId,
       });
 
+      const changedAt = new Date();
+
+      await sendEmail(
+        buildPasswordChangedEmail({
+          to: user.email,
+          name: user.name,
+          brand,
+          changedAt,
+          resetUrl: buildPathLink(config.authPasswordResetLinkPath),
+          idempotencyKey: `auth:password_changed:${user.id}:${changedAt.getTime()}`,
+        }),
+      );
+
       await recordSecurityEvent(client, {
         action: SecurityAction.PasswordChanged,
         targetType: 'User',
@@ -632,12 +670,15 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           ttlSeconds: config.emailChangeTokenTtlSeconds,
           targetEmail: input.email,
         },
-        (token, expiresAt) =>
+        (token, expiresAt, tokenId) =>
           buildEmailChangeEmail({
             to: input.email,
             name: user.name,
+            brand,
             verificationUrl: buildLink(config.authEmailChangeLinkPath, token),
             expiresAt,
+            newEmail: input.email,
+            idempotencyKey: `auth:email_change:${tokenId}`,
           }),
       );
 
@@ -646,8 +687,12 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         buildSecurityNotificationEmail({
           to: user.email,
           name: user.name,
-          subject: 'A Nexus email address change was requested',
-          detail: `A request was made to change the email address on your Nexus account to ${input.email}. If this was not you, change your password immediately.`,
+          brand,
+          subject: `A ${brand.appName} email address change was requested`,
+          detail: `A request was made to change the email address on your ${brand.appName} account to ${input.email}. If this was not you, change your password immediately.`,
+          actionUrl: buildPathLink(config.authPasswordResetLinkPath),
+          actionLabel: 'Reset your password',
+          idempotencyKey: `auth:email_change_notice:${user.id}:${hashSecret(input.email)}`,
         }),
       );
 

@@ -89,9 +89,43 @@ test('parseEnv exposes the authentication settings with their defaults', () => {
 });
 
 test('parseEnv forces secure cookies in production', () => {
-  const config = parseEnv({ ...baseEnv, NODE_ENV: 'production' });
+  const config = parseEnv({
+    ...baseEnv,
+    NODE_ENV: 'production',
+    EMAIL_PROVIDER: 'smtp',
+    EMAIL_SMTP_HOST: 'smtp.example.com',
+  });
 
   assert.equal(config.cookieSecure, true);
+});
+
+test('parseEnv requires a transactional email provider in production', () => {
+  assert.throws(
+    () => parseEnv({ ...baseEnv, NODE_ENV: 'production' }),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'EMAIL_PROVIDER'),
+  );
+});
+
+test('parseEnv requires an SMTP host when the SMTP provider is selected', () => {
+  assert.throws(
+    () => parseEnv({ ...baseEnv, EMAIL_PROVIDER: 'smtp' }),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'EMAIL_SMTP_HOST'),
+  );
+});
+
+test('parseEnv exposes the email settings with their defaults', () => {
+  const config = parseEnv(baseEnv);
+
+  assert.equal(config.emailProvider, 'console');
+  assert.equal(config.emailFromAddress, 'no-reply@nexus.local');
+  assert.equal(config.emailFromName, 'Nexus');
+  assert.equal(config.emailMaxAttempts, 5);
+  assert.equal(config.emailWorkerEnabled, true);
+  assert.equal(config.emailWebhookSignatureHeader, 'x-nexus-signature');
 });
 
 test('parseEnv requires a frontend URL in production', () => {

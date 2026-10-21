@@ -3,6 +3,11 @@ import { createApp } from './app';
 import { loadEnv, type AppConfig } from './config/env';
 import { connectDatabase, disconnectDatabase } from './db/prisma';
 import { connectRedis, disconnectRedis } from './db/redis';
+import {
+  createEmailWorker,
+  getEmailDeliveryService,
+  installOutboxEmailSender,
+} from './services/email';
 import { logger as baseLogger, type Logger } from './utils/logger';
 
 export interface RunningServer {
@@ -59,10 +64,25 @@ export async function startServer(): Promise<RunningServer> {
   const app = createApp({ config, logger });
   const server = createServer(app);
 
+  // Every transactional email is written to the outbox before the provider is
+  // contacted, and the worker delivers the queued messages.
+  installOutboxEmailSender(config);
+
+  const emailWorker = createEmailWorker({
+    service: getEmailDeliveryService(config),
+    config,
+    logger,
+  });
+
+  if (config.emailWorkerEnabled) {
+    emailWorker.start();
+  }
+
   try {
     await listen(server, config.port);
   } catch (error) {
     logger.error('server_listen_failed', { error, port: config.port });
+    await emailWorker.stop();
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
   }
@@ -101,6 +121,7 @@ export async function startServer(): Promise<RunningServer> {
 
     const results = await Promise.allSettled([
       closeServer,
+      emailWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);

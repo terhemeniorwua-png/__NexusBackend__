@@ -1,0 +1,665 @@
+import type { Invitation, PrismaClient, WorkspaceRole } from '@prisma/client';
+import type { AppConfig } from '../../config/env';
+import { getPrismaClient } from '../../db/prisma';
+import type { RequestContext } from '../auth/auth.types';
+import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
+import { buildEmailBrand, buildWorkspaceInvitationEmail } from '../../services/email';
+import { sendEmail } from '../../services/email';
+import { createNotification } from '../../services/notifications';
+import { generateSecureToken, hashSecret } from '../../utils/crypto';
+import { AppError } from '../../utils/errors';
+import { requireWorkspaceAccess, WorkspaceCapability } from './authorization';
+import type { CreateInvitationInput } from './workspace.schemas';
+import type { InvitationPreview, InvitationResult, InvitationSummary } from './workspace.types';
+
+/**
+ * Workspace invitations.
+ *
+ * An invitation is a single use link that grants a membership. The raw token
+ * only exists in the mail that carries it: the database keeps a SHA-256
+ * digest, so a database leak does not hand out access.
+ *
+ * The rules the service enforces:
+ *
+ * - A pending invitation is unique per address and workspace, so the same
+ *   person cannot hold two live invitations.
+ * - The token expires, and an expired invitation is rejected instead of
+ *   granted.
+ * - The accepting account has to be the one the invitation was meant for:
+ *   either the account it is bound to, or the account that owns the address
+ *   it was sent to.
+ * - The acceptance is applied once. A second attempt with the same token is
+ *   rejected, even when it arrives at the same moment as the first one.
+ */
+
+export interface InvitationService {
+  create(
+    input: { userId: string; workspaceId: string } & CreateInvitationInput,
+    ctx: RequestContext,
+  ): Promise<InvitationResult>;
+  list(input: {
+    userId: string;
+    workspaceId: string;
+    status: 'PENDING' | 'ACCEPTED' | 'REVOKED' | 'EXPIRED' | 'ALL';
+  }): Promise<InvitationSummary[]>;
+  resend(
+    input: { userId: string; workspaceId: string; invitationId: string },
+    ctx: RequestContext,
+  ): Promise<InvitationResult>;
+  revoke(input: {
+    userId: string;
+    workspaceId: string;
+    invitationId: string;
+  }): Promise<InvitationSummary>;
+  preview(token: string): Promise<InvitationPreview>;
+  accept(input: { userId: string; token: string }, ctx: RequestContext): Promise<InvitationSummary>;
+  listMine(userId: string): Promise<InvitationSummary[]>;
+}
+
+const ROLE_LABELS: Record<WorkspaceRole, string> = {
+  OWNER: 'owner',
+  PROJECT_MANAGER: 'project manager',
+  MEMBER: 'member',
+  COLLABORATOR: 'collaborator',
+  VIEWER: 'viewer',
+};
+
+export function maskInvitationEmail(email: string): string {
+  const [local, domain] = email.split('@');
+
+  if (!local || !domain) {
+    return '***';
+  }
+
+  return `${local.slice(0, 1)}***@${domain}`;
+}
+
+function pendingKeyFor(workspaceId: string, email: string): string {
+  return `workspace:${workspaceId}:email:${email}`;
+}
+
+export function createInvitationService(
+  config: AppConfig,
+  prisma?: PrismaClient,
+): InvitationService {
+  const client = prisma ?? getPrismaClient();
+  const brand = buildEmailBrand(config);
+
+  function acceptUrl(token: string): string {
+    const base = config.frontendUrl.replace(/\/+$/, '');
+
+    return `${base}${config.workspaceInvitationLinkPath}?token=${encodeURIComponent(token)}`;
+  }
+
+  function toSummary(
+    invitation: Invitation & {
+      workspace: { id: string; name: string };
+      invitedBy: { id: string; name: string };
+    },
+  ): InvitationSummary {
+    return {
+      id: invitation.id,
+      workspaceId: invitation.workspaceId,
+      workspaceName: invitation.workspace.name,
+      email: invitation.email,
+      role: invitation.role,
+      type: invitation.type,
+      status: invitation.status,
+      invitedBy: { id: invitation.invitedBy.id, name: invitation.invitedBy.name },
+      expiresAt: invitation.expiresAt,
+      acceptedAt: invitation.acceptedAt,
+      revokedAt: invitation.revokedAt,
+      createdAt: invitation.createdAt,
+    };
+  }
+
+  const summaryInclude = {
+    workspace: { select: { id: true, name: true } },
+    invitedBy: { select: { id: true, name: true } },
+  } as const;
+
+  /**
+   * Marks the invitations whose deadline has passed as expired.
+   *
+   * The check on the deadline is done on every read anyway, so the sweep only
+   * keeps the stored state honest.
+   */
+  async function expireStale(workspaceId?: string): Promise<void> {
+    await client.invitation.updateMany({
+      where: {
+        status: 'PENDING',
+        expiresAt: { lte: new Date() },
+        ...(workspaceId ? { workspaceId } : {}),
+      },
+      data: { status: 'EXPIRED', pendingKey: null },
+    });
+  }
+
+  /**
+   * Builds and sends the invitation mail.
+   *
+   * A delivery failure is reported instead of thrown: the invitation itself
+   * exists and the inviter can send it again.
+   */
+  async function sendInvitationMail(input: {
+    invitationId: string;
+    email: string;
+    inviteeName: string | null;
+    inviterName: string;
+    workspaceName: string;
+    role: WorkspaceRole;
+    token: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<boolean> {
+    const result = await sendEmail(
+      buildWorkspaceInvitationEmail({
+        to: input.email,
+        name: input.inviteeName ?? 'there',
+        brand,
+        inviterName: input.inviterName,
+        workspaceName: input.workspaceName,
+        acceptUrl: acceptUrl(input.token),
+        role: ROLE_LABELS[input.role],
+        expiresAt: input.expiresAt,
+        idempotencyKey: `workspace-invitation:${input.invitationId}:${input.tokenHash}`,
+      }),
+    );
+
+    return result.accepted;
+  }
+
+  return {
+    async create(input, ctx): Promise<InvitationResult> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ManageInvitations,
+      });
+
+      const inviter = await client.user.findUnique({
+        where: { id: input.userId },
+        select: { id: true, name: true, email: true },
+      });
+
+      if (!inviter) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      }
+
+      // An invitation for an address that already belongs to the workspace
+      // makes no sense.
+      const existingUser = await client.user.findUnique({
+        where: { email: input.email },
+        select: { id: true, name: true, status: true, deletedAt: true },
+      });
+
+      if (existingUser && !existingUser.deletedAt) {
+        const membership = await client.workspaceMembership.findUnique({
+          where: {
+            workspaceId_userId: { workspaceId: access.workspace.id, userId: existingUser.id },
+          },
+        });
+
+        if (membership) {
+          throw new AppError(
+            409,
+            'ALREADY_A_MEMBER',
+            'This account is already a member of the workspace',
+          );
+        }
+      }
+
+      const pending = await client.invitation.findFirst({
+        where: {
+          workspaceId: access.workspace.id,
+          email: input.email,
+          status: 'PENDING',
+        },
+        select: { id: true, expiresAt: true },
+      });
+
+      if (pending) {
+        throw new AppError(
+          409,
+          'INVITATION_EXISTS',
+          'An invitation for this address is still pending. Resend it instead.',
+        );
+      }
+
+      const token = generateSecureToken();
+      const tokenHash = hashSecret(token);
+      const expiresAt = new Date(Date.now() + config.workspaceInvitationTtlSeconds * 1_000);
+
+      const invitation = await client.$transaction(async (tx) => {
+        const created = await tx.invitation.create({
+          data: {
+            workspaceId: access.workspace.id,
+            email: input.email,
+            role: input.role as WorkspaceRole,
+            type: 'WORKSPACE',
+            tokenHash,
+            status: 'PENDING',
+            invitedById: input.userId,
+            // The invitation is bound to the account as soon as one exists,
+            // so only that account can accept it.
+            ...(existingUser && !existingUser.deletedAt ? { forUserId: existingUser.id } : {}),
+            expiresAt,
+            pendingKey: pendingKeyFor(access.workspace.id, input.email),
+          },
+        });
+
+        await recordAuditEvent(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.InvitationCreated,
+          targetType: 'Invitation',
+          targetId: created.id,
+          metadata: { email: input.email, role: input.role, type: 'WORKSPACE' },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return created;
+      });
+
+      const emailSent = await sendInvitationMail({
+        invitationId: invitation.id,
+        email: invitation.email,
+        inviteeName: existingUser && !existingUser.deletedAt ? existingUser.name : null,
+        inviterName: inviter.name,
+        workspaceName: access.workspace.name,
+        role: invitation.role,
+        token,
+        tokenHash,
+        expiresAt,
+      });
+
+      const stored = await client.invitation.findUnique({
+        where: { id: invitation.id },
+        include: summaryInclude,
+      });
+
+      if (!stored) {
+        throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      }
+
+      return { invitation: toSummary(stored), emailSent };
+    },
+
+    async list(input): Promise<InvitationSummary[]> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewInvitations,
+      });
+
+      await expireStale(access.workspace.id);
+
+      const invitations = await client.invitation.findMany({
+        where: {
+          workspaceId: access.workspace.id,
+          ...(input.status === 'ALL' ? {} : { status: input.status }),
+        },
+        include: summaryInclude,
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return invitations.map(toSummary);
+    },
+
+    async resend(input, ctx): Promise<InvitationResult> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ManageInvitations,
+      });
+
+      const invitation = await client.invitation.findFirst({
+        where: { id: input.invitationId, workspaceId: access.workspace.id },
+        include: { invitedBy: { select: { id: true, name: true } } },
+      });
+
+      if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
+      }
+
+      if (invitation.status === 'ACCEPTED') {
+        throw new AppError(
+          409,
+          'INVITATION_ALREADY_ACCEPTED',
+          'This invitation has already been accepted',
+        );
+      }
+
+      if (invitation.status === 'REVOKED') {
+        throw new AppError(409, 'INVITATION_REVOKED', 'This invitation was revoked');
+      }
+
+      if (invitation.status === 'EXPIRED' || invitation.expiresAt.getTime() <= Date.now()) {
+        await client.invitation.update({
+          where: { id: invitation.id },
+          data: { status: 'EXPIRED', pendingKey: null },
+        });
+
+        throw new AppError(
+          409,
+          'INVITATION_EXPIRED',
+          'This invitation has expired. Create a new one instead.',
+        );
+      }
+
+      // A new token replaces the old one, so a link that was already sent
+      // stops working.
+      const token = generateSecureToken();
+      const tokenHash = hashSecret(token);
+      const expiresAt = new Date(Date.now() + config.workspaceInvitationTtlSeconds * 1_000);
+
+      const updated = await client.$transaction(async (tx) => {
+        const changed = await tx.invitation.update({
+          where: { id: invitation.id },
+          data: { tokenHash, expiresAt },
+        });
+
+        await recordAuditEvent(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.InvitationResent,
+          targetType: 'Invitation',
+          targetId: changed.id,
+          metadata: { email: changed.email, role: changed.role },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return changed;
+      });
+
+      const invitee = await client.user.findUnique({
+        where: { email: updated.email },
+        select: { name: true, deletedAt: true },
+      });
+
+      const emailSent = await sendInvitationMail({
+        invitationId: updated.id,
+        email: updated.email,
+        inviteeName: invitee && !invitee.deletedAt ? invitee.name : null,
+        inviterName: invitation.invitedBy.name,
+        workspaceName: access.workspace.name,
+        role: updated.role,
+        token,
+        tokenHash,
+        expiresAt,
+      });
+
+      const stored = await client.invitation.findUnique({
+        where: { id: updated.id },
+        include: summaryInclude,
+      });
+
+      if (!stored) {
+        throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      }
+
+      return { invitation: toSummary(stored), emailSent };
+    },
+
+    async revoke(input): Promise<InvitationSummary> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ManageInvitations,
+      });
+
+      const invitation = await client.invitation.findFirst({
+        where: { id: input.invitationId, workspaceId: access.workspace.id },
+      });
+
+      if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
+      }
+
+      if (invitation.status === 'ACCEPTED') {
+        throw new AppError(
+          409,
+          'INVITATION_ALREADY_ACCEPTED',
+          'This invitation has already been accepted',
+        );
+      }
+
+      if (invitation.status === 'REVOKED') {
+        throw new AppError(409, 'INVITATION_REVOKED', 'This invitation was revoked');
+      }
+
+      const revoked = await client.$transaction(async (tx) => {
+        const changed = await tx.invitation.update({
+          where: { id: invitation.id },
+          data: { status: 'REVOKED', revokedAt: new Date(), pendingKey: null },
+        });
+
+        await recordAuditEvent(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.InvitationRevoked,
+          targetType: 'Invitation',
+          targetId: changed.id,
+          metadata: { email: changed.email },
+        });
+
+        return changed;
+      });
+
+      const stored = await client.invitation.findUnique({
+        where: { id: revoked.id },
+        include: summaryInclude,
+      });
+
+      if (!stored) {
+        throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      }
+
+      return toSummary(stored);
+    },
+
+    async preview(token: string): Promise<InvitationPreview> {
+      const invitation = await client.invitation.findUnique({
+        where: { tokenHash: hashSecret(token) },
+        include: {
+          workspace: { select: { id: true, name: true, slug: true } },
+          invitedBy: { select: { id: true, name: true } },
+        },
+      });
+
+      if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
+      }
+
+      if (invitation.status === 'PENDING' && invitation.expiresAt.getTime() <= Date.now()) {
+        await client.invitation.update({
+          where: { id: invitation.id },
+          data: { status: 'EXPIRED', pendingKey: null },
+        });
+
+        throw new AppError(410, 'INVITATION_EXPIRED', 'This invitation link has expired');
+      }
+
+      if (invitation.status === 'REVOKED') {
+        throw new AppError(410, 'INVITATION_REVOKED', 'This invitation was revoked');
+      }
+
+      if (invitation.status === 'ACCEPTED') {
+        throw new AppError(
+          410,
+          'INVITATION_ALREADY_ACCEPTED',
+          'This invitation has already been accepted',
+        );
+      }
+
+      return {
+        workspace: invitation.workspace,
+        invitedBy: invitation.invitedBy,
+        role: invitation.role,
+        status: invitation.status,
+        expiresAt: invitation.expiresAt,
+        maskedEmail: maskInvitationEmail(invitation.email),
+        boundToAccount: Boolean(invitation.forUserId),
+      };
+    },
+
+    async accept(input, ctx): Promise<InvitationSummary> {
+      const invitation = await client.invitation.findUnique({
+        where: { tokenHash: hashSecret(input.token) },
+        include: {
+          workspace: { select: { id: true, name: true } },
+          invitedBy: { select: { id: true, name: true } },
+        },
+      });
+
+      if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
+      }
+
+      if (invitation.status === 'ACCEPTED') {
+        throw new AppError(
+          409,
+          'INVITATION_ALREADY_ACCEPTED',
+          'This invitation has already been accepted',
+        );
+      }
+
+      if (invitation.status === 'REVOKED') {
+        throw new AppError(409, 'INVITATION_REVOKED', 'This invitation was revoked');
+      }
+
+      if (invitation.expiresAt.getTime() <= Date.now()) {
+        await client.invitation.update({
+          where: { id: invitation.id },
+          data: { status: 'EXPIRED', pendingKey: null },
+        });
+
+        throw new AppError(410, 'INVITATION_EXPIRED', 'This invitation link has expired');
+      }
+
+      const user = await client.user.findUnique({
+        where: { id: input.userId },
+        select: { id: true, name: true, email: true, status: true, deletedAt: true },
+      });
+
+      if (!user || user.deletedAt) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      }
+
+      // The invitation is meant for one recipient. A bound invitation belongs
+      // to one account, an unbound one to the address it was sent to.
+      const boundToOtherAccount = invitation.forUserId !== null && invitation.forUserId !== user.id;
+      const addressDoesNotMatch = invitation.forUserId === null && invitation.email !== user.email;
+
+      if (boundToOtherAccount || addressDoesNotMatch) {
+        throw new AppError(
+          403,
+          'INVITATION_FOR_OTHER_USER',
+          'This invitation was sent to a different account',
+        );
+      }
+
+      const accepted = await client.$transaction(async (tx) => {
+        const existing = await tx.workspaceMembership.findUnique({
+          where: {
+            workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id },
+          },
+        });
+
+        // An account that already belongs to the workspace keeps its role.
+        if (!existing) {
+          await tx.workspaceMembership.create({
+            data: {
+              workspaceId: invitation.workspaceId,
+              userId: user.id,
+              role: invitation.role,
+            },
+          });
+        }
+
+        // The status guard makes the acceptance single use, even when two
+        // requests arrive with the same token at the same time.
+        const updated = await tx.invitation.updateMany({
+          where: { id: invitation.id, status: 'PENDING' },
+          data: {
+            status: 'ACCEPTED',
+            acceptedAt: new Date(),
+            acceptedById: user.id,
+            pendingKey: null,
+          },
+        });
+
+        if (updated.count === 0) {
+          throw new AppError(
+            409,
+            'INVITATION_ALREADY_ACCEPTED',
+            'This invitation has already been accepted',
+          );
+        }
+
+        await recordAuditEvent(tx, {
+          workspaceId: invitation.workspaceId,
+          actorId: user.id,
+          action: WorkspaceAuditAction.InvitationAccepted,
+          targetType: 'Invitation',
+          targetId: invitation.id,
+          metadata: {
+            userId: user.id,
+            email: invitation.email,
+            role: invitation.role,
+            alreadyMember: Boolean(existing),
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        if (invitation.invitedById !== user.id) {
+          await createNotification(tx, {
+            userId: invitation.invitedById,
+            type: 'INVITATION_ACCEPTED',
+            title: `${user.name} joined ${invitation.workspace.name}`,
+            body: `The invitation you sent to ${maskInvitationEmail(invitation.email)} was accepted.`,
+            link: `${config.frontendUrl.replace(/\/+$/, '')}/workspaces/${invitation.workspaceId}`,
+            data: { workspaceId: invitation.workspaceId, userId: user.id, role: invitation.role },
+          });
+        }
+
+        return tx.invitation.findUnique({
+          where: { id: invitation.id },
+          include: summaryInclude,
+        });
+      });
+
+      if (!accepted) {
+        throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      }
+
+      return toSummary(accepted);
+    },
+
+    async listMine(userId: string): Promise<InvitationSummary[]> {
+      const user = await client.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true },
+      });
+
+      if (!user) {
+        return [];
+      }
+
+      await expireStale();
+
+      const invitations = await client.invitation.findMany({
+        where: {
+          OR: [{ forUserId: user.id }, { email: user.email }],
+        },
+        include: summaryInclude,
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return invitations.map(toSummary);
+    },
+  };
+}

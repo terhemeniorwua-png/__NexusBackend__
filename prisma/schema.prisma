@@ -111,40 +111,58 @@ enum AuthTokenPurpose {
   EMAIL_CHANGE
 }
 
+enum EmailDeliveryStatus {
+  QUEUED
+  SENDING
+  ACCEPTED
+  DELIVERED
+  BOUNCED
+  COMPLAINED
+  FAILED
+  SUPPRESSED
+}
+
+enum EmailSuppressionReason {
+  HARD_BOUNCE
+  COMPLAINT
+  MANUAL
+}
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
 
 model User {
-  id                String           @id @default(uuid())
-  email             String           @unique
-  passwordHash      String
-  name              String
-  status            UserStatus       @default(PENDING_VERIFICATION)
-  emailVerifiedAt   DateTime?
-  lastLoginAt       DateTime?
-  createdAt         DateTime         @default(now())
-  updatedAt   DateTime          @default(now())
-  deletedAt         DateTime?
+  id              String     @id @default(uuid())
+  email           String     @unique
+  passwordHash    String
+  name            String
+  status          UserStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @default(now())
+  deletedAt       DateTime?
 
-  profile           UserProfile?
-  sessions          Session[]
-  authTokens        AuthToken[]
+  profile              UserProfile?
+  sessions             Session[]
+  authTokens           AuthToken[]
   workspaceMemberships WorkspaceMembership[]
-  teamMemberships   TeamMembership[]
-  projectMemberships  ProjectMembership[]
-  createdTasks      Task[]            @relation("TaskCreator")
-  assignedTasks     TaskAssignee[]
-  authoredComments  Comment[]
-  notifications     Notification[]
-  uploadedFiles     FileAttachment[]
-  auditLogs         AuditLog[]
-  invitedWorkspaces Invitation[]      @relation("InvitedBy")
-  pendingInvitations Invitation[]     @relation("InvitedUser")
-  ownedWorkspaces   Workspace[]       @relation("WorkspaceOwner")
-  ownedProjects     Project[]         @relation("ProjectOwner")
-  ledTeams          Team[]            @relation("TeamLead")
-  taskAssignments   TaskAssignee[]    @relation("TaskAssigner")
+  teamMemberships      TeamMembership[]
+  projectMemberships   ProjectMembership[]
+  createdTasks         Task[]                @relation("TaskCreator")
+  assignedTasks        TaskAssignee[]
+  authoredComments     Comment[]
+  notifications        Notification[]
+  uploadedFiles        FileAttachment[]
+  auditLogs            AuditLog[]
+  invitedWorkspaces    Invitation[]          @relation("InvitedBy")
+  pendingInvitations   Invitation[]          @relation("InvitedUser")
+  acceptedInvitations  Invitation[]          @relation("AcceptedBy")
+  ownedWorkspaces      Workspace[]           @relation("WorkspaceOwner")
+  ownedProjects        Project[]             @relation("ProjectOwner")
+  ledTeams             Team[]                @relation("TeamLead")
+  taskAssignments      TaskAssignee[]        @relation("TaskAssigner")
 
   @@index([status])
   @@index([createdAt])
@@ -159,26 +177,26 @@ model UserProfile {
   timeZone  String   @default("UTC")
   locale    String   @default("en")
   createdAt DateTime @default(now())
-  updatedAt DateTime  @updatedAt
+  updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Session {
-  id              String    @id @default(uuid())
-  userId          String
-  refreshTokenHash String   @unique
+  id                       String    @id @default(uuid())
+  userId                   String
+  refreshTokenHash         String    @unique
   /// Hash of the previous refresh token, kept for one rotation so that a
   /// replayed (already rotated) token can be detected.
-  previousRefreshTokenHash String? @unique
-  userAgent       String?
-  ip              String?
-  lastUsedAt      DateTime?
-  expiresAt       DateTime
-  revokedAt       DateTime?
-  revokedReason   String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  previousRefreshTokenHash String?   @unique
+  userAgent                String?
+  ip                       String?
+  lastUsedAt               DateTime?
+  expiresAt                DateTime
+  revokedAt                DateTime?
+  revokedReason            String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -208,23 +226,23 @@ model AuthToken {
 // ---------------------------------------------------------------------------
 
 model Workspace {
-  id          String         @id @default(uuid())
+  id          String          @id @default(uuid())
   name        String
-  slug        String         @unique
+  slug        String          @unique
   description String?
   status      WorkspaceStatus @default(ACTIVE)
   ownerId     String
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
   deletedAt   DateTime?
 
-  owner      User                @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members    WorkspaceMembership[]
-  teams      Team[]
-  projects   Project[]
+  owner       User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members     WorkspaceMembership[]
+  teams       Team[]
+  projects    Project[]
   invitations Invitation[]
-  files      FileAttachment[]
-  auditLogs  AuditLog[]
+  files       FileAttachment[]
+  auditLogs   AuditLog[]
 
   @@index([ownerId])
   @@index([status])
@@ -258,8 +276,8 @@ model Team {
   updatedAt   DateTime   @updatedAt
   deletedAt   DateTime?
 
-  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  lead      User?           @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead      User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
   members   TeamMembership[]
   projects  Project[]
 
@@ -303,9 +321,9 @@ model Project {
   updatedAt   DateTime          @default(now())
   deletedAt   DateTime?
 
-  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  team        Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  owner       User               @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team        Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  owner       User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   members     ProjectMembership[]
   tasks       Task[]
   attachments FileAttachment[]
@@ -335,21 +353,21 @@ model ProjectMembership {
 }
 
 model Task {
-  id            String       @id @default(uuid())
-  projectId     String
-  key           String
-  title         String
-  description   String?
-  status        TaskStatus   @default(ASSIGNED)
-  priority      TaskPriority @default(MEDIUM)
-  startDate     DateTime?
-  dueDate       DateTime?
-  position      Int          @default(0)
-  parentTaskId  String?
-  creatorId     String
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @default(now())
-  deletedAt     DateTime?
+  id           String       @id @default(uuid())
+  projectId    String
+  key          String
+  title        String
+  description  String?
+  status       TaskStatus   @default(ASSIGNED)
+  priority     TaskPriority @default(MEDIUM)
+  startDate    DateTime?
+  dueDate      DateTime?
+  position     Int          @default(0)
+  parentTaskId String?
+  creatorId    String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @default(now())
+  deletedAt    DateTime?
 
   project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   parentTask   Task?            @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
@@ -372,15 +390,15 @@ model Task {
 }
 
 model TaskAssignee {
-  id         String    @id @default(uuid())
+  id         String   @id @default(uuid())
   taskId     String
   userId     String
   assignedBy String?
-  assignedAt DateTime  @default(now())
+  assignedAt DateTime @default(now())
 
-  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  assigner   User? @relation("TaskAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
+  task     Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user     User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assigner User? @relation("TaskAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
 
   @@unique([taskId, userId])
   @@index([userId])
@@ -411,10 +429,10 @@ model Comment {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  task       Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  author     User             @relation(fields: [authorId], references: [id], onDelete: Restrict)
-  parent     Comment?         @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
-  replies    Comment[]        @relation("CommentReplies")
+  task        Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author      User             @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  parent      Comment?         @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies     Comment[]        @relation("CommentReplies")
   attachments FileAttachment[]
 
   @@index([taskId, createdAt])
@@ -451,8 +469,8 @@ model Invitation {
   teamId       String?
   projectId    String?
   email        String
-  role         WorkspaceRole   @default(MEMBER)
-  type         InvitationType  @default(WORKSPACE)
+  role         WorkspaceRole    @default(MEMBER)
+  type         InvitationType   @default(WORKSPACE)
   tokenHash    String           @unique
   status       InvitationStatus @default(PENDING)
   invitedById  String
@@ -464,11 +482,18 @@ model Invitation {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 
+  /// Set while the invitation is pending and cleared when it leaves that
+  /// state. The unique index on this column is what stops a second pending
+  /// invitation for the same address, while an accepted, revoked or expired
+  /// invitation never blocks a new one. A nullable unique column allows many
+  /// rows without a value in PostgreSQL.
+  pendingKey String? @unique
+
   workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   invitedBy  User      @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
   forUser    User?     @relation("InvitedUser", fields: [forUserId], references: [id], onDelete: SetNull)
+  acceptedBy User?     @relation("AcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
 
-  @@unique([workspaceId, email])
   @@index([workspaceId, status])
   @@index([email])
   @@index([status, expiresAt])
@@ -477,7 +502,7 @@ model Invitation {
 }
 
 model FileAttachment {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   workspaceId  String
   projectId    String?
   taskId       String?
@@ -486,9 +511,9 @@ model FileAttachment {
   fileName     String
   mimeType     String
   sizeBytes    Int
-  storageKey   String   @unique
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  storageKey   String    @unique
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -518,13 +543,90 @@ model AuditLog {
   createdAt   DateTime @default(now())
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  actor     User?     @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actor     User?      @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, createdAt])
   @@index([targetType, targetId])
   @@index([actorId])
   @@index([action])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Transactional email (Phase 4)
+// ---------------------------------------------------------------------------
+
+/// A transactional email that the application asked to send.
+///
+/// The row is written before the provider is contacted, which makes the
+/// outbox the source of truth for "did we try to send this". `idempotencyKey`
+/// is unique so a retried request can never enqueue the same email twice.
+model EmailDelivery {
+  id                String              @id @default(uuid())
+  toAddress         String
+  fromAddress       String
+  template          String
+  subject           String
+  textBody          String
+  htmlBody          String?
+  headers           Json?
+  metadata          Json?
+  status            EmailDeliveryStatus @default(QUEUED)
+  provider          String
+  providerMessageId String?
+  idempotencyKey    String              @unique
+  attempts          Int                 @default(0)
+  maxAttempts       Int                 @default(5)
+  lastError         String?
+  lastErrorCode     String?
+  nextAttemptAt     DateTime            @default(now())
+  acceptedAt        DateTime?
+  deliveredAt       DateTime?
+  bouncedAt         DateTime?
+  complainedAt      DateTime?
+  failedAt          DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([toAddress])
+  @@index([template])
+  @@index([providerMessageId])
+}
+
+/// Addresses that must not receive further email.
+///
+/// A hard bounce or a spam complaint adds the address here, so the delivery
+/// worker skips it instead of damaging the sending reputation of the domain.
+model EmailSuppression {
+  id           String                 @id @default(uuid())
+  emailAddress String                 @unique
+  reason       EmailSuppressionReason
+  provider     String?
+  detail       String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+}
+
+/// A provider webhook event that has been received.
+///
+/// `providerEventId` is unique, so a provider that retries a webhook cannot
+/// apply the same status change twice.
+model EmailWebhookEvent {
+  id              String    @id @default(uuid())
+  provider        String
+  providerEventId String
+  type            String
+  payload         Json
+  outcome         String?
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  // The event id is only unique per provider, so the provider is part of the
+  // key. A provider change must not reject a new event of the new provider.
+  @@unique([provider, providerEventId])
+  @@index([provider, type])
+  @@index([processedAt])
 }
 
 // ---------------------------------------------------------------------------

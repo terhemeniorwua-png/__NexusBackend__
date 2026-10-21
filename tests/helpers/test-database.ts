@@ -14,8 +14,8 @@ export interface TestDatabase {
   prisma: PrismaClient;
 }
 
-export function resolveTestDatabaseUrl(): string | null {
-  if (process.env.RUN_PHASE3_DB_TESTS !== 'true') {
+export function resolveTestDatabaseUrl(flag = 'RUN_PHASE3_DB_TESTS'): string | null {
+  if (process.env[flag] !== 'true') {
     return null;
   }
 
@@ -38,10 +38,11 @@ async function schemaIsPresent(prisma: PrismaClient): Promise<boolean> {
   const rows = await prisma.$queryRaw<Array<{ table_name: string }>>`
     SELECT table_name
     FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name IN ('User', 'Session', 'AuthToken', 'AuditLog')
+    WHERE table_schema = 'public'
+      AND table_name IN ('User', 'Session', 'AuthToken', 'AuditLog', 'EmailDelivery')
   `;
 
-  return rows.length === 4;
+  return rows.length === 5;
 }
 
 export async function connectTestDatabase(url: string): Promise<TestDatabase> {

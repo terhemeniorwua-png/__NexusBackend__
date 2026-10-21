@@ -7,6 +7,7 @@ import { createErrorHandler } from './middleware/error-handler';
 import { notFoundHandler } from './middleware/not-found';
 import { createRequestLogger } from './middleware/request-logger';
 import { requestId } from './middleware/request-id';
+import { createEmailWebhookRouter } from './modules/webhooks/email-webhook.routes';
 import { createApiRouter } from './routes';
 import { createReadinessProbe, type ReadinessProbe } from './services/health';
 import { AppError } from './utils/errors';
@@ -51,6 +52,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
       },
     }),
   );
+
+  // The provider webhook is mounted before the JSON body parser, because the
+  // signature is calculated over the raw request body.
+  app.use(`${config.apiPrefix}/webhooks`, createEmailWebhookRouter({ config }));
 
   app.use(
     express.json({

@@ -8,6 +8,9 @@ info:
     Phase 1 provides the foundation (health, configuration, error contract).
     Phase 3 adds the account lifecycle: registration, email verification,
     sessions, password recovery and profile management.
+    Phase 4 adds the transactional email provider webhook.
+    Phase 5 adds workspaces, their members and the invitations that grant
+    access to a workspace.
 
     Authentication model:
     - The access token is a short-lived JWT returned in the response body and
@@ -31,6 +34,12 @@ tags:
     description: Account registration, verification, sessions and recovery
   - name: Users
     description: The signed-in user's own profile
+  - name: Webhooks
+    description: Email provider callbacks, authenticated by HMAC signature
+  - name: Workspaces
+    description: Workspaces, their members and their invitations
+  - name: Invitations
+    description: Invitation links, their preview and their acceptance
 paths:
   /health:
     get:
@@ -590,6 +599,837 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /webhooks/email:
+    post:
+      tags: [Webhooks]
+      operationId: receiveEmailWebhook
+      summary: Provider delivery, bounce and complaint events
+      description: |
+        Public endpoint called by the email provider. The request is
+        authenticated by an HMAC signature over the raw request body, not by a
+        session.
+
+        The signature is read from the header named by
+        `EMAIL_WEBHOOK_SIGNATURE_HEADER` (`x-nexus-signature` by default) and
+        must be one of:
+
+        - `sha256=<hex digest>` — the HMAC-SHA256 of the raw body.
+        - `t=<unix seconds>,v1=<hex digest>` — the HMAC-SHA256 of
+          `<unix seconds>.<raw body>`. The timestamp must be inside
+          `EMAIL_WEBHOOK_TOLERANCE_SECONDS`.
+
+        The endpoint answers `200` for every verified payload, including
+        payloads that carry an unknown event, so the provider does not retry a
+        message that will never be understood. Repeated events are applied
+        once. A bounced or complained address is added to the suppression
+        list and stops receiving mail.
+
+        Brevo does not sign its events. The `/webhooks/email/{token}` route
+        accepts the same payload and authenticates it with the shared token
+        of the URL.
+      parameters:
+        - name: x-nexus-signature
+          in: header
+          required: false
+          description: HMAC-SHA256 signature of the raw payload.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              delivered:
+                summary: A provider delivery report
+                value:
+                  type: delivered
+                  data:
+                    email_id: 01J8Z0Q9W4
+                  created_at: 2026-10-21T12:00:00.000Z
+              bounced:
+                summary: A provider bounce report
+                value:
+                  type: bounced
+                  data:
+                    email_id: 01J8Z0Q9W4
+                    bounce:
+                      type: permanent
+                  created_at: 2026-10-21T12:05:00.000Z
+      responses:
+        '200':
+          description: The payload was received and verified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailWebhookResponse'
+        '400':
+          description: The payload is empty or cannot be processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: The signature is missing or not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The deployment has no webhook secret configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /webhooks/email/{token}:
+    post:
+      tags: [Webhooks]
+      operationId: receiveEmailWebhookWithToken
+      summary: Provider events authenticated with the token of the URL
+      description: |
+        The same endpoint for providers that do not sign their events, Brevo
+        among them. The token is the shared secret of the URL and is compared
+        in constant time.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The shared token of the webhook URL.
+          schema:
+            type: string
+            minLength: 32
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              brevoDelivered:
+                summary: A Brevo delivery report
+                value:
+                  event: delivered
+                  email: someone@example.com
+                  message_id: <delivery-id@example.com>
+                  ts: 1790000000
+      responses:
+        '200':
+          description: The payload was received and verified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailWebhookResponse'
+        '400':
+          description: The payload is empty or cannot be processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: The token is missing or not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The deployment has no webhook secret configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces:
+    post:
+      tags: [Workspaces]
+      operationId: createWorkspace
+      summary: Create a workspace
+      description: The creator becomes the owner of the workspace.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceRequest'
+      responses:
+        '201':
+          description: The created workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account has not verified its email address yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Workspaces]
+      operationId: listWorkspaces
+      summary: The workspaces the caller belongs to
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The workspaces of the caller.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Workspace'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: getWorkspace
+      summary: Read one workspace
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller does not belong to the workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags: [Workspaces]
+      operationId: updateWorkspace
+      summary: Change the name or the description of a workspace
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkspaceRequest'
+      responses:
+        '200':
+          description: The updated workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The role of the caller does not allow this change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Workspaces]
+      operationId: deleteWorkspace
+      summary: Delete a workspace
+      description: |
+        The workspace is removed softly, so the records that point at it keep
+        their history. The pending invitations of the workspace are revoked.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The workspace was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDeletedResponse'
+        '403':
+          description: The role of the caller does not allow this change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Workspaces]
+      operationId: archiveWorkspace
+      summary: Archive a workspace
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The archived workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+        '403':
+          description: Only the owner may archive a workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/switch:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Workspaces]
+      operationId: switchWorkspace
+      summary: Validate the membership and return the workspace to work in
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The workspace and the role of the caller in it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+        '403':
+          description: The caller does not belong to the workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/members:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: listWorkspaceMembers
+      summary: List the members of a workspace
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The members.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WorkspaceMember'
+        '403':
+          description: The caller does not belong to the workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Workspaces]
+      operationId: addWorkspaceMember
+      summary: Add a registered account to a workspace
+      description: |
+        The account has to exist already. An address without an account is
+        invited instead, through the invitation endpoints.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddMemberRequest'
+      responses:
+        '201':
+          description: The created membership.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceMemberResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The role of the caller does not allow this change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace or the account does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The account is already a member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: userId
+        in: path
+        required: true
+        description: The account whose membership is changed.
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Workspaces]
+      operationId: updateWorkspaceMemberRole
+      summary: Change the role of a member
+      description: |
+        The owner role is not part of the request: a workspace has exactly one
+        owner and that role cannot be transferred.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMemberRoleRequest'
+      responses:
+        '200':
+          description: The updated membership.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceMemberResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The role of the caller does not allow this change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace or the membership does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Workspaces]
+      operationId: removeWorkspaceMember
+      summary: Remove a member
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The member was removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: object
+                    required: [userId, removed]
+                    properties:
+                      userId:
+                        type: string
+                        format: uuid
+                      removed:
+                        type: boolean
+        '403':
+          description: The role of the caller does not allow this change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace or the membership does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/invitations:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: listWorkspaceInvitations
+      summary: List the invitations of a workspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: The state to filter on. `ALL` returns every invitation.
+          schema:
+            type: string
+            enum: [PENDING, ACCEPTED, REVOKED, EXPIRED, ALL]
+            default: ALL
+      responses:
+        '200':
+          description: The invitations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invitation'
+        '403':
+          description: The role of the caller does not allow this read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Workspaces]
+      operationId: createWorkspaceInvitation
+      summary: Invite an address and send the invitation
+      description: |
+        The address may belong to an account or not. A pending invitation for
+        the same address and workspace is refused, because the existing one can
+        be resent.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvitationRequest'
+      responses:
+        '201':
+          description: The created invitation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResultResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The role of the caller does not allow this action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The address is a member already or has a pending invitation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many invitations were sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/invitations/{invitationId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/InvitationId'
+    delete:
+      tags: [Workspaces]
+      operationId: revokeWorkspaceInvitation
+      summary: Revoke an invitation
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The revoked invitation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResponse'
+        '403':
+          description: The role of the caller does not allow this action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace or the invitation does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The invitation was accepted or revoked already.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/invitations/{invitationId}/resend:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/InvitationId'
+    post:
+      tags: [Workspaces]
+      operationId: resendWorkspaceInvitation
+      summary: Send the invitation again
+      description: |
+        The resend issues a new token, so a link that was sent before stops
+        working.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The invitation with its new deadline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResultResponse'
+        '403':
+          description: The role of the caller does not allow this action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace or the invitation does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The invitation was accepted, revoked or expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many invitations were sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /invitations:
+    get:
+      tags: [Invitations]
+      operationId: listMyInvitations
+      summary: The invitations that are addressed to the signed-in account
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The invitations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invitation'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /invitations/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: The single-use token of the invitation link.
+        schema:
+          type: string
+    get:
+      tags: [Invitations]
+      operationId: getInvitation
+      summary: The invitation behind the link
+      description: |
+        The token in the URL is the secret of the invitation, so the preview
+        needs no session. The address is masked, because a forwarded mail
+        carries the link with it.
+      responses:
+        '200':
+          description: The invitation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationPreviewResponse'
+        '404':
+          description: The token is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: The invitation expired, was revoked or was accepted already.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /invitations/{token}/accept:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: The single-use token of the invitation link.
+        schema:
+          type: string
+    post:
+      tags: [Invitations]
+      operationId: acceptInvitation
+      summary: Accept the invitation and join the workspace
+      description: |
+        The accepting account has to be the one the invitation was meant for.
+        The token works exactly once.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The accepted invitation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account has not verified its email address yet, or the invitation belongs to another account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The token is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The invitation was accepted or revoked already.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: The invitation expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     bearerAuth:
@@ -605,6 +1445,22 @@ components:
       description: Required when the refresh token is read from the `nexus_rt` cookie. The value is returned in the login and refresh responses and in the readable `nexus_csrf` cookie.
       schema:
         type: string
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      description: The workspace.
+      schema:
+        type: string
+        format: uuid
+    InvitationId:
+      name: invitationId
+      in: path
+      required: true
+      description: The invitation.
+      schema:
+        type: string
+        format: uuid
   headers:
     XRequestId:
       description: Request correlation identifier.
@@ -1004,3 +1860,325 @@ components:
                   type: string
                 locale:
                   type: string
+    WorkspaceRole:
+      type: string
+      enum: [OWNER, PROJECT_MANAGER, MEMBER, COLLABORATOR, VIEWER]
+    AssignableRole:
+      type: string
+      description: The roles a caller may hand out. The owner role is not part of it.
+      enum: [PROJECT_MANAGER, MEMBER, COLLABORATOR, VIEWER]
+    Workspace:
+      type: object
+      required:
+        - id
+        - name
+        - slug
+        - status
+        - ownerId
+        - role
+        - memberCount
+        - projectCount
+        - teamCount
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [ACTIVE, ARCHIVED]
+        ownerId:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/WorkspaceRole'
+        memberCount:
+          type: integer
+        projectCount:
+          type: integer
+        teamCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    WorkspaceResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Workspace'
+    WorkspaceDeletedResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [id, deleted]
+          properties:
+            id:
+              type: string
+              format: uuid
+            deleted:
+              type: boolean
+    WorkspaceMember:
+      type: object
+      required: [id, userId, name, email, status, role, joinedAt, owner]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        status:
+          type: string
+          enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED]
+        role:
+          $ref: '#/components/schemas/WorkspaceRole'
+        joinedAt:
+          type: string
+          format: date-time
+        owner:
+          type: boolean
+    WorkspaceMemberResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/WorkspaceMember'
+    Invitation:
+      type: object
+      required:
+        - id
+        - workspaceId
+        - workspaceName
+        - email
+        - role
+        - type
+        - status
+        - invitedBy
+        - expiresAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        workspaceName:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/WorkspaceRole'
+        type:
+          type: string
+          enum: [WORKSPACE, TEAM, PROJECT]
+        status:
+          type: string
+          enum: [PENDING, ACCEPTED, REVOKED, EXPIRED]
+        invitedBy:
+          type: object
+          required: [id, name]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+        expiresAt:
+          type: string
+          format: date-time
+        acceptedAt:
+          type: [string, 'null']
+          format: date-time
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    InvitationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Invitation'
+    InvitationResultResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [invitation, emailSent]
+          properties:
+            invitation:
+              $ref: '#/components/schemas/Invitation'
+            emailSent:
+              type: boolean
+              description: False when the invitation could not be handed to the mail provider.
+    InvitationPreviewResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+            - workspace
+            - invitedBy
+            - role
+            - status
+            - expiresAt
+            - maskedEmail
+            - boundToAccount
+          properties:
+            workspace:
+              type: object
+              required: [id, name, slug]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                slug:
+                  type: string
+            invitedBy:
+              type: object
+              required: [id, name]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+            role:
+              $ref: '#/components/schemas/WorkspaceRole'
+            status:
+              type: string
+              enum: [PENDING, ACCEPTED, REVOKED, EXPIRED]
+            expiresAt:
+              type: string
+              format: date-time
+            maskedEmail:
+              type: string
+              example: p***@example.com
+            boundToAccount:
+              type: boolean
+    CreateWorkspaceRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        slug:
+          type: string
+          description: The public address of the workspace. A readable slug is derived from the name when it is missing.
+          minLength: 2
+          maxLength: 50
+          pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+    UpdateWorkspaceRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        description:
+          type: [string, 'null']
+          maxLength: 500
+    AddMemberRequest:
+      type: object
+      required: [email]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          allOf:
+            - $ref: '#/components/schemas/AssignableRole'
+          default: MEMBER
+    UpdateMemberRoleRequest:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role:
+          $ref: '#/components/schemas/AssignableRole'
+    CreateInvitationRequest:
+      type: object
+      required: [email]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          allOf:
+            - $ref: '#/components/schemas/AssignableRole'
+          default: MEMBER
+    EmailWebhookResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [received, outcome]
+          properties:
+            received:
+              type: boolean
+              const: true
+            outcome:
+              type: string
+              description: |
+                How the event was handled.
+                - `processed` — the event changed the delivery state.
+                - `duplicate` — the event was already applied.
+                - `ignored` — the event carries no known action.
+                - `unmatched` — the event refers to an unknown message.
+              enum: [processed, duplicate, ignored, unmatched]
