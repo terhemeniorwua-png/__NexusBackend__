@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request } from 'express';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { createRateLimiter } from '../../middleware/rate-limit';
@@ -8,6 +8,7 @@ import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import { createInvitationService, type InvitationService } from './invitation.service';
 import { invitationTokenParamsSchema } from './workspace.schemas';
+// import { ipKeyGenerator } from 'express-rate-limit';
 
 /**
  * Invitation routes.
@@ -21,6 +22,20 @@ export interface InvitationRouterOptions {
   config: AppConfig;
   service?: InvitationService;
 }
+
+
+function requireUser(req: Request): string {
+  if (!req.auth) {
+    throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+  }
+
+  return req.auth.userId;
+}
+
+function context(req: Request): RequestContext {
+  return { ip: req.ip, userAgent: req.header('user-agent') };
+}
+
 
 export function createInvitationRouter({
   config,
@@ -69,18 +84,8 @@ export function createInvitationRouter({
     requireActiveAccount,
     validate({ params: invitationTokenParamsSchema }),
     async (req, res) => {
-      const auth = req.auth;
-
-      if (!auth) {
-        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-      }
-
       const { token } = req.validated?.params as { token: string };
-      const ctx: RequestContext = {
-        ip: req.ip,
-        userAgent: req.header('user-agent'),
-      };
-      const invitation = await service.accept({ userId: auth.userId, token }, ctx);
+      const invitation = await service.accept({ userId: requireUser(req), token }, context(req));
 
       sendSuccess(res, invitation);
     },
