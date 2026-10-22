@@ -355,6 +355,9 @@ export function createAuthController({
 
       clearSessionCookies(res);
 
+
+      // console.log('register: handler reached');
+
       res.status(204).end();
     },
   };

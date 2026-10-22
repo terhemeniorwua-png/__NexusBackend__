@@ -4,6 +4,7 @@ import { createRequireActiveAccount, createRequireAuth } from '../../middleware/
 import { createRateLimiter } from '../../middleware/rate-limit';
 import { validate } from '../../middleware/validation';
 import type { RequestContext } from '../auth/auth.types';
+import { ipKeyGenerator } from 'express-rate-limit';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import { createInvitationService, type InvitationService } from './invitation.service';
@@ -75,7 +76,7 @@ export function createWorkspaceRouter({
     limit: 30,
     code: 'RATE_LIMITED',
     message: 'Too many invitations. Please try again later.',
-    keyGenerator: (req) => req.auth?.userId ?? `ip:${req.ip ?? 'unknown'}`,
+    keyGenerator: (req) => req.auth?.userId ?? `ip:${ipKeyGenerator(req.ip ?? 'unknown')}`,
   });
 
   router.post(
