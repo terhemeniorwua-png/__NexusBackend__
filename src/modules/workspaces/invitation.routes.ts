@@ -23,7 +23,6 @@ export interface InvitationRouterOptions {
   service?: InvitationService;
 }
 
-
 function requireUser(req: Request): string {
   if (!req.auth) {
     throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
@@ -35,7 +34,6 @@ function requireUser(req: Request): string {
 function context(req: Request): RequestContext {
   return { ip: req.ip, userAgent: req.header('user-agent') };
 }
-
 
 export function createInvitationRouter({
   config,

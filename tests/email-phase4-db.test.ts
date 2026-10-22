@@ -241,6 +241,11 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.equal(afterFailure?.attempts, 1);
     assert.ok(afterFailure?.lastError);
 
+    // The retry delay is very short in the test config, but we must still wait
+    // for nextAttemptAt to pass before the second processPending can claim the
+    // row. A brief sleep is enough; the production delay is 30 seconds.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
     const second = await deliveryService().processPending(10);
 
     assert.equal(second.sent, 1);

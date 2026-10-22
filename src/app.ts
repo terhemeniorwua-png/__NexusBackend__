@@ -49,8 +49,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
       },
       handler: (_req, _res, next) => {
         next(new AppError(429, 'RATE_LIMITED', 'Too many requests. Please try again later.'));
-        app.use((req, _res, next) => { console.log('hit', req.method, req.url); next(); });
-        
+        app.use((req, _res, next) => {
+          console.log('hit', req.method, req.url);
+          next();
+        });
       },
     }),
   );
