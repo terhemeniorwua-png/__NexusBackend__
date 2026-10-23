@@ -15,6 +15,7 @@ import {
   invitationParamsSchema,
   listInvitationsQuerySchema,
   memberParamsSchema,
+  transferOwnershipSchema,
   updateMemberRoleSchema,
   updateWorkspaceSchema,
   workspaceIdParamsSchema,
@@ -22,6 +23,7 @@ import {
   type CreateInvitationInput,
   type CreateWorkspaceInput,
   type ListInvitationsQuery,
+  type TransferOwnershipInput,
   type UpdateMemberRoleInput,
   type UpdateWorkspaceInput,
 } from './workspace.schemas';
@@ -166,6 +168,26 @@ export function createWorkspaceRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const workspace = await service.switchTo({ userId: requireUser(req), workspaceId });
+
+      sendSuccess(res, workspace);
+    },
+  );
+
+  router.patch(
+    '/:workspaceId/owner',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: memberParamsSchema, body: transferOwnershipSchema }),
+    async (req, res) => {
+      const { workspaceId, userId: newOwnerId } = req.validated?.params as {
+        workspaceId: string;
+        userId: string;
+      };
+      const input = req.validated?.body as TransferOwnershipInput;
+      const workspace = await service.transferOwnership(
+        { userId: requireUser(req), workspaceId, newOwnerId, ...input },
+        context(req),
+      );
 
       sendSuccess(res, workspace);
     },

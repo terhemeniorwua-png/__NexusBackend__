@@ -14,11 +14,13 @@ import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
 import {
   assertMayManageMember,
+  assertOwnershipSafe,
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from './authorization';
 import type {
   AddMemberInput,
+  TransferOwnershipInput,
   UpdateMemberRoleInput,
   UpdateWorkspaceInput,
 } from './workspace.schemas';
@@ -67,6 +69,14 @@ export interface WorkspaceService {
     input: { userId: string; workspaceId: string; targetUserId: string },
     ctx: RequestContext,
   ): Promise<void>;
+  transferOwnership(
+    input: {
+      userId: string;
+      workspaceId: string;
+      newOwnerId: string;
+    } & TransferOwnershipInput,
+    ctx: RequestContext,
+  ): Promise<WorkspaceSummary>;
 }
 
 interface WorkspaceCounts {
@@ -548,6 +558,15 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         targetIsOwner: target.user.id === access.workspace.ownerId,
       });
 
+      // Prevent the owner from removing themselves (which would leave the
+      // workspace permanently ownerless).
+      assertOwnershipSafe({
+        actorId: input.userId,
+        targetUserId: input.targetUserId,
+        targetRole: target.role,
+        workspaceOwnerId: access.workspace.ownerId,
+      });
+
       await client.$transaction(async (tx) => {
         await tx.workspaceMembership.delete({ where: { id: target.id } });
 
@@ -571,6 +590,90 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           data: { workspaceId: access.workspace.id },
         });
       });
+    },
+
+    async transferOwnership(input, ctx): Promise<WorkspaceSummary> {
+      // Only the current owner may initiate a transfer.
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.TransferOwnership,
+      });
+
+      if (input.newOwnerId === input.userId) {
+        throw new AppError(400, 'TRANSFER_TO_SELF', 'You cannot transfer ownership to yourself');
+      }
+
+      // The new owner must already be a member of the workspace.
+      const newOwnerMembership = await client.workspaceMembership.findUnique({
+        where: {
+          workspaceId_userId: { workspaceId: access.workspace.id, userId: input.newOwnerId },
+        },
+        include: { user: { select: { id: true, name: true, email: true } } },
+      });
+
+      if (!newOwnerMembership) {
+        throw new AppError(
+          404,
+          'MEMBER_NOT_FOUND',
+          'The new owner must already be a member of the workspace',
+        );
+      }
+
+      const updatedWorkspace = await client.$transaction(async (tx) => {
+        // Promote the new owner.
+        await tx.workspaceMembership.update({
+          where: { id: newOwnerMembership.id },
+          data: { role: 'OWNER' },
+        });
+
+        // Demote the previous owner to the requested role.
+        await tx.workspaceMembership.update({
+          where: {
+            workspaceId_userId: { workspaceId: access.workspace.id, userId: input.userId },
+          },
+          data: { role: input.newOwnerRole as WorkspaceRole },
+        });
+
+        // Transfer the authoritative owner column on the workspace itself.
+        const changed = await tx.workspace.update({
+          where: { id: access.workspace.id },
+          data: { ownerId: input.newOwnerId },
+        });
+
+        await recordAuditEvent(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.OwnershipTransferred,
+          targetType: 'Workspace',
+          targetId: access.workspace.id,
+          metadata: {
+            previousOwnerId: input.userId,
+            newOwnerId: input.newOwnerId,
+            previousOwnerNewRole: input.newOwnerRole,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        await createNotification(tx, {
+          userId: input.newOwnerId,
+          type: 'MEMBERSHIP_CHANGED',
+          title: `You are now the owner of ${access.workspace.name}`,
+          body: `Ownership of ${access.workspace.name} was transferred to you.`,
+          link: workspaceLink(access.workspace.id),
+          data: { workspaceId: access.workspace.id, role: 'OWNER' },
+        });
+
+        return changed;
+      });
+
+      return toSummary(
+        updatedWorkspace,
+        // The caller is no longer the owner after the transfer.
+        input.newOwnerRole as WorkspaceRole,
+        await counts(updatedWorkspace.id),
+      );
     },
   };
 }
