@@ -1134,6 +1134,76 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/owner/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: userId
+        in: path
+        required: true
+        description: The id of the member who will become the new owner.
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Workspaces]
+      operationId: transferWorkspaceOwnership
+      summary: Transfer workspace ownership
+      description: |
+        Transfers ownership of the workspace to an existing member.
+
+        Only the current owner may call this endpoint. The new owner must
+        already be a member of the workspace. The previous owner is
+        automatically assigned the role specified in `newOwnerRole`
+        (default `PROJECT_MANAGER`). Exactly one owner is maintained at all
+        times; the transfer is applied atomically.
+
+        Error codes:
+        - `TRANSFER_TO_SELF` — the caller is already the owner.
+        - `MEMBER_NOT_FOUND` — the target user is not a member of the workspace.
+        - `INSUFFICIENT_ROLE` — the caller is not the owner.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newOwnerRole:
+                  type: string
+                  enum: [PROJECT_MANAGER, MEMBER, COLLABORATOR, VIEWER]
+                  default: PROJECT_MANAGER
+                  description: |
+                    The role assigned to the previous owner after the transfer.
+                    Defaults to `PROJECT_MANAGER`.
+              additionalProperties: false
+      responses:
+        '200':
+          description: Ownership was transferred. Returns the workspace with the updated ownerId.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+        '400':
+          description: Invalid request body or the caller tried to transfer to themselves.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller is not the workspace owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The workspace does not exist or the target user is not a member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /workspaces/{workspaceId}/invitations:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
