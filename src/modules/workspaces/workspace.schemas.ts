@@ -112,6 +112,23 @@ export const listInvitationsQuerySchema = z.object({
   status: z.enum(['PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
 });
 
+/**
+ * Transfers ownership to an existing workspace member.
+ *
+ * The caller must be the current owner. The new owner must already be a
+ * member, so their identity is expressed as a user id (from the URL param)
+ * rather than an email address.
+ *
+ * After the transfer the previous owner becomes a PROJECT_MANAGER unless a
+ * different role is requested.  `OWNER` is not a valid post-transfer role for
+ * the previous owner — the workspace may only have one owner.
+ */
+export const transferOwnershipSchema = z
+  .object({
+    newOwnerRole: assignableRoleSchema.default('PROJECT_MANAGER'),
+  })
+  .strict();
+
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceSchema>;
 export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceSchema>;
 export type AddMemberInput = z.infer<typeof addMemberSchema>;
@@ -119,3 +136,4 @@ export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
 export type CreateInvitationInput = z.infer<typeof createInvitationSchema>;
 export type ListInvitationsQuery = z.infer<typeof listInvitationsQuerySchema>;
 export type AssignableRole = z.infer<typeof assignableRoleSchema>;
+export type TransferOwnershipInput = z.infer<typeof transferOwnershipSchema>;

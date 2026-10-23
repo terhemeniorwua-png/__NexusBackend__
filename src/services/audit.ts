@@ -19,6 +19,7 @@ export const WorkspaceAuditAction = {
   WorkspaceUpdated: 'workspace.updated',
   WorkspaceArchived: 'workspace.archived',
   WorkspaceDeleted: 'workspace.deleted',
+  OwnershipTransferred: 'workspace.ownership_transferred',
   MemberAdded: 'workspace.member_added',
   MemberRoleChanged: 'workspace.member_role_changed',
   MemberRemoved: 'workspace.member_removed',
