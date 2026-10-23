@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 5 |
+| **Completed** `[x]` | 6 |
 | **In progress** `[/]` | 0 |
 | **Not started** `[ ]` | 19 |
-| **Overall progress** | 21% |
+| **Overall progress** | 25% |
 
 _Update this table whenever a phase status changes._
 
@@ -236,7 +236,7 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 6 — Roles, permissions and authorization `[ ]`
+#### Phase 6 — Roles, permissions and authorization `[x]`
 
 **Objective:** Ensure users can only access and modify resources they are authorized to use.
 
@@ -260,7 +260,7 @@ Follow this cycle for every phase, without exception:
 - Role escalation and cross-workspace access are denied in tests
 - Ownership transfer edge cases covered
 
-**Blockers / Notes:** _None recorded._
+**Blockers / Notes:** Verified on 2026-10-23. The centralized authorization module was implemented at `src/modules/authorization/` with three policy files: `workspace.policy.ts` (workspace capability matrix, `requireWorkspaceAccess`, `assertMayManageMember`, `assertOwnershipSafe`), `project.policy.ts` (project capability matrix keyed by both workspace role and explicit project role, `requireProjectAccess`), and `team.policy.ts` (team capability matrix keyed by workspace role and explicit team role, `requireTeamAccess`), plus a barrel `index.ts` and shared `types.ts`. `src/modules/workspaces/authorization.ts` was converted to a compatibility shim that re-exports the same surface so all Phase 5 import paths remain valid. Workspace ownership transfer was added: `PATCH /api/v1/workspaces/{workspaceId}/owner/{userId}` is gated on `workspace:transfer_ownership` (OWNER only), validates the new owner is an existing member and not the caller themselves, atomically updates the `ownerId` column and both membership roles in one transaction, writes a `workspace.ownership_transferred` audit entry, and notifies the new owner. `assertOwnershipSafe` was wired into `removeMember` to prevent the owner from removing themselves. No Prisma schema changes were needed. Tests: `tests/phase6-authorization.test.ts` (44 unit tests) covers all workspace/project/team capability matrices, `assertMayManageMember`, `assertOwnershipSafe`, and `transferOwnershipSchema`. `tests/phase6-authorization-db.test.ts` (integration tests) covers cross-workspace access denial, role-based enforcement, owner-removal protection, and the full ownership transfer flow with audit log verification. Verification: `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run build` and `npm test` (97/97, 1 skipped — DB tests requiring an explicit flag) all pass. Committed in four chunks on `feature/phase-6-roles-permissions` (cbe270a, fb5efe3, e6fa0ef, d6c070f).
 
 ---
 
@@ -876,7 +876,7 @@ _Security is implemented from Phase 1. This phase audits and hardens the whole p
 
 ### Current Phase
 
-**Current phase:** Phase 5 is complete and verified. The next phase to begin is Phase 6, roles, permissions and authorization.
+**Current phase:** Phase 6 is complete and verified. The next phase to begin is Phase 7, teams and organizational structure.
 
 ---
 
@@ -931,7 +931,8 @@ _No issues recorded._
 | 3 — Authentication and account lifecycle | 2026-10-21 | 63 tests pass with the database integration tests enabled, covering the full account lifecycle, the session rotation, the CSRF enforcement, the rate limits and the audit trail. |
 | 4 — Transactional email | 2026-10-21 | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
+| 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 
 ---
 
-_Last updated: 2026-10-22. Phases 1 to 5 are implemented and verified. The document also describes the planned state of the later phases._
+_Last updated: 2026-10-23. Phases 1 to 6 are implemented and verified. The document also describes the planned state of the later phases._
