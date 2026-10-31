@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import type { Server } from 'node:http';
 import { once } from 'node:events';
 import test from 'node:test';
-import type { Express } from 'express';
+import express, { type Express } from 'express';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
+import { createErrorHandler } from '../src/middleware/error-handler';
+import { createRateLimiter } from '../src/middleware/rate-limit';
 import type { ReadinessProbe } from '../src/services/health';
+import { Logger } from '../src/utils/logger';
 
 function createTestConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfig {
   return parseEnv({
@@ -177,5 +180,87 @@ test('CORS allows configured origins and rejects unknown origins', async () => {
 
     assert.equal(denied.status, 403);
     assert.equal(body.error.code, 'CORS_ORIGIN_DENIED');
+  });
+});
+
+test('the global rate limiter allows requests within the configured limit', async () => {
+  const app = createApp({
+    config: createTestConfig({ RATE_LIMIT_MAX: '2' }),
+    readinessProbe: readyProbe,
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const first = await fetch(`${baseUrl}/api/v1/does-not-exist`);
+    const second = await fetch(`${baseUrl}/api/v1/does-not-exist`);
+
+    assert.equal(first.status, 404);
+    assert.equal(second.status, 404);
+  });
+});
+
+test('the global rate limiter returns the standard 429 response after the limit', async () => {
+  const app = createApp({
+    config: createTestConfig({ RATE_LIMIT_MAX: '1' }),
+    readinessProbe: readyProbe,
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const allowed = await fetch(`${baseUrl}/api/v1/does-not-exist`);
+    assert.equal(allowed.status, 404);
+
+    const blocked = await fetch(`${baseUrl}/api/v1/does-not-exist`);
+    const body = (await blocked.json()) as {
+      success: boolean;
+      error: { code: string; message: string; requestId: string };
+    };
+
+    assert.equal(blocked.status, 429);
+    assert.equal(body.success, false);
+    assert.equal(body.error.code, 'RATE_LIMITED');
+    assert.equal(body.error.message, 'Too many requests. Please try again later.');
+    assert.equal(body.error.requestId, blocked.headers.get('x-request-id'));
+
+    const serialized = JSON.stringify(body);
+    assert.equal(serialized.includes('AppError'), false);
+    assert.equal(serialized.includes('stack'), false);
+
+    const stillBlocked = await fetch(`${baseUrl}/api/v1/does-not-exist`);
+    assert.equal(stillBlocked.status, 429);
+  });
+});
+
+test('route-level rate limiters still return their configured 429 error', async () => {
+  const app = express();
+
+  app.use(
+    createRateLimiter({
+      namespace: `phase-1-1-${process.pid}-${Date.now()}`,
+      windowMs: 60_000,
+      limit: 1,
+      code: 'TEST_RATE_LIMITED',
+      message: 'Too many test requests.',
+    }),
+  );
+
+  app.get('/limited', (_req, res) => {
+    res.json({ success: true, data: { ok: true } });
+  });
+
+  app.use(createErrorHandler(new Logger('silent'), { isProduction: true }));
+
+  await withServer(app, async (baseUrl) => {
+    const allowed = await fetch(`${baseUrl}/limited`);
+    assert.equal(allowed.status, 200);
+
+    const blocked = await fetch(`${baseUrl}/limited`);
+    const body = (await blocked.json()) as {
+      success: boolean;
+      error: { code: string; message: string };
+    };
+
+    assert.equal(blocked.status, 429);
+    assert.equal(body.success, false);
+    assert.equal(body.error.code, 'TEST_RATE_LIMITED');
+    assert.equal(body.error.message, 'Too many test requests.');
   });
 });
