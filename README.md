@@ -386,6 +386,8 @@ The verification, reset and email change links are built from `FRONTEND_URL` and
 | `WORKSPACE_INVITATION_TTL_SECONDS` | `604800` | Lifetime of an invitation link |
 | `WORKSPACE_INVITATION_LINK_PATH` | `/workspaces/invitations/accept` | Frontend route that receives the acceptance link |
 | `TASK_ASSIGNMENT_LINK_PATH` | `/projects/:projectId/tasks/:taskId` | Frontend route for an assigned task. `:projectId` and `:taskId` are replaced with encoded identifiers |
+| `COMMENT_MENTION_LINK_PATH` | `/projects/:projectId/tasks/:taskId#comment-:commentId` | Frontend route for a comment mention. Route parameters are replaced with encoded identifiers |
+| `MEETING_INVITATION_LINK_PATH` | `/meetings/:meetingId` | Frontend route for a meeting invitation. `:meetingId` is replaced with an encoded identifier |
 
 ### Email settings
 
@@ -719,6 +721,7 @@ Phase 4 implements transactional email as a reusable platform capability.
 - **Retries and deduplication** — transient provider failures and unexpected worker errors are retried with exponential backoff and jitter only while `EMAIL_MAX_ATTEMPTS` remains. Permanent failures stop immediately, and an exhausted delivery moves to the terminal `FAILED` state instead of returning to the queue. A unique idempotency key per logical send prevents duplicate rows and duplicate sends.
 - **Provider webhooks** — `POST /api/v1/webhooks/email` verifies an HMAC signature over the raw payload, then applies delivery, bounce and complaint events. Providers that do not sign their events, Brevo among them, are verified with the token in the webhook URL. Repeated events are applied once.
 - **Task assignment notifier** — `src/services/task-assignment-notifier.ts` turns a persisted `TaskAssignee` row into the existing `task_assignment` email. It validates the active workspace and project membership, uses suppression rules, builds the task link from `EMAIL_APP_URL` and `TASK_ASSIGNMENT_LINK_PATH`, and derives its idempotency key from the assignment timestamp. The Phase 9 task service will call it after committing an assignment; delivery failure is reported without changing task data.
+- **Collaboration email notifier** — `src/services/collaboration-email-notifier.ts` provides post-commit handlers for persisted comment mentions and pending meeting invitations. Mention recipients are looked up from active users with workspace membership and the comment author is excluded. Both handlers use the transactional outbox, address suppression, stable idempotency keys and links rooted at `EMAIL_APP_URL`. The repository currently has no mention parser or meeting invitation model/workflow, so these handlers do not create mention events or authorize meetings; their owning workflows must call them after commit and supply the persisted pending-invitation context. Notification preferences are not modeled yet; the existing suppression list is enforced.
 - **Logging** — verification tokens, reset links and message bodies are never written to the application log. Delivery logs carry the delivery ID, template, provider, attempt and failure category, but not the recipient email address; provider and worker error text is redacted before it is logged.
 
 Requirements:
