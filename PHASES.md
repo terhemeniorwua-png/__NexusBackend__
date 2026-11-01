@@ -338,6 +338,29 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 4.2 — Recipient email privacy in logs `[x]`
+
+**Objective:** Remove recipient email addresses from the transactional email logs without losing the delivery metadata needed to operate and troubleshoot the outbox.
+
+**Deliverables:**
+- Recipient addresses removed from the queued, console, disabled and logging-sender events
+- Error text from providers, workers and persistence failures redacted before logging
+- Delivery ID, template, provider, attempt, maximum attempts, retry delay and failure category retained
+- Regression tests for queued, sent, provider-failure, unexpected-worker-failure and development-transport logs
+
+**Dependencies:** Phase 4.1
+
+**Verification criteria:**
+- `email_delivery_queued` contains no recipient address or `to` field
+- Structured log metadata contains no recipient address
+- Provider responses and unexpected worker errors cannot reintroduce an address through their message or stack
+- Operational metadata for correlation and retry diagnosis remains available
+- Existing delivery, retry, suppression and webhook behaviour is unchanged
+
+**Blockers / Notes:** Verified on 2026-11-01. The audit identified `email_delivery_queued`, which logged the `to` field. The field was removed; the event still carries the delivery ID and template so a message can be correlated through the outbox and provider message ID. The same recipient field was present in the `console` and `disabled` transports and the legacy logging sender, so those lifecycle events were corrected together while keeping delivery ID, template, subject and provider where available. A small `src/services/email/log-privacy.ts` helper now redacts email-shaped text from unexpected worker errors, retry-persistence failures and worker-pass failures, including the serialized stack; provider error codes are redacted before being logged. The raw provider error can still be stored in `EmailDelivery.lastError` for operational recovery, but it is never written to the application log by these paths. No delivery, retry, suppression, webhook or queue behaviour changed, and no schema or environment change was needed. Tests: `tests/email-phase4.test.ts` adds redaction and development-transport coverage; `tests/email-phase4-db.test.ts` adds queued/sent, provider-error and unexpected-worker-error assertions, verifies required metadata, and checks that the delivery still reaches `ACCEPTED` or `FAILED` as appropriate. The test SMTP helper now clears its envelope buffer after a simulated 451 or 550 so a pooled connection cannot leak state into the next case; this removed an existing intermittent Phase 4 failure. The Phase 4 database suite passed on three consecutive runs (21 subtests). The Phase 4 unit suite passes 18/18, the full suite with the Phase 2–5 database integrations enabled passes 194/194, and `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `git diff --check` pass. The pre-existing Phase 6 database suite failures documented in Phase 4.1 are unchanged and outside this phase.
+
+---
+
 ### Milestone 2 — Organization and Access Control
 
 ---
@@ -1071,9 +1094,10 @@ _No issues recorded._
 | 3 — Authentication and account lifecycle | 2026-10-21 | 63 tests pass with the database integration tests enabled, covering the full account lifecycle, the session rotation, the CSRF enforcement, the rate limits and the audit trail. |
 | 4 — Transactional email | 2026-10-21 | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account. |
 | 4.1 — Bounded email delivery retries | 2026-11-01 | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. |
+| 4.2 — Recipient email privacy in logs | 2026-11-01 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. New unit and PostgreSQL integration tests pass, the Phase 4 database suite passed three consecutive runs, the full Phase 2–5 database-enabled suite passes 194/194, and build, typecheck, lint and format check pass. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 
 ---
 
-_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, together with corrective Phases 3.1–3.5 and 4.1. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. The document also describes the planned state of the later phases._
