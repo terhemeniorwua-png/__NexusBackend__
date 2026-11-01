@@ -25,6 +25,7 @@ import {
   TOKEN_BYTES,
 } from '../src/utils/crypto';
 import { parseCookies } from '../src/utils/cookies';
+import { FakeRedisClient } from './helpers/fake-redis';
 
 /**
  * Phase 3 unit tests.
@@ -177,7 +178,11 @@ test('cookies are parsed into a name/value map', () => {
 
 test('the rate limit store counts hits and can reset a key', async () => {
   const namespace = `unit-test-${process.pid}-${Date.now()}`;
-  const store = createRateLimitStore({ namespace, windowMs: 60_000 });
+  const store = createRateLimitStore({
+    namespace,
+    windowMs: 60_000,
+    client: new FakeRedisClient(),
+  });
 
   const first = await store.increment('client-1');
   const second = await store.increment('client-1');
