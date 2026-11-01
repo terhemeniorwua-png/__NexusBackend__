@@ -1014,28 +1014,45 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         );
       }
 
-      const ownedWorkspaces = await client.workspace.count({
-        where: {
-          ownerId: user.id,
-          deletedAt: null,
-          status: 'ACTIVE',
-        },
-      });
-
-      if (ownedWorkspaces > 0) {
-        throw new AppError(
-          409,
-          'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED',
-          'Transfer ownership of your workspaces before deleting your account',
-        );
-      }
-
-      await revokeAllSessions(client, {
-        userId: user.id,
-        reason: 'ACCOUNT_DELETED',
-      });
-
       await client.$transaction(async (tx) => {
+        const [lockedUser] = await tx.$queryRaw<
+          Array<{ status: string; deletedAt: Date | null }>
+        >`SELECT "status"::text AS "status", "deletedAt"
+          FROM "User"
+          WHERE "id" = ${user.id}
+          FOR UPDATE`;
+
+        if (!lockedUser) {
+          throw new AppError(404, 'USER_NOT_FOUND', 'The requested account was not found');
+        }
+
+        if (lockedUser.deletedAt || lockedUser.status === 'DEACTIVATED') {
+          throw new AppError(
+            409,
+            'ACCOUNT_ALREADY_DELETED',
+            'This account has already been deleted',
+          );
+        }
+
+        if (lockedUser.status === 'SUSPENDED') {
+          throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+        }
+
+        const ownedWorkspaces = await tx.workspace.count({ where: { ownerId: user.id } });
+
+        if (ownedWorkspaces > 0) {
+          throw new AppError(
+            409,
+            'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED',
+            'Transfer ownership of your workspaces before deleting your account',
+          );
+        }
+
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: new Date(), revokedReason: 'ACCOUNT_DELETED' },
+        });
+
         await tx.authToken.updateMany({
           where: { userId: user.id, usedAt: null },
           data: { usedAt: new Date() },

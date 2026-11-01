@@ -1,4 +1,5 @@
 import type {
+  Prisma,
   PrismaClient,
   User,
   Workspace,
@@ -193,11 +194,39 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
     return `${config.frontendUrl.replace(/\/+$/, '')}/workspaces/${workspaceId}`;
   }
 
+  async function lockActiveWorkspaceAccount(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<void> {
+    const [account] = await tx.$queryRaw<Array<{ status: string; deletedAt: Date | null }>>`
+      SELECT "status"::text AS "status", "deletedAt"
+      FROM "User"
+      WHERE "id" = ${userId}
+      FOR KEY SHARE
+    `;
+
+    if (!account || account.deletedAt || account.status === 'DEACTIVATED') {
+      throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account cannot own a workspace');
+    }
+
+    if (account.status === 'SUSPENDED') {
+      throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+    }
+
+    if (account.status === 'PENDING_VERIFICATION') {
+      throw new AppError(403, 'EMAIL_NOT_VERIFIED', 'Verify your email address to continue');
+    }
+  }
+
   return {
     async create(input, ctx): Promise<WorkspaceSummary> {
       const slug = await uniqueSlug(input.name, input.slug);
 
       const workspace = await client.$transaction(async (tx) => {
+        // Serialize workspace creation with account deletion. The owner row
+        // lock is held until the workspace and its owner membership commit.
+        await lockActiveWorkspaceAccount(tx, input.userId);
+
         const created = await tx.workspace.create({
           data: {
             name: input.name,
@@ -621,6 +650,11 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       }
 
       const updatedWorkspace = await client.$transaction(async (tx) => {
+        // A transfer and account deletion must agree on whether either user
+        // can own this workspace. Locks are held through the whole transfer.
+        await lockActiveWorkspaceAccount(tx, input.userId);
+        await lockActiveWorkspaceAccount(tx, input.newOwnerId);
+
         // Promote the new owner.
         await tx.workspaceMembership.update({
           where: { id: newOwnerMembership.id },
@@ -636,9 +670,25 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         });
 
         // Transfer the authoritative owner column on the workspace itself.
-        const changed = await tx.workspace.update({
-          where: { id: access.workspace.id },
+        const changed = await tx.workspace.updateMany({
+          where: {
+            id: access.workspace.id,
+            ownerId: input.userId,
+            deletedAt: null,
+          },
           data: { ownerId: input.newOwnerId },
+        });
+
+        if (changed.count === 0) {
+          throw new AppError(
+            409,
+            'WORKSPACE_OWNERSHIP_CHANGED',
+            'Workspace ownership changed before the transfer could complete',
+          );
+        }
+
+        const changedWorkspace = await tx.workspace.findUniqueOrThrow({
+          where: { id: access.workspace.id },
         });
 
         await recordAuditEvent(tx, {
@@ -665,7 +715,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           data: { workspaceId: access.workspace.id, role: 'OWNER' },
         });
 
-        return changed;
+        return changedWorkspace;
       });
 
       return toSummary(

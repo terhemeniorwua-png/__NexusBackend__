@@ -227,6 +227,123 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(response.status, 204, JSON.stringify(response.body));
   }
 
+  async function requestAccountDeletion(session: AuthenticatedSession) {
+    return jsonRequest(`${baseUrl}/api/v1/auth/delete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${session.accessToken}` },
+      body: JSON.stringify({ currentPassword: session.password, confirmation: session.email }),
+    });
+  }
+
+  async function createOwnedWorkspace(
+    userId: string,
+    input: { status?: 'ACTIVE' | 'ARCHIVED'; deletedAt?: Date | null } = {},
+  ): Promise<string> {
+    uniqueCounter += 1;
+
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: `Ownership test ${uniqueCounter}`,
+        slug: `ownership-test-${userId}-${uniqueCounter}`,
+        ownerId: userId,
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.deletedAt !== undefined ? { deletedAt: input.deletedAt } : {}),
+      },
+    });
+
+    return workspace.id;
+  }
+
+  async function createWorkspaceThroughApi(
+    session: AuthenticatedSession,
+    name: string,
+  ): Promise<string> {
+    const response = await jsonRequest(`${baseUrl}/api/v1/workspaces`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${session.accessToken}` },
+      body: JSON.stringify({ name }),
+    });
+
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+
+    return (response.body.data as { id: string }).id;
+  }
+
+  async function waitForLockWaiter(queryFragment: 'FOR UPDATE' | 'FOR KEY SHARE'): Promise<void> {
+    const deadline = Date.now() + 5_000;
+
+    while (Date.now() < deadline) {
+      const [result] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint AS "count"
+        FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock'
+          AND query ILIKE ${`%${queryFragment}%`}
+      `;
+
+      if (Number(result?.count ?? 0n) > 0) {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    assert.fail(`Timed out waiting for a database query containing ${queryFragment}`);
+  }
+
+  async function withAccountRowLocked(
+    userId: string,
+    action: (releaseLock: () => void) => Promise<void>,
+  ): Promise<void> {
+    let signalAcquired!: () => void;
+    let releaseLock!: () => void;
+    const acquired = new Promise<void>((resolve) => {
+      signalAcquired = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const transaction = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+        signalAcquired();
+        await held;
+      },
+      { timeout: 15_000 },
+    );
+
+    await acquired;
+
+    try {
+      await action(releaseLock);
+    } finally {
+      releaseLock();
+      await transaction;
+    }
+  }
+
+  async function assertDeletionIsBlockedWithoutSideEffects(
+    session: AuthenticatedSession,
+  ): Promise<void> {
+    const response = await requestAccountDeletion(session);
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error?.code, 'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED');
+
+    const user = await prisma.user.findUnique({ where: { id: session.userId } });
+    const storedSession = await prisma.session.findUnique({ where: { id: session.sessionId } });
+
+    assert.equal(user?.status, 'ACTIVE');
+    assert.equal(user?.deletedAt, null);
+    assert.equal(storedSession?.revokedAt, null);
+
+    const authenticated = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    });
+
+    assert.equal(authenticated.status, 200);
+  }
+
   test('registration creates a pending account and sends a verification email', async () => {
     const email = uniqueEmail();
 
@@ -1158,6 +1275,216 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const stored = await prisma.user.findUnique({ where: { id: session.userId } });
 
     assert.equal(stored?.status, 'DEACTIVATED');
+  });
+
+  test('account deletion is blocked while the account owns an active workspace', async () => {
+    const session = await activate();
+
+    await createOwnedWorkspace(session.userId, { status: 'ACTIVE' });
+    await assertDeletionIsBlockedWithoutSideEffects(session);
+  });
+
+  test('account deletion is blocked while the account owns an archived workspace', async () => {
+    const session = await activate();
+
+    await createOwnedWorkspace(session.userId, { status: 'ARCHIVED' });
+    await assertDeletionIsBlockedWithoutSideEffects(session);
+  });
+
+  test('account deletion checks every retained workspace status, including soft-deleted rows', async () => {
+    const session = await activate();
+
+    await createOwnedWorkspace(session.userId, { status: 'ACTIVE' });
+    await createOwnedWorkspace(session.userId, { status: 'ARCHIVED' });
+    await createOwnedWorkspace(session.userId, { status: 'ARCHIVED', deletedAt: new Date() });
+
+    await assertDeletionIsBlockedWithoutSideEffects(session);
+  });
+
+  test('account deletion ignores workspaces owned by another user and workspace memberships', async () => {
+    const member = await activate();
+    const owner = await activate();
+    const workspaceId = await createWorkspaceThroughApi(owner, 'Workspace owned by another user');
+
+    await prisma.workspaceMembership.create({
+      data: { workspaceId, userId: member.userId, role: 'MEMBER' },
+    });
+
+    const deleted = await requestAccountDeletion(member);
+
+    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+
+    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+
+    assert.equal(workspace?.ownerId, owner.userId);
+  });
+
+  test('account deletion succeeds after ownership is transferred to an existing member', async () => {
+    const owner = await activate();
+    const nextOwner = await activate();
+    const workspaceId = await createWorkspaceThroughApi(owner, 'Transfer before account deletion');
+
+    await prisma.workspaceMembership.create({
+      data: { workspaceId, userId: nextOwner.userId, role: 'MEMBER' },
+    });
+
+    const transfer = await jsonRequest(
+      `${baseUrl}/api/v1/workspaces/${workspaceId}/owner/${nextOwner.userId}`,
+      {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+        body: JSON.stringify({ newOwnerRole: 'MEMBER' }),
+      },
+    );
+
+    assert.equal(transfer.status, 200, JSON.stringify(transfer.body));
+
+    const transferred = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+
+    assert.equal(transferred?.ownerId, nextOwner.userId);
+
+    const deleted = await requestAccountDeletion(owner);
+
+    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+  });
+
+  test('a failed ownership transfer leaves deletion blocked and the account usable', async () => {
+    const owner = await activate();
+    const other = await activate();
+    const workspaceId = await createWorkspaceThroughApi(owner, 'Failed ownership resolution');
+
+    const transfer = await jsonRequest(
+      `${baseUrl}/api/v1/workspaces/${workspaceId}/owner/${other.userId}`,
+      {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+        body: JSON.stringify({ newOwnerRole: 'MEMBER' }),
+      },
+    );
+
+    assert.equal(transfer.status, 404);
+
+    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+
+    assert.equal(workspace?.ownerId, owner.userId);
+    await assertDeletionIsBlockedWithoutSideEffects(owner);
+  });
+
+  test('a deletion transaction failure does not partially revoke the account session', async () => {
+    const session = await activate();
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION nexus_test_fail_account_deletion_session_update()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF NEW."revokedReason" = 'ACCOUNT_DELETED' THEN
+          RAISE EXCEPTION 'simulated account deletion failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER nexus_test_fail_account_deletion_session_update
+      BEFORE UPDATE ON "Session"
+      FOR EACH ROW
+      EXECUTE FUNCTION nexus_test_fail_account_deletion_session_update()
+    `);
+
+    try {
+      const response = await requestAccountDeletion(session);
+
+      assert.equal(response.status, 500);
+
+      const user = await prisma.user.findUnique({ where: { id: session.userId } });
+      const storedSession = await prisma.session.findUnique({ where: { id: session.sessionId } });
+
+      assert.equal(user?.status, 'ACTIVE');
+      assert.equal(user?.deletedAt, null);
+      assert.equal(storedSession?.revokedAt, null);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        `DROP TRIGGER nexus_test_fail_account_deletion_session_update ON "Session"`,
+      );
+      await prisma.$executeRawUnsafe(
+        `DROP FUNCTION nexus_test_fail_account_deletion_session_update()`,
+      );
+    }
+  });
+
+  test('a concurrent workspace creation cannot attach to a deleting account', async () => {
+    const session = await activate();
+    let deletionStatus = 0;
+    let creationStatus = 0;
+
+    await withAccountRowLocked(session.userId, async (releaseLock) => {
+      const deletion = requestAccountDeletion(session);
+
+      await waitForLockWaiter('FOR UPDATE');
+
+      const creation = jsonRequest(`${baseUrl}/api/v1/workspaces`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${session.accessToken}` },
+        body: JSON.stringify({ name: 'Concurrent workspace creation' }),
+      });
+
+      await waitForLockWaiter('FOR KEY SHARE');
+      releaseLock();
+
+      const [deleted, created] = await Promise.all([deletion, creation]);
+
+      deletionStatus = deleted.status;
+      creationStatus = created.status;
+    });
+
+    assert.equal(deletionStatus, 204);
+    assert.equal(creationStatus, 403);
+    assert.equal(await prisma.workspace.count({ where: { ownerId: session.userId } }), 0);
+  });
+
+  test('a concurrent deletion prevents ownership transfer to the deleted account', async () => {
+    const owner = await activate();
+    const nextOwner = await activate();
+    const workspaceId = await createWorkspaceThroughApi(owner, 'Concurrent ownership transfer');
+
+    await prisma.workspaceMembership.create({
+      data: { workspaceId, userId: nextOwner.userId, role: 'MEMBER' },
+    });
+
+    let deletionStatus = 0;
+    let transferStatus = 0;
+
+    await withAccountRowLocked(nextOwner.userId, async (releaseLock) => {
+      const deletion = requestAccountDeletion(nextOwner);
+
+      await waitForLockWaiter('FOR UPDATE');
+
+      const transfer = jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${workspaceId}/owner/${nextOwner.userId}`,
+        {
+          method: 'PATCH',
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+          body: JSON.stringify({ newOwnerRole: 'MEMBER' }),
+        },
+      );
+
+      await waitForLockWaiter('FOR KEY SHARE');
+      releaseLock();
+
+      const [deleted, transferred] = await Promise.all([deletion, transfer]);
+
+      deletionStatus = deleted.status;
+      transferStatus = transferred.status;
+    });
+
+    assert.equal(deletionStatus, 204);
+    assert.equal(transferStatus, 403);
+
+    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+
+    assert.equal(workspace?.ownerId, owner.userId);
   });
 
   test('deleting the account anonymises it and releases the email address', async () => {
