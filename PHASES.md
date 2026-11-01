@@ -312,6 +312,32 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 4.1 — Bounded email delivery retries `[x]`
+
+**Objective:** Remove the infinite email retry path found in the Phase 4 audit and guarantee that every delivery attempt sequence ends in a terminal state.
+
+**Deliverables:**
+- One bounded retry decision shared by provider failures and unexpected worker errors
+- Attempt counter persisted atomically on claim and never reset by retry scheduling
+- Retry exhaustion transitions the delivery to `FAILED`
+- Permanent provider failures continue to stop immediately
+- Existing idempotency, suppression and webhook processing preserved
+- Regression tests for transient, permanent, unexpected, exhausted, duplicate and recovery cases
+
+**Dependencies:** Phase 4
+
+**Verification criteria:**
+- A transient failure retries with backoff and succeeds when the provider recovers
+- Repeated transient failures stop at `EMAIL_MAX_ATTEMPTS`
+- A permanent failure does not retry
+- Unexpected transport or worker errors obey the same limit
+- An exhausted row never reaches the provider again
+- Concurrent workers do not claim or send the same row twice
+
+**Blockers / Notes:** Verified on 2026-11-01. Root cause: the provider-error branch already checked `attempts < maxAttempts`, but the unexpected-error catch in `processPending` called `markRetry` unconditionally. Any thrown error — from the transport, the suppression lookup, or an outcome persistence write — therefore returned the row to `QUEUED` forever while each claim incremented `attempts`. The retry decision is now centralized in `retryOrFail`: it schedules exponential backoff with jitter only while `delivery.attempts < delivery.maxAttempts`, and otherwise writes the terminal `FAILED` state with the last error and `failedAt`. Both the provider retry path and the unexpected-error path use it. `claimDue` now excludes rows whose attempts are already exhausted, and `failExhaustedQueued` repairs any legacy `QUEUED` row at or past its limit before the claim runs, so stale rows never reach the provider again. The counter is still incremented atomically in the claim query and is not reset by a retry. Permanent failures still fail immediately. No schema migration or new environment variable was needed. The existing policy settings are `EMAIL_MAX_ATTEMPTS` (default 5, maximum 10), `EMAIL_RETRY_BASE_DELAY_MS` and `EMAIL_RETRY_MAX_DELAY_MS`. Delivery idempotency, suppression, provider webhook verification and event deduplication are unchanged. `tests/email-phase4-db.test.ts` now has 18 integration tests, adding repeated transient failures up to the limit, terminal state after exhaustion, repair of an exhausted queued row, unexpected transport failure bounded at the limit, recovery after a temporary worker failure, retry counter persistence, and concurrent workers claiming and sending only once; the Phase 4 suite passes 18/18. With the Phase 2–5 database suites enabled the full suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. Remaining limitation: delivery is at-least-once. If the provider accepts a message but the process fails before `markAccepted` persists that outcome, a retry can send one duplicate; provider-side idempotency would be needed for exactly-once delivery. Rows left in `SENDING` by a hard worker crash are not automatically reclaimed; this phase only bounds retries and repairs exhausted `QUEUED` rows. The separate Phase 6 database suite currently fails for pre-existing reasons unrelated to this change (its `/auth/me` fixture reads `data.id` while the endpoint returns `data.user.id`, and the repository `.env` supplies an invalid `TRUST_PROXY` value through `prisma.config.ts`); it is outside Phase 4.1.
+
+---
+
 ### Milestone 2 — Organization and Access Control
 
 ---
@@ -1044,9 +1070,10 @@ _No issues recorded._
 | 2 — Core domain schema | 2026-10-21 | Migrations apply to PostgreSQL 16, the constraint and index checks pass, the `npm test` suite passes with the database integration tests enabled. |
 | 3 — Authentication and account lifecycle | 2026-10-21 | 63 tests pass with the database integration tests enabled, covering the full account lifecycle, the session rotation, the CSRF enforcement, the rate limits and the audit trail. |
 | 4 — Transactional email | 2026-10-21 | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account. |
+| 4.1 — Bounded email delivery retries | 2026-11-01 | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 
 ---
 
-_Last updated: 2026-10-23. Phases 1 to 6 are implemented and verified. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, together with corrective Phases 3.1–3.5 and 4.1. The document also describes the planned state of the later phases._
