@@ -1,12 +1,13 @@
 import { logger } from '../../../utils/logger';
+import { redactEmailAddresses } from '../../email/log-privacy';
 import type { EmailTransport, EmailTransportRequest, EmailTransportResult } from './types';
 
 /**
  * Development transport.
  *
- * It records delivery metadata only. Message bodies, verification links and
- * single use tokens are never written to the log, because the log is shipped
- * to an aggregator that is not a secret store.
+ * It records delivery metadata only. Recipient addresses, message bodies,
+ * verification links and single use tokens are never written to the log,
+ * because the log is shipped to an aggregator that is not a secret store.
  */
 export function createConsoleTransport(): EmailTransport {
   return {
@@ -15,8 +16,7 @@ export function createConsoleTransport(): EmailTransport {
     async send(request: EmailTransportRequest): Promise<EmailTransportResult> {
       logger.info('email_delivery_console', {
         deliveryId: request.deliveryId,
-        to: request.to,
-        subject: request.subject,
+        subject: redactEmailAddresses(request.subject),
       });
 
       return {
