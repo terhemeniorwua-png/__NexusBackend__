@@ -440,6 +440,14 @@ Do not run migrations against production without reviewing the migration, confir
 
 Avoid destructive database resets unless explicitly authorized and safely isolated to a disposable development database.
 
+Prisma Migrate does not provide automatic down migrations. The recovery policy, migration risk review and backup/restore procedures are documented in [`docs/migration-recovery.md`](docs/migration-recovery.md). Verify the procedure against a disposable database with:
+
+```bash
+DATABASE_URL="postgresql://<test-user>:<test-password>@<host>:<port>/<test-database>" \
+SHADOW_DATABASE_URL="postgresql://<test-user>:<test-password>@<host>:<port>/<shadow-database>" \
+./scripts/verify-migration-recovery.sh
+```
+
 ## Running the Server
 
 Inspect `package.json` for the actual scripts.
@@ -841,7 +849,7 @@ Before deploying:
 9. Deploy using the approved process.
 10. Verify health, logs, database access, and essential user flows.
 
-Use backward-compatible database changes when possible. Prepare a rollback or recovery procedure for risky releases.
+Use backward-compatible database changes when possible. Prepare a rollback or recovery procedure for risky releases. See [`docs/migration-recovery.md`](docs/migration-recovery.md) for the migration recovery policy and the verification script.
 
 ## Development Workflow
 

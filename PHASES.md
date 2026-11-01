@@ -17,7 +17,7 @@
 
 _Update this table whenever a phase status changes._
 
-Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. Phase 2.1 is a database-model audit subphase of Phase 2. They are tracked below but do not change the 24-phase roadmap count.
+Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. Phases 2.1 and 2.2 are database audit and migration-recovery subphases of Phase 2. They are tracked below but do not change the 24-phase roadmap count.
 
 ---
 
@@ -177,9 +177,14 @@ Follow this cycle for every phase, without exception:
 - Fresh database setup runs all migrations without errors
 - Seed script populates test data reproducibly
 - Uniqueness, foreign-key, and index constraints verified by tests or migration review
-- Rollback of migrations tested in a safe environment
+- Migration application verified against a disposable database
+- Recovery procedure tested: backup/restore, failed-migration resolution and forward corrective migration
+- Data integrity verified after each tested recovery
+- Migration history and schema drift checked before and after recovery
+- Evidence documented in `docs/migration-recovery.md`
+- Remaining limitations explicitly acknowledged; no claim is made that every migration has a tested down path
 
-**Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied.
+**Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied. The rollback/recovery criterion is satisfied by Phase 2.2: Prisma has no automatic down migrations, so recovery uses backup/restore, failed-migration resolution and forward corrective migrations, verified in `docs/migration-recovery.md`.
 
 ---
 
@@ -207,6 +212,36 @@ Follow this cycle for every phase, without exception:
 - The audit result is documented and the deferred models remain out of scope until their roadmap phases.
 
 **Blockers / Notes:** Audited on 2026-11-01. `npx prisma validate`, `npx prisma generate`, `npx prisma migrate deploy` and `npx prisma migrate diff --exit-code` pass; the migration diff reports no difference. `tests/database-phase2.test.ts` passes 2/2 with `RUN_PHASE2_DB_TESTS=true` against a disposable PostgreSQL 16 container. Conclusion: the deferred models are not a Phase 2 defect; adding them now would be premature. The full database-enabled suite currently reports 176 passed and 10 failed, all failures confined to the pre-existing Phase 6 ownership-transfer integration tests. Those failures are unrelated to Phase 2.1: `tests/phase6-authorization-db.test.ts` reads `data.id` instead of `data.user.id` from `/api/v1/auth/me`, and `src/modules/workspaces/workspace.routes.ts` registers `/:workspaceId/owner` while the OpenAPI contract and tests use `/:workspaceId/owner/:userId`. The Phase 6 blocker is recorded here and left untouched under the Phase 2.1 scope.
+
+---
+
+#### Phase 2.2 — Database migration rollback and recovery `[x]`
+
+**Objective:** Establish and verify a safe recovery strategy for Prisma migrations without assuming that every migration has a reversible down path.
+
+**Deliverables:**
+- Documented the difference between application deployment rollback, schema reversal, failed-migration recovery and backup restoration.
+- Reviewed all six committed migrations and classified their operations and reversal risks.
+- Confirmed Prisma Migrate is the active migration system and that it does not provide automatic down migrations.
+- Documented the recovery policy in `docs/migration-recovery.md`.
+- Added `scripts/verify-migration-recovery.sh`, which tests baseline migration, schema drift, backup/restore, failed-migration resolution and forward corrective migration against a disposable database.
+- Preserved all existing migration files and migration history; no migration was edited, deleted or reset.
+- Verified that a backup restores data, a failed migration can be resolved, and a forward corrective migration preserves existing rows.
+- Updated the Phase 2 verification criteria to distinguish migration application, recovery testing, data integrity, evidence and remaining limitations.
+
+**Dependencies:** Phases 2 and 2.1 complete.
+
+**Verification criteria:**
+- All committed migrations apply to a disposable database.
+- The resulting schema matches `prisma/schema.prisma` with no drift.
+- A backup/restore round trip preserves sentinel data.
+- A failed migration is recorded by Prisma and can be marked rolled back.
+- A forward corrective migration preserves existing data and restores the intended schema shape.
+- The database returns to a known-good six-migration state after testing.
+- The verification procedure is repeatable through the script.
+- Remaining production backup, restore and deployment limitations are documented.
+
+**Blockers / Notes:** Verified on 2026-11-01 against a disposable PostgreSQL 16.15 container using `nexus_test`, `nexus_shadow`, `nexus_probe`, `nexus_probe_corrective` and `nexus_restore` databases. The six committed migrations apply successfully, `prisma migrate diff` reports no difference, and `tests/database-phase2.test.ts` passes 2/2. `scripts/verify-migration-recovery.sh` passed all six stages: baseline application and drift check, sentinel-data backup/restore, failed-migration `P3018` detection and `migrate resolve --rolled-back`, forward add-column and corrective drop-column migrations with data preserved, and final known-good restore. A separate restore into `nexus_restore` also reported the schema up to date. No per-migration down scripts exist by design; destructive changes rely on verified backup restoration or forward corrective migrations. No shared, staging or production database was accessed. The repository still lacks automated backup scheduling, retention, encryption, point-in-time recovery and a staging deployment rollback exercise; those remain Phase 23/24 work. The pre-existing Phase 6 DB test failures remain documented and unchanged.
 
 ---
 
