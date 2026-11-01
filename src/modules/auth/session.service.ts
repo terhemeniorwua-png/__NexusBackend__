@@ -91,8 +91,16 @@ export async function rotateSession(
 
   const nextRefreshToken = generateSecureToken();
 
-  const session = await prisma.session.update({
-    where: { id: current.id },
+  // Compare-and-swap the exact refresh state that was read above. PostgreSQL
+  // rechecks these predicates after waiting for a concurrent row update, so
+  // only one request can consume this token hash.
+  const rotation = await prisma.session.updateMany({
+    where: {
+      id: current.id,
+      refreshTokenHash: tokenHash,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
     data: {
       refreshTokenHash: hashSecret(nextRefreshToken),
       previousRefreshTokenHash: tokenHash,
@@ -101,6 +109,41 @@ export async function rotateSession(
       ...(input.ip ? { ip: input.ip.slice(0, 128) } : {}),
     },
   });
+
+  if (rotation.count !== 1) {
+    // A request that lost the compare-and-swap may have presented a token
+    // that is now recorded as the previous token. Preserve the established
+    // reuse-detection policy; otherwise report the current session state.
+    const previous = await prisma.session.findUnique({
+      where: { previousRefreshTokenHash: tokenHash },
+    });
+
+    if (previous) {
+      return { kind: 'reused', session: previous };
+    }
+
+    const latest = await prisma.session.findUnique({ where: { id: current.id } });
+
+    if (latest?.revokedAt) {
+      return { kind: 'reused', session: latest };
+    }
+
+    if (latest && latest.expiresAt.getTime() <= Date.now()) {
+      throw new AppError(401, 'SESSION_EXPIRED', 'Your session has expired. Please sign in again.');
+    }
+
+    throw new AppError(401, 'REFRESH_TOKEN_INVALID', 'Your session is no longer valid');
+  }
+
+  const session = await prisma.session.findUnique({
+    where: { refreshTokenHash: hashSecret(nextRefreshToken) },
+  });
+
+  if (!session) {
+    // Do not return the generated token unless its state is visible as
+    // persisted. A database failure here rejects the request.
+    throw new AppError(401, 'REFRESH_TOKEN_INVALID', 'Your session is no longer valid');
+  }
 
   return { kind: 'rotated', session, refreshToken: nextRefreshToken };
 }
