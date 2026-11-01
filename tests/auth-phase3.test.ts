@@ -772,6 +772,51 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(login.body.error?.code, 'ACCOUNT_DEACTIVATED');
   });
 
+  test('a deactivation transaction failure leaves account and session state unchanged', async () => {
+    const session = await activate();
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION nexus_test_fail_deactivation_session_update()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF NEW."revokedReason" = 'ACCOUNT_DEACTIVATED' THEN
+          RAISE EXCEPTION 'simulated session revocation failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER nexus_test_fail_deactivation_session_update
+      BEFORE UPDATE ON "Session"
+      FOR EACH ROW
+      EXECUTE FUNCTION nexus_test_fail_deactivation_session_update()
+    `);
+
+    try {
+      const response = await jsonRequest(`${baseUrl}/api/v1/auth/deactivate`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${session.accessToken}` },
+        body: JSON.stringify({ currentPassword: session.password }),
+      });
+
+      assert.equal(response.status, 500);
+
+      const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+      const storedSession = await prisma.session.findUnique({ where: { id: session.sessionId } });
+
+      assert.equal(stored?.status, 'ACTIVE');
+      assert.equal(storedSession?.revokedAt, null);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        `DROP TRIGGER nexus_test_fail_deactivation_session_update ON "Session"`,
+      );
+      await prisma.$executeRawUnsafe(`DROP FUNCTION nexus_test_fail_deactivation_session_update()`);
+    }
+  });
+
   test('reactivation restores the account but never restores its old sessions', async () => {
     const session = await activate();
 
@@ -864,6 +909,20 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     });
 
     assert.equal(activeSessionsAfter, activeSessionsBefore);
+
+    const failure = await prisma.auditLog.findFirst({
+      where: {
+        action: 'auth.account_reactivation_failed',
+        actorId: session.userId,
+        targetId: session.userId,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    assert.equal(
+      failure?.metadata && (failure.metadata as { reason?: string }).reason,
+      'ACCOUNT_ALREADY_ACTIVE',
+    );
   });
 
   test('a suspended account cannot reactivate itself', async () => {
@@ -885,6 +944,50 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const stored = await prisma.user.findUnique({ where: { id: session.userId } });
 
     assert.equal(stored?.status, 'SUSPENDED');
+
+    const failure = await prisma.auditLog.findFirst({
+      where: {
+        action: 'auth.account_reactivation_failed',
+        actorId: session.userId,
+        targetId: session.userId,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    assert.equal(
+      failure?.metadata && (failure.metadata as { reason?: string }).reason,
+      'ACCOUNT_SUSPENDED',
+    );
+  });
+
+  test('an unverified account that was never deactivated cannot reactivate', async () => {
+    const account = await register();
+
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: account.email, password: account.password }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error?.code, 'ACCOUNT_NOT_DEACTIVATED');
+
+    const stored = await prisma.user.findUnique({ where: { id: account.userId } });
+
+    assert.equal(stored?.status, 'PENDING_VERIFICATION');
+
+    const failure = await prisma.auditLog.findFirst({
+      where: {
+        action: 'auth.account_reactivation_failed',
+        actorId: account.userId,
+        targetId: account.userId,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    assert.equal(
+      failure?.metadata && (failure.metadata as { reason?: string }).reason,
+      'ACCOUNT_NOT_DEACTIVATED',
+    );
   });
 
   test('a deleted account cannot be reactivated', async () => {

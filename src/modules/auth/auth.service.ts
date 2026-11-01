@@ -858,6 +858,18 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     async reactivateAccount(input: LoginInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
       const user = await findUserByEmail(input.email);
 
+      async function recordReactivationFailure(userId: string, reason: string): Promise<void> {
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: userId,
+          actorId: userId,
+          metadata: { reason },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+      }
+
       if (!user || user.deletedAt) {
         await verifyPassword(input.password, TIMING_EQUALIZER_HASH);
 
@@ -899,14 +911,17 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       if (user.status === 'SUSPENDED') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_SUSPENDED');
         throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
       }
 
       if (user.status === 'ACTIVE') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_ALREADY_ACTIVE');
         throw new AppError(409, 'ACCOUNT_ALREADY_ACTIVE', 'This account is already active');
       }
 
       if (user.status !== 'DEACTIVATED') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_NOT_DEACTIVATED');
         throw new AppError(409, 'ACCOUNT_NOT_DEACTIVATED', 'This account is not deactivated');
       }
 
@@ -919,6 +934,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         });
 
         if (updated.count === 0) {
+          await recordReactivationFailure(user.id, 'ACCOUNT_NOT_REACTIVATABLE');
           throw new AppError(
             409,
             'ACCOUNT_NOT_REACTIVATABLE',
