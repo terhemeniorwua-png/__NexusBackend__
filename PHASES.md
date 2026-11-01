@@ -168,6 +168,35 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 3.1 — Account reactivation and deactivation hardening `[x]`
+
+**Objective:** Close the account-lifecycle gap left by Phase 3: a deactivated account had no supported recovery path, and deactivation left outstanding credentials that could restore access.
+
+**Deliverables:**
+- Self-service reactivation for a deactivated account using its email address and password
+- Reactivation that never creates a session and requires a fresh sign-in
+- Return an unverified account to `PENDING_VERIFICATION` with a new verification email
+- Reject reactivation for active, suspended, deleted and non-deactivated accounts
+- Revoke every session and invalidate every outstanding one-time token on deactivation
+- Prevent email-change confirmation from activating a suspended or deactivated account
+- Security event logging for successful and failed reactivation attempts
+- API, OpenAPI and README documentation
+
+**Dependencies:** Phases 2, 3, 4
+
+**Verification criteria:**
+- A deactivated account can reactivate and sign in again
+- Reactivation returns no access token, refresh token or session
+- Old access and refresh tokens stay invalid after reactivation
+- Deleted and suspended accounts cannot reactivate themselves
+- Pre-deactivation verification, reset and email-change tokens cannot restore access
+- Reactivation is rate limited and does not reveal whether an account exists
+- The Phase 3 authentication suite passes against PostgreSQL and Redis
+
+**Blockers / Notes:** Implemented on 2026-11-01. The original Phase 3 audit findings were not present in the repository, git history, pull requests or issues, so the expected behaviour was derived from the existing account lifecycle and the product requirement that deactivation be reversible. The endpoint is `POST /api/v1/auth/reactivate` with the same `{ email, password }` contract and rate limiters as sign-in. It restores `ACTIVE` only when the address was already verified; otherwise it restores `PENDING_VERIFICATION` and sends a fresh verification link, so reactivation cannot bypass email verification. Active accounts return `409 ACCOUNT_ALREADY_ACTIVE`, suspended accounts `403 ACCOUNT_SUSPENDED`, non-deactivated pending accounts `409 ACCOUNT_NOT_DEACTIVATED`, and deleted or unknown accounts or a wrong password return the same `401 INVALID_CREDENTIALS` response after a bcrypt timing equaliser. The status update is conditional on `status = DEACTIVATED` and `deletedAt IS NULL`, so concurrent requests cannot both succeed. Deactivation is now one transaction that sets the status, revokes every session and marks every unused `AuthToken` as used, not only `EMAIL_VERIFICATION`; reactivation also revokes any remaining session and token before returning the new status. `confirmEmailChange` rejects suspended and deactivated accounts before updating the address, closing the path where a pre-deactivation email-change token could set the status back to `ACTIVE`. Reactivation and failure events are written to `AuditLog` without passwords or tokens. No schema migration was required. The Phase 3 integration suite now has 37 tests, including nine reactivation and credential-invalidation cases; it passes 37/37 with `RUN_PHASE3_DB_TESTS=true TEST_DATABASE_URL=postgresql://test:test@localhost:55435/nexus_test NODE_ENV=test node --import tsx --test tests/auth-phase3.test.ts` against an ephemeral PostgreSQL 16 container and Redis database 15. The full Phase 2-5 database-enabled suite passes 166/166 with the same database and Redis database 15; `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `prisma validate` pass. Remaining limitation: there is no administrator role or suspension endpoint, so reactivation is self-service only; administrative recovery would need an explicit privileged workflow in a later phase.
+
+---
+
 #### Phase 4 — Transactional email and delivery infrastructure `[x]`
 
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.

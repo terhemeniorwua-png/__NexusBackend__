@@ -217,6 +217,16 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     return login(account.email, account.password);
   }
 
+  async function deactivate(session: AuthenticatedSession): Promise<void> {
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/deactivate`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${session.accessToken}` },
+      body: JSON.stringify({ currentPassword: session.password }),
+    });
+
+    assert.equal(response.status, 204, JSON.stringify(response.body));
+  }
+
   test('registration creates a pending account and sends a verification email', async () => {
     const email = uniqueEmail();
 
@@ -760,6 +770,291 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     assert.equal(login.status, 403);
     assert.equal(login.body.error?.code, 'ACCOUNT_DEACTIVATED');
+  });
+
+  test('reactivation restores the account but never restores its old sessions', async () => {
+    const session = await activate();
+
+    await deactivate(session);
+
+    const oldAccessBefore = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    });
+
+    assert.equal(oldAccessBefore.status, 401);
+
+    const oldRefreshBefore = await jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken: session.refreshToken }),
+    });
+
+    assert.equal(oldRefreshBefore.status, 401);
+    assert.equal(oldRefreshBefore.body.error?.code, 'SESSION_REUSE_DETECTED');
+
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+
+    const data = response.body.data as {
+      user: { status: string };
+      accessToken?: string;
+      session?: unknown;
+    };
+
+    assert.equal(data.user.status, 'ACTIVE');
+    assert.equal(data.accessToken, undefined, 'Reactivation must not create an access token');
+    assert.equal(data.session, undefined, 'Reactivation must not create a session');
+
+    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+
+    assert.equal(stored?.status, 'ACTIVE');
+    assert.equal(stored?.deletedAt, null);
+
+    const oldAccessAfter = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    });
+
+    assert.equal(oldAccessAfter.status, 401);
+
+    const oldRefreshAfter = await jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken: session.refreshToken }),
+    });
+
+    assert.equal(oldRefreshAfter.status, 401);
+
+    const newSession = await login(session.email, session.password);
+    const newAccess = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${newSession.accessToken}` },
+    });
+
+    assert.equal(newAccess.status, 200);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { action: 'auth.account_reactivated', actorId: session.userId },
+    });
+
+    assert.ok(audit, 'Reactivation has to be recorded in the audit log');
+  });
+
+  test('reactivating an already active account is rejected', async () => {
+    const session = await activate();
+
+    const activeSessionsBefore = await prisma.session.count({
+      where: { userId: session.userId, revokedAt: null },
+    });
+
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error?.code, 'ACCOUNT_ALREADY_ACTIVE');
+
+    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+
+    assert.equal(stored?.status, 'ACTIVE');
+
+    const activeSessionsAfter = await prisma.session.count({
+      where: { userId: session.userId, revokedAt: null },
+    });
+
+    assert.equal(activeSessionsAfter, activeSessionsBefore);
+  });
+
+  test('a suspended account cannot reactivate itself', async () => {
+    const session = await activate();
+
+    await prisma.user.update({
+      where: { id: session.userId },
+      data: { status: 'SUSPENDED' },
+    });
+
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error?.code, 'ACCOUNT_SUSPENDED');
+
+    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+
+    assert.equal(stored?.status, 'SUSPENDED');
+  });
+
+  test('a deleted account cannot be reactivated', async () => {
+    const session = await activate();
+
+    const deleted = await jsonRequest(`${baseUrl}/api/v1/auth/delete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${session.accessToken}` },
+      body: JSON.stringify({ currentPassword: session.password, confirmation: session.email }),
+    });
+
+    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error?.code, 'INVALID_CREDENTIALS');
+
+    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+
+    assert.equal(stored?.status, 'DEACTIVATED');
+    assert.ok(stored?.deletedAt);
+  });
+
+  test('reactivation does not reveal account state to an invalid credential', async () => {
+    const session = await activate();
+
+    await deactivate(session);
+
+    const wrongPassword = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: 'Wrong-Password-9' }),
+    });
+
+    const unknownAccount = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: uniqueEmail('ghost'), password: session.password }),
+    });
+
+    assert.equal(wrongPassword.status, 401);
+    assert.equal(wrongPassword.body.error?.code, 'INVALID_CREDENTIALS');
+    assert.equal(unknownAccount.status, 401);
+    assert.equal(unknownAccount.body.error?.code, 'INVALID_CREDENTIALS');
+    assert.equal(wrongPassword.body.error?.message, unknownAccount.body.error?.message);
+
+    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+
+    assert.equal(stored?.status, 'DEACTIVATED');
+  });
+
+  test('reactivation validates the email address and password', async () => {
+    const invalidEmail = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: 'not-an-email', password: 'Correct-Horse-9' }),
+    });
+
+    const missingPassword = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: uniqueEmail('reactivation') }),
+    });
+
+    assert.equal(invalidEmail.status, 400);
+    assert.equal(invalidEmail.body.error?.code, 'VALIDATION_ERROR');
+    assert.equal(missingPassword.status, 400);
+    assert.equal(missingPassword.body.error?.code, 'VALIDATION_ERROR');
+  });
+
+  test('reactivating an unverified account returns it to pending verification', async () => {
+    const account = await register();
+    const oldVerificationToken = sender.tokenFrom(
+      sender.lastFor(account.email, 'account_verification'),
+    );
+    const session = await login(account.email, account.password);
+
+    await deactivate(session);
+
+    const oldVerification = await jsonRequest(`${baseUrl}/api/v1/auth/verify-email`, {
+      method: 'POST',
+      body: JSON.stringify({ token: oldVerificationToken }),
+    });
+
+    assert.equal(oldVerification.status, 400);
+    assert.equal(oldVerification.body.error?.code, 'TOKEN_ALREADY_USED');
+
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: account.email, password: account.password }),
+    });
+
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+
+    const data = response.body.data as { user: { status: string } };
+
+    assert.equal(data.user.status, 'PENDING_VERIFICATION');
+
+    const stored = await prisma.user.findUnique({ where: { id: account.userId } });
+
+    assert.equal(stored?.status, 'PENDING_VERIFICATION');
+    assert.equal(stored?.emailVerifiedAt, null);
+
+    await verifyAccount(account.email);
+
+    const verified = await prisma.user.findUnique({ where: { id: account.userId } });
+
+    assert.equal(verified?.status, 'ACTIVE');
+    assert.ok(verified?.emailVerifiedAt);
+
+    const newSession = await login(account.email, account.password);
+
+    assert.ok(newSession.accessToken);
+  });
+
+  test('a pre-deactivation email-change token cannot reactivate the account', async () => {
+    const session = await activate();
+    const newEmail = uniqueEmail('reactivation-change');
+
+    const requested = await jsonRequest(`${baseUrl}/api/v1/auth/email/change`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${session.accessToken}` },
+      body: JSON.stringify({ email: newEmail, currentPassword: session.password }),
+    });
+
+    assert.equal(requested.status, 200, JSON.stringify(requested.body));
+
+    const token = sender.tokenFrom(sender.lastFor(newEmail, 'email_change_verification'));
+
+    await deactivate(session);
+
+    const confirmed = await jsonRequest(`${baseUrl}/api/v1/auth/email/change/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+
+    assert.equal(confirmed.status, 400);
+    assert.equal(confirmed.body.error?.code, 'TOKEN_ALREADY_USED');
+
+    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+
+    assert.equal(stored?.status, 'DEACTIVATED');
+    assert.equal(stored?.email, session.email);
+  });
+
+  test('a pre-deactivation password-reset token cannot be used while deactivated', async () => {
+    const session = await activate();
+
+    const requested = await jsonRequest(`${baseUrl}/api/v1/auth/password/forgot`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email }),
+    });
+
+    assert.equal(requested.status, 200);
+
+    const token = sender.tokenFrom(sender.lastFor(session.email, 'password_reset'));
+
+    await deactivate(session);
+
+    const reset = await jsonRequest(`${baseUrl}/api/v1/auth/password/reset`, {
+      method: 'POST',
+      body: JSON.stringify({ token, password: 'Another-Good-Pass-4' }),
+    });
+
+    assert.equal(reset.status, 400);
+    assert.equal(reset.body.error?.code, 'TOKEN_ALREADY_USED');
+
+    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+
+    assert.equal(stored?.status, 'DEACTIVATED');
   });
 
   test('deleting the account anonymises it and releases the email address', async () => {

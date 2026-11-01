@@ -521,9 +521,10 @@ Rules that the implementation enforces:
 - Requests that rely on the `nexus_rt` cookie must also send the `x-csrf-token` header. The header is required: the `nexus_csrf` cookie alone is not accepted, because a browser attaches cookies to cross-site requests automatically. The cookie only gives the frontend a way to read the value. Requests that present the refresh token in the request body are not cookie-authenticated and do not need one.
 - Only cookie-authenticated requests exist, so the business endpoints never accept the access token from a cookie and are therefore not exposed to cross-site request forgery.
 - One-time tokens (email verification, password reset, email change) are single use, expiring, and stored only as digests. The newest token of a purpose invalidates the older ones.
+- Deactivation revokes every session and invalidates every outstanding one-time token, so a link issued before deactivation cannot restore access or change the account. Reactivation is self-service with the account email address and password, never creates a session, and returns an unverified account to `PENDING_VERIFICATION` with a fresh verification link. Deleted and suspended accounts cannot reactivate themselves.
 - Passwords are hashed with bcrypt, are limited to 72 bytes so nothing is silently truncated, and are never logged or emailed.
 - Endpoints that accept an email address (`resend-verification`, `password/forgot`) always return the same response, so they cannot be used to discover which addresses are registered.
-- Sign-in, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and fall back to an in-process counter when Redis is unavailable.
+- Sign-in, reactivation, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and fall back to an in-process counter when Redis is unavailable.
 - Account level security events are written to the `AuditLog` table with a null `workspaceId`. They never contain passwords, tokens or verification links.
 
 ### Endpoints
@@ -534,6 +535,7 @@ Rules that the implementation enforces:
 | `POST` | `/api/v1/auth/verify-email` | Activate the account with the emailed token |
 | `POST` | `/api/v1/auth/resend-verification` | Request a new verification link |
 | `POST` | `/api/v1/auth/login` | Start a session |
+| `POST` | `/api/v1/auth/reactivate` | Reactivate a deactivated account |
 | `POST` | `/api/v1/auth/refresh` | Rotate the session |
 | `POST` | `/api/v1/auth/logout` | End the current session |
 | `POST` | `/api/v1/auth/logout-all` | End every session of the account |

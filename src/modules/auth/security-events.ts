@@ -28,6 +28,8 @@ export const SecurityAction = {
   EmailChangeRequested: 'auth.email_change_requested',
   EmailChanged: 'auth.email_changed',
   AccountDeactivated: 'auth.account_deactivated',
+  AccountReactivated: 'auth.account_reactivated',
+  AccountReactivationFailed: 'auth.account_reactivation_failed',
   AccountDeleted: 'auth.account_deleted',
 } as const;
 

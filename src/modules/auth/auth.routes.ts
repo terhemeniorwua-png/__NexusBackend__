@@ -140,6 +140,13 @@ export function createAuthRouter({
     validateBody(loginSchema),
     controller.login,
   );
+  router.post(
+    '/reactivate',
+    loginIpLimit,
+    loginAccountLimit,
+    validateBody(loginSchema),
+    controller.reactivate,
+  );
   router.post('/refresh', validateBody(refreshSchema), controller.refresh);
   router.post('/logout', validateBody(refreshSchema), controller.logout);
 

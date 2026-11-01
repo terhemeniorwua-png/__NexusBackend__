@@ -342,6 +342,15 @@ export function createAuthController({
       res.status(204).end();
     },
 
+    async reactivate(req: Request, res: Response): Promise<void> {
+      const body = req.validated?.body as LoginInput;
+      const result = await service.reactivateAccount(body, context(req));
+
+      clearSessionCookies(res);
+
+      sendSuccess(res, { user: result.user });
+    },
+
     async remove(req: Request, res: Response): Promise<void> {
       const auth = req.auth;
 

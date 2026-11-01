@@ -87,6 +87,7 @@ export interface AuthService {
     input: { userId: string; currentPassword: string },
     ctx: RequestContext,
   ): Promise<void>;
+  reactivateAccount(input: LoginInput, ctx: RequestContext): Promise<{ user: PublicUser }>;
   deleteAccount(input: AccountDeleteInput & { userId: string }, ctx: RequestContext): Promise<void>;
 }
 
@@ -270,13 +271,37 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         purpose: 'EMAIL_VERIFICATION',
       });
 
-      const user = await client.user.update({
-        where: { id: record.userId },
+      const verified = await client.user.updateMany({
+        where: {
+          id: record.userId,
+          deletedAt: null,
+          status: { in: ['PENDING_VERIFICATION', 'ACTIVE'] },
+        },
         data: {
           status: 'ACTIVE',
           emailVerifiedAt: new Date(),
         },
       });
+
+      if (verified.count === 0) {
+        const current = await client.user.findUnique({ where: { id: record.userId } });
+
+        if (!current || current.deletedAt) {
+          throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+        }
+
+        if (current.status === 'SUSPENDED') {
+          throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+        }
+
+        if (current.status === 'DEACTIVATED') {
+          throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+        }
+
+        throw new AppError(409, 'ACCOUNT_NOT_VERIFIABLE', 'This account cannot be verified');
+      }
+
+      const user = await client.user.findUniqueOrThrow({ where: { id: record.userId } });
 
       await recordSecurityEvent(client, {
         action: SecurityAction.EmailVerified,
@@ -720,6 +745,20 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
       }
 
+      const current = await client.user.findUnique({ where: { id: record.userId } });
+
+      if (!current || current.deletedAt) {
+        throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+      }
+
+      if (current.status === 'SUSPENDED') {
+        throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+      }
+
+      if (current.status === 'DEACTIVATED') {
+        throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+      }
+
       const existing = await findUserByEmail(record.targetEmail);
 
       if (existing && existing.id !== record.userId) {
@@ -730,14 +769,38 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         );
       }
 
-      const user = await client.user.update({
-        where: { id: record.userId },
+      const changed = await client.user.updateMany({
+        where: {
+          id: record.userId,
+          deletedAt: null,
+          status: { in: ['PENDING_VERIFICATION', 'ACTIVE'] },
+        },
         data: {
           email: record.targetEmail,
           emailVerifiedAt: new Date(),
           status: 'ACTIVE',
         },
       });
+
+      if (changed.count === 0) {
+        const latest = await client.user.findUnique({ where: { id: record.userId } });
+
+        if (!latest || latest.deletedAt) {
+          throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+        }
+
+        if (latest.status === 'SUSPENDED') {
+          throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+        }
+
+        if (latest.status === 'DEACTIVATED') {
+          throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+        }
+
+        throw new AppError(409, 'ACCOUNT_NOT_CHANGEABLE', 'This account cannot be changed');
+      }
+
+      const user = await client.user.findUniqueOrThrow({ where: { id: record.userId } });
 
       await recordSecurityEvent(client, {
         action: SecurityAction.EmailChanged,
@@ -763,19 +826,23 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       await requirePassword(user, input.currentPassword);
 
-      await client.user.update({
-        where: { id: user.id },
-        data: { status: 'DEACTIVATED' },
-      });
+      const deactivatedAt = new Date();
 
-      await revokeAllSessions(client, {
-        userId: user.id,
-        reason: 'ACCOUNT_DEACTIVATED',
-      });
+      await client.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: { status: 'DEACTIVATED' },
+        });
 
-      await invalidateAuthTokens(client, {
-        userId: user.id,
-        purpose: 'EMAIL_VERIFICATION',
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: deactivatedAt, revokedReason: 'ACCOUNT_DEACTIVATED' },
+        });
+
+        await tx.authToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: deactivatedAt },
+        });
       });
 
       await recordSecurityEvent(client, {
@@ -786,6 +853,125 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
+    },
+
+    async reactivateAccount(input: LoginInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
+      const user = await findUserByEmail(input.email);
+
+      if (!user || user.deletedAt) {
+        await verifyPassword(input.password, TIMING_EQUALIZER_HASH);
+
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: user?.id ?? 'unknown',
+          ...(user ? { actorId: user.id } : {}),
+          metadata: { emailHash: hashSecret(input.email), reason: 'INVALID_CREDENTIALS' },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        throw new AppError(
+          401,
+          'INVALID_CREDENTIALS',
+          'The email address or password is incorrect',
+        );
+      }
+
+      const matches = await verifyPassword(input.password, user.passwordHash);
+
+      if (!matches) {
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: user.id,
+          actorId: user.id,
+          metadata: { reason: 'INVALID_CREDENTIALS' },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        throw new AppError(
+          401,
+          'INVALID_CREDENTIALS',
+          'The email address or password is incorrect',
+        );
+      }
+
+      if (user.status === 'SUSPENDED') {
+        throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+      }
+
+      if (user.status === 'ACTIVE') {
+        throw new AppError(409, 'ACCOUNT_ALREADY_ACTIVE', 'This account is already active');
+      }
+
+      if (user.status !== 'DEACTIVATED') {
+        throw new AppError(409, 'ACCOUNT_NOT_DEACTIVATED', 'This account is not deactivated');
+      }
+
+      const nextStatus = user.emailVerifiedAt ? 'ACTIVE' : 'PENDING_VERIFICATION';
+
+      const reactivated = await client.$transaction(async (tx) => {
+        const updated = await tx.user.updateMany({
+          where: { id: user.id, status: 'DEACTIVATED', deletedAt: null },
+          data: { status: nextStatus },
+        });
+
+        if (updated.count === 0) {
+          throw new AppError(
+            409,
+            'ACCOUNT_NOT_REACTIVATABLE',
+            'This account can no longer be reactivated',
+          );
+        }
+
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: new Date(), revokedReason: 'ACCOUNT_REACTIVATED' },
+        });
+
+        await tx.authToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+
+        return tx.user.findUniqueOrThrow({ where: { id: user.id } });
+      });
+
+      if (reactivated.status === 'PENDING_VERIFICATION') {
+        await issueAndSend(
+          {
+            user: reactivated,
+            purpose: 'EMAIL_VERIFICATION',
+            ttlSeconds: config.verificationTokenTtlSeconds,
+          },
+          (token, expiresAt, tokenId) =>
+            buildVerificationEmail({
+              to: reactivated.email,
+              name: reactivated.name,
+              brand,
+              verificationUrl: buildLink(config.authVerificationLinkPath, token),
+              expiresAt,
+              idempotencyKey: `auth:email_verification:${tokenId}`,
+            }),
+        );
+      }
+
+      await recordSecurityEvent(client, {
+        action: SecurityAction.AccountReactivated,
+        targetType: 'User',
+        targetId: reactivated.id,
+        actorId: reactivated.id,
+        metadata: {
+          status: reactivated.status,
+          verificationRequired: reactivated.status === 'PENDING_VERIFICATION',
+        },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+
+      return { user: toPublicUser(reactivated) };
     },
 
     async deleteAccount(

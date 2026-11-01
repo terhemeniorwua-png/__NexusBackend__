@@ -220,6 +220,66 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /auth/reactivate:
+    post:
+      tags: [Authentication]
+      operationId: reactivateAccount
+      summary: Reactivate a deactivated account
+      description: |
+        Self-service reactivation for an account whose status is `DEACTIVATED`.
+        The email address and password are required, and the route is rate
+        limited like sign-in. Reactivation never creates a session: the account
+        must sign in again. An account that had not verified its email address
+        returns to `PENDING_VERIFICATION` and a new verification email is sent.
+        Deleted and suspended accounts cannot be reactivated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: The account was reactivated. No session is created.
+          headers:
+            Set-Cookie:
+              description: Stale `nexus_rt` and `nexus_csrf` cookies are cleared.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: The request body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: The email address or password is incorrect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The account is already active or is not deactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many reactivation attempts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /auth/refresh:
     post:
       tags: [Authentication]
