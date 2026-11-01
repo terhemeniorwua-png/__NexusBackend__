@@ -17,6 +17,8 @@
 
 _Update this table whenever a phase status changes._
 
+Phases 1.1 and 1.2 are remediation subphases of Phase 1. They are tracked below but do not change the 24-phase roadmap count.
+
 ---
 
 ## Phase Status Rules
@@ -101,6 +103,31 @@ Follow this cycle for every phase, without exception:
 - No secrets committed to the repository
 
 **Blockers / Notes:** Verified on 2026-10-21. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `npm test` (14/14 tests) pass. The built server was smoke-tested against an ephemeral PostgreSQL 16 container and local Redis: liveness returned 200, readiness returned 200 with both dependencies up, and `SIGTERM` triggered graceful shutdown. No domain models were created; Phase 2 must add the core Prisma models and first migration. Known advisory note: `npm audit` still reports issues in Prisma 6 CLI tooling (`deepmerge-ts`) and legacy Sequelize (`uuid`); these were not force-fixed because that would require breaking upgrades or unrelated dependency removal outside Phase 1. Phase 1.1 remediation on 2026-11-01: corrected the global rate-limit error handler in `src/app.ts`, which previously registered a new Express middleware and logged on every 429, causing unbounded middleware stack growth; the handler now only delegates the 429 to the central error handler. Regression tests in `tests/foundation.test.ts` cover within-limit requests, the standard 429 body and request id, no stack or `AppError` leakage, continued blocking, and route-level limiter behavior. Verification: the targeted foundation suite passes 8/8, `npm test` passes 100 tests with 1 skipped, and `npm run typecheck`, `npm run lint` and `npm run build` pass.
+
+---
+
+#### Phase 1.2 — Redis-backed distributed rate limiting `[x]`
+
+**Objective:** Ensure every Express rate limiter uses shared Redis counters across backend instances and fails closed when distributed enforcement is unavailable.
+
+**Deliverables:**
+- The global limiter is created through the shared `createRateLimiter` middleware and uses the Redis-backed store.
+- Route-specific authentication, invitation and workspace limiters use the same store and key convention.
+- The in-process fallback was removed. Redis unavailability produces a controlled `503 RATE_LIMIT_UNAVAILABLE` response.
+- Counters use `rl:{namespace}:{client-key}` keys with a millisecond TTL; the global limiter uses the `:global` namespace.
+- The store reuses the shared Redis client from `src/db/redis.ts` and does not open a connection per request. The server remains responsible for connect/disconnect lifecycle.
+- Health endpoints remain exempt from the global limiter. Client identity uses `req.ip` and the existing `TRUST_PROXY` setting rather than an arbitrary forwarded header.
+- Tests cover shared counters, window rollover, fail-closed behavior, route-level limiters, proxy-header handling and failure cleanup, with a gated real-Redis integration test.
+
+**Dependencies:** Phase 1 and Phase 1.1 complete.
+
+**Verification criteria:**
+- Global and route-level limiter tests pass.
+- Counters are shared by two limiter instances using the same Redis key space.
+- Redis failure returns the documented fail-closed response.
+- Type checking, linting and build pass.
+
+**Blockers / Notes:** Verified on 2026-11-01. Implemented in `src/services/cache/rate-limit-store.ts`, `src/middleware/rate-limit.ts` and `src/app.ts`. The store now requires a ready shared Redis client, uses an atomic Lua increment with a millisecond TTL, and throws `RateLimitStoreUnavailableError` (`503 RATE_LIMIT_UNAVAILABLE`) when Redis cannot confirm a counter. Decrement and reset operations log failures without creating unhandled rejections. The global limiter now uses the same middleware and store as the route-specific limiters with the namespace `${RATE_LIMIT_NAMESPACE}:global`; the health endpoints remain skipped. No new dependency or environment variable was added: `REDIS_URL`, `RATE_LIMIT_NAMESPACE`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` and `TRUST_PROXY` are reused. Tests: `tests/rate-limit-redis.test.ts` covers shared counters, window rollover, two applications sharing the global counter, fail-closed global and route-level behavior, untrusted forwarded addresses and failure cleanup. The gated real-Redis suite passes 8/8 with `RUN_REDIS_TESTS=true REDIS_TEST_URL=redis://localhost:6379/15`. The full `npm test` suite passes 107 tests with 2 skipped DB integration suites. `npm run typecheck`, `npm run lint`, `npm run build` and `npm run format:check` pass. The Phase 4, 5 and 6 DB suites now connect the test Redis before creating the app so their rate-limited requests use the distributed store.
 
 ---
 
@@ -933,7 +960,8 @@ _No issues recorded._
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 | 1.1 — Rate-limit handler remediation | 2026-11-01 | The global 429 handler no longer registers middleware or logs on every blocked request. `tests/foundation.test.ts` passes 8/8, `npm test` passes 100 tests with 1 skipped, and `npm run typecheck`, `npm run lint` and `npm run build` pass. |
+| 1.2 — Redis-backed distributed rate limiting | 2026-11-01 | The global and route-specific limiters use shared Redis counters with no in-process fallback. Redis failure returns `503 RATE_LIMIT_UNAVAILABLE`. The real-Redis rate-limit suite passes 8/8, `npm test` passes 107 tests with 2 skipped DB suites, and typecheck, lint, build and format checks pass. |
 
 ---
 
-_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, including the Phase 1.1 rate-limit handler remediation. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, including the Phase 1.1 and 1.2 remediation subphases. The document also describes the planned state of the later phases._

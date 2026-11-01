@@ -9,6 +9,7 @@ import { createErrorHandler } from '../src/middleware/error-handler';
 import { createRateLimiter } from '../src/middleware/rate-limit';
 import type { ReadinessProbe } from '../src/services/health';
 import { Logger } from '../src/utils/logger';
+import { FakeRedisClient } from './helpers/fake-redis';
 
 function createTestConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfig {
   return parseEnv({
@@ -69,7 +70,11 @@ async function withServer(app: Express, run: (baseUrl: string) => Promise<void>)
 }
 
 test('liveness endpoint returns a consistent success response and security headers', async () => {
-  const app = createApp({ config: createTestConfig(), readinessProbe: readyProbe });
+  const app = createApp({
+    config: createTestConfig(),
+    readinessProbe: readyProbe,
+    rateLimitClient: new FakeRedisClient(),
+  });
 
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/v1/health`);
@@ -92,7 +97,11 @@ test('liveness endpoint returns a consistent success response and security heade
 });
 
 test('request IDs are preserved when safe and replaced when unsafe', async () => {
-  const app = createApp({ config: createTestConfig(), readinessProbe: readyProbe });
+  const app = createApp({
+    config: createTestConfig(),
+    readinessProbe: readyProbe,
+    rateLimitClient: new FakeRedisClient(),
+  });
 
   await withServer(app, async (baseUrl) => {
     const accepted = await fetch(`${baseUrl}/api/v1/health`, {
@@ -111,7 +120,11 @@ test('request IDs are preserved when safe and replaced when unsafe', async () =>
 });
 
 test('unknown routes return the standard error shape', async () => {
-  const app = createApp({ config: createTestConfig(), readinessProbe: readyProbe });
+  const app = createApp({
+    config: createTestConfig(),
+    readinessProbe: readyProbe,
+    rateLimitClient: new FakeRedisClient(),
+  });
 
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/v1/does-not-exist`);
@@ -136,7 +149,11 @@ test('readiness reports dependency status and returns 503 when a dependency is d
     },
   });
 
-  const app = createApp({ config: createTestConfig(), readinessProbe: notReadyProbe });
+  const app = createApp({
+    config: createTestConfig(),
+    readinessProbe: notReadyProbe,
+    rateLimitClient: new FakeRedisClient(),
+  });
 
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/v1/health/ready`);
@@ -153,7 +170,11 @@ test('readiness reports dependency status and returns 503 when a dependency is d
 });
 
 test('CORS allows configured origins and rejects unknown origins', async () => {
-  const app = createApp({ config: createTestConfig(), readinessProbe: readyProbe });
+  const app = createApp({
+    config: createTestConfig(),
+    readinessProbe: readyProbe,
+    rateLimitClient: new FakeRedisClient(),
+  });
 
   await withServer(app, async (baseUrl) => {
     const allowed = await fetch(`${baseUrl}/api/v1/health`, {
@@ -187,6 +208,7 @@ test('the global rate limiter allows requests within the configured limit', asyn
   const app = createApp({
     config: createTestConfig({ RATE_LIMIT_MAX: '2' }),
     readinessProbe: readyProbe,
+    rateLimitClient: new FakeRedisClient(),
   });
 
   await withServer(app, async (baseUrl) => {
@@ -202,6 +224,7 @@ test('the global rate limiter returns the standard 429 response after the limit'
   const app = createApp({
     config: createTestConfig({ RATE_LIMIT_MAX: '1' }),
     readinessProbe: readyProbe,
+    rateLimitClient: new FakeRedisClient(),
   });
 
   await withServer(app, async (baseUrl) => {
@@ -239,6 +262,7 @@ test('route-level rate limiters still return their configured 429 error', async 
       limit: 1,
       code: 'TEST_RATE_LIMITED',
       message: 'Too many test requests.',
+      client: new FakeRedisClient(),
     }),
   );
 

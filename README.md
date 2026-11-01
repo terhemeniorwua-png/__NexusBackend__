@@ -338,7 +338,7 @@ Typical configuration categories include:
 | `NODE_ENV` | Runtime environment |
 | `PORT` | HTTP server port |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Redis connection string, if used |
+| `REDIS_URL` | Redis connection string; required for distributed rate limiting |
 | `FRONTEND_URL` | Trusted frontend origin |
 | `JWT_SECRET` | JWT signing secret, if JWT is used |
 | `SESSION_SECRET` | Session signing secret, if applicable |
@@ -464,7 +464,7 @@ When running locally, confirm that:
 - The server starts successfully.
 - PostgreSQL is reachable.
 - Required migrations have been applied.
-- Redis connects if required.
+- Redis is reachable; rate limiting fails closed without it.
 - Required environment variables are present.
 - The frontend can reach the API using the configured URL.
 
@@ -523,7 +523,7 @@ Rules that the implementation enforces:
 - One-time tokens (email verification, password reset, email change) are single use, expiring, and stored only as digests. The newest token of a purpose invalidates the older ones.
 - Passwords are hashed with bcrypt, are limited to 72 bytes so nothing is silently truncated, and are never logged or emailed.
 - Endpoints that accept an email address (`resend-verification`, `password/forgot`) always return the same response, so they cannot be used to discover which addresses are registered.
-- Sign-in, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and fall back to an in-process counter when Redis is unavailable.
+- Sign-in, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and are shared across backend instances. If Redis is unavailable, rate-limited requests fail closed with `503 RATE_LIMIT_UNAVAILABLE` instead of falling back to a process-local counter.
 - Account level security events are written to the `AuditLog` table with a null `workspaceId`. They never contain passwords, tokens or verification links.
 
 ### Endpoints
@@ -672,15 +672,26 @@ Document the event contract so the frontend can subscribe to the correct events 
 
 ## Redis and Caching
 
-Redis can support selected infrastructure needs, including:
+Redis supports the following configured infrastructure needs:
 
 - Caching frequently accessed data.
-- Rate limiting.
+- Rate limiting (required; requests fail closed when Redis is unavailable).
 - Temporary state.
 - Background-job infrastructure, if configured.
 - Socket.IO cross-instance coordination when the relevant adapter is installed.
 
 Use Redis only for responsibilities actually configured in the project.
+
+### Distributed rate limiting
+
+The global limiter and the route-specific authentication, invitation and workspace limiters use Redis-backed counters. The store has no in-process fallback, so two backend instances sharing the same Redis deployment and `RATE_LIMIT_NAMESPACE` enforce one shared counter set. Keys use the form `rl:{RATE_LIMIT_NAMESPACE}:{limiter}:{client-key}` and expire with the configured window.
+
+- `REDIS_URL` must point at the shared Redis deployment. Use a separate Redis database or namespace per environment and per test run.
+- `RATE_LIMIT_NAMESPACE` separates counters when environments share one Redis instance.
+- `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX` configure the global limiter.
+- `TRUST_PROXY` controls whether Express trusts forwarded addresses. Leave it disabled unless the application is behind a trusted proxy; the limiter uses `req.ip`, not an arbitrary forwarded header.
+
+Health endpoints are exempt from the global limiter. If Redis is unavailable, rate-limited requests are denied with `503 RATE_LIMIT_UNAVAILABLE`; this is deliberate fail-closed behavior for authentication and abuse-sensitive traffic. The readiness endpoint reports Redis status, and the server logs `redis_unavailable` without logging connection credentials. Deployments must provide a reachable Redis instance before relying on the API for authentication or other rate-limited operations.
 
 Define cache expiration and invalidation rules. Do not allow stale cached data to bypass authorization or expose data after permissions change.
 
