@@ -265,6 +265,23 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 3.5 — Authentication debug cleanup `[x]`
+
+**Objective:** Remove obsolete commented-out debug logging from the authentication module without changing runtime behavior.
+
+**Deliverables:**
+- Remove only obsolete commented `console.log` statements in authentication service and controller code
+- Preserve active code, useful comments, and all runtime logging
+
+**Verification criteria:**
+- Authentication-module search finds no remaining commented `console.log` statements
+- Diff contains no executable logic changes
+- Authentication unit and PostgreSQL integration tests, typecheck, lint, and formatting checks pass
+
+**Blockers / Notes:** Verified on 2026-11-01. Removed four commented debug statements: registration-stage logs for `hashing`, `creating user`, and `queueing email` from `auth.service.ts`, and the `handler reached` log from `auth.controller.ts`. Also removed the two standalone `// ...` placeholder comments interspersed in the same obsolete service debug block. No active logging, explanatory comments, executable logic, or authentication behavior was changed. The auth-module search returns no commented `console.log` calls. `tests/auth-unit.test.ts` passes; `tests/auth-phase3.test.ts` passes 55/55 against disposable PostgreSQL. Typecheck, lint, format check, and `git diff --check` pass. Implementation commit `7de01e0` (`chore(phase-3.5): remove commented auth debug logs`) is pushed to `origin/feature/phase-3.5-auth-debug-cleanup`.
+
+---
+
 #### Phase 4 — Transactional email and delivery infrastructure `[x]`
 
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.
