@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 6 |
+| **Completed** `[x]` | 5 |
 | **In progress** `[/]` | 1 |
 | **Not started** `[ ]` | 18 |
-| **Overall progress** | 25% |
+| **Overall progress** | 21% |
 
 _Update this table whenever a phase status changes._
 
@@ -282,7 +282,7 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 4 — Transactional email and delivery infrastructure `[x]`
+#### Phase 4 — Transactional email and delivery infrastructure `[/]`
 
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.
 
@@ -420,6 +420,29 @@ Follow this cycle for every phase, without exception:
 **Dependencies:** Phase 7 team invitation workflow; Phase 8 project invitation workflow.
 
 **Status / Blockers:** Not started and deferred. The phase tracker defines `[ ]` as not started and has no blocked/deferred status. The existing invitation service only creates `WORKSPACE` invitations and accepts them by creating workspace memberships. Team and project invitation routes, services, creation, acceptance, revocation and membership-granting flows are not implemented. `TEAM` and `PROJECT` values in `InvitationType`, and optional `teamId` / `projectId` columns, are schema placeholders; the `Invitation` model has no team/project relations. Team invitations depend on the Phase 7 workflow, and project invitations depend on the Phase 8 workflow. The existing team and project email templates may remain unused until their respective workflows can call them safely. Do not connect them to workspace invitation events or create invitation behavior in this email phase. Phase 4.6 is not defined in this tracker; when it is defined, it must explicitly carry these integrations forward or depend on Phases 7 and 8. Do not mark Phase 4.5 complete until both authoritative workflows exist and the invitation security and email tests pass.
+
+---
+
+#### Phase 4.6 — Email integration, security, and regression verification `[/]`
+
+**Objective:** Verify the Phase 4 email delivery and security protections, connect all collaboration templates to real workflows, and keep the phase open while required workflows are missing.
+
+**Deliverables:**
+- Regression verification for bounded retries, recipient privacy, webhook verification/idempotency, suppression, bounces and complaints
+- Safe request and error logging for invitation and webhook URL tokens
+- Real workflow callers for task assignment, mentions, meeting invitations, team invitations and project invitations
+- Accurate Phase 4 status and remaining dependency documentation
+
+**Dependencies:** Phases 4.1–4.5 and the owning task, messaging, meeting, team and project workflows.
+
+**Verification criteria:**
+- Retry counters persist, failures terminate at the configured limit, and duplicate processing stays bounded
+- Recipient addresses, invitation tokens and webhook URL tokens are not exposed in logs
+- Existing webhook, suppression, bounce and complaint protections pass regression tests
+- All five collaboration templates have callers from their authoritative application workflows
+- Typecheck, lint, build, and relevant unit and database tests pass
+
+**Blockers / Notes:** Partially verified on 2026-11-01. The retry, privacy, webhook, suppression, bounce and complaint paths pass their existing Phase 4 tests. The audit fixed request/error log exposure of invitation and webhook URL tokens by redacting those paths and sanitized error details; an obsolete `console.log(req.url)` middleware registration was removed from `src/app.ts`. Focused tests pass 27/27; the Phase 4 PostgreSQL/SMTP suite passes 20/20; task-assignment outbox integration passes 7/7; workspace invitation HTTP/database integration passes 19/19; the full suite passes 108 with 0 failures and 1 skipped suite; typecheck, lint, build and format check pass. However, none of the five collaboration email handlers has a production workflow caller: the task-assignment notifier is only exercised by tests and the Phase 9 task workflow is absent; mention and meeting handlers are only exercised by tests and their Phase 14 / Phase 17 workflows are absent; the team/project template builders have no callers and their Phase 7 / Phase 8 invitation workflows are absent. Workspace invitations continue to use only the workspace template. Phase 4 and Phase 4.6 remain in progress; do not mark them complete until the five real workflow integrations exist and are verified. Notification preference records are not implemented; existing email suppression is honored.
 
 ---
 
@@ -1160,9 +1183,10 @@ _No issues recorded._
 | 4.3 — Task assignment email integration | 2026-11-01 | Partial. The reusable task-assignment notifier and 7 PostgreSQL/outbox integration tests pass, including reassignment, duplicate events, suppression, ineligible recipients and delivery failure isolation. No runtime caller exists because the Phase 9 task workflow is not implemented, so the phase remains in progress. |
 | 4.4 — Mention and meeting-invitation email integration | 2026-11-01 | Partial. Added post-commit notifier boundaries and configurable application links for both existing templates. Four focused unit tests pass; typecheck, lint and build pass. No comment mention or meeting workflow exists to supply authoritative runtime callers; the phase remains in progress pending Phases 14 and 17. |
 | 4.5 — Team and project invitation email integration | 2026-11-01 | Deferred / not started. The current invitation workflow is workspace-only. Team and project invitation creation and acceptance depend on Phases 7 and 8; optional schema fields do not provide those workflows. Phase 4.6 must track these outstanding integrations or their dependencies when that phase is defined. |
+| 4.6 — Email integration, security, and regression verification | 2026-11-01 | Partial. Retry, recipient privacy, token-path logging, webhook verification/idempotency, suppression and bounce/complaint checks pass. The full suite is 108 passed, 1 skipped; dedicated Phase 4, task assignment, and workspace-invitation database suites pass. All five collaboration templates still lack production workflow callers, so Phase 4 and 4.6 remain in progress. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 
 ---
 
-_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3 and 4.4 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging and meeting workflows. Phase 4.5 is deferred until the team and project invitation workflows in Phases 7 and 8 exist. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-01. Phases 1–3 and 5–6 are implemented and verified, together with corrective Phases 3.1–3.5 and Phase 4.1–4.2. Phase 4 is back in progress: Phase 4.3 and 4.4 notifier helpers still lack their task, messaging and meeting workflow callers; Phase 4.5 is deferred until the team and project invitation workflows in Phases 7 and 8 exist; Phase 4.6 verified delivery/privacy/webhook protections but all five collaboration integrations remain incomplete. The document also describes the planned state of the later phases._
