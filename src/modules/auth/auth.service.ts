@@ -934,12 +934,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         });
 
         if (updated.count === 0) {
-          await recordReactivationFailure(user.id, 'ACCOUNT_NOT_REACTIVATABLE');
-          throw new AppError(
-            409,
-            'ACCOUNT_NOT_REACTIVATABLE',
-            'This account can no longer be reactivated',
-          );
+          return null;
         }
 
         await tx.session.updateMany({
@@ -954,6 +949,15 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
         return tx.user.findUniqueOrThrow({ where: { id: user.id } });
       });
+
+      if (!reactivated) {
+        await recordReactivationFailure(user.id, 'ACCOUNT_NOT_REACTIVATABLE');
+        throw new AppError(
+          409,
+          'ACCOUNT_NOT_REACTIVATABLE',
+          'This account can no longer be reactivated',
+        );
+      }
 
       if (reactivated.status === 'PENDING_VERIFICATION') {
         await issueAndSend(
