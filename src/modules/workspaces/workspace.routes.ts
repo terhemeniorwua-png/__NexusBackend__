@@ -174,7 +174,7 @@ export function createWorkspaceRouter({
   );
 
   router.patch(
-    '/:workspaceId/owner',
+    '/:workspaceId/owner/:userId',
     requireAuth,
     requireActiveAccount,
     validate({ params: memberParamsSchema, body: transferOwnershipSchema }),
