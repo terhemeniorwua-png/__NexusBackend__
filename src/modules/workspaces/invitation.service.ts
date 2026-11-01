@@ -8,7 +8,7 @@ import { sendEmail } from '../../services/email';
 import { createNotification } from '../../services/notifications';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
-import { requireWorkspaceAccess, WorkspaceCapability } from './authorization';
+import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
 import type { CreateInvitationInput } from './workspace.schemas';
 import type { InvitationPreview, InvitationResult, InvitationSummary } from './workspace.types';
 
@@ -175,6 +175,11 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageInvitations,
+      });
+
+      assertMayAssignRole({
+        actorRole: access.membership.role,
+        requestedRole: input.role as WorkspaceRole,
       });
 
       const inviter = await client.user.findUnique({

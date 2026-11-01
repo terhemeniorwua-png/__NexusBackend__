@@ -813,6 +813,148 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.ok(first);
   });
 
+  test('a project manager cannot grant project-manager privileges through any workspace role path', async () => {
+    const ownerEmail = uniqueEmail('grant-role-owner');
+    const managerEmail = uniqueEmail('grant-role-manager');
+    const memberEmail = uniqueEmail('grant-role-member');
+    const addedEmail = uniqueEmail('grant-role-added');
+    const invitedEmail = uniqueEmail('grant-role-invited');
+
+    await createUser('Grant Role Owner', ownerEmail);
+    const manager = await createUser('Grant Role Manager', managerEmail);
+    const member = await createUser('Grant Role Member', memberEmail);
+    await createUser('Grant Role Added', addedEmail);
+
+    const ownerToken = await login(ownerEmail);
+    const managerToken = await login(managerEmail);
+    const workspace = await createWorkspace(ownerToken);
+
+    // The owner's legitimate role grants continue to work.
+    const managerAdded = await api(`/workspaces/${workspace.id}/members`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: managerEmail, role: 'PROJECT_MANAGER' },
+    });
+    assert.equal(managerAdded.status, 201, JSON.stringify(managerAdded.body));
+
+    const memberAdded = await api(`/workspaces/${workspace.id}/members`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: memberEmail, role: 'MEMBER' },
+    });
+    assert.equal(memberAdded.status, 201, JSON.stringify(memberAdded.body));
+
+    const elevateByAdding = await api(`/workspaces/${workspace.id}/members`, {
+      method: 'POST',
+      token: managerToken,
+      body: { email: addedEmail, role: 'PROJECT_MANAGER' },
+    });
+    assert.equal(elevateByAdding.status, 403);
+    assert.equal(elevateByAdding.body.error?.code, 'INSUFFICIENT_ROLE');
+
+    const elevateMember = await api(`/workspaces/${workspace.id}/members/${member.id}`, {
+      method: 'PATCH',
+      token: managerToken,
+      body: { role: 'PROJECT_MANAGER' },
+    });
+    assert.equal(elevateMember.status, 403);
+    assert.equal(elevateMember.body.error?.code, 'INSUFFICIENT_ROLE');
+
+    const manageLowerRole = await api(`/workspaces/${workspace.id}/members/${member.id}`, {
+      method: 'PATCH',
+      token: managerToken,
+      body: { role: 'VIEWER' },
+    });
+    assert.equal(manageLowerRole.status, 200, JSON.stringify(manageLowerRole.body));
+    assert.equal((manageLowerRole.body.data as { role: string }).role, 'VIEWER');
+
+    const elevateSelf = await api(`/workspaces/${workspace.id}/members/${manager.id}`, {
+      method: 'PATCH',
+      token: managerToken,
+      body: { role: 'PROJECT_MANAGER' },
+    });
+    assert.equal(elevateSelf.status, 403);
+    assert.equal(elevateSelf.body.error?.code, 'INSUFFICIENT_ROLE');
+
+    const inviteAsManager = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: managerToken,
+      body: { email: invitedEmail, role: 'PROJECT_MANAGER' },
+    });
+    assert.equal(inviteAsManager.status, 403);
+    assert.equal(inviteAsManager.body.error?.code, 'INSUFFICIENT_ROLE');
+
+    assert.equal(
+      await prisma.workspaceMembership
+        .findUnique({
+          where: { workspaceId_userId: { workspaceId: workspace.id, userId: member.id } },
+          select: { role: true },
+        })
+        .then((row) => row?.role),
+      'VIEWER',
+    );
+    assert.equal(
+      await prisma.workspaceMembership
+        .findUnique({
+          where: { workspaceId_userId: { workspaceId: workspace.id, userId: manager.id } },
+          select: { role: true },
+        })
+        .then((row) => row?.role),
+      'PROJECT_MANAGER',
+    );
+    assert.equal(
+      await prisma.invitation.count({ where: { workspaceId: workspace.id, email: invitedEmail } }),
+      0,
+    );
+  });
+
+  test('membership role changes stay scoped to the actor workspace', async () => {
+    const firstOwnerEmail = uniqueEmail('scope-first-owner');
+    const secondOwnerEmail = uniqueEmail('scope-second-owner');
+    const managerEmail = uniqueEmail('scope-manager');
+    const targetEmail = uniqueEmail('scope-target');
+
+    await createUser('First Workspace Owner', firstOwnerEmail);
+    await createUser('Second Workspace Owner', secondOwnerEmail);
+    await createUser('Scoped Manager', managerEmail);
+    const target = await createUser('Other Workspace Member', targetEmail);
+
+    const firstOwnerToken = await login(firstOwnerEmail);
+    const secondOwnerToken = await login(secondOwnerEmail);
+    const managerToken = await login(managerEmail);
+    const firstWorkspace = await createWorkspace(firstOwnerToken);
+    const secondWorkspace = await createWorkspace(secondOwnerToken);
+
+    const managerAdded = await api(`/workspaces/${firstWorkspace.id}/members`, {
+      method: 'POST',
+      token: firstOwnerToken,
+      body: { email: managerEmail, role: 'PROJECT_MANAGER' },
+    });
+    assert.equal(managerAdded.status, 201, JSON.stringify(managerAdded.body));
+
+    const targetAdded = await api(`/workspaces/${secondWorkspace.id}/members`, {
+      method: 'POST',
+      token: secondOwnerToken,
+      body: { email: targetEmail, role: 'MEMBER' },
+    });
+    assert.equal(targetAdded.status, 201, JSON.stringify(targetAdded.body));
+
+    const crossWorkspaceTarget = await api(
+      `/workspaces/${firstWorkspace.id}/members/${target.id}`,
+      { method: 'PATCH', token: managerToken, body: { role: 'VIEWER' } },
+    );
+    assert.equal(crossWorkspaceTarget.status, 404);
+    assert.equal(crossWorkspaceTarget.body.error?.code, 'MEMBER_NOT_FOUND');
+
+    const outsideActor = await login(secondOwnerEmail);
+    const unauthorizedWorkspace = await api(
+      `/workspaces/${firstWorkspace.id}/members/${target.id}`,
+      { method: 'PATCH', token: outsideActor, body: { role: 'VIEWER' } },
+    );
+    assert.equal(unauthorizedWorkspace.status, 403);
+    assert.equal(unauthorizedWorkspace.body.error?.code, 'WORKSPACE_ACCESS_DENIED');
+  });
+
   test('a member without the right role cannot manage the members', async () => {
     const ownerEmail = uniqueEmail('viewer-owner');
 

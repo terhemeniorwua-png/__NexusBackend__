@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import {
   assertMayManageMember,
+  assertMayAssignRole,
   roleCan,
   WorkspaceCapability,
 } from '../src/modules/workspaces/authorization';
@@ -76,6 +77,20 @@ describe('Phase 5 workspace rules', () => {
         targetRole: 'MEMBER',
         targetIsOwner: false,
       }),
+    );
+  });
+
+  test('only the workspace owner may grant the project manager role', () => {
+    assert.throws(
+      () => assertMayAssignRole({ actorRole: 'PROJECT_MANAGER', requestedRole: 'PROJECT_MANAGER' }),
+      /Only the owner of a workspace can grant the project manager role/i,
+    );
+
+    assert.doesNotThrow(() =>
+      assertMayAssignRole({ actorRole: 'OWNER', requestedRole: 'PROJECT_MANAGER' }),
+    );
+    assert.doesNotThrow(() =>
+      assertMayAssignRole({ actorRole: 'PROJECT_MANAGER', requestedRole: 'MEMBER' }),
     );
   });
 
