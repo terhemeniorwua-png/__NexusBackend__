@@ -5,8 +5,9 @@
  * service decides *how* and *when* to send it: it stores the message in the
  * outbox, hands it to the provider adapter and retries transient failures.
  *
- * Message bodies, single use links and verification tokens are never written
- * to the log. Only delivery metadata is recorded.
+ * Message bodies, single use links, verification tokens and recipient email
+ * addresses are never written to the log. Only non-recipient delivery
+ * metadata is recorded.
  */
 
 export type EmailTemplate =

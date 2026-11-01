@@ -13,6 +13,7 @@ import {
   resetEmailServices,
   type EmailMessage,
 } from '../src/services/email';
+import { Logger } from '../src/utils/logger';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { captureLogs } from './helpers/test-logger';
 import { startSmtpServer, type TestSmtpServer } from './helpers/smtp-server';
@@ -56,6 +57,18 @@ function uniqueEmail(prefix = 'mail'): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createCapturingLogger(): {
+  logger: Logger;
+  entries: Record<string, unknown>[];
+} {
+  const entries: Record<string, unknown>[] = [];
+  const logger = new Logger('info', {}, (line) => {
+    entries.push(JSON.parse(line) as Record<string, unknown>);
+  });
+
+  return { logger, entries };
 }
 
 /**
@@ -874,5 +887,148 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.ok(token, 'Expected the email to contain a single use token');
     assert.equal(logs.output.includes(token as string), false);
     assert.equal(logs.output.includes('token='), false);
+  });
+
+  test('the delivery lifecycle logs never expose the recipient address', async () => {
+    smtp.reset();
+    const email = uniqueEmail('privacy');
+    const { logger, entries } = createCapturingLogger();
+    const service = createEmailDeliveryService({
+      prisma,
+      transport: getEmailTransport(config),
+      config,
+      logger,
+    });
+
+    const queuedResult = await service.enqueue({
+      to: email,
+      subject: 'A private message',
+      template: 'security_notification',
+      text: 'A private message',
+    });
+    const pass = await service.processPending(10);
+
+    assert.equal(queuedResult.accepted, true);
+    assert.equal(pass.sent, 1);
+    assert.equal(
+      entries.some((entry) => JSON.stringify(entry).includes(email)),
+      false,
+    );
+
+    const queued = entries.find((entry) => entry.message === 'email_delivery_queued');
+    const sent = entries.find((entry) => entry.message === 'email_delivery_sent');
+
+    assert.ok(queued);
+    assert.equal(queued.deliveryId, queuedResult.providerMessageId);
+    assert.equal(queued.template, 'security_notification');
+    assert.equal('to' in queued, false);
+    assert.equal(JSON.stringify(queued).includes('@'), false);
+
+    assert.ok(sent);
+    assert.equal(sent.deliveryId, queuedResult.providerMessageId);
+    assert.equal(sent.template, 'security_notification');
+    assert.equal(sent.provider, 'smtp');
+    assert.equal(JSON.stringify(sent).includes('@'), false);
+
+    const row = await prisma.emailDelivery.findUnique({
+      where: { id: queuedResult.providerMessageId },
+    });
+
+    assert.equal(row?.status, 'ACCEPTED');
+  });
+
+  test('a provider error response does not put the recipient address in the log', async () => {
+    const email = uniqueEmail('privacy-provider');
+    const { logger, entries } = createCapturingLogger();
+    const transport: EmailTransport = {
+      provider: 'rejecting',
+      async send() {
+        return {
+          accepted: false,
+          retryable: false,
+          errorCode: 'SMTP_550',
+          error: `The server rejected ${email}`,
+        };
+      },
+      async verify() {},
+      async close() {},
+    };
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport,
+      config: buildConfig({ EMAIL_MAX_ATTEMPTS: '1' }),
+      logger,
+    });
+
+    const queued = await limited.enqueue({
+      to: email,
+      subject: 'Rejected',
+      template: 'security_notification',
+      text: 'Rejected',
+    });
+    const pass = await limited.processPending(10);
+
+    assert.equal(pass.failed, 1);
+    assert.equal(
+      entries.some((entry) => JSON.stringify(entry).includes(email)),
+      false,
+    );
+
+    const failed = entries.find((entry) => entry.message === 'email_delivery_failed');
+
+    assert.ok(failed);
+    assert.equal(failed.deliveryId, queued.providerMessageId);
+    assert.equal(failed.errorCode, 'SMTP_550');
+    assert.equal(failed.attempt, 1);
+
+    const row = await prisma.emailDelivery.findUnique({
+      where: { id: queued.providerMessageId },
+    });
+
+    assert.equal(row?.status, 'FAILED');
+  });
+
+  test('an unexpected worker error is logged without the recipient address', async () => {
+    const email = uniqueEmail('privacy-unexpected');
+    const { logger, entries } = createCapturingLogger();
+    const transport: EmailTransport = {
+      provider: 'throwing',
+      async send() {
+        throw new Error(`SMTP conversation failed for ${email}`);
+      },
+      async verify() {},
+      async close() {},
+    };
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport,
+      config: buildConfig({ EMAIL_MAX_ATTEMPTS: '1' }),
+      logger,
+    });
+
+    const queued = await limited.enqueue({
+      to: email,
+      subject: 'Unexpected failure',
+      template: 'security_notification',
+      text: 'Unexpected failure',
+    });
+    const pass = await limited.processPending(10);
+
+    assert.equal(pass.failed, 1);
+    assert.equal(
+      entries.some((entry) => JSON.stringify(entry).includes(email)),
+      false,
+    );
+
+    const unexpected = entries.find((entry) => entry.message === 'email_delivery_unexpected_error');
+    const failed = entries.find((entry) => entry.message === 'email_delivery_failed');
+
+    assert.ok(unexpected);
+    assert.equal(unexpected.deliveryId, queued.providerMessageId);
+    assert.match(JSON.stringify(unexpected), /\[REDACTED_EMAIL\]/);
+
+    assert.ok(failed);
+    assert.equal(failed.errorCode, 'UNEXPECTED');
+    assert.equal(failed.attempt, 1);
   });
 });

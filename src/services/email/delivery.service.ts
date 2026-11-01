@@ -3,6 +3,7 @@ import type { AppConfig } from '../../config/env';
 import { hashSecret } from '../../utils/crypto';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import type { EmailTransport } from '../providers/email';
+import { redactEmailAddresses, summarizeErrorForLog } from './log-privacy';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
 
@@ -162,7 +163,6 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
     log.info('email_delivery_queued', {
       deliveryId,
       template: message.template,
-      to: message.to,
     });
 
     return { accepted: true, providerMessageId: deliveryId };
@@ -287,7 +287,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
         template: delivery.template,
         attempt: delivery.attempts,
         maxAttempts: delivery.maxAttempts,
-        errorCode,
+        errorCode: redactEmailAddresses(errorCode),
       });
 
       return 'failed';
@@ -302,7 +302,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       attempt: delivery.attempts,
       maxAttempts: delivery.maxAttempts,
       retryInMs: delay,
-      errorCode,
+      errorCode: redactEmailAddresses(errorCode),
     });
 
     return 'retried';
@@ -359,7 +359,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       deliveryId: delivery.id,
       template: delivery.template,
       attempt: delivery.attempts,
-      errorCode,
+      errorCode: redactEmailAddresses(errorCode),
     });
 
     return 'failed';
@@ -401,7 +401,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
         // same bounded policy as a transient provider failure.
         log.error('email_delivery_unexpected_error', {
           deliveryId: delivery.id,
-          error,
+          error: summarizeErrorForLog(error),
         });
 
         const message =
@@ -420,7 +420,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
           // number of times. The next pass reports the persistence failure.
           log.error('email_delivery_retry_persistence_failed', {
             deliveryId: delivery.id,
-            error: persistenceError,
+            error: summarizeErrorForLog(persistenceError),
           });
         }
       }

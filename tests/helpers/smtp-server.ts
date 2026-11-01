@@ -95,12 +95,18 @@ export async function startSmtpServer(): Promise<TestSmtpServer> {
 
             if (permanentFailures > 0) {
               permanentFailures -= 1;
+              from = '';
+              recipients = [];
+              dataBuffer = '';
               write('550 5.1.1 Mailbox unavailable');
               continue;
             }
 
             if (temporaryFailures > 0) {
               temporaryFailures -= 1;
+              from = '';
+              recipients = [];
+              dataBuffer = '';
               write('451 4.3.0 Temporary failure, please try again later');
               continue;
             }

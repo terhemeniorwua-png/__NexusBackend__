@@ -13,6 +13,7 @@ import {
   buildTaskAssignmentEmail,
   buildVerificationEmail,
   buildWorkspaceInvitationEmail,
+  createLoggingEmailSender,
   deliveryIdFromMessageId,
   deriveIdempotencyKey,
   normalizeMessageId,
@@ -20,6 +21,9 @@ import {
   verifyWebhookToken,
   type EmailMessage,
 } from '../src/services/email';
+import { redactEmailAddresses, summarizeErrorForLog } from '../src/services/email/log-privacy';
+import { createConsoleTransport, createEmailTransport } from '../src/services/providers/email';
+import { captureLogs } from './helpers/test-logger';
 import {
   mapProviderEvent,
   normalizeEventType,
@@ -395,6 +399,62 @@ test('provider payloads are mapped onto one event shape', () => {
   assert.ok(withoutId);
   assert.match(withoutId?.eventId ?? '', /^[a-f0-9]{64}$/);
   assert.equal(withoutId?.eventId, mapProviderEvent({ type: 'email.delivered' })?.eventId);
+});
+
+test('email addresses are removed from error text before it is logged', () => {
+  const redacted = redactEmailAddresses('Rejected ada@example.com and grace.hopper@example.co.uk');
+
+  assert.equal(redacted, 'Rejected [REDACTED_EMAIL] and [REDACTED_EMAIL]');
+
+  const summary = summarizeErrorForLog(
+    Object.assign(new Error('SMTP rejected ada@example.com'), { code: 'EENVELOPE' }),
+  );
+
+  assert.equal(JSON.stringify(summary).includes('ada@example.com'), false);
+  assert.equal(summary.name, 'Error');
+  assert.equal(summary.code, 'EENVELOPE');
+  assert.match(summary.message as string, /\[REDACTED_EMAIL\]/);
+  assert.match(summary.stack as string, /\[REDACTED_EMAIL\]/);
+});
+
+test('development transports log delivery metadata without the recipient address', async () => {
+  const email = 'private.recipient@example.com';
+  const request = {
+    deliveryId: 'eml_privacy',
+    to: email,
+    from: 'Nexus <no-reply@example.com>',
+    subject: `A message for ${email}`,
+    text: 'Body',
+  };
+
+  const { logs } = await captureLogs(async () => {
+    await createLoggingEmailSender().send(message({ to: email, subject: request.subject }));
+    await createConsoleTransport().send(request);
+    await createEmailTransport({ ...config, emailProvider: 'disabled' }).send(request);
+  });
+
+  assert.equal(logs.output.includes(email), false);
+
+  const entries = logs.output
+    .split('\n')
+    .filter((line) => line.startsWith('{'))
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  const logging = entries.find((entry) => entry.message === 'email_queued');
+  const console = entries.find((entry) => entry.message === 'email_delivery_console');
+  const disabled = entries.find((entry) => entry.message === 'email_delivery_disabled');
+
+  assert.ok(logging);
+  assert.equal(logging.template, 'account_verification');
+  assert.equal('to' in logging, false);
+
+  assert.ok(console);
+  assert.equal(console.deliveryId, request.deliveryId);
+  assert.equal('to' in console, false);
+
+  assert.ok(disabled);
+  assert.equal(disabled.deliveryId, request.deliveryId);
+  assert.equal('to' in disabled, false);
 });
 
 test('provider errors are classified as permanent or transient', () => {
