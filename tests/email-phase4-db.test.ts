@@ -5,6 +5,7 @@ import type { Express } from 'express';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { getPrismaClient } from '../src/db/prisma';
+import { connectRedis, disconnectRedis } from '../src/db/redis';
 import {
   createEmailDeliveryService,
   getEmailDeliveryService,
@@ -99,6 +100,8 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     prisma = getPrismaClient(database.url);
 
+    await connectRedis({ redisUrl: 'redis://localhost:6379/15' });
+
     // A previous run can leave queued rows behind. They would be claimed by
     // the next run and break the counters of the delivery tests.
     await clearTestDeliveries();
@@ -120,6 +123,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     // The delivery rows of this suite are disposable.
     await clearTestDeliveries();
+    await disconnectRedis();
     await prisma?.$disconnect();
   });
 

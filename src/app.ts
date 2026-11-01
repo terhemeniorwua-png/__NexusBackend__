@@ -1,22 +1,24 @@
 import express, { type Express } from 'express';
-import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { loadEnv, type AppConfig } from './config/env';
 import { createCorsMiddleware } from './middleware/cors';
 import { createErrorHandler } from './middleware/error-handler';
 import { notFoundHandler } from './middleware/not-found';
+import { createRateLimiter } from './middleware/rate-limit';
 import { createRequestLogger } from './middleware/request-logger';
 import { requestId } from './middleware/request-id';
 import { createEmailWebhookRouter } from './modules/webhooks/email-webhook.routes';
 import { createApiRouter } from './routes';
+import type { RateLimitRedisClient } from './services/cache/rate-limit-store';
 import { createReadinessProbe, type ReadinessProbe } from './services/health';
-import { AppError } from './utils/errors';
 import { logger as defaultLogger, type Logger } from './utils/logger';
 
 export interface CreateAppOptions {
   config?: AppConfig;
   readinessProbe?: ReadinessProbe;
   logger?: Logger;
+  /** Injectable for tests. Production uses the shared Redis client. */
+  rateLimitClient?: RateLimitRedisClient;
 }
 
 export function createApp(options: CreateAppOptions = {}): Express {
@@ -37,22 +39,15 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use(createCorsMiddleware(config));
 
   app.use(
-    rateLimit({
+    createRateLimiter({
+      namespace: `${config.rateLimitNamespace}:global`,
       windowMs: config.rateLimitWindowMs,
       limit: config.rateLimitMax,
-      standardHeaders: 'draft-7',
-      legacyHeaders: false,
+      client: options.rateLimitClient,
       skip: (req) => {
         const healthPath = `${config.apiPrefix}/health`;
 
         return req.path === healthPath || req.path.startsWith(`${healthPath}/`);
-      },
-      handler: (_req, _res, next) => {
-        next(new AppError(429, 'RATE_LIMITED', 'Too many requests. Please try again later.'));
-        app.use((req, _res, next) => {
-          console.log('hit', req.method, req.url);
-          next();
-        });
       },
     }),
   );
