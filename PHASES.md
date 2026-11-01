@@ -10,12 +10,14 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 5 |
-| **In progress** `[/]` | 1 |
-| **Not started** `[ ]` | 18 |
-| **Overall progress** | 21% |
+| **Completed** `[x]` | 7 |
+| **In progress** `[/]` | 0 |
+| **Not started** `[ ]` | 17 |
+| **Overall progress** | 29% |
 
 _Update this table whenever a phase status changes._
+
+Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. Phases 2.1 and 2.2 are database audit and migration-recovery subphases of Phase 2. They are tracked below but do not change the 24-phase roadmap count.
 
 ---
 
@@ -100,7 +102,55 @@ Follow this cycle for every phase, without exception:
 - Tests pass in CI
 - No secrets committed to the repository
 
-**Blockers / Notes:** Verified on 2026-10-21. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `npm test` (14/14 tests) pass. The built server was smoke-tested against an ephemeral PostgreSQL 16 container and local Redis: liveness returned 200, readiness returned 200 with both dependencies up, and `SIGTERM` triggered graceful shutdown. No domain models were created; Phase 2 must add the core Prisma models and first migration. Known advisory note: `npm audit` still reports issues in Prisma 6 CLI tooling (`deepmerge-ts`) and legacy Sequelize (`uuid`); these were not force-fixed because that would require breaking upgrades or unrelated dependency removal outside Phase 1.
+**Blockers / Notes:** Verified on 2026-10-21. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `npm test` (14/14 tests) pass. The built server was smoke-tested against an ephemeral PostgreSQL 16 container and local Redis: liveness returned 200, readiness returned 200 with both dependencies up, and `SIGTERM` triggered graceful shutdown. No domain models were created; Phase 2 must add the core Prisma models and first migration. Known advisory note: `npm audit` still reports issues in Prisma 6 CLI tooling (`deepmerge-ts`) and legacy Sequelize (`uuid`); these were not force-fixed because that would require breaking upgrades or unrelated dependency removal outside Phase 1. Phase 1.1 remediation on 2026-11-01: corrected the global rate-limit error handler in `src/app.ts`, which previously registered a new Express middleware and logged on every 429, causing unbounded middleware stack growth; the handler now only delegates the 429 to the central error handler. Regression tests in `tests/foundation.test.ts` cover within-limit requests, the standard 429 body and request id, no stack or `AppError` leakage, continued blocking, and route-level limiter behavior. Verification: the targeted foundation suite passes 8/8, `npm test` passes 100 tests with 1 skipped, and `npm run typecheck`, `npm run lint` and `npm run build` pass.
+
+---
+
+#### Phase 1.2 — Redis-backed distributed rate limiting `[x]`
+
+**Objective:** Ensure every Express rate limiter uses shared Redis counters across backend instances and fails closed when distributed enforcement is unavailable.
+
+**Deliverables:**
+- The global limiter is created through the shared `createRateLimiter` middleware and uses the Redis-backed store.
+- Route-specific authentication, invitation and workspace limiters use the same store and key convention.
+- The in-process fallback was removed. Redis unavailability produces a controlled `503 RATE_LIMIT_UNAVAILABLE` response.
+- Counters use `rl:{namespace}:{client-key}` keys with a millisecond TTL; the global limiter uses the `:global` namespace.
+- The store reuses the shared Redis client from `src/db/redis.ts` and does not open a connection per request. The server remains responsible for connect/disconnect lifecycle.
+- Health endpoints remain exempt from the global limiter. Client identity uses `req.ip` and the existing `TRUST_PROXY` setting rather than an arbitrary forwarded header.
+- Tests cover shared counters, window rollover, fail-closed behavior, route-level limiters, proxy-header handling and failure cleanup, with a gated real-Redis integration test.
+
+**Dependencies:** Phase 1 and Phase 1.1 complete.
+
+**Verification criteria:**
+- Global and route-level limiter tests pass.
+- Counters are shared by two limiter instances using the same Redis key space.
+- Redis failure returns the documented fail-closed response.
+- Type checking, linting and build pass.
+
+**Blockers / Notes:** Verified on 2026-11-01. Implemented in `src/services/cache/rate-limit-store.ts`, `src/middleware/rate-limit.ts` and `src/app.ts`. The store now requires a ready shared Redis client, uses an atomic Lua increment with a millisecond TTL, and throws `RateLimitStoreUnavailableError` (`503 RATE_LIMIT_UNAVAILABLE`) when Redis cannot confirm a counter. Decrement and reset operations log failures without creating unhandled rejections. The global limiter now uses the same middleware and store as the route-specific limiters with the namespace `${RATE_LIMIT_NAMESPACE}:global`; the health endpoints remain skipped. No new dependency or environment variable was added: `REDIS_URL`, `RATE_LIMIT_NAMESPACE`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` and `TRUST_PROXY` are reused. Tests: `tests/rate-limit-redis.test.ts` covers shared counters, window rollover, two applications sharing the global counter, fail-closed global and route-level behavior, untrusted forwarded addresses and failure cleanup. The gated real-Redis suite passes 8/8 with `RUN_REDIS_TESTS=true REDIS_TEST_URL=redis://localhost:6379/15`. The full `npm test` suite passes 107 tests with 2 skipped DB integration suites. `npm run typecheck`, `npm run lint`, `npm run build` and `npm run format:check` pass. The Phase 4, 5 and 6 DB suites now connect the test Redis before creating the app so their rate-limited requests use the distributed store.
+
+---
+
+#### Phase 1.3 — Remove obsolete legacy JavaScript middleware and validators `[x]`
+
+**Objective:** Remove the legacy CommonJS middleware and validator files that were superseded by the TypeScript application shell and module-level Zod schemas.
+
+**Deliverables:**
+- Removed `src/middleware/authorization.js`, `src/middleware/logger.js` and `src/middleware/validator.js`.
+- Removed `src/validators/avatar.js`, `src/validators/login.js`, `src/validators/registration.js` and `src/validators/verification.js`; the now-empty `src/validators` directory was removed.
+- Preserved the active implementations: `src/middleware/validation.ts`, `src/utils/logger.ts`, `src/middleware/request-logger.ts`, `src/middleware/authenticate.ts`, `src/modules/authorization/*`, `src/modules/auth/auth.schemas.ts` and `src/modules/users/users.schemas.ts`.
+- Confirmed that no tracked source, test, script or documentation references the removed files or their exported symbols.
+- No runtime dependency, API contract, environment variable or database schema changed.
+
+**Dependencies:** Phases 1, 1.1 and 1.2 complete.
+
+**Verification criteria:**
+- No `.js` files remain under `src/`.
+- No imports, requires, dynamic imports or string references to the removed modules remain.
+- The validation, authorization and logging tests continue to pass.
+- Type checking, linting, build and formatting checks pass.
+
+**Blockers / Notes:** Verified on 2026-11-01. The audit found seven tracked CommonJS files with no references anywhere in `src`, `tests`, package scripts or documentation. `authorization.js` additionally imported the removed `models` module and `src/services/pin`, so it could not execute against the current tree. The active TypeScript validation middleware (`src/middleware/validation.ts`) and module schemas (`auth.schemas.ts`, `users.schemas.ts`) replace `validator.js` and the four files in `src/validators`; `src/utils/logger.ts` and `request-logger.ts` replace `logger.js`; `authenticate.ts` and `src/modules/authorization` replace `authorization.js`. Verification: `find src -name '*.js'` returns no files, the stale-reference search returns no matches, and `npm test` passes 107 tests with 2 skipped integration suites. `npm run typecheck`, `npm run lint`, `npm run build` and `npm run format:check` pass. Generated `dist/` output is ignored and was not edited.
 
 ---
 
@@ -119,7 +169,7 @@ Follow this cycle for every phase, without exception:
 - Indexes for workspace, project, task, membership, and activity queries
 - Migrations for every schema change
 - Seed script for reproducible test data
-- Placeholder stubs for future models (messages, meetings, AI usage, integrations) without full implementation
+- Documented placeholders for future models (messages, meetings, AI usage, integrations) without full implementation
 
 **Dependencies:** Phase 1
 
@@ -127,9 +177,71 @@ Follow this cycle for every phase, without exception:
 - Fresh database setup runs all migrations without errors
 - Seed script populates test data reproducibly
 - Uniqueness, foreign-key, and index constraints verified by tests or migration review
-- Rollback of migrations tested in a safe environment
+- Migration application verified against a disposable database
+- Recovery procedure tested: backup/restore, failed-migration resolution and forward corrective migration
+- Data integrity verified after each tested recovery
+- Migration history and schema drift checked before and after recovery
+- Evidence documented in `docs/migration-recovery.md`
+- Remaining limitations explicitly acknowledged; no claim is made that every migration has a tested down path
 
-**Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied.
+**Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied. The rollback/recovery criterion is satisfied by Phase 2.2: Prisma has no automatic down migrations, so recovery uses backup/restore, failed-migration resolution and forward corrective migrations, verified in `docs/migration-recovery.md`.
+
+---
+
+#### Phase 2.1 — Database model audit `[x]`
+
+**Objective:** Audit the Phase 2 schema against the planned-model list, determine whether any missing models are a genuine defect, and document the result without making unjustified schema changes.
+
+**Deliverables:**
+- Compared `prisma/schema.prisma` with `docs/planned-models.md` and the roadmap.
+- Confirmed the active ORM and migration system is Prisma (`@prisma/client` 6.19.3); the Sequelize packages in `package.json` are unused.
+- Verified all 21 current models and 16 enums against implemented modules, routes, services and tests.
+- Classified every deferred model by its roadmap phase and dependency.
+- Confirmed no implemented Phase 1–6 feature requires messages, meetings, AI usage, generic integrations or generic webhook models.
+- Confirmed `EmailWebhookEvent` covers the Phase 4 provider-webhook requirement, while generic `WebhookSubscription` and `WebhookDelivery` remain Phase 20 work.
+- Documented the audit decision, implemented model inventory, deferred-model mapping and change policy in `docs/planned-models.md`.
+- Made no Prisma schema or migration changes.
+
+**Dependencies:** Phase 2 complete.
+
+**Verification criteria:**
+- The schema validates and the Prisma client generates.
+- All six existing migrations apply to a disposable test database.
+- The migration history matches the schema with no drift.
+- Phase 2 database tests pass.
+- The audit result is documented and the deferred models remain out of scope until their roadmap phases.
+
+**Blockers / Notes:** Audited on 2026-11-01. `npx prisma validate`, `npx prisma generate`, `npx prisma migrate deploy` and `npx prisma migrate diff --exit-code` pass; the migration diff reports no difference. `tests/database-phase2.test.ts` passes 2/2 with `RUN_PHASE2_DB_TESTS=true` against a disposable PostgreSQL 16 container. Conclusion: the deferred models are not a Phase 2 defect; adding them now would be premature. The full database-enabled suite currently reports 176 passed and 10 failed, all failures confined to the pre-existing Phase 6 ownership-transfer integration tests. Those failures are unrelated to Phase 2.1: `tests/phase6-authorization-db.test.ts` reads `data.id` instead of `data.user.id` from `/api/v1/auth/me`, and `src/modules/workspaces/workspace.routes.ts` registers `/:workspaceId/owner` while the OpenAPI contract and tests use `/:workspaceId/owner/:userId`. The Phase 6 blocker is recorded here and left untouched under the Phase 2.1 scope.
+
+---
+
+#### Phase 2.2 — Database migration rollback and recovery `[x]`
+
+**Objective:** Establish and verify a safe recovery strategy for Prisma migrations without assuming that every migration has a reversible down path.
+
+**Deliverables:**
+- Documented the difference between application deployment rollback, schema reversal, failed-migration recovery and backup restoration.
+- Reviewed all six committed migrations and classified their operations and reversal risks.
+- Confirmed Prisma Migrate is the active migration system and that it does not provide automatic down migrations.
+- Documented the recovery policy in `docs/migration-recovery.md`.
+- Added `scripts/verify-migration-recovery.sh`, which tests baseline migration, schema drift, backup/restore, failed-migration resolution and forward corrective migration against a disposable database.
+- Preserved all existing migration files and migration history; no migration was edited, deleted or reset.
+- Verified that a backup restores data, a failed migration can be resolved, and a forward corrective migration preserves existing rows.
+- Updated the Phase 2 verification criteria to distinguish migration application, recovery testing, data integrity, evidence and remaining limitations.
+
+**Dependencies:** Phases 2 and 2.1 complete.
+
+**Verification criteria:**
+- All committed migrations apply to a disposable database.
+- The resulting schema matches `prisma/schema.prisma` with no drift.
+- A backup/restore round trip preserves sentinel data.
+- A failed migration is recorded by Prisma and can be marked rolled back.
+- A forward corrective migration preserves existing data and restores the intended schema shape.
+- The database returns to a known-good six-migration state after testing.
+- The verification procedure is repeatable through the script.
+- Remaining production backup, restore and deployment limitations are documented.
+
+**Blockers / Notes:** Verified on 2026-11-01 against a disposable PostgreSQL 16.15 container using `nexus_test`, `nexus_shadow`, `nexus_probe`, `nexus_probe_corrective` and `nexus_restore` databases. The six committed migrations apply successfully, `prisma migrate diff` reports no difference, and `tests/database-phase2.test.ts` passes 2/2. `scripts/verify-migration-recovery.sh` passed all six stages: baseline application and drift check, sentinel-data backup/restore, failed-migration `P3018` detection and `migrate resolve --rolled-back`, forward add-column and corrective drop-column migrations with data preserved, and final known-good restore. A separate restore into `nexus_restore` also reported the schema up to date. No per-migration down scripts exist by design; destructive changes rely on verified backup restoration or forward corrective migrations. No shared, staging or production database was accessed. The repository still lacks automated backup scheduling, retention, encryption, point-in-time recovery and a staging deployment rollback exercise; those remain Phase 23/24 work. The pre-existing Phase 6 DB test failures remain documented and unchanged.
 
 ---
 
@@ -512,7 +624,7 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 7 — Teams and organizational structure `[ ]`
+#### Phase 7 — Teams and organizational structure `[x]`
 
 **Objective:** Support teams within workspaces and make team membership meaningful across the platform.
 
@@ -534,7 +646,7 @@ Follow this cycle for every phase, without exception:
 - Team permissions enforced in project and communication modules
 - Membership change notifications delivered
 
-**Blockers / Notes:** _None recorded._
+**Blockers / Notes:** Verified on 2026-10-23. The team module is implemented at `src/modules/teams/` with `team.schemas.ts` (Zod validation for create, update, member add/update, lead change), `team.types.ts` (TeamSummary, TeamMemberSummary, TeamLeadSummary response shapes) and `team.service.ts` (full CRUD: create, list, get, update, archive, delete; membership: addMember, updateMemberRole, removeMember; lead management: changeLead). The HTTP layer lives in `team.routes.ts` and is mounted at `/api/v1/workspaces/:workspaceId/teams` via `src/routes/index.ts`. Authorization is enforced through the Phase 6 centralized module: workspace OWNER and PROJECT_MANAGER have full team capabilities; TEAM_LEAD may update and manage members of their own team; workspace MEMBER may list and view teams; workspace COLLABORATOR and VIEWER have no default access. The role that a client sends in a request body is never trusted. Every create, update, archive, delete, membership add/update/remove, and lead change is written to the `AuditLog` table inside the same transaction. Notifications are sent to affected members on add, role change, removal and lead assignment using `createNotification` from `src/services/notifications`. `TeamAuditAction` constants (`team.created`, `team.updated`, `team.archived`, `team.deleted`, `team.member_added`, `team.member_role_changed`, `team.member_removed`, `team.lead_changed`) were added to `src/services/audit.ts`. Team creation automatically adds the creator as a team member (TEAM_LEAD for OWNER/PM, MEMBER otherwise) and optionally adds a specified lead. Deleting a team is a soft-delete (`deletedAt` set); archived teams are filtered from the default list but visible with `?includeArchived=true`. Tests: `tests/phase7-teams.test.ts` (35 unit tests covering capability matrices, schema validation, audit constants) and `tests/phase7-teams-db.test.ts` (integration tests covering full lifecycle, member management, lead management, authorization enforcement, audit trail, and notifications). Verification: `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` all pass; `npm test` passes 136/137 (1 skipped — Phase 7 DB tests requiring `RUN_PHASE7_DB_TESTS=true`). Committed in two chunks on `feature/phase-7-teams` (90ee444 and 8245c69), pushed to `origin/feature/phase-7-teams`.
 
 ---
 
@@ -1124,7 +1236,7 @@ _Security is implemented from Phase 1. This phase audits and hardens the whole p
 
 ### Current Phase
 
-**Current phase:** Phase 6 is complete and verified. The next phase to begin is Phase 7, teams and organizational structure.
+**Current phase:** Phase 7 is complete and verified. The next phase to begin is Phase 8, projects and project collaboration.
 
 ---
 
@@ -1186,7 +1298,8 @@ _No issues recorded._
 | 4.6 — Email integration, security, and regression verification | 2026-11-01 | Partial. Retry, recipient privacy, token-path logging, webhook verification/idempotency, suppression and bounce/complaint checks pass. The full suite is 108 passed, 1 skipped; dedicated Phase 4, task assignment, and workspace-invitation database suites pass. All five collaboration templates still lack production workflow callers, so Phase 4 and 4.6 remain in progress. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
+| 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |
 
 ---
 
-_Last updated: 2026-11-01. Phases 1–3 and 5–6 are implemented and verified, together with corrective Phases 3.1–3.5 and Phase 4.1–4.2. Phase 4 is back in progress: Phase 4.3 and 4.4 notifier helpers still lack their task, messaging and meeting workflow callers; Phase 4.5 is deferred until the team and project invitation workflows in Phases 7 and 8 exist; Phase 4.6 verified delivery/privacy/webhook protections but all five collaboration integrations remain incomplete. The document also describes the planned state of the later phases._
+_Last updated: 2026-10-23. Phases 1 to 7 are implemented and verified. The document also describes the planned state of the later phases._

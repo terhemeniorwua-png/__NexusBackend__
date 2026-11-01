@@ -1,6 +1,9 @@
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import type { Request, RequestHandler } from 'express';
-import { createRateLimitStore } from '../services/cache/rate-limit-store';
+import {
+  createRateLimitStore,
+  type RateLimitRedisClient,
+} from '../services/cache/rate-limit-store';
 import { AppError } from '../utils/errors';
 import { hashSecret } from '../utils/crypto';
 
@@ -21,6 +24,10 @@ export interface RateLimiterOptions {
   message?: string;
   /** Derives the bucket key. Defaults to the client IP. */
   keyGenerator?: (req: Request) => string;
+  /** Skips the limiter for a request, such as the health endpoints. */
+  skip?: (req: Request) => boolean | Promise<boolean>;
+  /** Injectable for tests. Production uses the shared Redis client. */
+  client?: RateLimitRedisClient;
 }
 
 export function createRateLimiter({
@@ -30,14 +37,18 @@ export function createRateLimiter({
   code = 'RATE_LIMITED',
   message = 'Too many requests. Please try again later.',
   keyGenerator,
+  skip,
+  client,
 }: RateLimiterOptions): RequestHandler {
   return rateLimit({
     windowMs,
     limit,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
-    store: createRateLimitStore({ namespace, windowMs }),
+    store: createRateLimitStore({ namespace, windowMs, client }),
     keyGenerator: keyGenerator ?? ((req: Request) => ipKeyGenerator(req.ip ?? 'unknown')),
+    skip,
+    passOnStoreError: false,
     handler: (_req, _res, next) => {
       next(new AppError(429, code, message));
     },
