@@ -199,6 +199,31 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 3.2 — Account deletion and workspace ownership `[x]`
+
+**Objective:** Prevent account deletion while the account remains the owner of any persisted workspace.
+
+**Deliverables:**
+- Block deletion for owned workspaces in every persisted state, including `ACTIVE`, `ARCHIVED`, and soft-deleted rows
+- Preserve the existing requirement that ownership be transferred to an existing workspace member before account deletion
+- Keep a rejected deletion side-effect free, including sessions and one-time tokens
+- Serialize account deletion against workspace creation and ownership transfer
+- Keep workspace ownership transfer atomic and restricted to active accounts
+- Align the transfer route with its documented `/workspaces/{workspaceId}/owner/{userId}` contract
+
+**Verification criteria:**
+- Active, archived, soft-deleted, and mixed-status owned workspaces block account deletion
+- Membership and workspaces owned by another account do not block deletion
+- A successful ownership transfer permits deletion by the previous owner
+- A failed transfer leaves ownership unchanged and deletion blocked
+- Database failure rolls back deletion changes
+- Concurrent workspace creation or ownership transfer cannot attach a workspace to a deleted account
+- Phase 3 account lifecycle tests and broader regression checks pass
+
+**Blockers / Notes:** The root defect was an account deletion count filtered by both `deletedAt: null` and `status: 'ACTIVE'`, which omitted archived workspace rows. The workspace model has only `ACTIVE` and `ARCHIVED` states; workspace deletion is soft and sets `deletedAt` while retaining the `ownerId` foreign key (`ON DELETE RESTRICT`). There is no permanent workspace removal path, so any retained row with `ownerId` equal to the account remains relevant, even if soft-deleted. Deletion returns the existing `409 WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED` response until the current owner transfers each workspace to an existing, active member. The ownership check, session revocation, token invalidation, profile anonymisation, and user update now run in one transaction after locking the user row. Workspace creation and ownership transfer take compatible owner-row locks and revalidate account state inside their transactions; transfer also conditionally updates the workspace only if the caller remains its owner. No schema migration was required. The Phase 3 integration suite passes 48/48; the complete regression suite with Phase 2–5 database suites and Phase 6 unit tests passes 177/177. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check`, and `git diff --check` pass. Redis was unavailable, so rate limits used the existing in-process fallback. The separate Phase 6 database suite still has pre-existing fixture defects: it reads the user ID from the wrong `/auth/me` response shape and its teardown deletes users before owner-restricted workspace rows. The new Phase 3 integration tests cover the transfer endpoint and its concurrency behavior. Implementation commit `d851cb1` (`fix(phase-3.2): guard account deletion against retained ownership`) is pushed to `origin/feature/phase-3.2-account-deletion-ownership`.
+
+---
+
 #### Phase 4 — Transactional email and delivery infrastructure `[x]`
 
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.
