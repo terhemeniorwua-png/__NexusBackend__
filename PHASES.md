@@ -525,6 +525,16 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 4.5 — Team and project invitation email integration `[ ]`
+
+**Objective:** Connect the existing team and project invitation templates to their authoritative invitation workflows after those workflows exist.
+
+**Dependencies:** Phase 7 team invitation workflow; Phase 8 project invitation workflow.
+
+**Status / Blockers:** Not started and deferred. The phase tracker defines `[ ]` as not started and has no blocked/deferred status. The existing invitation service only creates `WORKSPACE` invitations and accepts them by creating workspace memberships. Team and project invitation routes, services, creation, acceptance, revocation and membership-granting flows are not implemented. `TEAM` and `PROJECT` values in `InvitationType`, and optional `teamId` / `projectId` columns, are schema placeholders; the `Invitation` model has no team/project relations. Team invitations depend on the Phase 7 workflow, and project invitations depend on the Phase 8 workflow. The existing team and project email templates may remain unused until their respective workflows can call them safely. Do not connect them to workspace invitation events or create invitation behavior in this email phase. Phase 4.6 is not defined in this tracker; when it is defined, it must explicitly carry these integrations forward or depend on Phases 7 and 8. Do not mark Phase 4.5 complete until both authoritative workflows exist and the invitation security and email tests pass.
+
+---
+
 ### Milestone 2 — Organization and Access Control
 
 ---
@@ -1261,6 +1271,7 @@ _No issues recorded._
 | 4.2 — Recipient email privacy in logs | 2026-11-01 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. New unit and PostgreSQL integration tests pass, the Phase 4 database suite passed three consecutive runs, the full Phase 2–5 database-enabled suite passes 194/194, and build, typecheck, lint and format check pass. |
 | 4.3 — Task assignment email integration | 2026-11-01 | Partial. The reusable task-assignment notifier and 7 PostgreSQL/outbox integration tests pass, including reassignment, duplicate events, suppression, ineligible recipients and delivery failure isolation. No runtime caller exists because the Phase 9 task workflow is not implemented, so the phase remains in progress. |
 | 4.4 — Mention and meeting-invitation email integration | 2026-11-01 | Partial. Added post-commit notifier boundaries and configurable application links for both existing templates. Four focused unit tests pass; typecheck, lint and build pass. No comment mention or meeting workflow exists to supply authoritative runtime callers; the phase remains in progress pending Phases 14 and 17. |
+| 4.5 — Team and project invitation email integration | 2026-11-01 | Deferred / not started. The current invitation workflow is workspace-only. Team and project invitation creation and acceptance depend on Phases 7 and 8; optional schema fields do not provide those workflows. Phase 4.6 must track these outstanding integrations or their dependencies when that phase is defined. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 | 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |
