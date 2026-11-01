@@ -1585,6 +1585,122 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     }
   });
 
+  test('a later deletion failure rolls back successful session and token updates', async () => {
+    const session = await activate();
+    const resetTokenHash = hashSecret(`deletion-rollback-${session.userId}`);
+
+    await prisma.authToken.create({
+      data: {
+        userId: session.userId,
+        purpose: 'PASSWORD_RESET',
+        tokenHash: resetTokenHash,
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    await prisma.userProfile.upsert({
+      where: { userId: session.userId },
+      create: {
+        userId: session.userId,
+        bio: 'Keep this profile on rollback',
+        jobTitle: 'Engineer',
+        avatarUrl: 'https://example.com/avatar.png',
+      },
+      update: {
+        bio: 'Keep this profile on rollback',
+        jobTitle: 'Engineer',
+        avatarUrl: 'https://example.com/avatar.png',
+      },
+    });
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION nexus_test_fail_account_deletion_user_update()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF NEW."deletedAt" IS NOT NULL THEN
+          RAISE EXCEPTION 'simulated account deletion user update failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER nexus_test_fail_account_deletion_user_update
+      BEFORE UPDATE ON "User"
+      FOR EACH ROW
+      EXECUTE FUNCTION nexus_test_fail_account_deletion_user_update()
+    `);
+
+    try {
+      const response = await requestAccountDeletion(session);
+
+      assert.equal(response.status, 500);
+
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+      const storedSession = await prisma.session.findUniqueOrThrow({
+        where: { id: session.sessionId },
+      });
+      const token = await prisma.authToken.findUniqueOrThrow({
+        where: { tokenHash: resetTokenHash },
+      });
+      const profile = await prisma.userProfile.findUniqueOrThrow({
+        where: { userId: session.userId },
+      });
+
+      assert.equal(user.status, 'ACTIVE');
+      assert.equal(user.deletedAt, null);
+      assert.equal(storedSession.revokedAt, null);
+      assert.equal(storedSession.revokedReason, null);
+      assert.equal(token.usedAt, null);
+      assert.equal(profile.bio, 'Keep this profile on rollback');
+      assert.equal(profile.jobTitle, 'Engineer');
+      assert.equal(profile.avatarUrl, 'https://example.com/avatar.png');
+
+      const authenticated = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+        headers: { authorization: `Bearer ${session.accessToken}` },
+      });
+
+      assert.equal(authenticated.status, 200);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        `DROP TRIGGER nexus_test_fail_account_deletion_user_update ON "User"`,
+      );
+      await prisma.$executeRawUnsafe(
+        `DROP FUNCTION nexus_test_fail_account_deletion_user_update()`,
+      );
+    }
+  });
+
+  test('concurrent deletion requests commit once and reject the losing request', async () => {
+    const session = await activate();
+    let statuses: number[] = [];
+
+    await withAccountRowLocked(session.userId, async (releaseLock) => {
+      const first = requestAccountDeletion(session);
+      const second = requestAccountDeletion(session);
+
+      await waitForLockWaiter('FOR UPDATE', 2);
+      releaseLock();
+      statuses = (await Promise.all([first, second])).map((response) => response.status);
+    });
+
+    assert.deepEqual(
+      statuses.sort((a, b) => a - b),
+      [204, 409],
+    );
+
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    const storedSession = await prisma.session.findUniqueOrThrow({
+      where: { id: session.sessionId },
+    });
+
+    assert.equal(stored.status, 'DEACTIVATED');
+    assert.ok(stored.deletedAt);
+    assert.ok(storedSession.revokedAt);
+    assert.equal(storedSession.revokedReason, 'ACCOUNT_DELETED');
+  });
+
   test('a concurrent workspace creation cannot attach to a deleting account', async () => {
     const session = await activate();
     let deletionStatus = 0;
@@ -1682,11 +1798,21 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(response.status, 204, JSON.stringify(response.body));
 
     const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+    const storedSession = await prisma.session.findUniqueOrThrow({
+      where: { id: session.sessionId },
+    });
 
     assert.equal(stored?.name, 'Deleted user');
     assert.equal(stored?.email, `deleted+${session.userId}@nexus.invalid`);
     assert.equal(stored?.status, 'DEACTIVATED');
     assert.ok(stored?.deletedAt);
+    assert.ok(storedSession.revokedAt);
+    assert.equal(storedSession.revokedReason, 'ACCOUNT_DELETED');
+
+    const oldSessionAccess = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    });
+    assert.equal(oldSessionAccess.status, 401);
 
     // The address is free again, so a new account can use it.
     const reRegister = await jsonRequest(`${baseUrl}/api/v1/auth/register`, {
