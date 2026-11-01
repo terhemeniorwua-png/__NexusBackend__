@@ -1,14 +1,15 @@
 import type { Store } from 'express-rate-limit';
 import { getRedisClient } from '../../db/redis';
+import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
 /**
- * Rate-limit counters.
+ * Redis-backed rate-limit counters.
  *
- * Redis is the primary store so limits are shared across backend instances.
- * When Redis is unavailable the counter falls back to an in-process map so a
- * cache outage degrades limit precision instead of taking authentication
- * offline.
+ * The counters are shared by every backend instance that points at the same
+ * Redis deployment. The store deliberately has no in-process fallback: when
+ * Redis cannot confirm a counter the request is denied, because silently
+ * accepting traffic would remove the protection the limiter exists to provide.
  *
  * Key convention: `rl:{namespace}:{client-key}` with a millisecond TTL.
  */
@@ -26,29 +27,64 @@ end
 return { current, ttl }
 `;
 
-interface MemoryEntry {
-  hits: number;
-  resetAt: number;
+export interface RateLimitRedisClient {
+  readonly isOpen: boolean;
+  readonly isReady?: boolean;
+  eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
+  decr(key: string): Promise<number>;
+  del(key: string): Promise<number>;
 }
 
 export interface RateLimitStoreOptions {
   namespace: string;
   windowMs: number;
+  /** Injectable for tests. Production uses the shared Redis client. */
+  client?: RateLimitRedisClient;
 }
 
-export function createRateLimitStore({ namespace, windowMs }: RateLimitStoreOptions): Store {
-  const memory = new Map<string, MemoryEntry>();
+export class RateLimitStoreUnavailableError extends AppError {
+  constructor() {
+    super(
+      503,
+      'RATE_LIMIT_UNAVAILABLE',
+      'Rate limiting is temporarily unavailable. Please try again later.',
+      { expose: true },
+    );
+    this.name = 'RateLimitStoreUnavailableError';
+  }
+}
 
-  function pruneMemory(now: number): void {
-    if (memory.size < 1_000) {
-      return;
+function asRateLimitClient(client: unknown): RateLimitRedisClient {
+  return client as RateLimitRedisClient;
+}
+
+export function createRateLimitStore({
+  namespace,
+  windowMs,
+  client: injectedClient,
+}: RateLimitStoreOptions): Store {
+  function getReadyClient(): RateLimitRedisClient {
+    const client = injectedClient ?? asRateLimitClient(getRedisClient());
+
+    if (!client.isOpen || client.isReady === false) {
+      throw new RateLimitStoreUnavailableError();
     }
 
-    for (const [key, entry] of memory) {
-      if (entry.resetAt <= now) {
-        memory.delete(key);
-      }
-    }
+    return client;
+  }
+
+  function redisKey(key: string): string {
+    return `rl:${namespace}:${key}`;
+  }
+
+  function reportUnavailable(error: unknown, operation: string): never {
+    logger.warn('rate_limit_store_redis_unavailable', {
+      namespace,
+      operation,
+      error,
+    });
+
+    throw new RateLimitStoreUnavailableError();
   }
 
   return {
@@ -57,83 +93,72 @@ export function createRateLimitStore({ namespace, windowMs }: RateLimitStoreOpti
     localKeys: false,
 
     increment: async (key: string) => {
-      const redisKey = `rl:${namespace}:${key}`;
-      const now = Date.now();
-
       try {
-        const client = getRedisClient();
+        const client = getReadyClient();
+        const reply = await client.eval(INCREMENT_SCRIPT, {
+          keys: [redisKey(key)],
+          arguments: [String(windowMs)],
+        });
 
-        if (client.isOpen) {
-          const reply = (await client.eval(INCREMENT_SCRIPT, {
-            keys: [redisKey],
-            arguments: [String(windowMs)],
-          })) as [number, number];
-
-          const totalHits = Number(reply[0]);
-          const ttlMs = Number(reply[1]);
-
-          return {
-            totalHits,
-            resetTime: new Date(now + (ttlMs > 0 ? ttlMs : windowMs)),
-          };
+        if (!Array.isArray(reply) || reply.length < 2) {
+          throw new Error('Unexpected response from the rate-limit store');
         }
+
+        const totalHits = Number(reply[0]);
+        const ttlMs = Number(reply[1]);
+
+        if (!Number.isFinite(totalHits) || totalHits < 1) {
+          throw new Error('Unexpected hit count from the rate-limit store');
+        }
+
+        return {
+          totalHits,
+          resetTime: new Date(Date.now() + (ttlMs > 0 ? ttlMs : windowMs)),
+        };
       } catch (error) {
-        logger.warn('rate_limit_store_redis_unavailable', { error, namespace });
+        if (error instanceof RateLimitStoreUnavailableError) {
+          throw error;
+        }
+
+        return reportUnavailable(error, 'increment');
       }
-
-      pruneMemory(now);
-
-      const existing = memory.get(key);
-
-      if (!existing || existing.resetAt <= now) {
-        memory.set(key, { hits: 1, resetAt: now + windowMs });
-        return { totalHits: 1, resetTime: new Date(now + windowMs) };
-      }
-
-      existing.hits += 1;
-      memory.set(key, existing);
-
-      return { totalHits: existing.hits, resetTime: new Date(existing.resetAt) };
     },
 
     decrement: async (key: string) => {
-      const existing = memory.get(key);
-
-      if (existing) {
-        existing.hits = Math.max(0, existing.hits - 1);
-      }
-
       try {
-        const client = getRedisClient();
-
-        if (client.isOpen) {
-          await client.decr(`rl:${namespace}:${key}`);
+        const client = getReadyClient();
+        await client.decr(redisKey(key));
+      } catch (error) {
+        // Decrementing is a best-effort correction for skip options. It must
+        // never turn a completed request into an unhandled rejection.
+        if (!(error instanceof RateLimitStoreUnavailableError)) {
+          logger.warn('rate_limit_store_redis_unavailable', {
+            namespace,
+            operation: 'decrement',
+            error,
+          });
         }
-      } catch {
-        // The in-memory counter above is the fallback path.
       }
     },
 
     resetKey: async (key: string) => {
-      memory.delete(key);
-
       try {
-        const client = getRedisClient();
-
-        if (client.isOpen) {
-          await client.del(`rl:${namespace}:${key}`);
+        const client = getReadyClient();
+        await client.del(redisKey(key));
+      } catch (error) {
+        if (!(error instanceof RateLimitStoreUnavailableError)) {
+          logger.warn('rate_limit_store_redis_unavailable', {
+            namespace,
+            operation: 'resetKey',
+            error,
+          });
         }
-      } catch {
-        // Nothing else to do; the counter will expire on its own.
       }
     },
 
-    resetAll: async () => {
-      memory.clear();
-    },
-
     shutdown: () => {
-      memory.clear();
+      // The store borrows the application's shared Redis client. The server
+      // owns the connection lifecycle and closes it during shutdown.
     },
   };
 }
