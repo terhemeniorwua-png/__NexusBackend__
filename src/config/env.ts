@@ -129,6 +129,25 @@ const envSchema = z
         'TASK_ASSIGNMENT_LINK_PATH must include :projectId and :taskId',
       )
       .default('/projects/:projectId/tasks/:taskId'),
+    COMMENT_MENTION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .refine(
+        (value) =>
+          value.includes(':projectId') && value.includes(':taskId') && value.includes(':commentId'),
+        'COMMENT_MENTION_LINK_PATH must include :projectId, :taskId and :commentId',
+      )
+      .default('/projects/:projectId/tasks/:taskId#comment-:commentId'),
+    MEETING_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .refine(
+        (value) => value.includes(':meetingId'),
+        'MEETING_INVITATION_LINK_PATH must include :meetingId',
+      )
+      .default('/meetings/:meetingId'),
 
     // Prefix for Redis keys. Environments that share a Redis instance must use
     // different namespaces so their rate-limit counters stay separate.
@@ -320,6 +339,8 @@ export interface AppConfig {
   workspaceInvitationTtlSeconds: number;
   workspaceInvitationLinkPath: string;
   taskAssignmentLinkPath: string;
+  commentMentionLinkPath: string;
+  meetingInvitationLinkPath: string;
   emailProvider: 'smtp' | 'console' | 'disabled';
   emailSmtpHost: string;
   emailSmtpPort: number;
@@ -432,6 +453,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     workspaceInvitationTtlSeconds: values.WORKSPACE_INVITATION_TTL_SECONDS,
     workspaceInvitationLinkPath: values.WORKSPACE_INVITATION_LINK_PATH,
     taskAssignmentLinkPath: values.TASK_ASSIGNMENT_LINK_PATH,
+    commentMentionLinkPath: values.COMMENT_MENTION_LINK_PATH,
+    meetingInvitationLinkPath: values.MEETING_INVITATION_LINK_PATH,
     emailProvider: values.EMAIL_PROVIDER,
     emailSmtpHost: values.EMAIL_SMTP_HOST,
     emailSmtpPort: values.EMAIL_SMTP_PORT,

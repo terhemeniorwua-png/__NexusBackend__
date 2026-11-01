@@ -387,6 +387,32 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 4.4 — Mention and meeting-invitation email integration `[/]`
+
+**Objective:** Connect the existing mention and meeting-invitation templates to their authoritative collaboration workflows without duplicating event parsing or notification state.
+
+**Deliverables:**
+- Post-commit mention email integration using existing persisted comment and workspace membership data
+- Post-commit pending meeting-invitation email integration using the invitation workflow's authorized context
+- Configurable frontend paths rooted at `EMAIL_APP_URL`
+- Stable event idempotency, existing suppression enforcement and non-fatal delivery failures
+- Tests for recipient selection, template context, duplicate processing, suppression, invitation status and failure isolation
+- Runtime callers from the mention and meeting-invitation workflows
+
+**Dependencies:** Phase 4.2, Phase 14 messaging/mentions, Phase 17 meetings
+
+**Verification criteria:**
+- Both existing templates have runtime callers
+- Mention events target the mentioned workspace member, excluding the author
+- Meeting mail is sent only for a valid pending invitation and does not independently grant access
+- Repeated events do not enqueue duplicate messages
+- Existing reschedule/cancellation behavior is preserved
+- Relevant tests, type checks, lint and build pass
+
+**Blockers / Notes:** Partially implemented on 2026-11-01. Added `src/services/collaboration-email-notifier.ts` as a post-commit integration boundary. It resolves mention recipients from active users with workspace membership, excludes the comment author, uses the persisted task/comment context, checks the existing suppression list, generates links from `EMAIL_APP_URL` plus configurable `COMMENT_MENTION_LINK_PATH` / `MEETING_INVITATION_LINK_PATH`, and uses stable event keys through the transactional outbox. Meeting invitation sends are gated on `PENDING`; the handler takes invitation context from its owning workflow because no meeting or meeting-invitation model exists yet. Delivery failures are reported without mutating collaboration data. Four focused tests pass; `pnpm typecheck`, `pnpm lint`, `pnpm build` and `git diff --check` pass. The repository has no comment creation/mention parsing service or notification caller, no meeting schema/routes/workflow, and no email preference model. Therefore no production runtime caller can be connected here without implementing later messaging and meetings phases; notification suppression is the only existing email preference control. The meeting handler cannot independently confirm persisted authorization or invitation state until the Phase 17 workflow exists. Phase 4.4 remains in progress pending those authoritative workflows and end-to-end tests.
+
+---
+
 ### Milestone 2 — Organization and Access Control
 
 ---
@@ -1122,9 +1148,10 @@ _No issues recorded._
 | 4.1 — Bounded email delivery retries | 2026-11-01 | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. |
 | 4.2 — Recipient email privacy in logs | 2026-11-01 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. New unit and PostgreSQL integration tests pass, the Phase 4 database suite passed three consecutive runs, the full Phase 2–5 database-enabled suite passes 194/194, and build, typecheck, lint and format check pass. |
 | 4.3 — Task assignment email integration | 2026-11-01 | Partial. The reusable task-assignment notifier and 7 PostgreSQL/outbox integration tests pass, including reassignment, duplicate events, suppression, ineligible recipients and delivery failure isolation. No runtime caller exists because the Phase 9 task workflow is not implemented, so the phase remains in progress. |
+| 4.4 — Mention and meeting-invitation email integration | 2026-11-01 | Partial. Added post-commit notifier boundaries and configurable application links for both existing templates. Four focused unit tests pass; typecheck, lint and build pass. No comment mention or meeting workflow exists to supply authoritative runtime callers; the phase remains in progress pending Phases 14 and 17. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 
 ---
 
-_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phase 4.3 is partially implemented: the task-assignment notifier is ready, but its runtime caller waits for the Phase 9 task workflow. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3 and 4.4 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging and meeting workflows. The document also describes the planned state of the later phases._
