@@ -1701,6 +1701,49 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(storedSession.revokedReason, 'ACCOUNT_DELETED');
   });
 
+  test('a concurrent session refresh cannot survive committed account deletion', async () => {
+    const session = await activate();
+    let deletionStatus = 0;
+    let refresh: Awaited<ReturnType<typeof jsonRequest>> | undefined;
+
+    await withSessionRowLocked(session.sessionId, async (releaseLock) => {
+      const deletion = requestAccountDeletion(session);
+      const refreshing = jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: session.refreshToken }),
+      });
+
+      await waitForLockWaiter('Session', 2);
+      releaseLock();
+      const [deleted, refreshed] = await Promise.all([deletion, refreshing]);
+      deletionStatus = deleted.status;
+      refresh = refreshed;
+    });
+
+    assert.equal(deletionStatus, 204);
+    assert.ok(refresh);
+    assert.ok([200, 401, 403].includes(refresh.status));
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    const storedSession = await prisma.session.findUniqueOrThrow({
+      where: { id: session.sessionId },
+    });
+
+    assert.equal(user.status, 'DEACTIVATED');
+    assert.ok(user.deletedAt);
+    assert.ok(storedSession.revokedAt);
+    assert.equal(storedSession.revokedReason, 'ACCOUNT_DELETED');
+
+    if (refresh.status === 200) {
+      const accessToken = (refresh.body.data as { accessToken: string }).accessToken;
+      const authenticated = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+
+      assert.equal(authenticated.status, 401);
+    }
+  });
+
   test('a concurrent workspace creation cannot attach to a deleting account', async () => {
     const session = await activate();
     let deletionStatus = 0;
