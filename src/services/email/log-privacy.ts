@@ -1,4 +1,4 @@
-const emailAddressPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+import { redactSensitiveText } from '../../utils/log-redaction';
 
 /**
  * Removes email addresses from text that may be written to the application
@@ -6,7 +6,7 @@ const emailAddressPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
  * includes the recipient address.
  */
 export function redactEmailAddresses(value: string): string {
-  return value.replace(emailAddressPattern, '[REDACTED_EMAIL]');
+  return redactSensitiveText(value);
 }
 
 /**
