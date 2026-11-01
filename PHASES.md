@@ -17,7 +17,7 @@
 
 _Update this table whenever a phase status changes._
 
-Phases 1.1 and 1.2 are remediation subphases of Phase 1. They are tracked below but do not change the 24-phase roadmap count.
+Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. Phase 2.1 is a database-model audit subphase of Phase 2. They are tracked below but do not change the 24-phase roadmap count.
 
 ---
 
@@ -131,6 +131,29 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 1.3 — Remove obsolete legacy JavaScript middleware and validators `[x]`
+
+**Objective:** Remove the legacy CommonJS middleware and validator files that were superseded by the TypeScript application shell and module-level Zod schemas.
+
+**Deliverables:**
+- Removed `src/middleware/authorization.js`, `src/middleware/logger.js` and `src/middleware/validator.js`.
+- Removed `src/validators/avatar.js`, `src/validators/login.js`, `src/validators/registration.js` and `src/validators/verification.js`; the now-empty `src/validators` directory was removed.
+- Preserved the active implementations: `src/middleware/validation.ts`, `src/utils/logger.ts`, `src/middleware/request-logger.ts`, `src/middleware/authenticate.ts`, `src/modules/authorization/*`, `src/modules/auth/auth.schemas.ts` and `src/modules/users/users.schemas.ts`.
+- Confirmed that no tracked source, test, script or documentation references the removed files or their exported symbols.
+- No runtime dependency, API contract, environment variable or database schema changed.
+
+**Dependencies:** Phases 1, 1.1 and 1.2 complete.
+
+**Verification criteria:**
+- No `.js` files remain under `src/`.
+- No imports, requires, dynamic imports or string references to the removed modules remain.
+- The validation, authorization and logging tests continue to pass.
+- Type checking, linting, build and formatting checks pass.
+
+**Blockers / Notes:** Verified on 2026-11-01. The audit found seven tracked CommonJS files with no references anywhere in `src`, `tests`, package scripts or documentation. `authorization.js` additionally imported the removed `models` module and `src/services/pin`, so it could not execute against the current tree. The active TypeScript validation middleware (`src/middleware/validation.ts`) and module schemas (`auth.schemas.ts`, `users.schemas.ts`) replace `validator.js` and the four files in `src/validators`; `src/utils/logger.ts` and `request-logger.ts` replace `logger.js`; `authenticate.ts` and `src/modules/authorization` replace `authorization.js`. Verification: `find src -name '*.js'` returns no files, the stale-reference search returns no matches, and `npm test` passes 107 tests with 2 skipped integration suites. `npm run typecheck`, `npm run lint`, `npm run build` and `npm run format:check` pass. Generated `dist/` output is ignored and was not edited.
+
+---
+
 #### Phase 2 — Database architecture and migrations `[x]`
 
 **Objective:** Define the complete relational foundation for the Nexus platform before implementing business logic.
@@ -146,7 +169,7 @@ Follow this cycle for every phase, without exception:
 - Indexes for workspace, project, task, membership, and activity queries
 - Migrations for every schema change
 - Seed script for reproducible test data
-- Placeholder stubs for future models (messages, meetings, AI usage, integrations) without full implementation
+- Documented placeholders for future models (messages, meetings, AI usage, integrations) without full implementation
 
 **Dependencies:** Phase 1
 
@@ -157,6 +180,33 @@ Follow this cycle for every phase, without exception:
 - Rollback of migrations tested in a safe environment
 
 **Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied.
+
+---
+
+#### Phase 2.1 — Database model audit `[x]`
+
+**Objective:** Audit the Phase 2 schema against the planned-model list, determine whether any missing models are a genuine defect, and document the result without making unjustified schema changes.
+
+**Deliverables:**
+- Compared `prisma/schema.prisma` with `docs/planned-models.md` and the roadmap.
+- Confirmed the active ORM and migration system is Prisma (`@prisma/client` 6.19.3); the Sequelize packages in `package.json` are unused.
+- Verified all 21 current models and 16 enums against implemented modules, routes, services and tests.
+- Classified every deferred model by its roadmap phase and dependency.
+- Confirmed no implemented Phase 1–6 feature requires messages, meetings, AI usage, generic integrations or generic webhook models.
+- Confirmed `EmailWebhookEvent` covers the Phase 4 provider-webhook requirement, while generic `WebhookSubscription` and `WebhookDelivery` remain Phase 20 work.
+- Documented the audit decision, implemented model inventory, deferred-model mapping and change policy in `docs/planned-models.md`.
+- Made no Prisma schema or migration changes.
+
+**Dependencies:** Phase 2 complete.
+
+**Verification criteria:**
+- The schema validates and the Prisma client generates.
+- All six existing migrations apply to a disposable test database.
+- The migration history matches the schema with no drift.
+- Phase 2 database tests pass.
+- The audit result is documented and the deferred models remain out of scope until their roadmap phases.
+
+**Blockers / Notes:** Audited on 2026-11-01. `npx prisma validate`, `npx prisma generate`, `npx prisma migrate deploy` and `npx prisma migrate diff --exit-code` pass; the migration diff reports no difference. `tests/database-phase2.test.ts` passes 2/2 with `RUN_PHASE2_DB_TESTS=true` against a disposable PostgreSQL 16 container. Conclusion: the deferred models are not a Phase 2 defect; adding them now would be premature. The full database-enabled suite currently reports 176 passed and 10 failed, all failures confined to the pre-existing Phase 6 ownership-transfer integration tests. Those failures are unrelated to Phase 2.1: `tests/phase6-authorization-db.test.ts` reads `data.id` instead of `data.user.id` from `/api/v1/auth/me`, and `src/modules/workspaces/workspace.routes.ts` registers `/:workspaceId/owner` while the OpenAPI contract and tests use `/:workspaceId/owner/:userId`. The Phase 6 blocker is recorded here and left untouched under the Phase 2.1 scope.
 
 ---
 
