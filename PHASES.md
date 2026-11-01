@@ -473,6 +473,32 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 4.3 — Task assignment email integration `[/]`
+
+**Objective:** Connect the existing `task_assignment` template to a reusable notifier that the authoritative task assignment workflow can call after it commits an assignment.
+
+**Deliverables:**
+- Reusable notifier around the existing template and transactional outbox
+- Recipient validation against active workspace and project membership
+- Suppression-list handling and task link generation from configuration
+- Stable per-assignment idempotency and non-fatal delivery failure handling
+- PostgreSQL integration tests for context, reassignment, duplicate processing, suppression, ineligible recipients and failure isolation
+- Runtime caller from the authoritative task assignment service
+
+**Dependencies:** Phase 4.2, Phase 9
+
+**Verification criteria:**
+- The existing task-assignment template has a real runtime caller
+- Task assignment triggers the expected email
+- Correct recipients and contextual data are used
+- Duplicate processing is handled safely
+- Existing task and email behavior remains intact
+- Relevant tests pass
+
+**Blockers / Notes:** Partially implemented on 2026-11-01. The repository does not yet contain the Phase 9 task service, task routes or assignment workflow, so the user explicitly selected the notifier-only option rather than authorizing a partial Phase 9 implementation. `src/services/task-assignment-notifier.ts` now validates a persisted `TaskAssignee`, requires an active user with workspace access and project membership (or workspace management/project ownership), enforces existing address suppression, and calls the existing `sendEmail` seam with the existing `task_assignment` template. It builds the task link from `EMAIL_APP_URL` and the new `TASK_ASSIGNMENT_LINK_PATH`, adds task/project/workspace metadata, and uses the persisted assignment timestamp in the idempotency key so duplicate events collapse into one outbox row. Delivery errors are caught and reported without modifying task data. The integration suite has 7 passing PostgreSQL/outbox tests; the unit suite adds link and idempotency coverage. The full Phase 2–5 database-enabled suite passes 203/203, and `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `git diff --check` pass. The completion criteria are not met because no production runtime caller or task-assignment endpoint exists, and the schema has no notification-preference model, so suppression is the only preference mechanism currently available. Phase 4.3 stays in progress until the Phase 9 task service calls the notifier after a successful assignment commit and the end-to-end assignment path is verified.
+
+---
+
 ### Milestone 2 — Organization and Access Control
 
 ---
@@ -1207,6 +1233,7 @@ _No issues recorded._
 | 4 — Transactional email | 2026-10-21 | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account. |
 | 4.1 — Bounded email delivery retries | 2026-11-01 | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. |
 | 4.2 — Recipient email privacy in logs | 2026-11-01 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. New unit and PostgreSQL integration tests pass, the Phase 4 database suite passed three consecutive runs, the full Phase 2–5 database-enabled suite passes 194/194, and build, typecheck, lint and format check pass. |
+| 4.3 — Task assignment email integration | 2026-11-01 | Partial. The reusable task-assignment notifier and 7 PostgreSQL/outbox integration tests pass, including reassignment, duplicate events, suppression, ineligible recipients and delivery failure isolation. No runtime caller exists because the Phase 9 task workflow is not implemented, so the phase remains in progress. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 | 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |

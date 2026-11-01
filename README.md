@@ -385,6 +385,7 @@ The verification, reset and email change links are built from `FRONTEND_URL` and
 |---|---|---|
 | `WORKSPACE_INVITATION_TTL_SECONDS` | `604800` | Lifetime of an invitation link |
 | `WORKSPACE_INVITATION_LINK_PATH` | `/workspaces/invitations/accept` | Frontend route that receives the acceptance link |
+| `TASK_ASSIGNMENT_LINK_PATH` | `/projects/:projectId/tasks/:taskId` | Frontend route for an assigned task. `:projectId` and `:taskId` are replaced with encoded identifiers |
 
 ### Email settings
 
@@ -717,6 +718,7 @@ Phase 4 implements transactional email as a reusable platform capability.
 - **Background delivery** — a worker polls the outbox and claims due rows with `FOR UPDATE SKIP LOCKED`, so several instances can run it safely. Rows are claimed atomically and the worker stops with the server.
 - **Retries and deduplication** — transient provider failures and unexpected worker errors are retried with exponential backoff and jitter only while `EMAIL_MAX_ATTEMPTS` remains. Permanent failures stop immediately, and an exhausted delivery moves to the terminal `FAILED` state instead of returning to the queue. A unique idempotency key per logical send prevents duplicate rows and duplicate sends.
 - **Provider webhooks** — `POST /api/v1/webhooks/email` verifies an HMAC signature over the raw payload, then applies delivery, bounce and complaint events. Providers that do not sign their events, Brevo among them, are verified with the token in the webhook URL. Repeated events are applied once.
+- **Task assignment notifier** — `src/services/task-assignment-notifier.ts` turns a persisted `TaskAssignee` row into the existing `task_assignment` email. It validates the active workspace and project membership, uses suppression rules, builds the task link from `EMAIL_APP_URL` and `TASK_ASSIGNMENT_LINK_PATH`, and derives its idempotency key from the assignment timestamp. The Phase 9 task service will call it after committing an assignment; delivery failure is reported without changing task data.
 - **Logging** — verification tokens, reset links and message bodies are never written to the application log. Delivery logs carry the delivery ID, template, provider, attempt and failure category, but not the recipient email address; provider and worker error text is redacted before it is logged.
 
 Requirements:
@@ -811,7 +813,7 @@ DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus_test" npx prisma mig
 
 The Phase 3 suite covers registration, verification, sign-in, session rotation, refresh token replay detection, CSRF enforcement, sign-out, password reset and change, email change, deactivation, deletion, profile updates, rate limiting and the audit trail.
 
-The Phase 4 suite covers template rendering in HTML and plain text, configuration validation, transport error classification, outbox enqueue and claiming, idempotent sends, transient retries, permanent failures, the attempt limit, bounded retry of unexpected worker errors, recovery after a temporary worker failure, repair of exhausted queued rows, concurrent claim safety, address suppression, webhook verification and idempotency, that verification tokens never reach the application log, and that queued, sent and failure events do not expose recipient addresses. The integration tests talk to a local SMTP capture server, so no provider credentials and no outbound mail are required.
+The Phase 4 suite covers template rendering in HTML and plain text, configuration validation, transport error classification, outbox enqueue and claiming, idempotent sends, transient retries, permanent failures, the attempt limit, bounded retry of unexpected worker errors, recovery after a temporary worker failure, repair of exhausted queued rows, concurrent claim safety, address suppression, webhook verification and idempotency, that verification tokens never reach the application log, and that queued, sent and failure events do not expose recipient addresses. The Phase 4.3 task-assignment integration suite covers recipient and context selection, reassignment, duplicate events, suppression, ineligible recipients, and delivery failure without assignment corruption. The integration tests talk to a local SMTP capture server or the transactional outbox, so no provider credentials and no outbound mail are required.
 
 The Phase 5 suite covers the workspace lifecycle, the membership rules and the invitation flow: the content of the invitation mail, an invitee that registers after the invitation was sent, a single use token, expired, revoked and duplicate invitations, an invitation that belongs to another account, a resend that replaces the token, the member rules for the owner and for a project manager, the audit trail of every membership change and the state of the workspace after an archive and a deletion.
 
