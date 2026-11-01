@@ -17,6 +17,7 @@ import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-data
 import { captureLogs } from './helpers/test-logger';
 import { startSmtpServer, type TestSmtpServer } from './helpers/smtp-server';
 import { jsonRequest, startServer, type RunningServer } from './helpers/test-server';
+import type { EmailTransport } from '../src/services/providers/email';
 
 /**
  * Phase 4 integration tests.
@@ -51,6 +52,52 @@ function uniqueEmail(prefix = 'mail'): string {
   uniqueCounter += 1;
 
   return `${prefix}.${process.pid}.${uniqueCounter}.${Date.now()}@example.com`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * A transport that throws instead of returning a result. The transport
+ * contract says this should not happen, so it exercises the worker's
+ * unexpected-error path. The delivery is still accepted after the configured
+ * number of failures.
+ */
+function createThrowingTransport(failuresBeforeSuccess: number): EmailTransport & {
+  readonly calls: number;
+} {
+  let calls = 0;
+
+  return {
+    provider: 'throwing',
+
+    get calls(): number {
+      return calls;
+    },
+
+    async send(request) {
+      calls += 1;
+
+      if (calls <= failuresBeforeSuccess) {
+        throw new Error('Simulated worker failure');
+      }
+
+      return {
+        accepted: true,
+        providerMessageId: `throwing-${request.deliveryId}`,
+        retryable: false,
+      };
+    },
+
+    async verify(): Promise<void> {
+      // Nothing to verify.
+    },
+
+    async close(): Promise<void> {
+      // Nothing to close.
+    },
+  };
 }
 
 describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
@@ -180,6 +227,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     const delivered = await prisma.emailDelivery.findUnique({ where: { id: queued.id } });
 
     assert.equal(delivered?.status, 'ACCEPTED');
+    assert.equal(delivered?.attempts, 1);
     assert.ok(delivered?.providerMessageId);
     assert.ok(delivered?.acceptedAt);
   });
@@ -318,6 +366,210 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     // The row is terminal, so it never reaches the provider again.
     await prisma.emailDelivery.delete({ where: { id: deliveryId.providerMessageId as string } });
+  });
+
+  test('repeated transient failures reach the limit and stay in a terminal state', async () => {
+    smtp.reset();
+    smtp.failNext(10);
+
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '3',
+      EMAIL_RETRY_BASE_DELAY_MS: '10',
+      EMAIL_RETRY_MAX_DELAY_MS: '20',
+    });
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport: getEmailTransport(config),
+      config: limitedConfig,
+    });
+
+    const email = uniqueEmail('exhaust');
+    const deliveryId = await limited.enqueue({
+      to: email,
+      subject: 'Exhaust the retries',
+      template: 'security_notification',
+      text: 'Exhaust the retries',
+      idempotencyKey: `test:exhaust:${email}`,
+    });
+    const id = deliveryId.providerMessageId as string;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const result = await limited.processPending(10);
+      const row = await prisma.emailDelivery.findUnique({ where: { id } });
+
+      assert.equal(row?.attempts, attempt);
+
+      if (attempt < 3) {
+        assert.equal(result.retried, 1);
+        assert.equal(result.failed, 0);
+        assert.equal(row?.status, 'QUEUED');
+        assert.ok(row?.lastError);
+        assert.ok(row?.nextAttemptAt);
+
+        await sleep(50);
+      } else {
+        assert.equal(result.retried, 0);
+        assert.equal(result.failed, 1);
+        assert.equal(row?.status, 'FAILED');
+        assert.ok(row?.failedAt);
+        assert.ok(row?.lastError);
+      }
+    }
+
+    const afterLimit = await limited.processPending(10);
+    const final = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(afterLimit.claimed, 0);
+    assert.equal(afterLimit.sent, 0);
+    assert.equal(final?.status, 'FAILED');
+    assert.equal(final?.attempts, 3);
+    assert.equal(smtp.messages.length, 0);
+  });
+
+  test('an exhausted row left in the queue is moved to the terminal state without sending', async () => {
+    smtp.reset();
+
+    const email = uniqueEmail('stale');
+    const id = `eml_stale_${process.pid}_${Date.now()}`;
+
+    await prisma.emailDelivery.create({
+      data: {
+        id,
+        toAddress: email,
+        fromAddress: 'Nexus <no-reply@example.com>',
+        template: 'security_notification',
+        subject: 'Already exhausted',
+        textBody: 'Already exhausted',
+        provider: 'smtp',
+        idempotencyKey: `test:stale:${email}`,
+        status: 'QUEUED',
+        attempts: 2,
+        maxAttempts: 2,
+        lastError: 'The previous attempt failed',
+        lastErrorCode: 'SMTP_451',
+        nextAttemptAt: new Date(Date.now() - 1_000),
+      },
+    });
+
+    const result = await deliveryService().processPending(10);
+    const row = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(result.failed, 1);
+    assert.equal(result.sent, 0);
+    assert.equal(row?.status, 'FAILED');
+    assert.equal(row?.attempts, 2);
+    assert.ok(row?.failedAt);
+    assert.equal(row?.lastError, 'The previous attempt failed');
+    assert.equal(smtp.messages.length, 0);
+  });
+
+  test('an unexpected worker failure is retried and then fails at the limit', async () => {
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '2',
+      EMAIL_RETRY_BASE_DELAY_MS: '10',
+      EMAIL_RETRY_MAX_DELAY_MS: '20',
+    });
+    const transport = createThrowingTransport(Number.POSITIVE_INFINITY);
+    const limited = createEmailDeliveryService({ prisma, transport, config: limitedConfig });
+
+    const email = uniqueEmail('unexpected-fail');
+    const deliveryId = await limited.enqueue({
+      to: email,
+      subject: 'Unexpected failure',
+      template: 'security_notification',
+      text: 'Unexpected failure',
+      idempotencyKey: `test:unexpected-fail:${email}`,
+    });
+    const id = deliveryId.providerMessageId as string;
+
+    const first = await limited.processPending(10);
+    const afterFirst = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(first.retried, 1);
+    assert.equal(afterFirst?.status, 'QUEUED');
+    assert.equal(afterFirst?.attempts, 1);
+    assert.equal(afterFirst?.lastErrorCode, 'UNEXPECTED');
+
+    await sleep(50);
+
+    const second = await limited.processPending(10);
+    const afterSecond = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(second.failed, 1);
+    assert.equal(second.retried, 0);
+    assert.equal(afterSecond?.status, 'FAILED');
+    assert.equal(afterSecond?.attempts, 2);
+    assert.ok(afterSecond?.failedAt);
+    assert.equal(afterSecond?.lastErrorCode, 'UNEXPECTED');
+
+    const afterLimit = await limited.processPending(10);
+
+    assert.equal(afterLimit.claimed, 0);
+    assert.equal(transport.calls, 2);
+
+    await transport.close();
+  });
+
+  test('a delivery recovers after a temporary worker failure', async () => {
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '3',
+      EMAIL_RETRY_BASE_DELAY_MS: '10',
+      EMAIL_RETRY_MAX_DELAY_MS: '20',
+    });
+    const transport = createThrowingTransport(1);
+    const limited = createEmailDeliveryService({ prisma, transport, config: limitedConfig });
+
+    const email = uniqueEmail('unexpected-recover');
+    const deliveryId = await limited.enqueue({
+      to: email,
+      subject: 'Recover after a worker failure',
+      template: 'security_notification',
+      text: 'Recover after a worker failure',
+      idempotencyKey: `test:unexpected-recover:${email}`,
+    });
+    const id = deliveryId.providerMessageId as string;
+
+    const first = await limited.processPending(10);
+
+    assert.equal(first.retried, 1);
+
+    await sleep(50);
+
+    const second = await limited.processPending(10);
+    const row = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(second.sent, 1);
+    assert.equal(row?.status, 'ACCEPTED');
+    assert.equal(row?.attempts, 2);
+    assert.equal(transport.calls, 2);
+
+    await transport.close();
+  });
+
+  test('concurrent delivery passes never claim or send a row twice', async () => {
+    smtp.reset();
+
+    const email = uniqueEmail('concurrent');
+    const deliveryId = await deliveryService().enqueue({
+      to: email,
+      subject: 'Claim me once',
+      template: 'security_notification',
+      text: 'Claim me once',
+      idempotencyKey: `test:concurrent:${email}`,
+    });
+    const id = deliveryId.providerMessageId as string;
+
+    const [first, second] = await Promise.all([
+      deliveryService().processPending(10),
+      deliveryService().processPending(10),
+    ]);
+    const row = await prisma.emailDelivery.findUnique({ where: { id } });
+    const sentToAddress = smtp.messages.filter((message) => message.to.includes(email));
+
+    assert.equal(row?.status, 'ACCEPTED');
+    assert.equal(row?.attempts, 1);
+    assert.equal(sentToAddress.length, 1);
+    assert.ok(first.claimed + second.claimed >= 1);
   });
 
   test('a bounced address is suppressed and stops receiving email', async () => {
