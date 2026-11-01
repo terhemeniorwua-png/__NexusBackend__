@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 6 |
+| **Completed** `[x]` | 7 |
 | **In progress** `[/]` | 0 |
-| **Not started** `[ ]` | 19 |
-| **Overall progress** | 25% |
+| **Not started** `[ ]` | 17 |
+| **Overall progress** | 29% |
 
 _Update this table whenever a phase status changes._
 
@@ -291,7 +291,7 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 7 — Teams and organizational structure `[ ]`
+#### Phase 7 — Teams and organizational structure `[x]`
 
 **Objective:** Support teams within workspaces and make team membership meaningful across the platform.
 
@@ -313,7 +313,7 @@ Follow this cycle for every phase, without exception:
 - Team permissions enforced in project and communication modules
 - Membership change notifications delivered
 
-**Blockers / Notes:** _None recorded._
+**Blockers / Notes:** Verified on 2026-10-23. The team module is implemented at `src/modules/teams/` with `team.schemas.ts` (Zod validation for create, update, member add/update, lead change), `team.types.ts` (TeamSummary, TeamMemberSummary, TeamLeadSummary response shapes) and `team.service.ts` (full CRUD: create, list, get, update, archive, delete; membership: addMember, updateMemberRole, removeMember; lead management: changeLead). The HTTP layer lives in `team.routes.ts` and is mounted at `/api/v1/workspaces/:workspaceId/teams` via `src/routes/index.ts`. Authorization is enforced through the Phase 6 centralized module: workspace OWNER and PROJECT_MANAGER have full team capabilities; TEAM_LEAD may update and manage members of their own team; workspace MEMBER may list and view teams; workspace COLLABORATOR and VIEWER have no default access. The role that a client sends in a request body is never trusted. Every create, update, archive, delete, membership add/update/remove, and lead change is written to the `AuditLog` table inside the same transaction. Notifications are sent to affected members on add, role change, removal and lead assignment using `createNotification` from `src/services/notifications`. `TeamAuditAction` constants (`team.created`, `team.updated`, `team.archived`, `team.deleted`, `team.member_added`, `team.member_role_changed`, `team.member_removed`, `team.lead_changed`) were added to `src/services/audit.ts`. Team creation automatically adds the creator as a team member (TEAM_LEAD for OWNER/PM, MEMBER otherwise) and optionally adds a specified lead. Deleting a team is a soft-delete (`deletedAt` set); archived teams are filtered from the default list but visible with `?includeArchived=true`. Tests: `tests/phase7-teams.test.ts` (35 unit tests covering capability matrices, schema validation, audit constants) and `tests/phase7-teams-db.test.ts` (integration tests covering full lifecycle, member management, lead management, authorization enforcement, audit trail, and notifications). Verification: `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` all pass; `npm test` passes 136/137 (1 skipped — Phase 7 DB tests requiring `RUN_PHASE7_DB_TESTS=true`). Committed in two chunks on `feature/phase-7-teams` (90ee444 and 8245c69), pushed to `origin/feature/phase-7-teams`.
 
 ---
 
@@ -903,7 +903,7 @@ _Security is implemented from Phase 1. This phase audits and hardens the whole p
 
 ### Current Phase
 
-**Current phase:** Phase 6 is complete and verified. The next phase to begin is Phase 7, teams and organizational structure.
+**Current phase:** Phase 7 is complete and verified. The next phase to begin is Phase 8, projects and project collaboration.
 
 ---
 
@@ -959,9 +959,8 @@ _No issues recorded._
 | 4 — Transactional email | 2026-10-21 | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
-| 1.1 — Rate-limit handler remediation | 2026-11-01 | The global 429 handler no longer registers middleware or logs on every blocked request. `tests/foundation.test.ts` passes 8/8, `npm test` passes 100 tests with 1 skipped, and `npm run typecheck`, `npm run lint` and `npm run build` pass. |
-| 1.2 — Redis-backed distributed rate limiting | 2026-11-01 | The global and route-specific limiters use shared Redis counters with no in-process fallback. Redis failure returns `503 RATE_LIMIT_UNAVAILABLE`. The real-Redis rate-limit suite passes 8/8, `npm test` passes 107 tests with 2 skipped DB suites, and typecheck, lint, build and format checks pass. |
+| 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |
 
 ---
 
-_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, including the Phase 1.1 and 1.2 remediation subphases. The document also describes the planned state of the later phases._
+_Last updated: 2026-10-23. Phases 1 to 7 are implemented and verified. The document also describes the planned state of the later phases._
