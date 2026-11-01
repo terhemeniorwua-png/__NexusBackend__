@@ -22,6 +22,10 @@ import {
   type EmailMessage,
 } from '../src/services/email';
 import { redactEmailAddresses, summarizeErrorForLog } from '../src/services/email/log-privacy';
+import {
+  buildTaskAssignmentUrl,
+  taskAssignmentIdempotencyKey,
+} from '../src/services/task-assignment-notifier';
 import { createConsoleTransport, createEmailTransport } from '../src/services/providers/email';
 import { captureLogs } from './helpers/test-logger';
 import {
@@ -173,11 +177,19 @@ test('the collaboration templates cover invitations, assignments, mentions and m
     taskTitle: 'Write the compiler',
     projectName: 'ENGINES',
     assignedByName: 'Ada Lovelace',
+    dueAt: new Date('2026-12-01T10:00:00.000Z'),
     taskUrl: 'http://localhost:3000/tasks/42',
+    idempotencyKey: 'task-assignment:42:grace',
   });
 
   assert.equal(task.template, 'task_assignment');
   assert.match(task.text, /Write the compiler/);
+  assert.match(task.text, /ENGINES/);
+  assert.match(task.text, /Ada Lovelace/);
+  assert.match(task.text, /due on Tue, 01 Dec 2026 10:00:00 GMT/);
+  assert.match(task.text, /http:\/\/localhost:3000\/tasks\/42/);
+  assert.equal(task.idempotencyKey, 'task-assignment:42:grace');
+  assert.deepEqual(task.metadata, { taskTitle: 'Write the compiler', projectName: 'ENGINES' });
 
   const mention = buildMentionEmail({
     to: 'grace@example.com',
@@ -204,6 +216,47 @@ test('the collaboration templates cover invitations, assignments, mentions and m
 
   assert.equal(meeting.template, 'meeting_invitation');
   assert.match(meeting.text, /join/i);
+});
+
+test('task assignment links use the configured public URL and task path', () => {
+  const appConfig = parseEnv({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://nexus:nexus@localhost:5432/nexus_test',
+    REDIS_URL: 'redis://localhost:6379/15',
+    JWT_ACCESS_SECRET: 'phase4-unit-test-access-secret-value-that-is-long',
+    EMAIL_APP_URL: 'https://app.example.com/',
+    TASK_ASSIGNMENT_LINK_PATH: '/projects/:projectId/tasks/:taskId',
+  });
+
+  const url = buildTaskAssignmentUrl(appConfig, {
+    projectId: 'project/with space',
+    taskId: 'task 42',
+  });
+
+  assert.equal(url, 'https://app.example.com/projects/project%2Fwith%20space/tasks/task%2042');
+});
+
+test('the task assignment key is stable per event and changes for a new assignment', () => {
+  const assignedAt = new Date('2026-11-01T10:00:00.000Z');
+  const first = taskAssignmentIdempotencyKey({
+    taskId: 'task-1',
+    assigneeId: 'user-1',
+    assignedAt,
+  });
+  const duplicate = taskAssignmentIdempotencyKey({
+    taskId: 'task-1',
+    assigneeId: 'user-1',
+    assignedAt: new Date(assignedAt),
+  });
+  const nextAssignment = taskAssignmentIdempotencyKey({
+    taskId: 'task-1',
+    assigneeId: 'user-1',
+    assignedAt: new Date('2026-11-02T10:00:00.000Z'),
+  });
+
+  assert.equal(first, duplicate);
+  assert.notEqual(first, nextAssignment);
+  assert.equal(first, 'task-assignment:task-1:user-1:2026-11-01T10:00:00.000Z');
 });
 
 test('an idempotency key is stable for the same message and differs for another one', () => {

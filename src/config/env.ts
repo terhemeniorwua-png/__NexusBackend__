@@ -120,6 +120,15 @@ const envSchema = z
       .trim()
       .startsWith('/')
       .default('/workspaces/invitations/accept'),
+    TASK_ASSIGNMENT_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .refine(
+        (value) => value.includes(':projectId') && value.includes(':taskId'),
+        'TASK_ASSIGNMENT_LINK_PATH must include :projectId and :taskId',
+      )
+      .default('/projects/:projectId/tasks/:taskId'),
 
     // Prefix for Redis keys. Environments that share a Redis instance must use
     // different namespaces so their rate-limit counters stay separate.
@@ -310,6 +319,7 @@ export interface AppConfig {
   rateLimitNamespace: string;
   workspaceInvitationTtlSeconds: number;
   workspaceInvitationLinkPath: string;
+  taskAssignmentLinkPath: string;
   emailProvider: 'smtp' | 'console' | 'disabled';
   emailSmtpHost: string;
   emailSmtpPort: number;
@@ -421,6 +431,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimitNamespace: values.RATE_LIMIT_NAMESPACE,
     workspaceInvitationTtlSeconds: values.WORKSPACE_INVITATION_TTL_SECONDS,
     workspaceInvitationLinkPath: values.WORKSPACE_INVITATION_LINK_PATH,
+    taskAssignmentLinkPath: values.TASK_ASSIGNMENT_LINK_PATH,
     emailProvider: values.EMAIL_PROVIDER,
     emailSmtpHost: values.EMAIL_SMTP_HOST,
     emailSmtpPort: values.EMAIL_SMTP_PORT,
