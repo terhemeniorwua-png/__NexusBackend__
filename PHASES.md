@@ -17,7 +17,7 @@
 
 _Update this table whenever a phase status changes._
 
-Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. They are tracked below but do not change the 24-phase roadmap count.
+Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. Phase 2.1 is a database-model audit subphase of Phase 2. They are tracked below but do not change the 24-phase roadmap count.
 
 ---
 
@@ -169,7 +169,7 @@ Follow this cycle for every phase, without exception:
 - Indexes for workspace, project, task, membership, and activity queries
 - Migrations for every schema change
 - Seed script for reproducible test data
-- Placeholder stubs for future models (messages, meetings, AI usage, integrations) without full implementation
+- Documented placeholders for future models (messages, meetings, AI usage, integrations) without full implementation
 
 **Dependencies:** Phase 1
 
@@ -180,6 +180,33 @@ Follow this cycle for every phase, without exception:
 - Rollback of migrations tested in a safe environment
 
 **Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied.
+
+---
+
+#### Phase 2.1 — Database model audit `[x]`
+
+**Objective:** Audit the Phase 2 schema against the planned-model list, determine whether any missing models are a genuine defect, and document the result without making unjustified schema changes.
+
+**Deliverables:**
+- Compared `prisma/schema.prisma` with `docs/planned-models.md` and the roadmap.
+- Confirmed the active ORM and migration system is Prisma (`@prisma/client` 6.19.3); the Sequelize packages in `package.json` are unused.
+- Verified all 21 current models and 16 enums against implemented modules, routes, services and tests.
+- Classified every deferred model by its roadmap phase and dependency.
+- Confirmed no implemented Phase 1–6 feature requires messages, meetings, AI usage, generic integrations or generic webhook models.
+- Confirmed `EmailWebhookEvent` covers the Phase 4 provider-webhook requirement, while generic `WebhookSubscription` and `WebhookDelivery` remain Phase 20 work.
+- Documented the audit decision, implemented model inventory, deferred-model mapping and change policy in `docs/planned-models.md`.
+- Made no Prisma schema or migration changes.
+
+**Dependencies:** Phase 2 complete.
+
+**Verification criteria:**
+- The schema validates and the Prisma client generates.
+- All six existing migrations apply to a disposable test database.
+- The migration history matches the schema with no drift.
+- Phase 2 database tests pass.
+- The audit result is documented and the deferred models remain out of scope until their roadmap phases.
+
+**Blockers / Notes:** Audited on 2026-11-01. `npx prisma validate`, `npx prisma generate`, `npx prisma migrate deploy` and `npx prisma migrate diff --exit-code` pass; the migration diff reports no difference. `tests/database-phase2.test.ts` passes 2/2 with `RUN_PHASE2_DB_TESTS=true` against a disposable PostgreSQL 16 container. Conclusion: the deferred models are not a Phase 2 defect; adding them now would be premature. The full database-enabled suite currently reports 176 passed and 10 failed, all failures confined to the pre-existing Phase 6 ownership-transfer integration tests. Those failures are unrelated to Phase 2.1: `tests/phase6-authorization-db.test.ts` reads `data.id` instead of `data.user.id` from `/api/v1/auth/me`, and `src/modules/workspaces/workspace.routes.ts` registers `/:workspaceId/owner` while the OpenAPI contract and tests use `/:workspaceId/owner/:userId`. The Phase 6 blocker is recorded here and left untouched under the Phase 2.1 scope.
 
 ---
 
@@ -984,7 +1011,8 @@ _No issues recorded._
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 | 1.1 — Rate-limit handler remediation | 2026-11-01 | The global 429 handler no longer registers middleware or logs on every blocked request. `tests/foundation.test.ts` passes 8/8, `npm test` passes 100 tests with 1 skipped, and `npm run typecheck`, `npm run lint` and `npm run build` pass. |
 | 1.2 — Redis-backed distributed rate limiting | 2026-11-01 | The global and route-specific limiters use shared Redis counters with no in-process fallback. Redis failure returns `503 RATE_LIMIT_UNAVAILABLE`. The real-Redis rate-limit suite passes 8/8, `npm test` passes 107 tests with 2 skipped DB suites, and typecheck, lint, build and format checks pass. |
+| 2.1 — Database model audit | 2026-11-01 | Prisma validation, client generation, migration deploy and migration diff pass. `tests/database-phase2.test.ts` passes 2/2 against a disposable database. The audit concludes the deferred models are intentionally out of scope. The full DB suite reports 176 passed and 10 failed, all in the pre-existing Phase 6 ownership-transfer tests; the blocker is documented in Phase 2.1 and was not changed under this scope. |
 
 ---
 
-_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, including the Phase 1.1, 1.2 and 1.3 remediation subphases. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, including the Phase 1.1, 1.2 and 1.3 remediation subphases. Phase 2.1 completed the database-model audit and documented the intentionally deferred models. The Phase 6 ownership-transfer integration tests currently have a documented pre-existing failure that was left outside the Phase 2.1 scope. The document also describes the planned state of the later phases._
