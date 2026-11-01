@@ -17,7 +17,7 @@
 
 _Update this table whenever a phase status changes._
 
-Phases 1.1 and 1.2 are remediation subphases of Phase 1. They are tracked below but do not change the 24-phase roadmap count.
+Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. They are tracked below but do not change the 24-phase roadmap count.
 
 ---
 
@@ -128,6 +128,29 @@ Follow this cycle for every phase, without exception:
 - Type checking, linting and build pass.
 
 **Blockers / Notes:** Verified on 2026-11-01. Implemented in `src/services/cache/rate-limit-store.ts`, `src/middleware/rate-limit.ts` and `src/app.ts`. The store now requires a ready shared Redis client, uses an atomic Lua increment with a millisecond TTL, and throws `RateLimitStoreUnavailableError` (`503 RATE_LIMIT_UNAVAILABLE`) when Redis cannot confirm a counter. Decrement and reset operations log failures without creating unhandled rejections. The global limiter now uses the same middleware and store as the route-specific limiters with the namespace `${RATE_LIMIT_NAMESPACE}:global`; the health endpoints remain skipped. No new dependency or environment variable was added: `REDIS_URL`, `RATE_LIMIT_NAMESPACE`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` and `TRUST_PROXY` are reused. Tests: `tests/rate-limit-redis.test.ts` covers shared counters, window rollover, two applications sharing the global counter, fail-closed global and route-level behavior, untrusted forwarded addresses and failure cleanup. The gated real-Redis suite passes 8/8 with `RUN_REDIS_TESTS=true REDIS_TEST_URL=redis://localhost:6379/15`. The full `npm test` suite passes 107 tests with 2 skipped DB integration suites. `npm run typecheck`, `npm run lint`, `npm run build` and `npm run format:check` pass. The Phase 4, 5 and 6 DB suites now connect the test Redis before creating the app so their rate-limited requests use the distributed store.
+
+---
+
+#### Phase 1.3 — Remove obsolete legacy JavaScript middleware and validators `[x]`
+
+**Objective:** Remove the legacy CommonJS middleware and validator files that were superseded by the TypeScript application shell and module-level Zod schemas.
+
+**Deliverables:**
+- Removed `src/middleware/authorization.js`, `src/middleware/logger.js` and `src/middleware/validator.js`.
+- Removed `src/validators/avatar.js`, `src/validators/login.js`, `src/validators/registration.js` and `src/validators/verification.js`; the now-empty `src/validators` directory was removed.
+- Preserved the active implementations: `src/middleware/validation.ts`, `src/utils/logger.ts`, `src/middleware/request-logger.ts`, `src/middleware/authenticate.ts`, `src/modules/authorization/*`, `src/modules/auth/auth.schemas.ts` and `src/modules/users/users.schemas.ts`.
+- Confirmed that no tracked source, test, script or documentation references the removed files or their exported symbols.
+- No runtime dependency, API contract, environment variable or database schema changed.
+
+**Dependencies:** Phases 1, 1.1 and 1.2 complete.
+
+**Verification criteria:**
+- No `.js` files remain under `src/`.
+- No imports, requires, dynamic imports or string references to the removed modules remain.
+- The validation, authorization and logging tests continue to pass.
+- Type checking, linting, build and formatting checks pass.
+
+**Blockers / Notes:** Verified on 2026-11-01. The audit found seven tracked CommonJS files with no references anywhere in `src`, `tests`, package scripts or documentation. `authorization.js` additionally imported the removed `models` module and `src/services/pin`, so it could not execute against the current tree. The active TypeScript validation middleware (`src/middleware/validation.ts`) and module schemas (`auth.schemas.ts`, `users.schemas.ts`) replace `validator.js` and the four files in `src/validators`; `src/utils/logger.ts` and `request-logger.ts` replace `logger.js`; `authenticate.ts` and `src/modules/authorization` replace `authorization.js`. Verification: `find src -name '*.js'` returns no files, the stale-reference search returns no matches, and `npm test` passes 107 tests with 2 skipped integration suites. `npm run typecheck`, `npm run lint`, `npm run build` and `npm run format:check` pass. Generated `dist/` output is ignored and was not edited.
 
 ---
 
@@ -964,4 +987,4 @@ _No issues recorded._
 
 ---
 
-_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, including the Phase 1.1 and 1.2 remediation subphases. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-01. Phases 1 to 6 are implemented and verified, including the Phase 1.1, 1.2 and 1.3 remediation subphases. The document also describes the planned state of the later phases._
