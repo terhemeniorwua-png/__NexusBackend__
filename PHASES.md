@@ -336,6 +336,26 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 3.3 — Atomic refresh-token rotation `[x]`
+
+**Objective:** Prevent concurrent refresh requests from successfully consuming the same session refresh-token state.
+
+**Deliverables:**
+- Compare-and-swap a refresh only while the session still contains the presented token hash and remains unrevoked and unexpired
+- Preserve existing expired, revoked, invalid-token, and refresh-token reuse responses
+- Return a replacement token only after the conditional database update succeeds
+- Add real PostgreSQL coverage for two simultaneous refresh requests against one session
+
+**Verification criteria:**
+- One of two concurrent requests using the same original token succeeds, and the other receives the established reuse failure
+- The stored current and previous token hashes match the successful rotation
+- Failed persistence returns no replacement token and leaves the previous token state intact
+- Existing refresh, expiry, replay, and logout tests pass
+
+**Blockers / Notes:** Implemented on 2026-11-01. The defect was a lookup by refresh-token hash followed by an unconditional update by session ID, allowing concurrent requests to overwrite each other's replacement hash and both receive a token. Rotation now uses a Prisma `updateMany` compare-and-swap matching the session ID, original refresh-token hash, `revokedAt: null`, and future expiry; the replacement token is returned only after one row is changed and the new hash is read back. A losing request is identified through `previousRefreshTokenHash` and follows the established replay policy: `SESSION_REUSE_DETECTED` and revocation of the account's sessions. No schema or API changes were needed. A deterministic PostgreSQL test locks the session row until both concurrent refresh updates are waiting, then releases them together; exactly one request succeeds, the loser gets the reuse failure, and the database retains the winner's replacement hash and the original previous hash. A trigger-injected persistence failure returns no refresh cookie and leaves the original hashes intact. The Phase 3 PostgreSQL suite passes 52/52, including refresh success, expiry, revocation, invalid token, race, persistence failure, replay, CSRF, and logout checks. The repository-wide `npm test` passes 97 tests with one opt-in Phase 3 DB suite skipped; its loopback HTTP tests required local networking access and passed on rerun. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check`, and `git diff --check` pass. Tests used a disposable PostgreSQL 16 database; Redis was unavailable, so the existing rate-limit fallback was used. No known rotation race remains. By existing policy, a concurrent loser is indistinguishable from reuse and revokes the session family, so an ordinary simultaneous refresh retry can require a fresh sign-in. Implementation commit `7c7be30` (`fix(phase-3.3): make refresh rotation atomic`) is pushed to `origin/feature/phase-3.3-atomic-refresh-token-rotation`.
+
+---
+
 #### Phase 4 — Transactional email and delivery infrastructure `[x]`
 
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.

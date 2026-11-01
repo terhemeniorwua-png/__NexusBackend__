@@ -4,6 +4,7 @@ import type { Express } from 'express';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { getPrismaClient } from '../src/db/prisma';
+import { hashSecret } from '../src/utils/crypto';
 import { connectRedis, disconnectRedis } from '../src/db/redis';
 import {
   resetEmailSender,
@@ -269,7 +270,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     return (response.body.data as { id: string }).id;
   }
 
-  async function waitForLockWaiter(queryFragment: 'FOR UPDATE' | 'FOR KEY SHARE'): Promise<void> {
+  async function waitForLockWaiter(queryFragment: string, expectedCount = 1): Promise<void> {
     const deadline = Date.now() + 5_000;
 
     while (Date.now() < deadline) {
@@ -281,7 +282,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
           AND query ILIKE ${`%${queryFragment}%`}
       `;
 
-      if (Number(result?.count ?? 0n) > 0) {
+      if (Number(result?.count ?? 0n) >= expectedCount) {
         return;
       }
 
@@ -306,6 +307,37 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const transaction = prisma.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+        signalAcquired();
+        await held;
+      },
+      { timeout: 15_000 },
+    );
+
+    await acquired;
+
+    try {
+      await action(releaseLock);
+    } finally {
+      releaseLock();
+      await transaction;
+    }
+  }
+
+  async function withSessionRowLocked(
+    sessionId: string,
+    action: (releaseLock: () => void) => Promise<void>,
+  ): Promise<void> {
+    let signalAcquired!: () => void;
+    let releaseLock!: () => void;
+    const acquired = new Promise<void>((resolve) => {
+      signalAcquired = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const transaction = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${sessionId} FOR UPDATE`;
         signalAcquired();
         await held;
       },
@@ -559,6 +591,145 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     assert.ok(rotated);
     assert.notEqual(decodeURIComponent(rotated), session.refreshToken);
+  });
+
+  test('an expired refresh token is rejected without changing session state', async () => {
+    const session = await activate();
+    const original = await prisma.session.findUniqueOrThrow({ where: { id: session.sessionId } });
+
+    await prisma.session.update({
+      where: { id: session.sessionId },
+      data: { expiresAt: new Date(Date.now() - 1_000) },
+    });
+
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken: session.refreshToken }),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error?.code, 'SESSION_EXPIRED');
+
+    const stored = await prisma.session.findUniqueOrThrow({ where: { id: session.sessionId } });
+    assert.equal(stored.refreshTokenHash, original.refreshTokenHash);
+    assert.equal(stored.previousRefreshTokenHash, null);
+  });
+
+  test('a revoked session and an unknown refresh state are rejected', async () => {
+    const session = await activate();
+
+    await prisma.session.update({
+      where: { id: session.sessionId },
+      data: { revokedAt: new Date(), revokedReason: 'TEST_REVOCATION' },
+    });
+
+    const revoked = await jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken: session.refreshToken }),
+    });
+
+    assert.equal(revoked.status, 401);
+    assert.equal(revoked.body.error?.code, 'SESSION_REUSE_DETECTED');
+
+    const unknown = await jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken: 'unknown-refresh-token-value' }),
+    });
+
+    assert.equal(unknown.status, 401);
+    assert.equal(unknown.body.error?.code, 'REFRESH_TOKEN_INVALID');
+  });
+
+  test('concurrent refresh requests consume the original token state only once', async () => {
+    const session = await activate();
+    let first: Awaited<ReturnType<typeof jsonRequest>> | undefined;
+    let second: Awaited<ReturnType<typeof jsonRequest>> | undefined;
+
+    await withSessionRowLocked(session.sessionId, async (releaseLock) => {
+      const requestRefresh = () =>
+        jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+          method: 'POST',
+          body: JSON.stringify({ refreshToken: session.refreshToken }),
+        });
+      const firstRequest = requestRefresh();
+      const secondRequest = requestRefresh();
+
+      // Both requests have read the original state and are waiting to update
+      // the same PostgreSQL row before the lock is released.
+      // Prisma's generated SQL may qualify the table with its schema, so
+      // match the table name instead of relying on an exact query prefix.
+      await waitForLockWaiter('Session', 2);
+      releaseLock();
+      [first, second] = await Promise.all([firstRequest, secondRequest]);
+    });
+
+    assert.ok(first);
+    assert.ok(second);
+    const responses = [first, second];
+    assert.equal(responses.filter((response) => response.status === 200).length, 1);
+    const loser = responses.find((response) => response.status === 401);
+    const winner = responses.find((response) => response.status === 200);
+
+    assert.ok(winner);
+    assert.equal(loser?.body.error?.code, 'SESSION_REUSE_DETECTED');
+
+    const winnerToken = winner.response.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('nexus_rt='))
+      ?.split(';')[0]
+      ?.split('=')[1];
+    assert.ok(winnerToken);
+
+    const stored = await prisma.session.findUniqueOrThrow({ where: { id: session.sessionId } });
+    assert.equal(stored.refreshTokenHash, hashSecret(decodeURIComponent(winnerToken)));
+    assert.equal(stored.previousRefreshTokenHash, hashSecret(session.refreshToken));
+    // The established replay policy revokes the family when the losing
+    // request is recognised as reuse, without overwriting its winning hash.
+    assert.equal(stored.revokedReason, 'REFRESH_TOKEN_REUSE');
+  });
+
+  test('a database failure during rotation returns no replacement token', async () => {
+    const session = await activate();
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION nexus_test_fail_refresh_rotation()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF OLD."id" = '${session.sessionId}' AND NEW."refreshTokenHash" <> OLD."refreshTokenHash" THEN
+          RAISE EXCEPTION 'simulated refresh rotation failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER nexus_test_fail_refresh_rotation
+      BEFORE UPDATE ON "Session"
+      FOR EACH ROW
+      EXECUTE FUNCTION nexus_test_fail_refresh_rotation()
+    `);
+
+    try {
+      const response = await jsonRequest(`${baseUrl}/api/v1/auth/refresh`, {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: session.refreshToken }),
+      });
+
+      assert.equal(response.status, 500);
+      assert.equal(
+        response.response.headers.getSetCookie().some((cookie) => cookie.startsWith('nexus_rt=')),
+        false,
+      );
+
+      const stored = await prisma.session.findUniqueOrThrow({ where: { id: session.sessionId } });
+      assert.equal(stored.refreshTokenHash, hashSecret(session.refreshToken));
+      assert.equal(stored.previousRefreshTokenHash, null);
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER nexus_test_fail_refresh_rotation ON "Session"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION nexus_test_fail_refresh_rotation()`);
+    }
   });
 
   test('replaying a rotated refresh token revokes every session', async () => {
