@@ -356,6 +356,44 @@ Follow this cycle for every phase, without exception:
 
 ---
 
+#### Phase 3.4 — Account deletion transaction consistency `[x]`
+
+**Objective:** Keep account deletion and security-state changes consistent when a database operation fails or deletion requests race.
+
+**Deliverables:**
+- Keep ownership validation, session revocation, one-time token invalidation, profile anonymization, and account deletion in one database transaction
+- Preserve workspace ownership safeguards and existing error responses
+- Verify rollback when a later deletion operation fails after session and token updates have executed
+- Verify successful deletion commits session revocation and concurrent deletion requests serialize safely
+
+**Verification criteria:**
+- Workspace ownership rejection leaves the account and sessions unchanged
+- A failure during session revocation or a later account update rolls back account, session, token, and profile changes
+- Successful deletion commits account anonymization and session revocation
+- Concurrent deletion requests produce one successful deletion and one already-deleted response
+- Authentication remains usable after a rolled-back deletion and revoked after a successful deletion
+
+**Blockers / Notes:** Verified on 2026-11-01. The audit described a prior ordering bug: session revocations committed before the account-deletion transaction, so a later transaction failure could leave an active account signed out. That defect was already corrected in Phase 3.2 (`d851cb1`): `deleteAccount` locks the user row with `FOR UPDATE`, checks ownership before mutation, then revokes sessions, invalidates unused one-time tokens, anonymizes the profile, and updates the user inside one Prisma PostgreSQL transaction. Phase 3.4 made no production-code change because this transaction strategy is present; it strengthened integration coverage. A PostgreSQL trigger now fails the final user update after session, token, and profile writes have run, and the test verifies all those records roll back and the account's access token remains usable. Success tests assert `ACCOUNT_DELETED` revocation is committed and the old access token is rejected. A deterministic row-lock test verifies two simultaneous deletion requests return one `204` and one `409`; another races refresh against deletion and verifies the final account and session are deleted/revoked regardless of which update wins the session row. The existing ownership rejection test confirms no account or session changes occur when ownership remains unresolved. The Phase 3 PostgreSQL suite passes 55/55. `npm test` passes 97 tests with one opt-in Phase 3 database suite skipped (that suite was run separately); `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check`, and `git diff --check` pass. Tests used the disposable PostgreSQL 16 database. Redis was unavailable, so rate limits used the existing in-process fallback. The `AccountDeleted` audit event is written after commit via `recordSecurityEvent`, whose established contract makes audit-write failures best-effort and non-fatal; this log row is the only database operation outside the atomic account/session transaction. The flow performs no external calls. Test commits `118cf64` (`test(phase-3.4): verify account deletion rollback`) and `ec29ff8` (`test(phase-3.4): cover refresh deletion race`) are pushed to `origin/feature/phase-3.4-account-deletion-transaction-consistency`.
+
+---
+
+#### Phase 3.5 — Authentication debug cleanup `[x]`
+
+**Objective:** Remove obsolete commented-out debug logging from the authentication module without changing runtime behavior.
+
+**Deliverables:**
+- Remove only obsolete commented `console.log` statements in authentication service and controller code
+- Preserve active code, useful comments, and all runtime logging
+
+**Verification criteria:**
+- Authentication-module search finds no remaining commented `console.log` statements
+- Diff contains no executable logic changes
+- Authentication unit and PostgreSQL integration tests, typecheck, lint, and formatting checks pass
+
+**Blockers / Notes:** Verified on 2026-11-01. Removed four commented debug statements: registration-stage logs for `hashing`, `creating user`, and `queueing email` from `auth.service.ts`, and the `handler reached` log from `auth.controller.ts`. Also removed the two standalone `// ...` placeholder comments interspersed in the same obsolete service debug block. No active logging, explanatory comments, executable logic, or authentication behavior was changed. The auth-module search returns no commented `console.log` calls. `tests/auth-unit.test.ts` passes; `tests/auth-phase3.test.ts` passes 55/55 against disposable PostgreSQL. Typecheck, lint, format check, and `git diff --check` pass. Implementation commit `7de01e0` (`chore(phase-3.5): remove commented auth debug logs`) is pushed to `origin/feature/phase-3.5-auth-debug-cleanup`.
+
+---
+
 #### Phase 4 — Transactional email and delivery infrastructure `[x]`
 
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.

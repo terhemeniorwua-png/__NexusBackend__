@@ -1085,12 +1085,6 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
-
-      //       console.log('register: hashing');
-      // // ...
-      // console.log('register: creating user');
-      // // ...
-      // console.log('register: queueing email');
     },
   };
 }
