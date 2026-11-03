@@ -37,6 +37,9 @@ export const WorkspaceAuditAction = {
   JoinCodeDisabled: 'workspace.join_code_disabled',
   MemberSuspended: 'workspace.member_suspended',
   MemberRestored: 'workspace.member_restored',
+  DepartmentCreated: 'institution.department_created',
+  DepartmentMemberAdded: 'institution.department_member_added',
+  DepartmentMemberRemoved: 'institution.department_member_removed',
   TaskReassigned: 'task.reassigned',
 } as const;
 

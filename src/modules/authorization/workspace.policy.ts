@@ -1,4 +1,5 @@
 import type { PrismaClient, Workspace, WorkspaceMembership, WorkspaceRole } from '@prisma/client';
+import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
 import { AppError } from '../../utils/errors';
 
 /**
@@ -94,6 +95,7 @@ export function workspaceRoleCan(
 export interface WorkspaceAccess {
   workspace: Workspace;
   membership: WorkspaceMembership;
+  effectiveRole: WorkspaceRole;
 }
 
 /**
@@ -133,7 +135,24 @@ export async function requireWorkspaceAccess(
     );
   }
 
-  if (!workspaceRoleCan(membership.role, input.capability)) {
+  if (
+    membership.organizationRole &&
+    !isOrganizationRoleForWorkspace(workspace.type, membership.organizationRole)
+  ) {
+    throw new AppError(
+      403,
+      'ORGANIZATION_ROLE_WORKSPACE_MISMATCH',
+      'The organization role is not valid for this workspace',
+    );
+  }
+
+  const effectiveRole = effectiveWorkspaceRole(
+    workspace.type,
+    membership.role,
+    membership.organizationRole,
+  );
+
+  if (!workspaceRoleCan(effectiveRole, input.capability)) {
     throw new AppError(
       403,
       'INSUFFICIENT_ROLE',
@@ -141,7 +160,7 @@ export async function requireWorkspaceAccess(
     );
   }
 
-  return { workspace, membership };
+  return { workspace, membership, effectiveRole };
 }
 
 // ---------------------------------------------------------------------------

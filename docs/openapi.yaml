@@ -1632,6 +1632,129 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/departments:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: listInstitutionDepartments
+      summary: List departments the caller may access
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Departments visible to the caller.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Department'
+        '403':
+          description: The caller cannot access this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Workspaces]
+      operationId: createInstitutionDepartment
+      summary: Create an institution department
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDepartmentRequest'
+      responses:
+        '201':
+          description: The department was created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    $ref: '#/components/schemas/Department'
+        '403':
+          description: Only an institution owner or administrator may create a department.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/departments/{departmentId}/members:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: departmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Workspaces]
+      operationId: assignInstitutionDepartmentMember
+      summary: Assign a workspace member to a department
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepartmentMemberRequest'
+      responses:
+        '200':
+          description: The member was assigned.
+        '403':
+          description: The caller cannot manage this department membership.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/departments/{departmentId}/members/{targetUserId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: departmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: targetUserId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [Workspaces]
+      operationId: removeInstitutionDepartmentMember
+      summary: Remove a member assignment from an institution department
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The department membership was removed.
+        '403':
+          description: The caller cannot manage this department membership.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /workspaces/{workspaceId}/members/{userId}:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2640,6 +2763,23 @@ components:
     WorkspaceRole:
       type: string
       enum: [OWNER, PROJECT_MANAGER, MEMBER, COLLABORATOR, VIEWER]
+    OrganizationRole:
+      type: string
+      description: Workspace-scoped predefined Company or Institution role. Custom roles are deferred.
+      enum:
+        - COMPANY_OWNER
+        - COMPANY_ADMIN
+        - COMPANY_PROJECT_MANAGER
+        - COMPANY_MEMBER
+        - COMPANY_COLLABORATOR
+        - COMPANY_VIEWER
+        - INSTITUTION_OWNER
+        - INSTITUTION_ADMIN
+        - INSTITUTION_DEPARTMENT_HEAD
+        - INSTITUTION_LECTURER_STAFF
+        - INSTITUTION_STUDENT
+        - INSTITUTION_COLLABORATOR
+        - INSTITUTION_VIEWER
     WorkspaceType:
       type: string
       enum: [INDIVIDUAL, COMPANY, INSTITUTION]
@@ -2662,6 +2802,7 @@ components:
         - status
         - ownerId
         - role
+        - organizationRole
         - joinCodeEnabled
         - memberCount
         - projectCount
@@ -2691,6 +2832,10 @@ components:
           format: uuid
         role:
           $ref: '#/components/schemas/WorkspaceRole'
+        organizationRole:
+          oneOf:
+            - $ref: '#/components/schemas/OrganizationRole'
+            - type: 'null'
         joinCodeEnabled:
           type: boolean
           description: Indicates whether a join code exists. The code itself is never included in workspace responses.
@@ -2733,7 +2878,7 @@ components:
               type: boolean
     WorkspaceMember:
       type: object
-      required: [id, userId, name, email, status, role, membershipStatus, joinedAt, owner]
+      required: [id, userId, name, email, status, role, organizationRole, membershipStatus, joinedAt, owner]
       properties:
         id:
           type: string
@@ -2751,6 +2896,10 @@ components:
           enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED, PENDING_DELETION]
         role:
           $ref: '#/components/schemas/WorkspaceRole'
+        organizationRole:
+          oneOf:
+            - $ref: '#/components/schemas/OrganizationRole'
+            - type: 'null'
         membershipStatus:
           type: string
           enum: [ACTIVE, SUSPENDED]
@@ -2768,6 +2917,26 @@ components:
           const: true
         data:
           $ref: '#/components/schemas/WorkspaceMember'
+    Department:
+      type: object
+      required: [id, workspaceId, name, memberCount, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        memberCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     Invitation:
       type: object
       required:
@@ -2776,6 +2945,7 @@ components:
         - workspaceName
         - email
         - role
+        - organizationRole
         - type
         - status
         - invitedBy
@@ -2795,6 +2965,10 @@ components:
           format: email
         role:
           $ref: '#/components/schemas/WorkspaceRole'
+        organizationRole:
+          oneOf:
+            - $ref: '#/components/schemas/OrganizationRole'
+            - type: 'null'
         type:
           type: string
           enum: [WORKSPACE, TEAM, PROJECT]
@@ -2890,6 +3064,10 @@ components:
                   type: string
             role:
               $ref: '#/components/schemas/WorkspaceRole'
+            organizationRole:
+              oneOf:
+                - $ref: '#/components/schemas/OrganizationRole'
+                - type: 'null'
             status:
               type: string
               enum: [PENDING, ACCEPTED, DECLINED, REVOKED, EXPIRED]
@@ -2931,7 +3109,7 @@ components:
             $ref: '#/components/schemas/DiscoveredWorkspace'
     JoinRequest:
       type: object
-      required: [id, workspaceId, workspaceName, userId, userName, userEmail, status, role, teamId, message, reviewedBy, reviewedAt, decisionNote, expiresAt, createdAt]
+      required: [id, workspaceId, workspaceName, userId, userName, userEmail, status, role, organizationRole, teamId, message, reviewedBy, reviewedAt, decisionNote, expiresAt, createdAt]
       properties:
         id:
           type: string
@@ -2954,6 +3132,10 @@ components:
           enum: [PENDING, APPROVED, REJECTED, WITHDRAWN, EXPIRED]
         role:
           $ref: '#/components/schemas/WorkspaceRole'
+        organizationRole:
+          oneOf:
+            - $ref: '#/components/schemas/OrganizationRole'
+            - type: 'null'
         teamId:
           type: [string, 'null']
           format: uuid
@@ -3103,6 +3285,8 @@ components:
       properties:
         role:
           $ref: '#/components/schemas/AssignableRole'
+        organizationRole:
+          $ref: '#/components/schemas/OrganizationRole'
         teamId:
           type: [string, 'null']
           format: uuid
@@ -3125,13 +3309,37 @@ components:
           allOf:
             - $ref: '#/components/schemas/AssignableRole'
           default: MEMBER
+        organizationRole:
+          $ref: '#/components/schemas/OrganizationRole'
+    CreateDepartmentRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+    DepartmentMemberRequest:
+      type: object
+      required: [targetUserId]
+      additionalProperties: false
+      properties:
+        targetUserId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [HEAD, MEMBER]
+          default: MEMBER
     UpdateMemberRoleRequest:
       type: object
-      required: [role]
       additionalProperties: false
       properties:
         role:
           $ref: '#/components/schemas/AssignableRole'
+        organizationRole:
+          $ref: '#/components/schemas/OrganizationRole'
     CreateInvitationRequest:
       type: object
       required: [email]
@@ -3144,6 +3352,8 @@ components:
           allOf:
             - $ref: '#/components/schemas/AssignableRole'
           default: MEMBER
+        organizationRole:
+          $ref: '#/components/schemas/OrganizationRole'
     EmailWebhookResponse:
       type: object
       required: [success, data]

@@ -124,11 +124,15 @@ function runTests(dbUrl: string): void {
     };
   }
 
-  async function createWorkspace(user: TestUser, name: string): Promise<string> {
+  async function createWorkspace(
+    user: TestUser,
+    name: string,
+    type: 'COMPANY' | 'INSTITUTION' = 'COMPANY',
+  ): Promise<string> {
     const res = await jsonRequest<{ id: string }>(`${baseUrl}/api/v1/workspaces`, {
       method: 'POST',
       headers: authHeaders(user),
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, type }),
       jar: user.jar,
     });
     assert.equal(res.status, 201, `create workspace failed: ${JSON.stringify(res.body)}`);
@@ -140,11 +144,12 @@ function runTests(dbUrl: string): void {
     wsId: string,
     email: string,
     role = 'MEMBER',
+    organizationRole?: string,
   ): Promise<void> {
     const res = await jsonRequest(`${baseUrl}/api/v1/workspaces/${wsId}/members`, {
       method: 'POST',
       headers: authHeaders(actor),
-      body: JSON.stringify({ email, role }),
+      body: JSON.stringify(organizationRole ? { email, organizationRole } : { email, role }),
       jar: actor.jar,
     });
     assert.equal(res.status, 201, `addMember failed: ${JSON.stringify(res.body)}`);
@@ -223,6 +228,248 @@ function runTests(dbUrl: string): void {
   // ---------------------------------------------------------------------------
 
   describe('Phase 6 authorization db tests', () => {
+    test('organization roles remain scoped to each workspace and owners are plural', async () => {
+      const companyId = await createWorkspace(owner, 'Phase6 Role Company', 'COMPANY');
+      const institutionId = await createWorkspace(owner, 'Phase6 Role Institution', 'INSTITUTION');
+      await addMember(owner, companyId, pm.email, 'MEMBER', 'COMPANY_ADMIN');
+      await addMember(owner, institutionId, pm.email, 'MEMBER', 'INSTITUTION_STUDENT');
+
+      const db = await connectTestDatabase(dbUrl);
+      try {
+        const project = await db.prisma.project.create({
+          data: {
+            workspaceId: companyId,
+            name: 'Unassigned Company Project',
+            key: `UCP${Date.now()}`,
+            ownerId: owner.id,
+          },
+        });
+        const team = await db.prisma.team.create({
+          data: { workspaceId: companyId, name: 'Unassigned Company Team' },
+        });
+        await assert.rejects(
+          requireProjectAccess(db.prisma, {
+            userId: pm.id,
+            workspaceId: companyId,
+            projectId: project.id,
+            workspaceRole: 'PROJECT_MANAGER',
+            capability: ProjectCapability.ViewProject,
+          }),
+        );
+        await assert.rejects(
+          requireTeamAccess(db.prisma, {
+            userId: pm.id,
+            workspaceId: companyId,
+            teamId: team.id,
+            workspaceRole: 'PROJECT_MANAGER',
+            capability: 'team:view',
+          }),
+        );
+      } finally {
+        await db.prisma.$disconnect();
+      }
+
+      const companyUpdate = await jsonRequest(`${baseUrl}/api/v1/workspaces/${companyId}`, {
+        method: 'PATCH',
+        headers: authHeaders(pm),
+        body: JSON.stringify({ name: 'Phase6 Role Company Renamed' }),
+        jar: pm.jar,
+      });
+      assert.equal(companyUpdate.status, 200, JSON.stringify(companyUpdate.body));
+
+      const institutionUpdate = await jsonRequest(`${baseUrl}/api/v1/workspaces/${institutionId}`, {
+        method: 'PATCH',
+        headers: authHeaders(pm),
+        body: JSON.stringify({ name: 'Should Not Be Allowed' }),
+        jar: pm.jar,
+      });
+      assert.equal(institutionUpdate.status, 403, JSON.stringify(institutionUpdate.body));
+
+      const secondOwner = await register(
+        baseUrl,
+        'P6 Second Owner',
+        `phase6-second-owner-${Date.now()}@test.example`,
+        'TestPass123!',
+      );
+      await addMember(owner, companyId, secondOwner.email, 'MEMBER', 'COMPANY_OWNER');
+
+      const unauthorizedPromotion = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${companyId}/members/${outsider.id}`,
+        {
+          method: 'PATCH',
+          headers: authHeaders(pm),
+          body: JSON.stringify({ organizationRole: 'COMPANY_OWNER' }),
+          jar: pm.jar,
+        },
+      );
+      assert.equal(unauthorizedPromotion.status, 403, JSON.stringify(unauthorizedPromotion.body));
+
+      const demoteAdditionalOwner = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${companyId}/members/${secondOwner.id}`,
+        {
+          method: 'PATCH',
+          headers: authHeaders(owner),
+          body: JSON.stringify({ organizationRole: 'COMPANY_MEMBER' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(demoteAdditionalOwner.status, 200, JSON.stringify(demoteAdditionalOwner.body));
+
+      const demoteLastOwner = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${companyId}/members/${owner.id}`,
+        {
+          method: 'PATCH',
+          headers: authHeaders(owner),
+          body: JSON.stringify({ organizationRole: 'COMPANY_MEMBER' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(demoteLastOwner.status, 409, JSON.stringify(demoteLastOwner.body));
+    });
+
+    test('institution departments are private to assigned members and heads', async () => {
+      const institutionId = await createWorkspace(
+        owner,
+        'Phase6 Department Institution',
+        'INSTITUTION',
+      );
+      await addMember(owner, institutionId, pm.email, 'MEMBER', 'INSTITUTION_DEPARTMENT_HEAD');
+      await addMember(owner, institutionId, member.email, 'MEMBER', 'INSTITUTION_STUDENT');
+
+      const created = await jsonRequest<{ id: string }>(
+        `${baseUrl}/api/v1/workspaces/${institutionId}/departments`,
+        {
+          method: 'POST',
+          headers: authHeaders(owner),
+          body: JSON.stringify({ name: 'Computer Science' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const departmentId = (created.body.data as { id: string }).id;
+
+      const secondDepartment = await jsonRequest<{ id: string }>(
+        `${baseUrl}/api/v1/workspaces/${institutionId}/departments`,
+        {
+          method: 'POST',
+          headers: authHeaders(owner),
+          body: JSON.stringify({ name: 'Physics' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(secondDepartment.status, 201, JSON.stringify(secondDepartment.body));
+      const secondDepartmentId = (secondDepartment.body.data as { id: string }).id;
+
+      const assignedHead = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionId}/departments/${departmentId}/members`,
+        {
+          method: 'POST',
+          headers: authHeaders(owner),
+          body: JSON.stringify({ targetUserId: pm.id, role: 'HEAD' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(assignedHead.status, 200, JSON.stringify(assignedHead.body));
+
+      const assignedStudent = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionId}/departments/${departmentId}/members`,
+        {
+          method: 'POST',
+          headers: authHeaders(pm),
+          body: JSON.stringify({ targetUserId: member.id, role: 'MEMBER' }),
+          jar: pm.jar,
+        },
+      );
+      assert.equal(assignedStudent.status, 200, JSON.stringify(assignedStudent.body));
+
+      const visible = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionId}/departments`,
+        { headers: authHeaders(pm), jar: pm.jar },
+      );
+      assert.equal(visible.status, 200);
+      assert.equal((visible.body.data as Array<{ id: string }>).length, 1);
+
+      const studentCreate = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionId}/departments`,
+        {
+          method: 'POST',
+          headers: authHeaders(member),
+          body: JSON.stringify({ name: 'Unauthorized Department' }),
+          jar: member.jar,
+        },
+      );
+      assert.equal(studentCreate.status, 403);
+
+      const db = await connectTestDatabase(dbUrl);
+      try {
+        const assignedProject = await db.prisma.project.create({
+          data: {
+            workspaceId: institutionId,
+            departmentId,
+            name: 'Department Project',
+            key: `DP${Date.now()}`,
+            ownerId: owner.id,
+          },
+        });
+        const otherProject = await db.prisma.project.create({
+          data: {
+            workspaceId: institutionId,
+            departmentId: secondDepartmentId,
+            name: 'Other Department Project',
+            key: `ODP${Date.now()}`,
+            ownerId: owner.id,
+          },
+        });
+        const assignedTeam = await db.prisma.team.create({
+          data: { workspaceId: institutionId, departmentId, name: 'Department Team' },
+        });
+        const otherTeam = await db.prisma.team.create({
+          data: {
+            workspaceId: institutionId,
+            departmentId: secondDepartmentId,
+            name: 'Other Team',
+          },
+        });
+
+        await requireProjectAccess(db.prisma, {
+          userId: pm.id,
+          workspaceId: institutionId,
+          projectId: assignedProject.id,
+          workspaceRole: 'COLLABORATOR',
+          capability: ProjectCapability.ManageTask,
+        });
+        await assert.rejects(
+          requireProjectAccess(db.prisma, {
+            userId: pm.id,
+            workspaceId: institutionId,
+            projectId: otherProject.id,
+            workspaceRole: 'COLLABORATOR',
+            capability: ProjectCapability.ViewProject,
+          }),
+          (error: unknown) => (error as { code?: string }).code === 'PROJECT_NOT_FOUND',
+        );
+        await requireTeamAccess(db.prisma, {
+          userId: pm.id,
+          workspaceId: institutionId,
+          teamId: assignedTeam.id,
+          workspaceRole: 'COLLABORATOR',
+          capability: TeamCapability.UpdateTeam,
+        });
+        await assert.rejects(
+          requireTeamAccess(db.prisma, {
+            userId: pm.id,
+            workspaceId: institutionId,
+            teamId: otherTeam.id,
+            workspaceRole: 'COLLABORATOR',
+            capability: TeamCapability.ViewTeam,
+          }),
+          (error: unknown) => (error as { code?: string }).code === 'TEAM_NOT_FOUND',
+        );
+      } finally {
+        await db.prisma.$disconnect();
+      }
+    });
+
     describe('cross-workspace access denial', () => {
       test('outsider cannot read a workspace they do not belong to', async () => {
         const res = await jsonRequest(`${baseUrl}/api/v1/workspaces/${workspaceId}`, {
@@ -441,7 +688,7 @@ function runTests(dbUrl: string): void {
         assert.equal(membership.role, 'OWNER');
       });
 
-      test('after transfer the previous owner has the requested role', async () => {
+      test('after transfer the previous organization owner remains an owner', async () => {
         const db = await connectTestDatabase(dbUrl);
         const membership = await db.prisma.workspaceMembership.findUniqueOrThrow({
           where: {
@@ -449,7 +696,8 @@ function runTests(dbUrl: string): void {
           },
         });
         await db.prisma.$disconnect();
-        assert.equal(membership.role, 'PROJECT_MANAGER');
+        assert.equal(membership.role, 'OWNER');
+        assert.equal(membership.organizationRole, 'COMPANY_OWNER');
       });
 
       test('transfer is recorded in the audit log', async () => {

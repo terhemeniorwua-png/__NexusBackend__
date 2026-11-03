@@ -1146,6 +1146,24 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           );
         }
 
+        const organizationOwnerRole = await tx.workspaceMembership.findFirst({
+          where: {
+            userId: user.id,
+            status: 'ACTIVE',
+            organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] },
+            workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
+          },
+          select: { workspaceId: true },
+        });
+
+        if (organizationOwnerRole) {
+          throw new AppError(
+            409,
+            'ORGANIZATION_OWNERSHIP_TRANSFER_REQUIRED',
+            'Transfer or relinquish organization owner roles before requesting account deletion',
+          );
+        }
+
         const ownedOrganization = await tx.workspace.findFirst({
           where: { ownerId: user.id, type: { in: ['COMPANY', 'INSTITUTION'] } },
           select: { id: true },

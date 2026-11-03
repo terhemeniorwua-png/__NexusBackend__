@@ -1,6 +1,7 @@
 import type {
   Prisma,
   PrismaClient,
+  OrganizationRole,
   User,
   Workspace,
   WorkspaceMembership,
@@ -20,17 +21,28 @@ import {
   assertMayManageMember,
   assertMayAssignRole,
   assertOwnershipSafe,
+  roleCan,
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from './authorization';
 import type {
   AddMemberInput,
+  CreateDepartmentInput,
+  DepartmentMemberInput,
   TransferOwnershipInput,
   UpdateMemberRoleInput,
   UpdateWorkspaceInput,
 } from './workspace.schemas';
-import type { WorkspaceMember, WorkspaceSummary } from './workspace.types';
+import type { DepartmentSummary, WorkspaceMember, WorkspaceSummary } from './workspace.types';
 import { reassignOpenTasksBeforeMemberRemoval } from './task-reassignment';
+import {
+  assertCanAssignOrganizationRole,
+  assertMayManageOrganizationMember,
+  effectiveWorkspaceRole,
+  isOrganizationOwnerRole,
+  ownerOrganizationRole,
+} from '../authorization/organization-role';
+import { DepartmentCapability, requireDepartmentAccess } from '../authorization/department.policy';
 
 /**
  * Workspaces and their members.
@@ -74,6 +86,19 @@ export interface WorkspaceService {
   remove(input: { userId: string; workspaceId: string }, ctx: RequestContext): Promise<void>;
   switchTo(input: { userId: string; workspaceId: string }): Promise<WorkspaceSummary>;
   listMembers(input: { userId: string; workspaceId: string }): Promise<WorkspaceMember[]>;
+  listDepartments(input: { userId: string; workspaceId: string }): Promise<DepartmentSummary[]>;
+  createDepartment(
+    input: { userId: string; workspaceId: string } & CreateDepartmentInput,
+    ctx: RequestContext,
+  ): Promise<DepartmentSummary>;
+  assignDepartmentMember(
+    input: { userId: string; workspaceId: string; departmentId: string } & DepartmentMemberInput,
+    ctx: RequestContext,
+  ): Promise<void>;
+  removeDepartmentMember(
+    input: { userId: string; workspaceId: string; departmentId: string; targetUserId: string },
+    ctx: RequestContext,
+  ): Promise<void>;
   addMember(
     input: { userId: string; workspaceId: string } & AddMemberInput,
     ctx: RequestContext,
@@ -134,6 +159,7 @@ function toSummary(
   workspace: Workspace,
   role: WorkspaceRole,
   counts: WorkspaceCounts,
+  organizationRole: WorkspaceMember['organizationRole'] = null,
 ): WorkspaceSummary {
   return {
     id: workspace.id,
@@ -146,6 +172,7 @@ function toSummary(
     status: workspace.status,
     ownerId: workspace.ownerId,
     role,
+    organizationRole,
     joinCodeEnabled: Boolean(workspace.joinCodeHash),
     memberCount: counts.members,
     projectCount: counts.projects,
@@ -165,6 +192,64 @@ function assertVisibilityAllowed(type: WorkspaceType, visibility: WorkspaceVisib
   }
 }
 
+function ownerRolesForWorkspace(type: WorkspaceType): OrganizationRole[] {
+  if (type === 'COMPANY') return ['COMPANY_OWNER'];
+  if (type === 'INSTITUTION') return ['INSTITUTION_OWNER'];
+  return [];
+}
+
+async function lockWorkspaceForOwnerChange(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+): Promise<Workspace> {
+  await tx.$queryRaw`SELECT "id" FROM "Workspace" WHERE "id" = ${workspaceId} FOR UPDATE`;
+  return tx.workspace.findUniqueOrThrow({ where: { id: workspaceId } });
+}
+
+async function activeOrganizationOwners(
+  tx: Prisma.TransactionClient,
+  workspace: Workspace,
+): Promise<Array<{ userId: string }>> {
+  const roleValues = ownerRolesForWorkspace(workspace.type);
+  const memberships = await tx.workspaceMembership.findMany({
+    where: {
+      workspaceId: workspace.id,
+      status: 'ACTIVE',
+      OR: [
+        ...(roleValues.length ? [{ organizationRole: { in: roleValues } }] : []),
+        { userId: workspace.ownerId, role: 'OWNER' },
+      ],
+    },
+    select: { userId: true },
+  });
+  return [...new Map(memberships.map((membership) => [membership.userId, membership])).values()];
+}
+
+async function requireCurrentMemberManager(
+  tx: Prisma.TransactionClient,
+  workspace: Workspace,
+  userId: string,
+): Promise<WorkspaceMembership> {
+  const membership = await tx.workspaceMembership.findUnique({
+    where: { workspaceId_userId: { workspaceId: workspace.id, userId } },
+  });
+  if (
+    !membership ||
+    membership.status !== 'ACTIVE' ||
+    !roleCan(
+      effectiveWorkspaceRole(workspace.type, membership.role, membership.organizationRole),
+      WorkspaceCapability.ManageMembers,
+    )
+  ) {
+    throw new AppError(
+      403,
+      'MEMBERSHIP_PERMISSION_CHANGED',
+      'Your membership no longer allows this action',
+    );
+  }
+  return membership;
+}
+
 function toMember(
   membership: WorkspaceMembership & { user: Pick<User, 'id' | 'name' | 'email' | 'status'> },
   ownerId: string,
@@ -176,9 +261,10 @@ function toMember(
     email: membership.user.email,
     status: membership.user.status,
     role: membership.role,
+    organizationRole: membership.organizationRole,
     membershipStatus: membership.status,
     joinedAt: membership.joinedAt,
-    owner: membership.user.id === ownerId,
+    owner: membership.user.id === ownerId || isOrganizationOwnerRole(membership.organizationRole),
   };
 }
 
@@ -296,6 +382,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             workspaceId: created.id,
             userId: input.userId,
             role: 'OWNER',
+            organizationRole: ownerOrganizationRole(created.type),
           },
         });
 
@@ -318,7 +405,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         return created;
       });
 
-      return toSummary(workspace, 'OWNER', { members: 1, projects: 0, teams: 0 });
+      return toSummary(
+        workspace,
+        'OWNER',
+        { members: 1, projects: 0, teams: 0 },
+        ownerOrganizationRole(workspace.type),
+      );
     },
 
     async list(userId: string): Promise<WorkspaceSummary[]> {
@@ -337,11 +429,20 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       return memberships
         .filter((membership) => !membership.workspace.deletedAt)
         .map((membership) =>
-          toSummary(membership.workspace, membership.role, {
-            members: membership.workspace._count.members,
-            projects: membership.workspace._count.projects,
-            teams: membership.workspace._count.teams,
-          }),
+          toSummary(
+            membership.workspace,
+            effectiveWorkspaceRole(
+              membership.workspace.type,
+              membership.role,
+              membership.organizationRole,
+            ),
+            {
+              members: membership.workspace._count.members,
+              projects: membership.workspace._count.projects,
+              teams: membership.workspace._count.teams,
+            },
+            membership.organizationRole,
+          ),
         );
     },
 
@@ -352,7 +453,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         capability: WorkspaceCapability.ViewWorkspace,
       });
 
-      return toSummary(access.workspace, access.membership.role, await counts(access.workspace.id));
+      return toSummary(
+        access.workspace,
+        access.effectiveRole,
+        await counts(access.workspace.id),
+        access.membership.organizationRole,
+      );
     },
 
     async update(input, ctx): Promise<WorkspaceSummary> {
@@ -394,7 +500,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         return changed;
       });
 
-      return toSummary(updated, access.membership.role, await counts(updated.id));
+      return toSummary(
+        updated,
+        access.effectiveRole,
+        await counts(updated.id),
+        access.membership.organizationRole,
+      );
     },
 
     async archive(input, ctx): Promise<WorkspaceSummary> {
@@ -432,7 +543,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         return changed;
       });
 
-      return toSummary(archived, access.membership.role, await counts(archived.id));
+      return toSummary(
+        archived,
+        access.effectiveRole,
+        await counts(archived.id),
+        access.membership.organizationRole,
+      );
     },
 
     async restore(input, ctx): Promise<WorkspaceSummary> {
@@ -487,7 +603,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         return workspace;
       });
 
-      return toSummary(restored, access.membership.role, await counts(restored.id));
+      return toSummary(
+        restored,
+        access.effectiveRole,
+        await counts(restored.id),
+        access.membership.organizationRole,
+      );
     },
 
     async remove(input, ctx): Promise<void> {
@@ -543,7 +664,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         capability: WorkspaceCapability.ViewWorkspace,
       });
 
-      return toSummary(access.workspace, access.membership.role, await counts(access.workspace.id));
+      return toSummary(
+        access.workspace,
+        access.effectiveRole,
+        await counts(access.workspace.id),
+        access.membership.organizationRole,
+      );
     },
 
     async listMembers(input): Promise<WorkspaceMember[]> {
@@ -562,6 +688,230 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       return memberships.map((membership) => toMember(membership, access.workspace.ownerId));
     },
 
+    async listDepartments(input): Promise<DepartmentSummary[]> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      if (access.workspace.type !== 'INSTITUTION') {
+        throw new AppError(
+          404,
+          'DEPARTMENT_NOT_FOUND',
+          'Departments are only available in institutions',
+        );
+      }
+
+      const privileged =
+        isOrganizationOwnerRole(access.membership.organizationRole) ||
+        access.membership.organizationRole === 'INSTITUTION_ADMIN' ||
+        (!access.membership.organizationRole && access.effectiveRole === 'PROJECT_MANAGER');
+      const departments = await client.department.findMany({
+        where: {
+          workspaceId: access.workspace.id,
+          ...(privileged ? {} : { members: { some: { userId: input.userId } } }),
+        },
+        include: { _count: { select: { members: true } } },
+        orderBy: { name: 'asc' },
+      });
+      return departments.map((department) => ({
+        id: department.id,
+        workspaceId: department.workspaceId,
+        name: department.name,
+        memberCount: department._count.members,
+        createdAt: department.createdAt,
+        updatedAt: department.updatedAt,
+      }));
+    },
+
+    async createDepartment(input, ctx): Promise<DepartmentSummary> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.UpdateWorkspace,
+      });
+      if (access.workspace.type !== 'INSTITUTION') {
+        throw new AppError(
+          404,
+          'DEPARTMENT_NOT_FOUND',
+          'Departments are only available in institutions',
+        );
+      }
+      const privileged =
+        isOrganizationOwnerRole(access.membership.organizationRole) ||
+        access.membership.organizationRole === 'INSTITUTION_ADMIN' ||
+        (!access.membership.organizationRole && access.effectiveRole === 'PROJECT_MANAGER');
+      if (!privileged) {
+        throw new AppError(
+          403,
+          'INSUFFICIENT_ROLE',
+          'Only institution administrators can create departments',
+        );
+      }
+
+      const department = await client.$transaction(async (tx) => {
+        const created = await tx.department.create({
+          data: { workspaceId: access.workspace.id, name: input.name },
+          include: { _count: { select: { members: true } } },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.DepartmentCreated,
+          targetType: 'Department',
+          targetId: created.id,
+          metadata: { name: created.name },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        return created;
+      });
+      return {
+        id: department.id,
+        workspaceId: department.workspaceId,
+        name: department.name,
+        memberCount: department._count.members,
+        createdAt: department.createdAt,
+        updatedAt: department.updatedAt,
+      };
+    },
+
+    async assignDepartmentMember(input, ctx): Promise<void> {
+      const access = await requireDepartmentAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        departmentId: input.departmentId,
+        capability: DepartmentCapability.ManageMembers,
+      });
+      const actorMembership = await client.workspaceMembership.findUniqueOrThrow({
+        where: {
+          workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId },
+        },
+      });
+      const institutionAdmin =
+        isOrganizationOwnerRole(actorMembership.organizationRole) ||
+        actorMembership.organizationRole === 'INSTITUTION_ADMIN' ||
+        (!actorMembership.organizationRole &&
+          (actorMembership.role === 'OWNER' || actorMembership.role === 'PROJECT_MANAGER'));
+      if (input.role === 'HEAD' && !institutionAdmin) {
+        throw new AppError(
+          403,
+          'INSUFFICIENT_ROLE',
+          'Only an institution administrator can assign a department head',
+        );
+      }
+
+      const target = await client.workspaceMembership.findUnique({
+        where: {
+          workspaceId_userId: { workspaceId: input.workspaceId, userId: input.targetUserId },
+        },
+      });
+      if (!target || target.status !== 'ACTIVE') {
+        throw new AppError(
+          404,
+          'MEMBER_NOT_FOUND',
+          'The selected account is not an active institution member',
+        );
+      }
+      if (input.role === 'HEAD' && target.organizationRole !== 'INSTITUTION_DEPARTMENT_HEAD') {
+        throw new AppError(
+          409,
+          'DEPARTMENT_HEAD_ROLE_REQUIRED',
+          'Assign the Institution Department Head organization role before department assignment',
+        );
+      }
+
+      await client.$transaction(async (tx) => {
+        const assigned = await tx.departmentMembership.upsert({
+          where: {
+            departmentId_userId: {
+              departmentId: access.department.id,
+              userId: input.targetUserId,
+            },
+          },
+          create: {
+            departmentId: access.department.id,
+            userId: input.targetUserId,
+            role: input.role,
+          },
+          update: { role: input.role },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.DepartmentMemberAdded,
+          targetType: 'DepartmentMembership',
+          targetId: assigned.id,
+          metadata: {
+            departmentId: access.department.id,
+            userId: input.targetUserId,
+            role: input.role,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+      });
+    },
+
+    async removeDepartmentMember(input, ctx): Promise<void> {
+      const access = await requireDepartmentAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        departmentId: input.departmentId,
+        capability: DepartmentCapability.ManageMembers,
+      });
+      const target = await client.departmentMembership.findUnique({
+        where: {
+          departmentId_userId: {
+            departmentId: access.department.id,
+            userId: input.targetUserId,
+          },
+        },
+      });
+      if (!target) {
+        throw new AppError(
+          404,
+          'DEPARTMENT_MEMBER_NOT_FOUND',
+          'That user is not assigned to this department',
+        );
+      }
+      if (target.role === 'HEAD' && input.userId !== input.targetUserId) {
+        const actor = await client.workspaceMembership.findUniqueOrThrow({
+          where: {
+            workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId },
+          },
+        });
+        const admin =
+          isOrganizationOwnerRole(actor.organizationRole) ||
+          actor.organizationRole === 'INSTITUTION_ADMIN' ||
+          (!actor.organizationRole && (actor.role === 'OWNER' || actor.role === 'PROJECT_MANAGER'));
+        if (!admin) {
+          throw new AppError(
+            403,
+            'INSUFFICIENT_ROLE',
+            'Only an institution administrator can remove a department head',
+          );
+        }
+      }
+      await client.$transaction(async (tx) => {
+        await tx.departmentMembership.delete({ where: { id: target.id } });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.DepartmentMemberRemoved,
+          targetType: 'DepartmentMembership',
+          targetId: target.id,
+          metadata: {
+            departmentId: access.department.id,
+            userId: input.targetUserId,
+            role: target.role,
+          },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+      });
+    },
+
     async addMember(input, ctx): Promise<WorkspaceMember> {
       const access = await requireWorkspaceAccess(client, {
         userId: input.userId,
@@ -569,11 +919,22 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         capability: WorkspaceCapability.ManageMembers,
       });
 
-      assertMayAssignRole({
-        actorRole: access.membership.role,
-        requestedRole: input.role as WorkspaceRole,
-      });
-
+      if (input.organizationRole) {
+        assertCanAssignOrganizationRole({
+          workspaceType: access.workspace.type,
+          actorLegacyRole: access.membership.role,
+          actorOrganizationRole: access.membership.organizationRole,
+          requestedRole: input.organizationRole,
+        });
+      } else {
+        assertMayAssignRole({
+          actorRole: access.effectiveRole,
+          requestedRole: input.role as WorkspaceRole,
+        });
+      }
+      const assignedRole = input.organizationRole
+        ? effectiveWorkspaceRole(access.workspace.type, 'MEMBER', input.organizationRole)
+        : (input.role as WorkspaceRole);
       const user = await client.user.findUnique({
         where: { email: input.email },
         select: { id: true, name: true, email: true, status: true, deletedAt: true },
@@ -584,6 +945,14 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           404,
           'USER_NOT_FOUND',
           'No account uses this email address. Send an invitation instead.',
+        );
+      }
+
+      if (isOrganizationOwnerRole(input.organizationRole) && user.status !== 'ACTIVE') {
+        throw new AppError(
+          409,
+          'OWNER_MUST_BE_ACTIVE',
+          'An organization owner must have an active account',
         );
       }
 
@@ -600,11 +969,35 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       }
 
       const membership = await client.$transaction(async (tx) => {
+        const lockedWorkspace = await lockWorkspaceForOwnerChange(tx, access.workspace.id);
+        const actor = await requireCurrentMemberManager(tx, lockedWorkspace, input.userId);
+        if (input.organizationRole) {
+          assertCanAssignOrganizationRole({
+            workspaceType: lockedWorkspace.type,
+            actorLegacyRole: effectiveWorkspaceRole(
+              lockedWorkspace.type,
+              actor.role,
+              actor.organizationRole,
+            ),
+            actorOrganizationRole: actor.organizationRole,
+            requestedRole: input.organizationRole,
+          });
+        } else {
+          assertMayAssignRole({
+            actorRole: effectiveWorkspaceRole(
+              lockedWorkspace.type,
+              actor.role,
+              actor.organizationRole,
+            ),
+            requestedRole: input.role as WorkspaceRole,
+          });
+        }
         const created = await tx.workspaceMembership.create({
           data: {
             workspaceId: access.workspace.id,
             userId: user.id,
-            role: input.role as WorkspaceRole,
+            role: assignedRole,
+            organizationRole: input.organizationRole ?? null,
           },
           include: { user: { select: { id: true, name: true, email: true, status: true } } },
         });
@@ -615,7 +1008,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           action: WorkspaceAuditAction.MemberAdded,
           targetType: 'WorkspaceMembership',
           targetId: created.id,
-          metadata: { userId: user.id, email: user.email, role: input.role },
+          metadata: {
+            userId: user.id,
+            email: user.email,
+            role: assignedRole,
+            organizationRole: input.organizationRole ?? null,
+          },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
@@ -624,9 +1022,13 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           userId: user.id,
           type: 'MEMBERSHIP_CHANGED',
           title: `You joined ${access.workspace.name}`,
-          body: `Your role in ${access.workspace.name} is ${input.role.toLowerCase().replace('_', ' ')}.`,
+          body: `Your role in ${access.workspace.name} is ${(input.organizationRole ?? assignedRole).toLowerCase().replaceAll('_', ' ')}.`,
           link: workspaceLink(access.workspace.id),
-          data: { workspaceId: access.workspace.id, role: input.role },
+          data: {
+            workspaceId: access.workspace.id,
+            role: assignedRole,
+            organizationRole: input.organizationRole ?? null,
+          },
         });
 
         return created;
@@ -657,20 +1059,132 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         );
       }
 
-      assertMayManageMember({
-        actorRole: access.membership.role,
-        targetRole: target.role,
-        targetIsOwner: target.user.id === access.workspace.ownerId,
+      const targetIsOwner =
+        isOrganizationOwnerRole(target.organizationRole) ||
+        (!target.organizationRole && target.user.id === access.workspace.ownerId);
+      assertMayManageOrganizationMember({
+        actorLegacyRole: access.effectiveRole,
+        actorOrganizationRole: access.membership.organizationRole,
+        targetOrganizationRole: target.organizationRole,
+        targetLegacyRole: target.role,
+        targetIsPrimaryOwner: target.user.id === access.workspace.ownerId,
       });
-      assertMayAssignRole({
-        actorRole: access.membership.role,
-        requestedRole: input.role as WorkspaceRole,
-      });
+      if (!target.organizationRole) {
+        assertMayManageMember({
+          actorRole: access.effectiveRole,
+          targetRole: target.role,
+          targetIsOwner,
+        });
+      }
+      if (input.organizationRole) {
+        assertCanAssignOrganizationRole({
+          workspaceType: access.workspace.type,
+          actorLegacyRole: access.effectiveRole,
+          actorOrganizationRole: access.membership.organizationRole,
+          requestedRole: input.organizationRole,
+        });
+      } else {
+        assertMayAssignRole({
+          actorRole: access.effectiveRole,
+          requestedRole: input.role as WorkspaceRole,
+        });
+      }
+
+      const assignedRole = input.organizationRole
+        ? effectiveWorkspaceRole(access.workspace.type, 'MEMBER', input.organizationRole)
+        : (input.role as WorkspaceRole);
+      const assignedOrganizationRole = input.organizationRole ?? null;
+      if (
+        isOrganizationOwnerRole(assignedOrganizationRole) &&
+        (target.status !== 'ACTIVE' || target.user.status !== 'ACTIVE')
+      ) {
+        throw new AppError(
+          409,
+          'OWNER_MUST_BE_ACTIVE',
+          'An organization owner must have an active account',
+        );
+      }
 
       const updated = await client.$transaction(async (tx) => {
+        const currentWorkspace = await lockWorkspaceForOwnerChange(tx, access.workspace.id);
+        const currentActor = await requireCurrentMemberManager(tx, currentWorkspace, input.userId);
+        const currentTarget = await tx.workspaceMembership.findUniqueOrThrow({
+          where: {
+            workspaceId_userId: {
+              workspaceId: access.workspace.id,
+              userId: input.targetUserId,
+            },
+          },
+        });
+        assertMayManageOrganizationMember({
+          actorLegacyRole: effectiveWorkspaceRole(
+            currentWorkspace.type,
+            currentActor.role,
+            currentActor.organizationRole,
+          ),
+          actorOrganizationRole: currentActor.organizationRole,
+          targetOrganizationRole: currentTarget.organizationRole,
+          targetLegacyRole: currentTarget.role,
+          targetIsPrimaryOwner: currentTarget.userId === currentWorkspace.ownerId,
+        });
+        if (!currentTarget.organizationRole) {
+          assertMayManageMember({
+            actorRole: effectiveWorkspaceRole(
+              currentWorkspace.type,
+              currentActor.role,
+              currentActor.organizationRole,
+            ),
+            targetRole: currentTarget.role,
+            targetIsOwner: currentTarget.userId === currentWorkspace.ownerId,
+          });
+        }
+        if (input.organizationRole) {
+          assertCanAssignOrganizationRole({
+            workspaceType: currentWorkspace.type,
+            actorLegacyRole: effectiveWorkspaceRole(
+              currentWorkspace.type,
+              currentActor.role,
+              currentActor.organizationRole,
+            ),
+            actorOrganizationRole: currentActor.organizationRole,
+            requestedRole: input.organizationRole,
+          });
+        } else {
+          assertMayAssignRole({
+            actorRole: effectiveWorkspaceRole(
+              currentWorkspace.type,
+              currentActor.role,
+              currentActor.organizationRole,
+            ),
+            requestedRole: input.role as WorkspaceRole,
+          });
+        }
+        const owners = await activeOrganizationOwners(tx, currentWorkspace);
+        const targetIsOrgOwner =
+          isOrganizationOwnerRole(currentTarget.organizationRole) ||
+          (!currentTarget.organizationRole && currentTarget.userId === currentWorkspace.ownerId);
+        const remainsOwner = isOrganizationOwnerRole(assignedOrganizationRole);
+
+        if (targetIsOrgOwner && !remainsOwner) {
+          const remainingOwners = owners.filter((owner) => owner.userId !== currentTarget.userId);
+          if (remainingOwners.length === 0) {
+            throw new AppError(
+              409,
+              'LAST_ORGANIZATION_OWNER',
+              'An organization must retain at least one active owner',
+            );
+          }
+          if (currentWorkspace.ownerId === currentTarget.userId) {
+            await tx.workspace.update({
+              where: { id: currentWorkspace.id },
+              data: { ownerId: remainingOwners[0]!.userId },
+            });
+          }
+        }
+
         const changed = await tx.workspaceMembership.update({
-          where: { id: target.id },
-          data: { role: input.role as WorkspaceRole },
+          where: { id: currentTarget.id },
+          data: { role: assignedRole, organizationRole: assignedOrganizationRole },
           include: { user: { select: { id: true, name: true, email: true, status: true } } },
         });
 
@@ -683,7 +1197,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           metadata: {
             userId: changed.user.id,
             previousRole: target.role,
-            role: input.role,
+            previousOrganizationRole: target.organizationRole,
+            role: assignedRole,
+            organizationRole: assignedOrganizationRole,
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
@@ -693,9 +1209,13 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           userId: changed.user.id,
           type: 'MEMBERSHIP_CHANGED',
           title: `Your role in ${access.workspace.name} changed`,
-          body: `Your role is now ${input.role.toLowerCase().replace('_', ' ')}.`,
+          body: `Your role is now ${(assignedOrganizationRole ?? assignedRole).toLowerCase().replaceAll('_', ' ')}.`,
           link: workspaceLink(access.workspace.id),
-          data: { workspaceId: access.workspace.id, role: input.role },
+          data: {
+            workspaceId: access.workspace.id,
+            role: assignedRole,
+            organizationRole: assignedOrganizationRole,
+          },
         });
 
         return changed;
@@ -726,22 +1246,59 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         );
       }
 
-      assertMayManageMember({
-        actorRole: access.membership.role,
-        targetRole: target.role,
-        targetIsOwner: target.user.id === access.workspace.ownerId,
+      const targetIsOwner =
+        isOrganizationOwnerRole(target.organizationRole) ||
+        (!target.organizationRole && target.user.id === access.workspace.ownerId);
+      assertMayManageOrganizationMember({
+        actorLegacyRole: access.effectiveRole,
+        actorOrganizationRole: access.membership.organizationRole,
+        targetOrganizationRole: target.organizationRole,
+        targetLegacyRole: target.role,
+        targetIsPrimaryOwner: target.user.id === access.workspace.ownerId,
       });
+      if (!target.organizationRole) {
+        assertMayManageMember({
+          actorRole: access.effectiveRole,
+          targetRole: target.role,
+          targetIsOwner,
+        });
+      }
 
       // Prevent the owner from removing themselves (which would leave the
       // workspace permanently ownerless).
-      assertOwnershipSafe({
-        actorId: input.userId,
-        targetUserId: input.targetUserId,
-        targetRole: target.role,
-        workspaceOwnerId: access.workspace.ownerId,
-      });
+      if (!isOrganizationOwnerRole(target.organizationRole)) {
+        assertOwnershipSafe({
+          actorId: input.userId,
+          targetUserId: input.targetUserId,
+          targetRole: target.role,
+          workspaceOwnerId: access.workspace.ownerId,
+        });
+      }
 
       const reassigned = await client.$transaction(async (tx) => {
+        const currentWorkspace = await lockWorkspaceForOwnerChange(tx, access.workspace.id);
+        const owners = await activeOrganizationOwners(tx, currentWorkspace);
+        const targetIsOrgOwner =
+          isOrganizationOwnerRole(target.organizationRole) ||
+          (!target.organizationRole && target.user.id === currentWorkspace.ownerId);
+
+        if (targetIsOrgOwner) {
+          const remainingOwners = owners.filter((owner) => owner.userId !== target.user.id);
+          if (remainingOwners.length === 0) {
+            throw new AppError(
+              409,
+              'LAST_ORGANIZATION_OWNER',
+              'An organization must retain at least one active owner',
+            );
+          }
+          if (currentWorkspace.ownerId === target.user.id) {
+            await tx.workspace.update({
+              where: { id: currentWorkspace.id },
+              data: { ownerId: remainingOwners[0]!.userId },
+            });
+          }
+        }
+
         const [actorMembership, currentTarget] = await Promise.all([
           tx.workspaceMembership.findUnique({
             where: {
@@ -766,18 +1323,34 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           );
         }
 
-        assertMayManageMember({
-          actorRole: actorMembership.role,
-          targetRole: currentTarget.role,
-          targetIsOwner: input.targetUserId === access.workspace.ownerId,
+        assertMayManageOrganizationMember({
+          actorLegacyRole: effectiveWorkspaceRole(
+            currentWorkspace.type,
+            actorMembership.role,
+            actorMembership.organizationRole,
+          ),
+          actorOrganizationRole: actorMembership.organizationRole,
+          targetOrganizationRole: currentTarget.organizationRole,
+          targetLegacyRole: currentTarget.role,
+          targetIsPrimaryOwner: input.targetUserId === currentWorkspace.ownerId,
         });
-
-        assertOwnershipSafe({
-          actorId: input.userId,
-          targetUserId: input.targetUserId,
-          targetRole: currentTarget.role,
-          workspaceOwnerId: access.workspace.ownerId,
-        });
+        if (!currentTarget.organizationRole) {
+          assertMayManageMember({
+            actorRole: effectiveWorkspaceRole(
+              currentWorkspace.type,
+              actorMembership.role,
+              actorMembership.organizationRole,
+            ),
+            targetRole: currentTarget.role,
+            targetIsOwner: input.targetUserId === currentWorkspace.ownerId,
+          });
+          assertOwnershipSafe({
+            actorId: input.userId,
+            targetUserId: input.targetUserId,
+            targetRole: currentTarget.role,
+            workspaceOwnerId: currentWorkspace.ownerId,
+          });
+        }
 
         const taskReassignment = await reassignOpenTasksBeforeMemberRemoval(tx, {
           workspaceId: access.workspace.id,
@@ -802,6 +1375,19 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           );
         }
 
+        await tx.teamMembership.deleteMany({
+          where: { userId: input.targetUserId, team: { workspaceId: access.workspace.id } },
+        });
+        await tx.projectMembership.deleteMany({
+          where: { userId: input.targetUserId, project: { workspaceId: access.workspace.id } },
+        });
+        await tx.departmentMembership.deleteMany({
+          where: {
+            userId: input.targetUserId,
+            department: { workspaceId: access.workspace.id },
+          },
+        });
+
         await recordAuditEvent(tx, {
           workspaceId: access.workspace.id,
           actorId: input.userId,
@@ -812,6 +1398,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             userId: target.user.id,
             email: target.user.email,
             role: currentTarget.role,
+            organizationRole: currentTarget.organizationRole,
             reassignedTaskCount: taskReassignment.taskCount,
             ...(input.reassignTasksToUserId
               ? { reassignTasksToUserId: input.reassignTasksToUserId }
@@ -864,11 +1451,23 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         );
       }
 
-      assertMayManageMember({
-        actorRole: access.membership.role,
-        targetRole: target.role,
-        targetIsOwner: target.user.id === access.workspace.ownerId,
+      const targetIsOwner =
+        isOrganizationOwnerRole(target.organizationRole) ||
+        (!target.organizationRole && target.user.id === access.workspace.ownerId);
+      assertMayManageOrganizationMember({
+        actorLegacyRole: access.effectiveRole,
+        actorOrganizationRole: access.membership.organizationRole,
+        targetOrganizationRole: target.organizationRole,
+        targetLegacyRole: target.role,
+        targetIsPrimaryOwner: target.user.id === access.workspace.ownerId,
       });
+      if (!target.organizationRole) {
+        assertMayManageMember({
+          actorRole: access.effectiveRole,
+          targetRole: target.role,
+          targetIsOwner,
+        });
+      }
 
       if (target.status === 'SUSPENDED') {
         throw new AppError(
@@ -879,6 +1478,27 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       }
 
       const updated = await client.$transaction(async (tx) => {
+        const currentWorkspace = await lockWorkspaceForOwnerChange(tx, access.workspace.id);
+        const owners = await activeOrganizationOwners(tx, currentWorkspace);
+        if (
+          isOrganizationOwnerRole(target.organizationRole) ||
+          (!target.organizationRole && target.user.id === currentWorkspace.ownerId)
+        ) {
+          const remainingOwners = owners.filter((owner) => owner.userId !== target.user.id);
+          if (remainingOwners.length === 0) {
+            throw new AppError(
+              409,
+              'LAST_ORGANIZATION_OWNER',
+              'An organization must retain at least one active owner',
+            );
+          }
+          if (currentWorkspace.ownerId === target.user.id) {
+            await tx.workspace.update({
+              where: { id: currentWorkspace.id },
+              data: { ownerId: remainingOwners[0]!.userId },
+            });
+          }
+        }
         const changed = await tx.workspaceMembership.update({
           where: { id: target.id },
           data: { status: 'SUSPENDED' },
@@ -933,11 +1553,23 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         );
       }
 
-      assertMayManageMember({
-        actorRole: access.membership.role,
-        targetRole: target.role,
-        targetIsOwner: target.user.id === access.workspace.ownerId,
+      const targetIsOwner =
+        isOrganizationOwnerRole(target.organizationRole) ||
+        (!target.organizationRole && target.user.id === access.workspace.ownerId);
+      assertMayManageOrganizationMember({
+        actorLegacyRole: access.effectiveRole,
+        actorOrganizationRole: access.membership.organizationRole,
+        targetOrganizationRole: target.organizationRole,
+        targetLegacyRole: target.role,
+        targetIsPrimaryOwner: target.user.id === access.workspace.ownerId,
       });
+      if (!target.organizationRole) {
+        assertMayManageMember({
+          actorRole: access.effectiveRole,
+          targetRole: target.role,
+          targetIsOwner,
+        });
+      }
 
       if (target.status !== 'SUSPENDED') {
         throw new AppError(409, 'MEMBERSHIP_NOT_SUSPENDED', 'This membership is not suspended');
@@ -1010,25 +1642,61 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         await lockActiveWorkspaceAccount(tx, input.userId);
         await lockActiveWorkspaceAccount(tx, input.newOwnerId);
 
-        // Promote the new owner.
-        await tx.workspaceMembership.update({
-          where: { id: newOwnerMembership.id },
-          data: { role: 'OWNER' },
-        });
-
-        // Demote the previous owner to the requested role.
-        await tx.workspaceMembership.update({
+        const lockedWorkspace = await lockWorkspaceForOwnerChange(tx, access.workspace.id);
+        const currentOwnerMembership = await tx.workspaceMembership.findUniqueOrThrow({
           where: {
             workspaceId_userId: { workspaceId: access.workspace.id, userId: input.userId },
           },
-          data: { role: input.newOwnerRole as WorkspaceRole },
         });
+        if (
+          !isOrganizationOwnerRole(currentOwnerMembership.organizationRole) &&
+          !(currentOwnerMembership.role === 'OWNER' && lockedWorkspace.ownerId === input.userId)
+        ) {
+          throw new AppError(
+            403,
+            'ORGANIZATION_OWNER_REQUIRED',
+            'Only an owner may transfer ownership',
+          );
+        }
+
+        const refreshedTarget = await tx.workspaceMembership.findUniqueOrThrow({
+          where: {
+            workspaceId_userId: { workspaceId: access.workspace.id, userId: input.newOwnerId },
+          },
+        });
+        if (refreshedTarget.status !== 'ACTIVE') {
+          throw new AppError(409, 'NEW_OWNER_NOT_ACTIVE', 'The new owner must be an active member');
+        }
+
+        const newOrganizationOwnerRole = ownerOrganizationRole(lockedWorkspace.type);
+        if (newOrganizationOwnerRole) {
+          // Organization ownership is multi-owner. A transfer changes the
+          // primary owner while preserving the previous owner's approved role.
+          await tx.workspaceMembership.update({
+            where: { id: refreshedTarget.id },
+            data: { role: 'OWNER', organizationRole: newOrganizationOwnerRole },
+          });
+          if (!currentOwnerMembership.organizationRole) {
+            await tx.workspaceMembership.update({
+              where: { id: currentOwnerMembership.id },
+              data: { role: 'OWNER', organizationRole: newOrganizationOwnerRole },
+            });
+          }
+        } else {
+          await tx.workspaceMembership.update({
+            where: { id: refreshedTarget.id },
+            data: { role: 'OWNER' },
+          });
+          await tx.workspaceMembership.update({
+            where: { id: currentOwnerMembership.id },
+            data: { role: input.newOwnerRole as WorkspaceRole },
+          });
+        }
 
         // Transfer the authoritative owner column on the workspace itself.
         const changed = await tx.workspace.updateMany({
           where: {
             id: access.workspace.id,
-            ownerId: input.userId,
             deletedAt: null,
           },
           data: { ownerId: input.newOwnerId },
@@ -1073,11 +1741,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         return changedWorkspace;
       });
 
+      const callerStillOwner = ownerOrganizationRole(updatedWorkspace.type) !== null;
       return toSummary(
         updatedWorkspace,
-        // The caller is no longer the owner after the transfer.
-        input.newOwnerRole as WorkspaceRole,
+        callerStillOwner ? 'OWNER' : (input.newOwnerRole as WorkspaceRole),
         await counts(updatedWorkspace.id),
+        callerStillOwner ? ownerOrganizationRole(updatedWorkspace.type) : null,
       );
     },
   };

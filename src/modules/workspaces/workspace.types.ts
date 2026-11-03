@@ -2,6 +2,7 @@ import type {
   InvitationStatus,
   InvitationType,
   JoinRequestStatus,
+  OrganizationRole,
   UserStatus,
   WorkspaceMembershipStatus,
   WorkspaceRole,
@@ -29,6 +30,7 @@ export interface WorkspaceSummary {
   ownerId: string;
   /** The role of the caller inside this workspace. */
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
   /** True when an administrator has enabled a join code. */
   joinCodeEnabled: boolean;
   memberCount: number;
@@ -45,10 +47,20 @@ export interface WorkspaceMember {
   email: string;
   status: UserStatus;
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
   membershipStatus: WorkspaceMembershipStatus;
   joinedAt: Date;
   /** True for the account that owns the workspace. */
   owner: boolean;
+}
+
+export interface DepartmentSummary {
+  id: string;
+  workspaceId: string;
+  name: string;
+  memberCount: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface InvitationSummary {
@@ -57,6 +69,7 @@ export interface InvitationSummary {
   workspaceName: string;
   email: string;
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
   type: InvitationType;
   status: InvitationStatus;
   invitedBy: { id: string; name: string };
@@ -79,6 +92,7 @@ export interface InvitationPreview {
   workspace: { id: string; name: string; slug: string };
   invitedBy: { id: string; name: string };
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
   status: InvitationStatus;
   expiresAt: Date;
   /** The address the invitation was sent to, with the local part masked. */
@@ -112,6 +126,7 @@ export interface JoinRequestSummary {
   userEmail: string;
   status: JoinRequestStatus;
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
   teamId: string | null;
   message: string | null;
   reviewedBy: { id: string; name: string } | null;

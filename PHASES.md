@@ -1256,6 +1256,22 @@ Implement Nexus subscription and payment management.
 - Ownership transfer for billing.
 - Subscription entitlement middleware.
 
+### Approved commercial and membership rules
+
+These approved prices and rules are recorded in 2026-11-03 product decisions. The preparatory helper code in `src/modules/billing/` implements server-owned price/seat calculations and lifecycle policy calculations only. It does not start or complete Phase 17 because billing persistence, routes, a provider, verified payments, and entitlement enforcement are absent.
+
+| Plan | Monthly | Annual | Included members | Extra active member |
+|---|---:|---:|---:|---:|
+| Pro | $10/month | $50/year | 15 | $0.50/member/month |
+| Business | $15/month | $70/year | 25 | $1/member/month |
+
+- The workspace owner counts once and consumes an included seat.
+- Only active memberships with active accounts count. Pending invitations, suspended, removed, and deactivated memberships do not count. Admin roles do not have a separate billing exclusion.
+- Additional members are billed monthly, including on annual base subscriptions.
+- Upgrades and seat increases apply immediately only after server-verified successful payment and are prorated. Downgrades, seat reductions, and cancellation take effect at renewal/period end; paid access remains through the already-paid period. Seat conflicts never cause automatic member or data deletion.
+- No automatic refunds. Refund requests are handled manually under the business's approved policy and applicable law.
+- Failed-payment policy is deferred; retry behavior, grace periods, notifications, access timing, and additional-seat treatment remain undecided. Do not invent failure timelines or grant paid access without verified payment.
+
 ### Important Rules
 - A trial must not silently convert into a paid subscription.
 - If the user does not upgrade, the subscription falls back to the applicable Free plan.
@@ -1266,6 +1282,13 @@ Implement Nexus subscription and payment management.
 - Downgrades must not silently delete user data.
 - Over-limit features should be restricted gracefully.
 - Never store raw card details or CVV.
+
+### Current implementation status — policy preparation only
+
+- `src/modules/billing/pricing.ts`, `membership-billing.ts`, and `lifecycle-policy.ts` contain the approved integer-cent catalog, authoritative workspace-scoped active-member query/count calculation, prorated charge calculations, schedule policy, owner guard, and deferred failed-payment policy.
+- Unit tests cover the pure rules and database-scoped query helper. They do not establish provider payment verification or durable idempotency.
+- No subscription tables/migrations, routes, provider adapter/configuration, payment webhooks, invoice/history functionality, or subscription entitlement integration exist. Do not enable checkout or call Phase 17 complete.
+- Provider selection and legal review remain external dependencies. The exact implementation requirements are in the frontend repository's `docs/SUBSCRIPTION_BILLING_BACKEND_REQUIREMENTS.md`.
 
 ### Completion Criteria
 - Payment flows are verified.

@@ -11,6 +11,10 @@ import { createInvitationService, type InvitationService } from './invitation.se
 import {
   addMemberSchema,
   createInvitationSchema,
+  createDepartmentSchema,
+  departmentMemberParamsSchema,
+  departmentMemberSchema,
+  departmentParamsSchema,
   createWorkspaceSchema,
   invitationParamsSchema,
   listInvitationsQuerySchema,
@@ -22,6 +26,8 @@ import {
   workspaceIdParamsSchema,
   type AddMemberInput,
   type CreateInvitationInput,
+  type CreateDepartmentInput,
+  type DepartmentMemberInput,
   type CreateWorkspaceInput,
   type ListInvitationsQuery,
   type RemoveWorkspaceMemberInput,
@@ -221,6 +227,72 @@ export function createWorkspaceRouter({
       const members = await service.listMembers({ userId: requireUser(req), workspaceId });
 
       sendSuccess(res, members);
+    },
+  );
+
+  router.get(
+    '/:workspaceId/departments',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: workspaceIdParamsSchema }),
+    async (req, res) => {
+      const { workspaceId } = req.validated?.params as { workspaceId: string };
+      const departments = await service.listDepartments({ userId: requireUser(req), workspaceId });
+      sendSuccess(res, departments);
+    },
+  );
+
+  router.post(
+    '/:workspaceId/departments',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: workspaceIdParamsSchema, body: createDepartmentSchema }),
+    async (req, res) => {
+      const { workspaceId } = req.validated?.params as { workspaceId: string };
+      const input = req.validated?.body as CreateDepartmentInput;
+      const department = await service.createDepartment(
+        { userId: requireUser(req), workspaceId, ...input },
+        context(req),
+      );
+      sendSuccess(res, department, 201);
+    },
+  );
+
+  router.post(
+    '/:workspaceId/departments/:departmentId/members',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: departmentParamsSchema, body: departmentMemberSchema }),
+    async (req, res) => {
+      const { workspaceId, departmentId } = req.validated?.params as {
+        workspaceId: string;
+        departmentId: string;
+      };
+      const input = req.validated?.body as DepartmentMemberInput;
+      await service.assignDepartmentMember(
+        { userId: requireUser(req), workspaceId, departmentId, ...input },
+        context(req),
+      );
+      sendSuccess(res, { userId: input.targetUserId, assigned: true });
+    },
+  );
+
+  router.delete(
+    '/:workspaceId/departments/:departmentId/members/:targetUserId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: departmentMemberParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, departmentId, targetUserId } = req.validated?.params as {
+        workspaceId: string;
+        departmentId: string;
+        targetUserId: string;
+      };
+      await service.removeDepartmentMember(
+        { userId: requireUser(req), workspaceId, departmentId, targetUserId },
+        context(req),
+      );
+      sendSuccess(res, { userId: targetUserId, removed: true });
     },
   );
 
