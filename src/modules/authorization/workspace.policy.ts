@@ -42,6 +42,9 @@ export const WorkspaceCapability = {
   // Invitation management
   ViewInvitations: 'invitation:view',
   ManageInvitations: 'invitation:manage',
+  // Join requests (discovery is public to authenticated accounts)
+  ViewJoinRequests: 'join_request:view',
+  ManageJoinRequests: 'join_request:manage',
   // Ownership transfer (owner only)
   TransferOwnership: 'workspace:transfer_ownership',
 } as const;
@@ -70,6 +73,8 @@ const WORKSPACE_CAPABILITIES: Record<WorkspaceCapabilityValue, readonly Workspac
   'member:manage': ['OWNER', 'PROJECT_MANAGER'],
   'invitation:view': ['OWNER', 'PROJECT_MANAGER'],
   'invitation:manage': ['OWNER', 'PROJECT_MANAGER'],
+  'join_request:view': ['OWNER', 'PROJECT_MANAGER'],
+  'join_request:manage': ['OWNER', 'PROJECT_MANAGER'],
 };
 
 /**
@@ -116,6 +121,16 @@ export async function requireWorkspaceAccess(
 
   if (!membership) {
     throw new AppError(403, 'WORKSPACE_ACCESS_DENIED', 'You are not a member of this workspace');
+  }
+
+  // A suspended membership keeps the row (and its history) but grants no
+  // access until an administrator restores it.
+  if (membership.status === 'SUSPENDED') {
+    throw new AppError(
+      403,
+      'MEMBERSHIP_SUSPENDED',
+      'Your membership of this workspace is suspended',
+    );
   }
 
   if (!workspaceRoleCan(membership.role, input.capability)) {

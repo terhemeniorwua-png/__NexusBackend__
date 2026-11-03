@@ -136,6 +136,8 @@ test('parseEnv defaults the workspace invitation lifetime to 48 hours', () => {
 
   assert.equal(config.workspaceInvitationTtlSeconds, 172_800);
   assert.equal(config.workspaceInvitationLinkPath, '/workspaces/invitations/accept');
+  assert.equal(config.workspaceJoinRequestTtlSeconds, 604_800);
+  assert.equal(config.workspaceJoinLinkPath, '/workspaces/join');
 });
 
 test('parseEnv requires a frontend URL in production', () => {

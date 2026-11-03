@@ -1,0 +1,4 @@
+ALTER TYPE "InvitationStatus" ADD VALUE IF NOT EXISTS 'DECLINED';
+
+ALTER TABLE "Invitation"
+ADD COLUMN "declinedAt" TIMESTAMP(3);

@@ -70,11 +70,16 @@ export const invitationTokenParamsSchema = z.object({
   token: z.string().trim().min(20, 'The invitation token is not valid').max(200),
 });
 
+const workspaceTypeSchema = z.enum(['INDIVIDUAL', 'COMPANY', 'INSTITUTION']);
+const workspaceVisibilitySchema = z.enum(['PRIVATE', 'PUBLIC']);
+
 export const createWorkspaceSchema = z
   .object({
     name: nameSchema,
     description: descriptionSchema.optional(),
     slug: slugSchema.optional(),
+    type: workspaceTypeSchema.default('COMPANY'),
+    visibility: workspaceVisibilitySchema.default('PRIVATE'),
   })
   .strict();
 
@@ -82,6 +87,7 @@ export const updateWorkspaceSchema = z
   .object({
     name: nameSchema.optional(),
     description: descriptionSchema.optional(),
+    visibility: workspaceVisibilitySchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
@@ -120,7 +126,7 @@ export const createInvitationSchema = z
   .strict();
 
 export const listInvitationsQuerySchema = z.object({
-  status: z.enum(['PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
+  status: z.enum(['PENDING', 'ACCEPTED', 'DECLINED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
 });
 
 /**
@@ -140,6 +146,61 @@ export const transferOwnershipSchema = z
   })
   .strict();
 
+export const discoverWorkspacesQuerySchema = z.object({
+  search: z.string().trim().min(1).max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const createJoinRequestSchema = z
+  .object({
+    message: z
+      .string()
+      .trim()
+      .max(500, 'Message must be at most 500 characters')
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export const joinByCodeSchema = z
+  .object({
+    code: z.string().trim().min(20, 'The join code is not valid').max(200),
+    message: z
+      .string()
+      .trim()
+      .max(500, 'Message must be at most 500 characters')
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export const listJoinRequestsQuerySchema = z.object({
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN', 'EXPIRED', 'ALL']).default('ALL'),
+});
+
+export const approveJoinRequestSchema = z
+  .object({
+    role: assignableRoleSchema.optional(),
+    teamId: z.string().trim().uuid('The team id is not valid').nullable().optional(),
+  })
+  .strict();
+
+export const rejectJoinRequestSchema = z
+  .object({
+    note: z.string().trim().max(500, 'Note must be at most 500 characters').nullable().optional(),
+  })
+  .strict();
+
+export const joinRequestParamsSchema = z.object({
+  workspaceId: z.string().trim().uuid('The workspace id is not valid'),
+  requestId: z.string().trim().uuid('The join request id is not valid'),
+});
+
+export const joinRequestIdParamsSchema = z.object({
+  requestId: z.string().trim().uuid('The join request id is not valid'),
+});
+
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceSchema>;
 export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceSchema>;
 export type AddMemberInput = z.infer<typeof addMemberSchema>;
@@ -149,3 +210,9 @@ export type CreateInvitationInput = z.infer<typeof createInvitationSchema>;
 export type ListInvitationsQuery = z.infer<typeof listInvitationsQuerySchema>;
 export type AssignableRole = z.infer<typeof assignableRoleSchema>;
 export type TransferOwnershipInput = z.infer<typeof transferOwnershipSchema>;
+export type DiscoverWorkspacesQuery = z.infer<typeof discoverWorkspacesQuerySchema>;
+export type CreateJoinRequestInput = z.infer<typeof createJoinRequestSchema>;
+export type JoinByCodeInput = z.infer<typeof joinByCodeSchema>;
+export type ListJoinRequestsQuery = z.infer<typeof listJoinRequestsQuerySchema>;
+export type ApproveJoinRequestInput = z.infer<typeof approveJoinRequestSchema>;
+export type RejectJoinRequestInput = z.infer<typeof rejectJoinRequestSchema>;

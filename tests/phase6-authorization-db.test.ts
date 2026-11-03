@@ -108,11 +108,11 @@ function runTests(dbUrl: string): void {
     assert.equal(login.status, 200, `login failed for ${email}`);
     const accessToken = (login.body.data as { accessToken: string }).accessToken;
 
-    const meRes = await jsonRequest<{ id: string }>(`${base}/api/v1/auth/me`, {
+    const meRes = await jsonRequest<{ user: { id: string } }>(`${base}/api/v1/auth/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       jar,
     });
-    const id = (meRes.body.data as { id: string }).id;
+    const id = (meRes.body.data as { user: { id: string } }).user.id;
 
     return { id, email, accessToken, jar };
   }
@@ -202,6 +202,7 @@ function runTests(dbUrl: string): void {
     await server.close();
     await disconnectRedis();
     const db = await connectTestDatabase(dbUrl);
+    await db.prisma.workspace.deleteMany({ where: { id: workspaceId } });
     await db.prisma.user.deleteMany({
       where: {
         email: {
@@ -366,6 +367,7 @@ function runTests(dbUrl: string): void {
 
       after(async () => {
         const db = await connectTestDatabase(dbUrl);
+        await db.prisma.workspace.deleteMany({ where: { id: transferWsId } });
         await db.prisma.user.deleteMany({
           where: { email: 'phase6-transfer-member@test.example' },
         });

@@ -18,6 +18,7 @@ export const WorkspaceAuditAction = {
   WorkspaceCreated: 'workspace.created',
   WorkspaceUpdated: 'workspace.updated',
   WorkspaceArchived: 'workspace.archived',
+  WorkspaceRestored: 'workspace.restored',
   WorkspaceDeleted: 'workspace.deleted',
   OwnershipTransferred: 'workspace.ownership_transferred',
   MemberAdded: 'workspace.member_added',
@@ -27,6 +28,15 @@ export const WorkspaceAuditAction = {
   InvitationResent: 'workspace.invitation_resent',
   InvitationRevoked: 'workspace.invitation_revoked',
   InvitationAccepted: 'workspace.invitation_accepted',
+  InvitationDeclined: 'workspace.invitation_declined',
+  JoinRequestCreated: 'workspace.join_request_created',
+  JoinRequestApproved: 'workspace.join_request_approved',
+  JoinRequestRejected: 'workspace.join_request_rejected',
+  JoinRequestWithdrawn: 'workspace.join_request_withdrawn',
+  JoinCodeRotated: 'workspace.join_code_rotated',
+  JoinCodeDisabled: 'workspace.join_code_disabled',
+  MemberSuspended: 'workspace.member_suspended',
+  MemberRestored: 'workspace.member_restored',
   TaskReassigned: 'task.reassigned',
 } as const;
 

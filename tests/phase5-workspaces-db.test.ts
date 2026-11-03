@@ -430,6 +430,61 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.ok(audit, 'The acceptance has to be recorded');
   });
 
+  test('the invited person can decline once without receiving membership', async () => {
+    const ownerEmail = uniqueEmail('decline-owner');
+    const inviteeEmail = uniqueEmail('decline-invitee');
+    const otherEmail = uniqueEmail('decline-other');
+    await createUser('Decline Owner', ownerEmail);
+    const invitee = await createUser('Decline Invitee', inviteeEmail);
+    await createUser('Other Account', otherEmail);
+
+    const ownerToken = await login(ownerEmail);
+    const inviteeToken = await login(inviteeEmail);
+    const otherToken = await login(otherEmail);
+    const workspace = await createWorkspace(ownerToken);
+    sent = [];
+
+    const created = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const token = tokenFromEmail(lastInvitationEmail());
+
+    const wrongAccount = await api(`/invitations/${token}/decline`, {
+      method: 'POST',
+      token: otherToken,
+    });
+    assert.equal(wrongAccount.status, 403, JSON.stringify(wrongAccount.body));
+
+    const declined = await api(`/invitations/${token}/decline`, {
+      method: 'POST',
+      token: inviteeToken,
+    });
+    assert.equal(declined.status, 200, JSON.stringify(declined.body));
+    assert.equal((declined.body.data as { status: string }).status, 'DECLINED');
+    assert.ok((declined.body.data as { declinedAt: string | null }).declinedAt);
+
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: { workspaceId_userId: { workspaceId: workspace.id, userId: invitee.id } },
+    });
+    assert.equal(membership, null);
+
+    const repeated = await api(`/invitations/${token}/decline`, {
+      method: 'POST',
+      token: inviteeToken,
+    });
+    assert.equal(repeated.status, 409, JSON.stringify(repeated.body));
+
+    const reinvited = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail },
+    });
+    assert.equal(reinvited.status, 201, JSON.stringify(reinvited.body));
+  });
+
   test('an invitation can only be used once', async () => {
     const ownerEmail = uniqueEmail('single-owner');
 
@@ -1049,6 +1104,63 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.ok(
       !(list.body.data as Array<{ id: string }>).some((entry) => entry.id === workspace.id),
     );
+  });
+
+  test('only the workspace owner can restore an archived workspace and the change is audited', async () => {
+    const ownerEmail = uniqueEmail('restore-owner');
+    const managerEmail = uniqueEmail('restore-manager');
+    const owner = await createUser('Restore Owner', ownerEmail);
+    const manager = await createUser('Restore Manager', managerEmail);
+    const ownerToken = await login(ownerEmail);
+    const managerToken = await login(managerEmail);
+    const workspace = await createWorkspace(ownerToken);
+
+    await prisma.workspaceMembership.create({
+      data: { workspaceId: workspace.id, userId: manager.id, role: 'PROJECT_MANAGER' },
+    });
+
+    const archived = await api(`/workspaces/${workspace.id}/archive`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(archived.status, 200, JSON.stringify(archived.body));
+
+    const managerRestore = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: managerToken,
+    });
+    assert.equal(managerRestore.status, 403);
+
+    const restored = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+    assert.equal((restored.body.data as { status: string }).status, 'ACTIVE');
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { workspaceId: workspace.id, action: 'workspace.restored' },
+    });
+    assert.equal(audit?.actorId, owner.id);
+
+    const redundantRestore = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(redundantRestore.status, 409);
+    assert.equal(redundantRestore.body.error?.code, 'WORKSPACE_NOT_ARCHIVED');
+
+    const deleted = await api(`/workspaces/${workspace.id}`, {
+      method: 'DELETE',
+      token: ownerToken,
+    });
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+
+    const restoreDeleted = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(restoreDeleted.status, 404);
   });
 
   test('the invitations of a workspace are listed with their state', async () => {

@@ -40,7 +40,7 @@ export interface InvitationService {
   list(input: {
     userId: string;
     workspaceId: string;
-    status: 'PENDING' | 'ACCEPTED' | 'REVOKED' | 'EXPIRED' | 'ALL';
+    status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REVOKED' | 'EXPIRED' | 'ALL';
   }): Promise<InvitationSummary[]>;
   resend(
     input: { userId: string; workspaceId: string; invitationId: string },
@@ -53,6 +53,10 @@ export interface InvitationService {
   }): Promise<InvitationSummary>;
   preview(token: string): Promise<InvitationPreview>;
   accept(input: { userId: string; token: string }, ctx: RequestContext): Promise<InvitationSummary>;
+  decline(
+    input: { userId: string; token: string },
+    ctx: RequestContext,
+  ): Promise<InvitationSummary>;
   listMine(userId: string): Promise<InvitationSummary[]>;
 }
 
@@ -108,6 +112,7 @@ export function createInvitationService(
       invitedBy: { id: invitation.invitedBy.id, name: invitation.invitedBy.name },
       expiresAt: invitation.expiresAt,
       acceptedAt: invitation.acceptedAt,
+      declinedAt: invitation.declinedAt,
       revokedAt: invitation.revokedAt,
       createdAt: invitation.createdAt,
     };
@@ -349,6 +354,10 @@ export function createInvitationService(
         throw new AppError(409, 'INVITATION_REVOKED', 'This invitation was revoked');
       }
 
+      if (invitation.status === 'DECLINED') {
+        throw new AppError(409, 'INVITATION_DECLINED', 'The invitee declined this invitation');
+      }
+
       if (invitation.status === 'EXPIRED' || invitation.expiresAt.getTime() <= Date.now()) {
         await client.invitation.update({
           where: { id: invitation.id },
@@ -485,6 +494,10 @@ export function createInvitationService(
 
       if (!invitation) {
         throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
+      }
+
+      if (invitation.status === 'EXPIRED') {
+        throw new AppError(410, 'INVITATION_EXPIRED', 'This invitation link has expired');
       }
 
       if (invitation.status === 'PENDING' && invitation.expiresAt.getTime() <= Date.now()) {
@@ -667,6 +680,92 @@ export function createInvitationService(
       }
 
       return toSummary(accepted);
+    },
+
+    async decline(input, ctx): Promise<InvitationSummary> {
+      const invitation = await client.invitation.findUnique({
+        where: { tokenHash: hashSecret(input.token) },
+        include: {
+          workspace: { select: { id: true, name: true } },
+          invitedBy: { select: { id: true, name: true } },
+        },
+      });
+
+      if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
+      }
+
+      const user = await client.user.findUnique({
+        where: { id: input.userId },
+        select: { id: true, email: true, deletedAt: true },
+      });
+
+      if (!user || user.deletedAt) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      }
+
+      const boundToOtherAccount = invitation.forUserId !== null && invitation.forUserId !== user.id;
+      const addressDoesNotMatch = invitation.forUserId === null && invitation.email !== user.email;
+      if (boundToOtherAccount || addressDoesNotMatch) {
+        throw new AppError(
+          403,
+          'INVITATION_FOR_OTHER_USER',
+          'This invitation was sent to a different account',
+        );
+      }
+
+      if (invitation.status === 'PENDING' && invitation.expiresAt.getTime() <= Date.now()) {
+        await client.invitation.updateMany({
+          where: { id: invitation.id, status: 'PENDING' },
+          data: { status: 'EXPIRED', pendingKey: null },
+        });
+        throw new AppError(410, 'INVITATION_EXPIRED', 'This invitation link has expired');
+      }
+
+      if (invitation.status !== 'PENDING') {
+        throw new AppError(
+          409,
+          invitation.status === 'DECLINED' ? 'INVITATION_DECLINED' : 'INVITATION_NOT_PENDING',
+          'This invitation can no longer be declined',
+        );
+      }
+
+      const declined = await client.$transaction(async (tx) => {
+        const now = new Date();
+        const updated = await tx.invitation.updateMany({
+          where: { id: invitation.id, status: 'PENDING', expiresAt: { gt: now } },
+          data: { status: 'DECLINED', declinedAt: now, pendingKey: null },
+        });
+
+        if (updated.count === 0) {
+          throw new AppError(
+            409,
+            'INVITATION_NOT_PENDING',
+            'This invitation can no longer be declined',
+          );
+        }
+
+        await recordAuditEvent(tx, {
+          workspaceId: invitation.workspaceId,
+          actorId: user.id,
+          action: WorkspaceAuditAction.InvitationDeclined,
+          targetType: 'Invitation',
+          targetId: invitation.id,
+          metadata: { userId: user.id },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return tx.invitation.findUnique({
+          where: { id: invitation.id },
+          include: summaryInclude,
+        });
+      });
+
+      if (!declined) {
+        throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      }
+      return toSummary(declined);
     },
 
     async listMine(userId: string): Promise<InvitationSummary[]> {

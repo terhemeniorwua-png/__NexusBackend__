@@ -16,11 +16,36 @@ enum UserStatus {
   ACTIVE
   SUSPENDED
   DEACTIVATED
+  PENDING_DELETION
 }
 
 enum WorkspaceStatus {
   ACTIVE
   ARCHIVED
+}
+
+enum WorkspaceType {
+  INDIVIDUAL
+  COMPANY
+  INSTITUTION
+}
+
+enum WorkspaceVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum WorkspaceMembershipStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  EXPIRED
 }
 
 enum WorkspaceRole {
@@ -87,6 +112,7 @@ enum InvitationStatus {
   ACCEPTED
   REVOKED
   EXPIRED
+  DECLINED
 }
 
 enum NotificationType {
@@ -98,7 +124,12 @@ enum NotificationType {
   CHANGES_REQUESTED
   COMMENT_REPLY
   MEMBERSHIP_CHANGED
+  MEMBERSHIP_SUSPENDED
+  MEMBERSHIP_RESTORED
   INVITATION_ACCEPTED
+  JOIN_REQUEST_RECEIVED
+  JOIN_REQUEST_APPROVED
+  JOIN_REQUEST_REJECTED
   MEETING_INVITE
   MEETING_RESCHEDULED
   MEETING_CANCELLED
@@ -133,16 +164,18 @@ enum EmailSuppressionReason {
 // ---------------------------------------------------------------------------
 
 model User {
-  id              String     @id @default(uuid())
-  email           String     @unique
-  passwordHash    String
-  name            String
-  status          UserStatus @default(PENDING_VERIFICATION)
-  emailVerifiedAt DateTime?
-  lastLoginAt     DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @default(now())
-  deletedAt       DateTime?
+  id                  String     @id @default(uuid())
+  email               String     @unique
+  passwordHash        String
+  name                String
+  status              UserStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt     DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @default(now())
+  deletedAt           DateTime?
+  deletionRequestedAt DateTime?
+  scheduledDeletionAt DateTime?
 
   profile              UserProfile?
   sessions             Session[]
@@ -163,9 +196,12 @@ model User {
   ownedProjects        Project[]             @relation("ProjectOwner")
   ledTeams             Team[]                @relation("TeamLead")
   taskAssignments      TaskAssignee[]        @relation("TaskAssigner")
+  joinRequests         JoinRequest[]         @relation("JoinRequestApplicant")
+  reviewedJoinRequests JoinRequest[]         @relation("JoinRequestReviewer")
 
   @@index([status])
   @@index([createdAt])
+  @@index([status, scheduledDeletionAt])
 }
 
 model UserProfile {
@@ -226,36 +262,46 @@ model AuthToken {
 // ---------------------------------------------------------------------------
 
 model Workspace {
-  id          String          @id @default(uuid())
-  name        String
-  slug        String          @unique
-  description String?
-  status      WorkspaceStatus @default(ACTIVE)
-  ownerId     String
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  deletedAt   DateTime?
+  id           String              @id @default(uuid())
+  name         String
+  slug         String              @unique
+  description  String?
+  type         WorkspaceType       @default(COMPANY)
+  isPersonal   Boolean             @default(false)
+  visibility   WorkspaceVisibility @default(PRIVATE)
+  status       WorkspaceStatus     @default(ACTIVE)
+  ownerId      String
+  /// SHA-256 digest of the join code. The plaintext code is only returned
+  /// when an administrator generates or rotates it.
+  joinCodeHash String?             @unique
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  deletedAt    DateTime?
 
-  owner       User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members     WorkspaceMembership[]
-  teams       Team[]
-  projects    Project[]
-  invitations Invitation[]
-  files       FileAttachment[]
-  auditLogs   AuditLog[]
+  owner        User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members      WorkspaceMembership[]
+  teams        Team[]
+  projects     Project[]
+  invitations  Invitation[]
+  joinRequests JoinRequest[]
+  files        FileAttachment[]
+  auditLogs    AuditLog[]
 
   @@index([ownerId])
   @@index([status])
+  @@index([type])
+  @@index([visibility])
 }
 
 model WorkspaceMembership {
-  id          String        @id @default(uuid())
+  id          String                    @id @default(uuid())
   workspaceId String
   userId      String
-  role        WorkspaceRole @default(MEMBER)
-  joinedAt    DateTime      @default(now())
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  role        WorkspaceRole             @default(MEMBER)
+  status      WorkspaceMembershipStatus @default(ACTIVE)
+  joinedAt    DateTime                  @default(now())
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -263,6 +309,7 @@ model WorkspaceMembership {
   @@unique([workspaceId, userId])
   @@index([userId])
   @@index([workspaceId, role])
+  @@index([workspaceId, status])
 }
 
 model Team {
@@ -276,10 +323,11 @@ model Team {
   updatedAt   DateTime   @updatedAt
   deletedAt   DateTime?
 
-  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  lead      User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
-  members   TeamMembership[]
-  projects  Project[]
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead         User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
+  members      TeamMembership[]
+  projects     Project[]
+  joinRequests JoinRequest[]
 
   @@index([workspaceId])
   @@index([leadId])
@@ -479,6 +527,7 @@ model Invitation {
   acceptedAt   DateTime?
   acceptedById String?
   revokedAt    DateTime?
+  declinedAt   DateTime?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 
@@ -499,6 +548,39 @@ model Invitation {
   @@index([status, expiresAt])
   @@index([invitedById])
   @@index([forUserId])
+}
+
+model JoinRequest {
+  id           String            @id @default(uuid())
+  workspaceId  String
+  userId       String
+  status       JoinRequestStatus @default(PENDING)
+  /// The role the applicant will receive if the request is approved.
+  role         WorkspaceRole     @default(MEMBER)
+  teamId       String?
+  message      String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  decisionNote String?
+  expiresAt    DateTime
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  /// Set while the request is pending and cleared when it leaves that state,
+  /// so one applicant cannot hold two live requests for the same workspace
+  /// while a settled request never blocks a new one.
+  pendingKey String? @unique
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user       User      @relation("JoinRequestApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?     @relation("JoinRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  team       Team?     @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([userId, status])
+  @@index([status, expiresAt])
+  @@index([reviewedById])
+  @@index([teamId])
 }
 
 model FileAttachment {

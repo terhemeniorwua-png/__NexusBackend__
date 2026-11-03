@@ -5,6 +5,7 @@ import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { getPrismaClient } from '../src/db/prisma';
 import { hashSecret } from '../src/utils/crypto';
+import { processPendingAccountDeletions } from '../src/modules/auth/account-deletion.service';
 import { connectRedis, disconnectRedis } from '../src/db/redis';
 import {
   resetEmailSender,
@@ -360,7 +361,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const response = await requestAccountDeletion(session);
 
     assert.equal(response.status, 409);
-    assert.equal(response.body.error?.code, 'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED');
+    assert.equal(response.body.error?.code, 'ORGANIZATION_OWNERSHIP_TRANSFER_REQUIRED');
 
     const user = await prisma.user.findUnique({ where: { id: session.userId } });
     const storedSession = await prisma.session.findUnique({ where: { id: session.sessionId } });
@@ -478,6 +479,28 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     assert.equal(stored?.status, 'ACTIVE');
     assert.ok(stored?.emailVerifiedAt);
+    const personalWorkspace = await prisma.workspace.findFirst({
+      where: { ownerId: account.userId, isPersonal: true },
+      include: { members: true },
+    });
+    assert.ok(personalWorkspace);
+    assert.equal(personalWorkspace.type, 'INDIVIDUAL');
+    assert.equal(personalWorkspace.visibility, 'PRIVATE');
+    assert.equal(personalWorkspace.members.length, 1);
+    assert.equal(personalWorkspace.members[0]?.role, 'OWNER');
+
+    const session = await login(account.email, account.password);
+    const archivePersonal = await jsonRequest(
+      `${baseUrl}/api/v1/workspaces/${personalWorkspace.id}/archive`,
+      { method: 'POST', headers: { authorization: `Bearer ${session.accessToken}` } },
+    );
+    assert.equal(archivePersonal.status, 409);
+    assert.equal(archivePersonal.body.error?.code, 'PERSONAL_WORKSPACE_LIFECYCLE_MANAGED');
+    const deletePersonal = await jsonRequest(
+      `${baseUrl}/api/v1/workspaces/${personalWorkspace.id}`,
+      { method: 'DELETE', headers: { authorization: `Bearer ${session.accessToken}` } },
+    );
+    assert.equal(deletePersonal.status, 409);
   });
 
   test('an unknown verification token is rejected', async () => {
@@ -1278,29 +1301,55 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     );
   });
 
-  test('a deleted account cannot be reactivated', async () => {
+  test('a pending deletion requires password recovery and does not restore old sessions', async () => {
     const session = await activate();
 
-    const deleted = await jsonRequest(`${baseUrl}/api/v1/auth/delete`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${session.accessToken}` },
-      body: JSON.stringify({ currentPassword: session.password, confirmation: session.email }),
-    });
+    const deleted = await requestAccountDeletion(session);
 
-    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+    assert.equal(deleted.status, 202, JSON.stringify(deleted.body));
+
+    const storedPending = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    assert.equal(storedPending.status, 'PENDING_DELETION');
+    assert.equal(storedPending.deletedAt, null);
+    assert.ok(storedPending.deletionRequestedAt);
+    assert.ok(storedPending.scheduledDeletionAt);
+    assert.equal(
+      storedPending.scheduledDeletionAt.getTime() - storedPending.deletionRequestedAt.getTime(),
+      30 * 24 * 60 * 60 * 1_000,
+    );
+
+    const loginBlocked = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    assert.equal(loginBlocked.status, 403);
+    assert.equal(loginBlocked.body.error?.code, 'ACCOUNT_PENDING_DELETION');
+
+    const oldSession = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    });
+    assert.equal(oldSession.status, 401);
 
     const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
       method: 'POST',
       body: JSON.stringify({ email: session.email, password: session.password }),
     });
 
-    assert.equal(response.status, 401);
-    assert.equal(response.body.error?.code, 'INVALID_CREDENTIALS');
+    assert.equal(response.status, 200, JSON.stringify(response.body));
 
     const stored = await prisma.user.findUnique({ where: { id: session.userId } });
 
-    assert.equal(stored?.status, 'DEACTIVATED');
-    assert.ok(stored?.deletedAt);
+    assert.equal(stored?.status, 'ACTIVE');
+    assert.equal(stored?.deletionRequestedAt, null);
+    assert.equal(stored?.scheduledDeletionAt, null);
+
+    const oldSessionAgain = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    });
+    assert.equal(oldSessionAgain.status, 401);
+
+    const newLogin = await login(session.email, session.password);
+    assert.notEqual(newLogin.sessionId, session.sessionId);
   });
 
   test('reactivation does not reveal account state to an invalid credential', async () => {
@@ -1483,11 +1532,30 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     const deleted = await requestAccountDeletion(member);
 
-    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+    assert.equal(deleted.status, 202, JSON.stringify(deleted.body));
 
     const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
 
     assert.equal(workspace?.ownerId, owner.userId);
+  });
+
+  test('account deletion is blocked when the personal workspace has collaborators', async () => {
+    const owner = await activate();
+    const collaborator = await activate();
+    const personalWorkspace = await prisma.workspace.findFirstOrThrow({
+      where: { ownerId: owner.userId, isPersonal: true },
+    });
+    await prisma.workspaceMembership.create({
+      data: { workspaceId: personalWorkspace.id, userId: collaborator.userId, role: 'MEMBER' },
+    });
+
+    const response = await requestAccountDeletion(owner);
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error?.code, 'PERSONAL_WORKSPACE_SHARED');
+    assert.equal(
+      (await prisma.user.findUniqueOrThrow({ where: { id: owner.userId } })).status,
+      'ACTIVE',
+    );
   });
 
   test('account deletion succeeds after ownership is transferred to an existing member', async () => {
@@ -1516,7 +1584,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     const deleted = await requestAccountDeletion(owner);
 
-    assert.equal(deleted.status, 204, JSON.stringify(deleted.body));
+    assert.equal(deleted.status, 202, JSON.stringify(deleted.body));
   });
 
   test('a failed ownership transfer leaves deletion blocked and the account usable', async () => {
@@ -1550,7 +1618,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       LANGUAGE plpgsql
       AS $$
       BEGIN
-        IF NEW."revokedReason" = 'ACCOUNT_DELETED' THEN
+        IF NEW."revokedReason" = 'ACCOUNT_PENDING_DELETION' THEN
           RAISE EXCEPTION 'simulated account deletion failure';
         END IF;
         RETURN NEW;
@@ -1618,7 +1686,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       LANGUAGE plpgsql
       AS $$
       BEGIN
-        IF NEW."deletedAt" IS NOT NULL THEN
+        IF NEW."status" = 'PENDING_DELETION' THEN
           RAISE EXCEPTION 'simulated account deletion user update failure';
         END IF;
         RETURN NEW;
@@ -1687,7 +1755,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     assert.deepEqual(
       statuses.sort((a, b) => a - b),
-      [204, 409],
+      [202, 409],
     );
 
     const stored = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
@@ -1695,10 +1763,11 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       where: { id: session.sessionId },
     });
 
-    assert.equal(stored.status, 'DEACTIVATED');
-    assert.ok(stored.deletedAt);
+    assert.equal(stored.status, 'PENDING_DELETION');
+    assert.equal(stored.deletedAt, null);
+    assert.ok(stored.scheduledDeletionAt);
     assert.ok(storedSession.revokedAt);
-    assert.equal(storedSession.revokedReason, 'ACCOUNT_DELETED');
+    assert.equal(storedSession.revokedReason, 'ACCOUNT_PENDING_DELETION');
   });
 
   test('a concurrent session refresh cannot survive committed account deletion', async () => {
@@ -1720,7 +1789,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       refresh = refreshed;
     });
 
-    assert.equal(deletionStatus, 204);
+    assert.equal(deletionStatus, 202);
     assert.ok(refresh);
     assert.ok([200, 401, 403].includes(refresh.status));
 
@@ -1729,10 +1798,10 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       where: { id: session.sessionId },
     });
 
-    assert.equal(user.status, 'DEACTIVATED');
-    assert.ok(user.deletedAt);
+    assert.equal(user.status, 'PENDING_DELETION');
+    assert.equal(user.deletedAt, null);
     assert.ok(storedSession.revokedAt);
-    assert.equal(storedSession.revokedReason, 'ACCOUNT_DELETED');
+    assert.equal(storedSession.revokedReason, 'ACCOUNT_PENDING_DELETION');
 
     if (refresh.status === 200) {
       const accessToken = (refresh.body.data as { accessToken: string }).accessToken;
@@ -1769,9 +1838,12 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       creationStatus = created.status;
     });
 
-    assert.equal(deletionStatus, 204);
+    assert.equal(deletionStatus, 202);
     assert.equal(creationStatus, 403);
-    assert.equal(await prisma.workspace.count({ where: { ownerId: session.userId } }), 0);
+    assert.equal(
+      await prisma.workspace.count({ where: { ownerId: session.userId, isPersonal: false } }),
+      0,
+    );
   });
 
   test('a concurrent deletion prevents ownership transfer to the deleted account', async () => {
@@ -1809,7 +1881,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       transferStatus = transferred.status;
     });
 
-    assert.equal(deletionStatus, 204);
+    assert.equal(deletionStatus, 202);
     assert.equal(transferStatus, 403);
 
     const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
@@ -1817,7 +1889,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(workspace?.ownerId, owner.userId);
   });
 
-  test('deleting the account anonymises it and releases the email address', async () => {
+  test('deletion schedules 30 days of recovery without removing personal data', async () => {
     const session = await activate();
 
     const wrongConfirmation = await jsonRequest(`${baseUrl}/api/v1/auth/delete`, {
@@ -1838,36 +1910,213 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       body: JSON.stringify({ currentPassword: session.password, confirmation: session.email }),
     });
 
-    assert.equal(response.status, 204, JSON.stringify(response.body));
+    assert.equal(response.status, 202, JSON.stringify(response.body));
 
-    const stored = await prisma.user.findUnique({ where: { id: session.userId } });
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    const personalWorkspace = await prisma.workspace.findFirstOrThrow({
+      where: { ownerId: session.userId, isPersonal: true },
+    });
     const storedSession = await prisma.session.findUniqueOrThrow({
       where: { id: session.sessionId },
     });
 
-    assert.equal(stored?.name, 'Deleted user');
-    assert.equal(stored?.email, `deleted+${session.userId}@nexus.invalid`);
-    assert.equal(stored?.status, 'DEACTIVATED');
-    assert.ok(stored?.deletedAt);
+    assert.equal(stored.name, 'Test Person');
+    assert.equal(stored.email, session.email);
+    assert.equal(stored.status, 'PENDING_DELETION');
+    assert.equal(stored.deletedAt, null);
+    assert.ok(stored.deletionRequestedAt);
+    assert.ok(stored.scheduledDeletionAt);
+    assert.equal(personalWorkspace.name, "Test Person's Personal Workspace");
     assert.ok(storedSession.revokedAt);
-    assert.equal(storedSession.revokedReason, 'ACCOUNT_DELETED');
+    assert.equal(storedSession.revokedReason, 'ACCOUNT_PENDING_DELETION');
+
+    const deletionEmail = sender.lastFor(session.email, 'account_deletion_scheduled');
+    assert.ok(deletionEmail);
+    assert.match(deletionEmail.text, /30 days|30-day|scheduled for permanent deletion/i);
 
     const oldSessionAccess = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
       headers: { authorization: `Bearer ${session.accessToken}` },
     });
     assert.equal(oldSessionAccess.status, 401);
 
-    // The address is free again, so a new account can use it.
     const reRegister = await jsonRequest(`${baseUrl}/api/v1/auth/register`, {
       method: 'POST',
       body: JSON.stringify({
         email: session.email,
         name: 'Second Life',
-        password: 'Correct-Horse-9',
+        password: session.password,
       }),
     });
+    assert.equal(reRegister.status, 409);
+    assert.equal(reRegister.body.error?.code, 'EMAIL_ALREADY_REGISTERED');
+  });
 
-    assert.equal(reRegister.status, 201);
+  test('permanent deletion removes personal records and preserves shared content', async () => {
+    const member = await activate();
+    const organizationOwner = await activate();
+    const personalWorkspace = await prisma.workspace.findFirstOrThrow({
+      where: { ownerId: member.userId, isPersonal: true },
+    });
+    const sharedWorkspaceId = await createWorkspaceThroughApi(
+      organizationOwner,
+      'Retained shared organization',
+    );
+    await prisma.workspaceMembership.create({
+      data: { workspaceId: sharedWorkspaceId, userId: member.userId, role: 'MEMBER' },
+    });
+
+    const personalProject = await prisma.project.create({
+      data: {
+        workspaceId: personalWorkspace.id,
+        name: 'Personal project to remove',
+        key: `P${uniqueCounter + 1}`,
+        ownerId: member.userId,
+      },
+    });
+    const personalTask = await prisma.task.create({
+      data: {
+        projectId: personalProject.id,
+        key: 'P-1',
+        title: 'Personal task to remove',
+        creatorId: member.userId,
+      },
+    });
+
+    const sharedProject = await prisma.project.create({
+      data: {
+        workspaceId: sharedWorkspaceId,
+        name: 'Shared project to preserve',
+        key: `S${uniqueCounter + 1}`,
+        ownerId: organizationOwner.userId,
+      },
+    });
+    const sharedTask = await prisma.task.create({
+      data: {
+        projectId: sharedProject.id,
+        key: 'S-1',
+        title: 'Shared task to preserve',
+        creatorId: organizationOwner.userId,
+      },
+    });
+    await prisma.comment.create({
+      data: { taskId: sharedTask.id, authorId: member.userId, body: 'Keep this shared comment' },
+    });
+    await prisma.fileAttachment.create({
+      data: {
+        workspaceId: sharedWorkspaceId,
+        projectId: sharedProject.id,
+        taskId: sharedTask.id,
+        uploadedById: member.userId,
+        fileName: 'shared.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 16,
+        storageKey: `shared/${member.userId}/${uniqueCounter + 2}`,
+      },
+    });
+    await prisma.taskAssignee.create({
+      data: { taskId: sharedTask.id, userId: member.userId, assignedBy: organizationOwner.userId },
+    });
+
+    const request = await requestAccountDeletion(member);
+    assert.equal(request.status, 202, JSON.stringify(request.body));
+
+    const dueAt = new Date(Date.now() - 1);
+    await prisma.user.update({
+      where: { id: member.userId },
+      data: { scheduledDeletionAt: dueAt },
+    });
+
+    const processed = await processPendingAccountDeletions(prisma, new Date(), 4);
+    assert.equal(processed.deleted, 1);
+    assert.deepEqual(processed.blocked, []);
+
+    const deletedUser = await prisma.user.findUniqueOrThrow({ where: { id: member.userId } });
+    assert.equal(deletedUser.name, 'Deleted user');
+    assert.equal(deletedUser.email, `deleted+${member.userId}@nexus.invalid`);
+    assert.ok(deletedUser.deletedAt);
+    assert.equal(deletedUser.passwordHash === member.password, false);
+    assert.equal(await prisma.workspace.findUnique({ where: { id: personalWorkspace.id } }), null);
+    assert.equal(await prisma.project.findUnique({ where: { id: personalProject.id } }), null);
+    assert.equal(await prisma.task.findUnique({ where: { id: personalTask.id } }), null);
+
+    const retainedWorkspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: sharedWorkspaceId },
+    });
+    const retainedComment = await prisma.comment.findFirstOrThrow({
+      where: { taskId: sharedTask.id },
+      include: { author: true },
+    });
+    assert.equal(retainedWorkspace.ownerId, organizationOwner.userId);
+    assert.equal(retainedComment.body, 'Keep this shared comment');
+    assert.equal(retainedComment.author.name, 'Deleted user');
+    assert.equal(await prisma.taskAssignee.count({ where: { taskId: sharedTask.id } }), 0);
+    assert.equal(
+      await prisma.fileAttachment.count({ where: { workspaceId: sharedWorkspaceId } }),
+      1,
+    );
+
+    const recoveryAfterPurge = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify({ email: member.email, password: member.password }),
+    });
+    assert.equal(recoveryAfterPurge.status, 401);
+    assert.equal(recoveryAfterPurge.body.error?.code, 'INVALID_CREDENTIALS');
+
+    const retry = await processPendingAccountDeletions(prisma, new Date(), 4);
+    assert.equal(retry.deleted, 0);
+  });
+
+  test('permanent deletion is held when personal storage assets exist', async () => {
+    const session = await activate();
+    const personalWorkspace = await prisma.workspace.findFirstOrThrow({
+      where: { ownerId: session.userId, isPersonal: true },
+    });
+    await prisma.fileAttachment.create({
+      data: {
+        workspaceId: personalWorkspace.id,
+        uploadedById: session.userId,
+        fileName: 'private.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 10,
+        storageKey: `personal/${session.userId}/${uniqueCounter + 1}`,
+      },
+    });
+    const request = await requestAccountDeletion(session);
+    assert.equal(request.status, 202);
+    await prisma.user.update({
+      where: { id: session.userId },
+      data: { scheduledDeletionAt: new Date(Date.now() - 1) },
+    });
+
+    const result = await processPendingAccountDeletions(prisma, new Date(), 4);
+    assert.equal(result.deleted, 0);
+    assert.deepEqual(result.blocked, [{ userId: session.userId, reason: 'PERSONAL_FILES' }]);
+    assert.ok(await prisma.workspace.findUnique({ where: { id: personalWorkspace.id } }));
+    assert.equal(
+      await prisma.fileAttachment.count({ where: { workspaceId: personalWorkspace.id } }),
+      1,
+    );
+  });
+
+  test('deletion is blocked when the user is the final active organization administrator', async () => {
+    const owner = await activate();
+    const administrator = await activate();
+    const workspaceId = await createWorkspaceThroughApi(owner, 'Last administrator guard');
+    await prisma.workspaceMembership.create({
+      data: { workspaceId, userId: administrator.userId, role: 'PROJECT_MANAGER' },
+    });
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { status: 'DEACTIVATED' },
+    });
+
+    const response = await requestAccountDeletion(administrator);
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error?.code, 'LAST_ORGANIZATION_ADMIN');
+    assert.equal(
+      (await prisma.user.findUniqueOrThrow({ where: { id: administrator.userId } })).status,
+      'ACTIVE',
+    );
   });
 
   test('sign-in attempts are rate limited', async () => {

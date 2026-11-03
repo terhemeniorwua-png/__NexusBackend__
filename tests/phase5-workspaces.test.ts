@@ -15,9 +15,12 @@ import {
 import { slugifyWorkspaceName } from '../src/modules/workspaces/workspace.service';
 import {
   addMemberSchema,
+  approveJoinRequestSchema,
   assignableRoleSchema,
   createInvitationSchema,
+  createJoinRequestSchema,
   createWorkspaceSchema,
+  discoverWorkspacesQuerySchema,
   updateWorkspaceSchema,
 } from '../src/modules/workspaces/workspace.schemas';
 import { AppError } from '../src/utils/errors';
@@ -148,6 +151,48 @@ describe('Phase 5 workspace rules', () => {
     const parsed = createInvitationSchema.parse({ email: '  Person@Example.COM ' });
 
     assert.equal(parsed.email, 'person@example.com');
+  });
+
+  test('a workspace records its type and starts private', () => {
+    const company = createWorkspaceSchema.parse({ name: 'Acme' });
+    assert.equal(company.type, 'COMPANY');
+    assert.equal(company.visibility, 'PRIVATE');
+
+    const institution = createWorkspaceSchema.parse({
+      name: 'State University',
+      type: 'INSTITUTION',
+      visibility: 'PUBLIC',
+    });
+    assert.equal(institution.type, 'INSTITUTION');
+    assert.equal(institution.visibility, 'PUBLIC');
+
+    assert.equal(
+      createWorkspaceSchema.safeParse({ name: 'Acme', type: 'GOVERNMENT' }).success,
+      false,
+    );
+    assert.equal(
+      createWorkspaceSchema.safeParse({ name: 'Acme', visibility: 'HIDDEN' }).success,
+      false,
+    );
+  });
+
+  test('the workspace type cannot be changed through an update', () => {
+    assert.equal(updateWorkspaceSchema.safeParse({ type: 'INSTITUTION' }).success, false);
+    assert.equal(updateWorkspaceSchema.safeParse({ visibility: 'PUBLIC' }).success, true);
+  });
+
+  test('join discovery is paginated and a join request cannot choose a role', () => {
+    assert.equal(discoverWorkspacesQuerySchema.parse({}).limit, 20);
+    assert.equal(discoverWorkspacesQuerySchema.safeParse({ limit: '51' }).success, false);
+    assert.equal(
+      createJoinRequestSchema.safeParse({ message: 'Hello', role: 'PROJECT_MANAGER' }).success,
+      false,
+    );
+  });
+
+  test('only assignable roles may be granted on approval', () => {
+    assert.equal(approveJoinRequestSchema.safeParse({ role: 'OWNER' }).success, false);
+    assert.equal(approveJoinRequestSchema.safeParse({ role: 'MEMBER' }).success, true);
   });
 });
 

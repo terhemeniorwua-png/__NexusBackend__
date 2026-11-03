@@ -121,6 +121,15 @@ const envSchema = z
       .trim()
       .startsWith('/')
       .default('/workspaces/invitations/accept'),
+    // Join requests are reviewed by a human, so they live longer than an
+    // invitation. The product rule is seven days.
+    WORKSPACE_JOIN_REQUEST_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(2_592_000)
+      .default(604_800),
+    WORKSPACE_JOIN_LINK_PATH: z.string().trim().startsWith('/').default('/workspaces/join'),
     TASK_ASSIGNMENT_LINK_PATH: z
       .string()
       .trim()
@@ -349,6 +358,8 @@ export interface AppConfig {
   rateLimitNamespace: string;
   workspaceInvitationTtlSeconds: number;
   workspaceInvitationLinkPath: string;
+  workspaceJoinRequestTtlSeconds: number;
+  workspaceJoinLinkPath: string;
   taskAssignmentLinkPath: string;
   commentMentionLinkPath: string;
   meetingInvitationLinkPath: string;
@@ -465,6 +476,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimitNamespace: values.RATE_LIMIT_NAMESPACE,
     workspaceInvitationTtlSeconds: values.WORKSPACE_INVITATION_TTL_SECONDS,
     workspaceInvitationLinkPath: values.WORKSPACE_INVITATION_LINK_PATH,
+    workspaceJoinRequestTtlSeconds: values.WORKSPACE_JOIN_REQUEST_TTL_SECONDS,
+    workspaceJoinLinkPath: values.WORKSPACE_JOIN_LINK_PATH,
     taskAssignmentLinkPath: values.TASK_ASSIGNMENT_LINK_PATH,
     commentMentionLinkPath: values.COMMENT_MENTION_LINK_PATH,
     meetingInvitationLinkPath: values.MEETING_INVITATION_LINK_PATH,
