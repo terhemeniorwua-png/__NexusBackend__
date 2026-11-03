@@ -88,6 +88,7 @@ test('parseEnv exposes the authentication settings with their defaults', () => {
   assert.equal(config.authVerificationLinkPath, '/verify-email');
   assert.equal(config.meetingInvitationLinkPath, '/meetings/:meetingId');
   assert.equal(config.teamInvitationLinkPath, '/teams/invitations/accept');
+  assert.equal(config.projectInvitationLinkPath, '/projects/invitations/accept');
 });
 
 test('parseEnv forces secure cookies in production', () => {

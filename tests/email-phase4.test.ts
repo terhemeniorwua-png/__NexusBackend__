@@ -9,8 +9,10 @@ import {
   buildMentionEmail,
   buildPasswordChangedEmail,
   buildPasswordResetEmail,
+  buildProjectInvitationEmail,
   buildSecurityNotificationEmail,
   buildTaskAssignmentEmail,
+  buildTeamInvitationEmail,
   buildVerificationEmail,
   buildWorkspaceInvitationEmail,
   createLoggingEmailSender,
@@ -169,6 +171,44 @@ test('the collaboration templates cover invitations, assignments, mentions and m
   assert.equal(invitation.template, 'workspace_invitation');
   assert.match(invitation.text, /token=invite123/);
   assert.match(invitation.text, /Analytical Engines/);
+
+  const team = buildTeamInvitationEmail({
+    to: 'grace@example.com',
+    name: 'Grace Hopper',
+    brand,
+    inviterName: 'Ada Lovelace',
+    workspaceName: 'Analytical Engines',
+    teamName: 'Runtime',
+    acceptUrl: 'http://localhost:3000/teams/invitations/accept?token=team123',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
+  assert.equal(team.template, 'team_invitation');
+  assert.match(team.text, /invited you to join the team "Runtime"/);
+  assert.match(team.text, /token=team123/);
+
+  const project = buildProjectInvitationEmail({
+    to: 'grace@example.com',
+    name: 'Grace Hopper',
+    brand,
+    inviterName: 'Ada Lovelace',
+    projectName: 'Compiler Runtime',
+    workspaceName: 'Analytical Engines',
+    acceptUrl: 'http://localhost:3000/projects/invitations/accept?token=project123',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
+  assert.equal(project.template, 'project_invitation');
+  assert.match(project.subject, /Compiler Runtime/);
+  assert.match(project.text, /the project "Compiler Runtime"/);
+  assert.match(project.text, /the Analytical Engines workspace/);
+  assert.match(project.text, /token=project123/);
+  assert.match(project.text, /This invitation expires in/);
+  assert.deepEqual(project.metadata, {
+    workspaceName: 'Analytical Engines',
+    projectName: 'Compiler Runtime',
+    role: null,
+  });
 
   const task = buildTaskAssignmentEmail({
     to: 'grace@example.com',

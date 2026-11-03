@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 7 |
-| **In progress** `[/]` | 0 |
+| **Completed** `[x]` | 6 |
+| **In progress** `[/]` | 1 |
 | **Not started** `[ ]` | 17 |
-| **Overall progress** | 29% |
+| **Overall progress** | 25% |
 
 _Update this table whenever a phase status changes._
 
@@ -530,6 +530,35 @@ The repository still has no meeting schema, meeting routes, meeting participant 
 
 ---
 
+#### Phase 4.5 — Project invitation email integration and final email audit `[/]`
+
+**Objective:** Connect the existing project-invitation template to the authoritative project invitation workflow, then complete the Phase 4 email subsystem audit.
+
+**Deliverables:**
+- Post-commit project invitation email integration using a persisted `PROJECT` invitation, its project and a digest-verified single-use token
+- Project name, inviter, workspace context, expiration and a configurable acceptance link
+- Stable idempotency, existing suppression enforcement and non-fatal delivery failures
+- A final audit of delivery, retries, terminal failures, deduplication, logging privacy, all five collaboration integrations, and webhook verification/idempotency/suppression/bounce/complaint handling
+- Tests for delivery, duplicates, resend, expiration, wrong type, missing or archived project, invalid recipient, inactive inviter, token mismatch, suppression and failure isolation
+- Documentation of the remaining runtime-caller dependency
+
+**Dependencies:** Phases 4.1–4.4 and Phase 8 projects.
+
+**Verification criteria:**
+- Project mail includes the project name, inviter, workspace context, expiration and the configured acceptance link
+- Only a pending, unexpired `PROJECT` invitation for a live project in an active workspace is emailed
+- Invitation tokens never appear in logs, outbox metadata or idempotency keys
+- Repeated processing does not enqueue duplicate messages
+- Sending never creates, accepts, revokes or expires an invitation
+- Existing delivery, retry, privacy, webhook, suppression, bounce and complaint tests pass
+- Typecheck, lint, format and build pass
+
+**Blockers / Notes:** Implemented on 2026-11-03. `notifyProjectInvitation` in `src/services/collaboration-email-notifier.ts` loads a persisted `Invitation` of type `PROJECT`, requires a pending, unexpired invitation in an active workspace with an active inviter, resolves the live (non-archived) project by `projectId` and `workspaceId`, verifies `hashSecret(token)` against the stored `tokenHash`, and builds the acceptance link from `EMAIL_APP_URL` plus the new `PROJECT_INVITATION_LINK_PATH`. The template now renders the project name, workspace name, inviter, expiry and role when supplied. The raw token is used only for the link and its digest: it is never logged, stored in outbox metadata or embedded in the idempotency key. Idempotency uses the invitation and token digest, so re-processing one token collapses into one outbox row while a resend with a new token creates one new mail. A lookup, status, project, token or delivery failure returns a result without modifying the invitation, so acceptance validation, expiration and single-use semantics stay in the owning workflow. The notifier never creates, revokes, expires or accepts an invitation.
+
+The repository still has no project invitation creation/acceptance workflow. The Phase 8 project service adds an existing workspace member and sends an in-app notification; it does not issue project invitation tokens, and `Invitation.projectId` has no Prisma relation. The notifier is therefore the tested integration boundary that the Phase 8 workflow must call after committing an invitation, and Phase 4.5 remains in progress until that caller and an end-to-end acceptance path exist. The final audit confirmed the retry bound, terminal `FAILED` state, deduplication, log redaction, webhook verification/idempotency, suppression and bounce/complaint handling. Verification on 2026-11-03: the Phase 4 delivery suite passes 20/20, the collaboration suite 17/17 (including the project invitation cases), task assignment 7/7 and the focused unit suites 48/48; the database-enabled full suite (Phases 3, 4 and 5) passes 284 of 286 tests with 2 skipped and 0 failures; typecheck, lint, format check and build pass. All five collaboration handlers exist, but only the notifier boundaries are exercised; task assignment, mention, meeting, team and project workflows are still absent. Notification preferences are not modelled; the existing address suppression list is the only email preference control.
+
+---
+
 #### Phase 4.6 — Email integration, security, and regression verification `[/]`
 
 **Objective:** Verify the Phase 4 email delivery and security protections, connect all collaboration templates to real workflows, and keep the phase open while required workflows are missing.
@@ -549,7 +578,7 @@ The repository still has no meeting schema, meeting routes, meeting participant 
 - All five collaboration templates have callers from their authoritative application workflows
 - Typecheck, lint, build, and relevant unit and database tests pass
 
-**Blockers / Notes:** Partially verified on 2026-11-01. The retry, privacy, webhook, suppression, bounce and complaint paths pass their existing Phase 4 tests. The audit fixed request/error log exposure of invitation and webhook URL tokens by redacting those paths and sanitized error details; an obsolete `console.log(req.url)` middleware registration was removed from `src/app.ts`. Focused tests pass 27/27; the Phase 4 PostgreSQL/SMTP suite passes 20/20; task-assignment outbox integration passes 7/7; workspace invitation HTTP/database integration passes 19/19; the full suite passes 108 with 0 failures and 1 skipped suite; typecheck, lint, build and format check pass. However, none of the five collaboration email handlers has a production workflow caller: the task-assignment notifier is only exercised by tests and the Phase 9 task workflow is absent; mention and meeting handlers are only exercised by tests and their Phase 14 / Phase 17 workflows are absent; the team/project template builders have no callers and their Phase 7 / Phase 8 invitation workflows are absent. Workspace invitations continue to use only the workspace template. Phase 4 and Phase 4.6 remain in progress; do not mark them complete until the five real workflow integrations exist and are verified. Notification preference records are not implemented; existing email suppression is honored.
+**Blockers / Notes:** Partially verified on 2026-11-01. The retry, privacy, webhook, suppression, bounce and complaint paths pass their existing Phase 4 tests. The audit fixed request/error log exposure of invitation and webhook URL tokens by redacting those paths and sanitized error details; an obsolete `console.log(req.url)` middleware registration was removed from `src/app.ts`. Focused tests pass 27/27; the Phase 4 PostgreSQL/SMTP suite passes 20/20; task-assignment outbox integration passes 7/7; workspace invitation HTTP/database integration passes 19/19; the full suite passes 108 with 0 failures and 1 skipped suite; typecheck, lint, build and format check pass. However, none of the five collaboration email handlers has a production workflow caller: the task-assignment notifier is only exercised by tests and the Phase 9 task workflow is absent; mention and meeting handlers are only exercised by tests and their Phase 14 / Phase 17 workflows are absent; the team and project invitation handlers are only exercised by tests and their Phase 7 / Phase 8 invitation workflows are absent. Workspace invitations continue to use only the workspace template. Phase 4 and Phase 4.6 remain in progress; do not mark them complete until the five real workflow integrations exist and are verified. Notification preference records are not implemented; existing email suppression is honored. The 2026-11-03 Phase 4.5 audit re-ran the delivery, retry, privacy, webhook, suppression and bounce/complaint suites and added the project invitation handler and its unit and PostgreSQL/outbox coverage; the audit found no regression in the webhook implementation, which was left unchanged.
 
 ---
 
@@ -1289,12 +1318,12 @@ _No issues recorded._
 | 4.2 — Recipient email privacy in logs | 2026-11-01 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. New unit and PostgreSQL integration tests pass, the Phase 4 database suite passed three consecutive runs, the full Phase 2–5 database-enabled suite passes 194/194, and build, typecheck, lint and format check pass. |
 | 4.3 — Task assignment email integration | 2026-11-01 | Partial. The reusable task-assignment notifier and 7 PostgreSQL/outbox integration tests pass, including reassignment, duplicate events, suppression, ineligible recipients and delivery failure isolation. No runtime caller exists because the Phase 9 task workflow is not implemented, so the phase remains in progress. |
 | 4.4 — Mention, meeting and team-invitation email integration | 2026-11-03 | Partial. Added post-commit notifier boundaries and configurable application links for the mention, meeting-invitation and team-invitation templates. Team invitations use a persisted `TEAM` invitation, a digest-verified single-use token and a configured acceptance link; the token is never logged or stored in metadata or idempotency keys. The 10-test PostgreSQL/outbox suite covers team delivery, duplicates, resend, expiration, wrong type, missing team, invalid recipient, inactive inviter, token mismatch, suppression and failure isolation, plus meeting context, duplicate, suppression and failure paths. Unit tests cover template context, acceptance links and key stability. No comment mention, meeting or team invitation workflow exists to supply authoritative runtime callers, so the phase remains in progress pending Phases 7, 14 and 17. |
-| 4.5 — Team and project invitation email integration | 2026-11-01 | Deferred / not started. The current invitation workflow is workspace-only. Team and project invitation creation and acceptance depend on Phases 7 and 8; optional schema fields do not provide those workflows. Phase 4.6 must track these outstanding integrations or their dependencies when that phase is defined. |
-| 4.6 — Email integration, security, and regression verification | 2026-11-01 | Partial. Retry, recipient privacy, token-path logging, webhook verification/idempotency, suppression and bounce/complaint checks pass. The full suite is 108 passed, 1 skipped; dedicated Phase 4, task assignment, and workspace-invitation database suites pass. All five collaboration templates still lack production workflow callers, so Phase 4 and 4.6 remain in progress. |
+| 4.5 — Project invitation email integration and final email audit | 2026-11-03 | Partial. Added `notifyProjectInvitation` and the project acceptance-link configuration. Project mail loads a persisted `PROJECT` invitation, requires a live project in an active workspace with an active inviter, verifies the token digest, includes the project and workspace context, and uses a stable invitation-plus-digest idempotency key. Unit tests cover template context, link encoding, bound recipients, invalid states and failure isolation; the PostgreSQL/outbox suite covers delivery, duplicates, resend, expiration, wrong type, archived or missing project, invalid recipient, inactive inviter, token mismatch and suppression. The final audit re-ran the delivery, retry, privacy, webhook, suppression and bounce/complaint suites. No project invitation creation/acceptance workflow exists yet, so the phase remains in progress pending Phase 8. |
+| 4.6 — Email integration, security, and regression verification | 2026-11-03 | Partial. Retry, recipient privacy, token-path logging, webhook verification/idempotency, suppression and bounce/complaint checks pass. All five collaboration handlers now exist, but only their notifier boundaries are tested; no production workflow caller exists for task assignment, mentions, meetings, team invitations or project invitations. Phase 4 and 4.6 remain in progress. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 | 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |
 
 ---
 
-_Last updated: 2026-11-03. Phases 1 to 7 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3 and 4.4 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging, team and meeting workflows. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-03. Phases 1 to 7 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3, 4.4, 4.5 and 4.6 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging, meeting, team and project workflows. The document also describes the planned state of the later phases._

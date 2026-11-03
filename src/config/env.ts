@@ -153,6 +153,11 @@ const envSchema = z
       .trim()
       .startsWith('/')
       .default('/teams/invitations/accept'),
+    PROJECT_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .default('/projects/invitations/accept'),
 
     // Prefix for Redis keys. Environments that share a Redis instance must use
     // different namespaces so their rate-limit counters stay separate.
@@ -347,6 +352,7 @@ export interface AppConfig {
   commentMentionLinkPath: string;
   meetingInvitationLinkPath: string;
   teamInvitationLinkPath: string;
+  projectInvitationLinkPath: string;
   emailProvider: 'smtp' | 'console' | 'disabled';
   emailSmtpHost: string;
   emailSmtpPort: number;
@@ -462,6 +468,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     commentMentionLinkPath: values.COMMENT_MENTION_LINK_PATH,
     meetingInvitationLinkPath: values.MEETING_INVITATION_LINK_PATH,
     teamInvitationLinkPath: values.TEAM_INVITATION_LINK_PATH,
+    projectInvitationLinkPath: values.PROJECT_INVITATION_LINK_PATH,
     emailProvider: values.EMAIL_PROVIDER,
     emailSmtpHost: values.EMAIL_SMTP_HOST,
     emailSmtpPort: values.EMAIL_SMTP_PORT,

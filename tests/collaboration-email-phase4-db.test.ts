@@ -4,8 +4,10 @@ import type { InvitationType, PrismaClient, UserStatus } from '@prisma/client';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { createEmailDeliveryService, type EmailDeliveryService } from '../src/services/email';
 import {
+  buildProjectInvitationUrl,
   buildTeamInvitationUrl,
   createCollaborationEmailNotifier,
+  projectInvitationEmailIdempotencyKey,
   teamInvitationEmailIdempotencyKey,
   type CollaborationEmailNotifier,
 } from '../src/services/collaboration-email-notifier';
@@ -15,17 +17,18 @@ import { Logger } from '../src/utils/logger';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 
 /**
- * Phase 4.4 meeting and team invitation email integration tests.
+ * Phase 4.4 / 4.5 meeting, team and project invitation email integration tests.
  *
  * The real PostgreSQL schema and the real transactional outbox are used. A
  * fake transport only satisfies the delivery service contract: the tests never
  * contact a provider because no worker claims the queued rows.
  *
  * There is no meeting table in the schema and no team invitation creation or
- * acceptance workflow. The team invitation rows below are persisted directly
- * to exercise the notifier boundary that a future team invitation workflow
- * will call after it commits. The notifier never creates or accepts an
- * invitation, so the rows are unchanged by a successful or failed send.
+ * acceptance workflow. The team and project invitation rows below are
+ * persisted directly to exercise the notifier boundary that a future team or
+ * project invitation workflow will call after it commits. The notifier never
+ * creates or accepts an invitation, so the rows are unchanged by a successful
+ * or failed send.
  */
 
 let databaseUrl: string | null = null;
@@ -75,6 +78,7 @@ describe(
     let delivery: EmailDeliveryService;
     let notifier: CollaborationEmailNotifier;
     const workspaceIds: string[] = [];
+    const projectIds: string[] = [];
     const teamIds: string[] = [];
     const invitationIds: string[] = [];
     const userIds: string[] = [];
@@ -170,6 +174,103 @@ describe(
       };
     }
 
+    interface ProjectFixture {
+      workspaceId: string;
+      workspaceName: string;
+      projectId: string;
+      projectName: string;
+      inviterId: string;
+      invitationId: string;
+      inviteeEmail: string;
+      token: string;
+      tokenHash: string;
+      expiresAt: Date;
+    }
+
+    async function createProjectFixture(
+      options: {
+        expiresAt?: Date;
+        type?: InvitationType;
+        inviterStatus?: UserStatus;
+        email?: string;
+        projectStatus?: 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'ARCHIVED';
+      } = {},
+    ): Promise<ProjectFixture> {
+      const now = new Date();
+      const inviterEmail = uniqueEmail('project-inviter');
+      const inviteeEmail = options.email ?? uniqueEmail('project-invitee');
+
+      emailAddresses.push(inviterEmail, inviteeEmail);
+
+      const inviter = await prisma.user.create({
+        data: {
+          email: inviterEmail,
+          passwordHash: 'not-used',
+          name: 'Ada Lovelace',
+          status: options.inviterStatus ?? 'ACTIVE',
+          emailVerifiedAt: now,
+        },
+      });
+      userIds.push(inviter.id);
+
+      const workspaceName = uniqueValue('Analytical Engines');
+      const workspace = await prisma.workspace.create({
+        data: {
+          name: workspaceName,
+          slug: uniqueValue('engines'),
+          ownerId: inviter.id,
+        },
+      });
+      workspaceIds.push(workspace.id);
+
+      await prisma.workspaceMembership.create({
+        data: { workspaceId: workspace.id, userId: inviter.id, role: 'OWNER' },
+      });
+
+      const projectName = uniqueValue('Compiler Runtime');
+      const project = await prisma.project.create({
+        data: {
+          workspaceId: workspace.id,
+          name: projectName,
+          key: uniqueValue('CR'),
+          ownerId: inviter.id,
+          status: options.projectStatus ?? 'ACTIVE',
+        },
+      });
+      projectIds.push(project.id);
+
+      const token = generateSecureToken(24);
+      const tokenHash = hashSecret(token);
+      const expiresAt = options.expiresAt ?? new Date(Date.now() + 86_400_000);
+
+      const invitation = await prisma.invitation.create({
+        data: {
+          workspaceId: workspace.id,
+          projectId: project.id,
+          email: inviteeEmail,
+          type: options.type ?? 'PROJECT',
+          status: 'PENDING',
+          tokenHash,
+          invitedById: inviter.id,
+          expiresAt,
+        },
+      });
+      invitationIds.push(invitation.id);
+
+      return {
+        workspaceId: workspace.id,
+        workspaceName,
+        projectId: project.id,
+        projectName,
+        inviterId: inviter.id,
+        invitationId: invitation.id,
+        inviteeEmail,
+        token,
+        tokenHash,
+        expiresAt,
+      };
+    }
+
     before(async () => {
       const database = await connectTestDatabase(databaseUrl as string);
 
@@ -218,6 +319,9 @@ describe(
         }
         if (teamIds.length > 0) {
           await prisma.team.deleteMany({ where: { id: { in: teamIds } } });
+        }
+        if (projectIds.length > 0) {
+          await prisma.project.deleteMany({ where: { id: { in: projectIds } } });
         }
         if (workspaceIds.length > 0) {
           await prisma.workspace.deleteMany({ where: { id: { in: workspaceIds } } });
@@ -639,6 +743,313 @@ describe(
       assert.equal(result.status, 'failed');
       assert.equal(result.accepted, false);
       assert.equal(await prisma.emailDelivery.count({ where: { toAddress: inviteeEmail } }), 0);
+    });
+
+    test('queues the project invitation template with project, inviter, workspace, link and expiry', async () => {
+      const fixture = await createProjectFixture();
+
+      const result = await notifier.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: fixture.token,
+      });
+
+      assert.equal(result.status, 'queued');
+      assert.equal(result.accepted, true);
+      assert.ok(result.deliveryId);
+
+      const row = await prisma.emailDelivery.findUnique({
+        where: { id: result.deliveryId },
+      });
+
+      assert.ok(row);
+      assert.equal(row.toAddress, fixture.inviteeEmail);
+      assert.equal(row.template, 'project_invitation');
+      assert.match(row.subject, /Ada Lovelace/);
+      assert.match(
+        row.subject,
+        new RegExp(fixture.projectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      );
+      assert.match(
+        row.textBody,
+        new RegExp(`the project "${fixture.projectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
+      );
+      assert.match(
+        row.textBody,
+        new RegExp(fixture.workspaceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      );
+      assert.match(row.textBody, /This invitation expires in/);
+      assert.ok(
+        row.textBody.includes(
+          buildProjectInvitationUrl(config, fixture.token).replace(/&/g, '&amp;'),
+        ) || row.textBody.includes(buildProjectInvitationUrl(config, fixture.token)),
+      );
+      assert.equal(
+        row.idempotencyKey,
+        projectInvitationEmailIdempotencyKey(fixture.invitationId, fixture.tokenHash),
+      );
+      assert.doesNotMatch(row.idempotencyKey, new RegExp(fixture.token));
+
+      const metadata = row.metadata as Record<string, unknown>;
+
+      assert.equal(metadata.invitationId, fixture.invitationId);
+      assert.equal(metadata.projectId, fixture.projectId);
+      assert.equal(metadata.projectName, fixture.projectName);
+      assert.equal(metadata.workspaceId, fixture.workspaceId);
+      assert.equal(metadata.workspaceName, fixture.workspaceName);
+      assert.doesNotMatch(JSON.stringify(metadata), new RegExp(fixture.token));
+
+      // Sending never changes the persisted invitation, so acceptance keeps its
+      // own validation, expiration and single-use rules.
+      const persisted = await prisma.invitation.findUnique({
+        where: { id: fixture.invitationId },
+      });
+
+      assert.ok(persisted);
+      assert.equal(persisted.status, 'PENDING');
+      assert.equal(persisted.tokenHash, fixture.tokenHash);
+      assert.equal(persisted.expiresAt.getTime(), fixture.expiresAt.getTime());
+    });
+
+    test('re-processing the same project invitation and token creates one delivery', async () => {
+      const fixture = await createProjectFixture();
+
+      const first = await notifier.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: fixture.token,
+      });
+      const duplicate = await notifier.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: fixture.token,
+      });
+
+      assert.equal(first.status, 'queued');
+      assert.equal(duplicate.status, 'queued');
+      assert.equal(duplicate.deliveryId, first.deliveryId);
+      assert.equal(
+        await prisma.emailDelivery.count({ where: { toAddress: fixture.inviteeEmail } }),
+        1,
+      );
+    });
+
+    test('a project invitation resend with a new token creates exactly one new delivery', async () => {
+      const fixture = await createProjectFixture();
+
+      const first = await notifier.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: fixture.token,
+      });
+      const nextToken = generateSecureToken(24);
+      const nextTokenHash = hashSecret(nextToken);
+
+      await prisma.invitation.update({
+        where: { id: fixture.invitationId },
+        data: { tokenHash: nextTokenHash },
+      });
+
+      const resent = await notifier.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: nextToken,
+      });
+
+      assert.equal(first.status, 'queued');
+      assert.equal(resent.status, 'queued');
+      assert.notEqual(resent.deliveryId, first.deliveryId);
+      assert.equal(
+        await prisma.emailDelivery.count({ where: { toAddress: fixture.inviteeEmail } }),
+        2,
+      );
+    });
+
+    test('expired, accepted, wrong-type, archived or missing-project invitations are not emailed', async () => {
+      const expired = await createProjectFixture({ expiresAt: new Date(Date.now() - 60_000) });
+      const expiredResult = await notifier.notifyProjectInvitation({
+        invitationId: expired.invitationId,
+        token: expired.token,
+      });
+
+      assert.equal(expiredResult.status, 'ineligible');
+
+      const expiredRow = await prisma.invitation.findUnique({
+        where: { id: expired.invitationId },
+      });
+      assert.ok(expiredRow);
+      assert.equal(expiredRow.status, 'PENDING');
+
+      const accepted = await createProjectFixture();
+      await prisma.invitation.update({
+        where: { id: accepted.invitationId },
+        data: { status: 'ACCEPTED', acceptedAt: new Date() },
+      });
+      assert.equal(
+        (
+          await notifier.notifyProjectInvitation({
+            invitationId: accepted.invitationId,
+            token: accepted.token,
+          })
+        ).status,
+        'ineligible',
+      );
+
+      const wrongType = await createProjectFixture({ type: 'TEAM' });
+      assert.equal(
+        (
+          await notifier.notifyProjectInvitation({
+            invitationId: wrongType.invitationId,
+            token: wrongType.token,
+          })
+        ).status,
+        'not_found',
+      );
+
+      const archived = await createProjectFixture({ projectStatus: 'ARCHIVED' });
+      assert.equal(
+        (
+          await notifier.notifyProjectInvitation({
+            invitationId: archived.invitationId,
+            token: archived.token,
+          })
+        ).status,
+        'not_found',
+      );
+
+      const missingProject = await createProjectFixture();
+      await prisma.project.delete({ where: { id: missingProject.projectId } });
+      assert.equal(
+        (
+          await notifier.notifyProjectInvitation({
+            invitationId: missingProject.invitationId,
+            token: missingProject.token,
+          })
+        ).status,
+        'not_found',
+      );
+
+      assert.equal(
+        await prisma.emailDelivery.count({
+          where: {
+            toAddress: {
+              in: [
+                expired.inviteeEmail,
+                accepted.inviteeEmail,
+                wrongType.inviteeEmail,
+                archived.inviteeEmail,
+                missingProject.inviteeEmail,
+              ],
+            },
+          },
+        }),
+        0,
+      );
+    });
+
+    test('an invalid project recipient, inactive inviter or mismatched token is not emailed', async () => {
+      const invalidRecipient = await createProjectFixture({ email: 'not-an-address' });
+      assert.equal(
+        (
+          await notifier.notifyProjectInvitation({
+            invitationId: invalidRecipient.invitationId,
+            token: invalidRecipient.token,
+          })
+        ).status,
+        'ineligible',
+      );
+
+      const inactiveInviter = await createProjectFixture({ inviterStatus: 'SUSPENDED' });
+      assert.equal(
+        (
+          await notifier.notifyProjectInvitation({
+            invitationId: inactiveInviter.invitationId,
+            token: inactiveInviter.token,
+          })
+        ).status,
+        'not_found',
+      );
+
+      const fixture = await createProjectFixture();
+      assert.equal(
+        (
+          await notifier.notifyProjectInvitation({
+            invitationId: fixture.invitationId,
+            token: 'a-different-token',
+          })
+        ).status,
+        'ineligible',
+      );
+      assert.equal(
+        await prisma.emailDelivery.count({
+          where: {
+            toAddress: {
+              in: [
+                invalidRecipient.inviteeEmail,
+                inactiveInviter.inviteeEmail,
+                fixture.inviteeEmail,
+              ],
+            },
+          },
+        }),
+        0,
+      );
+    });
+
+    test('a suppressed project invitation address is skipped before a delivery is created', async () => {
+      const fixture = await createProjectFixture();
+
+      await prisma.emailSuppression.create({
+        data: {
+          emailAddress: fixture.inviteeEmail.toLowerCase(),
+          reason: 'HARD_BOUNCE',
+        },
+      });
+
+      const result = await notifier.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: fixture.token,
+      });
+
+      assert.equal(result.status, 'suppressed');
+      assert.equal(result.accepted, false);
+      assert.equal(
+        await prisma.emailDelivery.count({ where: { toAddress: fixture.inviteeEmail } }),
+        0,
+      );
+    });
+
+    test('a project invitation delivery failure leaves the invitation intact', async () => {
+      const fixture = await createProjectFixture();
+      const failing = createCollaborationEmailNotifier(config, {
+        prisma,
+        logger: new Logger('silent'),
+        send: async () => {
+          throw new Error(`SMTP rejected ${fixture.inviteeEmail}`);
+        },
+      });
+
+      const result = await failing.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: fixture.token,
+      });
+
+      assert.equal(result.status, 'failed');
+      assert.equal(result.accepted, false);
+
+      const persisted = await prisma.invitation.findUnique({
+        where: { id: fixture.invitationId },
+      });
+
+      assert.ok(persisted);
+      assert.equal(persisted.status, 'PENDING');
+      assert.equal(persisted.tokenHash, fixture.tokenHash);
+      assert.equal(
+        await prisma.emailDelivery.count({ where: { toAddress: fixture.inviteeEmail } }),
+        0,
+      );
+
+      const retried = await notifier.notifyProjectInvitation({
+        invitationId: fixture.invitationId,
+        token: fixture.token,
+      });
+
+      assert.equal(retried.status, 'queued');
     });
   },
 );

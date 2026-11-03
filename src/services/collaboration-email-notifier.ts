@@ -7,6 +7,7 @@ import {
   buildEmailBrand,
   buildMeetingInvitationEmail,
   buildMentionEmail,
+  buildProjectInvitationEmail,
   buildTeamInvitationEmail,
   sendEmail,
   type EmailDeliveryResult,
@@ -69,10 +70,23 @@ export interface NotifyTeamInvitationInput {
   token: string;
 }
 
+export interface NotifyProjectInvitationInput {
+  /** Identifier of the persisted PROJECT invitation. */
+  invitationId: string;
+  /**
+   * The raw single-use token created by the invitation workflow. Only its
+   * digest is stored in PostgreSQL, so it is verified against `tokenHash`
+   * before it is used to build the acceptance link. It is never logged or
+   * written to the outbox metadata.
+   */
+  token: string;
+}
+
 export interface CollaborationEmailNotifier {
   notifyMention(input: NotifyCommentMentionInput): Promise<CollaborationEmailResult>;
   notifyMeetingInvitation(input: NotifyMeetingInvitationInput): Promise<CollaborationEmailResult>;
   notifyTeamInvitation(input: NotifyTeamInvitationInput): Promise<CollaborationEmailResult>;
+  notifyProjectInvitation(input: NotifyProjectInvitationInput): Promise<CollaborationEmailResult>;
 }
 
 function appUrl(config: AppConfig, path: string): string {
@@ -99,6 +113,10 @@ export function buildTeamInvitationUrl(config: AppConfig, token: string): string
   return `${config.emailAppUrl.replace(/\/+$/, '')}${config.teamInvitationLinkPath}?token=${encodeURIComponent(token)}`;
 }
 
+export function buildProjectInvitationUrl(config: AppConfig, token: string): string {
+  return `${config.emailAppUrl.replace(/\/+$/, '')}${config.projectInvitationLinkPath}?token=${encodeURIComponent(token)}`;
+}
+
 export function collaborationEmailIdempotencyKey(
   kind: 'mention' | 'meeting-invitation',
   id: string,
@@ -116,17 +134,24 @@ export function teamInvitationEmailIdempotencyKey(invitationId: string, tokenHas
   return `team-invitation:${invitationId}:${tokenHash}`;
 }
 
+export function projectInvitationEmailIdempotencyKey(
+  invitationId: string,
+  tokenHash: string,
+): string {
+  return `project-invitation:${invitationId}:${tokenHash}`;
+}
+
 /**
  * Post-commit email integration for collaboration events. Mention recipients
  * are resolved from the persisted comment's workspace membership; this
  * service deliberately does not parse comment text or create notifications.
  *
  * Meeting invitations are supplied only by the meeting workflow after it has
- * authorized and persisted a pending invitation. Team invitations are
- * supplied only by a team invitation workflow after it has persisted a
- * `TEAM` invitation and issued its token. Neither meeting nor team invitation
- * creation/acceptance is implemented here: the notifier never creates,
- * revokes, expires or accepts an invitation.
+ * authorized and persisted a pending invitation. Team and project invitations
+ * are supplied only by their invitation workflows after they have persisted a
+ * `TEAM` or `PROJECT` invitation and issued its token. None of the meeting,
+ * team or project invitation creation/acceptance flows is implemented here:
+ * the notifier never creates, revokes, expires or accepts an invitation.
  */
 export function createCollaborationEmailNotifier(
   config: AppConfig,
@@ -433,6 +458,126 @@ export function createCollaborationEmailNotifier(
       } catch (error) {
         log.error('collaboration_email_failed', {
           template: 'team_invitation',
+          eventId: input.invitationId,
+          error: summarizeErrorForLog(error),
+        });
+
+        return { status: 'failed', accepted: false };
+      }
+    },
+
+    async notifyProjectInvitation(input): Promise<CollaborationEmailResult> {
+      try {
+        if (!input.invitationId || !input.token) {
+          return { status: 'ineligible', accepted: false };
+        }
+
+        const invitation = await client.invitation.findUnique({
+          where: { id: input.invitationId },
+          select: {
+            id: true,
+            email: true,
+            type: true,
+            status: true,
+            projectId: true,
+            workspaceId: true,
+            expiresAt: true,
+            forUserId: true,
+            tokenHash: true,
+            workspace: { select: { id: true, name: true, status: true, deletedAt: true } },
+            invitedBy: { select: { id: true, name: true, status: true, deletedAt: true } },
+          },
+        });
+
+        // A project invitation must be a persisted PROJECT invitation that
+        // belongs to a live project inside an active workspace.
+        if (
+          !invitation ||
+          invitation.type !== 'PROJECT' ||
+          !invitation.projectId ||
+          invitation.workspace.deletedAt ||
+          invitation.workspace.status !== 'ACTIVE' ||
+          invitation.invitedBy.deletedAt ||
+          invitation.invitedBy.status !== 'ACTIVE'
+        ) {
+          return { status: 'not_found', accepted: false };
+        }
+
+        // The notifier never expires or revokes an invitation: it only
+        // refuses to send for one that is no longer valid.
+        if (
+          invitation.status !== 'PENDING' ||
+          !Number.isFinite(invitation.expiresAt.getTime()) ||
+          invitation.expiresAt.getTime() <= Date.now() ||
+          !isEmailAddress(invitation.email)
+        ) {
+          return { status: 'ineligible', accepted: false };
+        }
+
+        // An invitation bound to an account cannot be emailed to a deleted or
+        // suspended account.
+        let inviteeName = 'there';
+
+        if (invitation.forUserId) {
+          const boundUser = await client.user.findFirst({
+            where: { id: invitation.forUserId, status: 'ACTIVE', deletedAt: null },
+            select: { id: true, name: true },
+          });
+
+          if (!boundUser) {
+            return { status: 'ineligible', accepted: false };
+          }
+
+          inviteeName = boundUser.name;
+        }
+
+        const project = await client.project.findFirst({
+          where: {
+            id: invitation.projectId,
+            workspaceId: invitation.workspaceId,
+            deletedAt: null,
+            status: { not: 'ARCHIVED' },
+          },
+          select: { id: true, name: true },
+        });
+
+        if (!project) {
+          return { status: 'not_found', accepted: false };
+        }
+
+        // Only the digest is stored, so a token that does not match the
+        // persisted invitation cannot be turned into an acceptance link.
+        if (hashSecret(input.token) !== invitation.tokenHash) {
+          return { status: 'ineligible', accepted: false };
+        }
+
+        const message = buildProjectInvitationEmail({
+          to: invitation.email,
+          name: inviteeName,
+          brand,
+          inviterName: invitation.invitedBy.name,
+          projectName: project.name,
+          workspaceName: invitation.workspace.name,
+          acceptUrl: buildProjectInvitationUrl(config, input.token),
+          expiresAt: invitation.expiresAt,
+          idempotencyKey: projectInvitationEmailIdempotencyKey(invitation.id, invitation.tokenHash),
+        });
+        message.metadata = {
+          ...message.metadata,
+          invitationId: invitation.id,
+          projectId: project.id,
+          projectName: project.name,
+          workspaceId: invitation.workspaceId,
+        };
+
+        return await deliver(
+          message,
+          invitation.id,
+          invitation.forUserId ?? 'unregistered-invitee',
+        );
+      } catch (error) {
+        log.error('collaboration_email_failed', {
+          template: 'project_invitation',
           eventId: input.invitationId,
           error: summarizeErrorForLog(error),
         });

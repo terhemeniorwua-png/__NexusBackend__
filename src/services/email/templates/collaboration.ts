@@ -44,6 +44,10 @@ export interface TeamInvitationEmailInput {
   expiresAt?: Date | undefined;
 }
 
+export interface ProjectInvitationEmailInput extends InvitationEmailInput {
+  projectName: string;
+}
+
 export interface TaskAssignmentEmailInput {
   to: string;
   name: string;
@@ -157,12 +161,17 @@ export function buildTeamInvitationEmail(input: TeamInvitationEmailInput): Email
   };
 }
 
-export function buildProjectInvitationEmail(input: InvitationEmailInput): EmailMessage {
+export function buildProjectInvitationEmail(input: ProjectInvitationEmailInput): EmailMessage {
   const { html, text } = renderEmailDocument(
     {
-      heading: `Join ${input.workspaceName}`,
-      preheader: `${input.inviterName} invited you to a project on ${input.brand.appName}.`,
-      paragraphs: inviteParagraphs(input, 'the project'),
+      heading: `Join the ${input.projectName} project`,
+      preheader: `${input.inviterName} invited you to a project in ${input.workspaceName}.`,
+      paragraphs: [
+        `Hi ${input.name},`,
+        `${input.inviterName} invited you to the project "${input.projectName}" in the ${input.workspaceName} workspace on ${input.brand.appName}.${expirySentence(input.expiresAt)}`,
+        input.role ? `You will join with the ${input.role} role.` : '',
+        'Accept the invitation to get started.',
+      ].filter(Boolean),
       action: { label: 'Accept invitation', url: input.acceptUrl },
       note: 'If you were not expecting this invitation, you can ignore this email.',
       footerNote: 'This is an automated message. Please do not reply to it.',
@@ -172,12 +181,16 @@ export function buildProjectInvitationEmail(input: InvitationEmailInput): EmailM
 
   return {
     to: input.to,
-    subject: `${input.inviterName} invited you to a project in ${input.workspaceName}`,
+    subject: `${input.inviterName} invited you to ${input.projectName} in ${input.workspaceName}`,
     template: 'project_invitation',
     text,
     html,
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    metadata: { workspaceName: input.workspaceName, role: input.role ?? null },
+    metadata: {
+      workspaceName: input.workspaceName,
+      projectName: input.projectName,
+      role: input.role ?? null,
+    },
   };
 }
 
