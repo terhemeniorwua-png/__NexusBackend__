@@ -8,7 +8,7 @@ import { sendEmail } from '../../services/email';
 import { createNotification } from '../../services/notifications';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
-import { requireWorkspaceAccess, WorkspaceCapability } from './authorization';
+import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
 import type { CreateInvitationInput } from './workspace.schemas';
 import type { InvitationPreview, InvitationResult, InvitationSummary } from './workspace.types';
 
@@ -177,6 +177,11 @@ export function createInvitationService(
         capability: WorkspaceCapability.ManageInvitations,
       });
 
+      assertMayAssignRole({
+        actorRole: access.membership.role,
+        requestedRole: input.role as WorkspaceRole,
+      });
+
       const inviter = await client.user.findUnique({
         where: { id: input.userId },
         select: { id: true, name: true, email: true },
@@ -322,6 +327,15 @@ export function createInvitationService(
       if (!invitation) {
         throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
       }
+
+      // A resend re-issues the same role, so it must be held to the same role
+      // assignment rule as creating the invitation. Otherwise a project
+      // manager could not create a project-manager invitation but could
+      // extend one that an owner created.
+      assertMayAssignRole({
+        actorRole: access.membership.role,
+        requestedRole: invitation.role,
+      });
 
       if (invitation.status === 'ACCEPTED') {
         throw new AppError(
@@ -530,13 +544,29 @@ export function createInvitationService(
         throw new AppError(409, 'INVITATION_REVOKED', 'This invitation was revoked');
       }
 
-      if (invitation.expiresAt.getTime() <= Date.now()) {
-        await client.invitation.update({
-          where: { id: invitation.id },
-          data: { status: 'EXPIRED', pendingKey: null },
-        });
+      const expired =
+        invitation.status === 'EXPIRED' || invitation.expiresAt.getTime() <= Date.now();
+
+      if (expired) {
+        if (invitation.status !== 'EXPIRED') {
+          await client.invitation.update({
+            where: { id: invitation.id },
+            data: { status: 'EXPIRED', pendingKey: null },
+          });
+        }
 
         throw new AppError(410, 'INVITATION_EXPIRED', 'This invitation link has expired');
+      }
+
+      // Only a pending invitation may grant a membership. The status guard
+      // inside the transaction keeps this race-safe, but rejecting here makes
+      // sure no membership is ever attempted for a spent invitation.
+      if (invitation.status !== 'PENDING') {
+        throw new AppError(
+          409,
+          'INVITATION_NOT_PENDING',
+          'This invitation can no longer be accepted',
+        );
       }
 
       const user = await client.user.findUnique({

@@ -106,15 +106,16 @@ const envSchema = z
 
     // --- Workspaces and invitations (Phase 5) ------------------------------
     //
-    // An invitation is a single use link with a deadline. The lifetime is
-    // generous enough for a person to notice the mail and the path points at
-    // the frontend page that shows the invitation.
+    // An invitation is a single use link with a deadline. The product rule is
+    // 48 hours, which is long enough for a person to notice the mail while
+    // keeping an unused invitation from staying live indefinitely. The path
+    // points at the frontend page that shows the invitation.
     WORKSPACE_INVITATION_TTL_SECONDS: z.coerce
       .number()
       .int()
       .positive()
       .max(2_592_000)
-      .default(604_800),
+      .default(172_800),
     WORKSPACE_INVITATION_LINK_PATH: z
       .string()
       .trim()

@@ -165,6 +165,24 @@ export function assertMayManageMember(input: {
 }
 
 /**
+ * Asserts that the acting workspace role may grant the requested role.
+ * Project managers can manage lower-privilege members, but only the workspace
+ * owner may grant project-manager privileges.
+ */
+export function assertMayAssignRole(input: {
+  actorRole: WorkspaceRole;
+  requestedRole: WorkspaceRole;
+}): void {
+  if (input.actorRole !== 'OWNER' && input.requestedRole === 'PROJECT_MANAGER') {
+    throw new AppError(
+      403,
+      'INSUFFICIENT_ROLE',
+      'Only the owner of a workspace can grant the project manager role',
+    );
+  }
+}
+
+/**
  * Asserts that removing the given member does not leave the workspace
  * without an owner.
  *

@@ -14,6 +14,7 @@ export {
   workspaceRoleCan,
   requireWorkspaceAccess,
   assertMayManageMember,
+  assertMayAssignRole,
   assertOwnershipSafe,
 } from '../authorization/workspace.policy';
 

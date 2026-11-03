@@ -30,6 +30,7 @@ export {
   workspaceRoleCan,
   requireWorkspaceAccess,
   assertMayManageMember,
+  assertMayAssignRole,
   assertOwnershipSafe,
 } from './workspace.policy';
 export type { WorkspaceCapabilityValue, WorkspaceAccess } from './workspace.policy';
