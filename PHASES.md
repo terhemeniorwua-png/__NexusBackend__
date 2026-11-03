@@ -1,6 +1,6 @@
-# Nexus Backend — Development Phases
+# NEXUS BACKEND — IMPLEMENTATION PHASE TRACKER
 
-> **Purpose:** Planning and progress-tracking document for the complete Nexus backend. This document is not authorization to implement phases automatically. Work on one phase at a time, only when explicitly instructed.
+## 1. Purpose
 
 ---
 
@@ -10,10 +10,10 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Total phases** | 24 |
-| **Completed** `[x]` | 7 |
-| **In progress** `[/]` | 0 |
+| **Completed** `[x]` | 6 |
+| **In progress** `[/]` | 1 |
 | **Not started** `[ ]` | 17 |
-| **Overall progress** | 29% |
+| **Overall progress** | 25% |
 
 _Update this table whenever a phase status changes._
 
@@ -21,41 +21,15 @@ Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. They are tracked b
 
 ---
 
-## Phase Status Rules
+Nexus is a Real-Time Workspace & Project Management Platform that combines project management, collaboration, communication, file management, scheduling, and AI-powered productivity.
 
-| Symbol | Meaning |
-|---|---|
-| `[ ]` | Not started |
-| `[/]` | In progress |
-| `[x]` | Completed and verified |
+The backend is responsible for application business logic, authentication, authorisation, workspace isolation, data persistence, real-time communication, integrations, notifications, and coordination with the separate Python AI service.
 
-- A phase may only be marked `[x]` after its deliverables have been reviewed and all verification criteria have passed.
-- Writing code does not complete a phase. The behavior must be verified.
-- If a phase is partially implemented, record the remaining work in its **Blockers / Notes** field and keep the status as `[/]`.
-- Update the Progress Dashboard whenever any phase status changes.
-- Do not mark a future phase as in progress before work on it actually begins.
+This tracker must be treated as the authoritative implementation sequence for backend development.
 
----
+## 3. Verified Progress Snapshot — 2026-11-03
 
-## Development Workflow
-
-Follow this cycle for every phase, without exception:
-
-1. Read `AGENTS.md` and the relevant `.opencode/skills/nexus-backend/SKILL.md`.
-2. Inspect the existing implementation and confirm all prerequisite phases are complete.
-3. Implement only the phase explicitly requested.
-4. Reuse the existing architecture and preserve all completed work.
-5. Run relevant tests, linting, type-checking, and verification steps.
-6. Fix any issues introduced by the implementation before reporting.
-7. Update this `PHASES.md` to reflect verified progress.
-8. Report completed work, test results, blockers, and the next recommended phase.
-9. **Stop and wait for explicit instruction before starting another phase.**
-
----
-
-## Milestones
-
-| Milestone | Phases | Deliverable |
+| Phase | Status | Evidence / remaining work |
 |---|---|---|
 | 1 — Foundation and Infrastructure | 1–4 | Running backend, database schema, authentication, email delivery |
 | 2 — Organization and Access Control | 5–7 | Workspaces, invitations, roles, permissions, teams |
@@ -169,7 +143,7 @@ Follow this cycle for every phase, without exception:
 - Indexes for workspace, project, task, membership, and activity queries
 - Migrations for every schema change
 - Seed script for reproducible test data
-- Placeholder stubs for future models (messages, meetings, AI usage, integrations) without full implementation
+- Documented placeholders for future models (messages, meetings, AI usage, integrations) without full implementation
 
 **Dependencies:** Phase 1
 
@@ -177,9 +151,71 @@ Follow this cycle for every phase, without exception:
 - Fresh database setup runs all migrations without errors
 - Seed script populates test data reproducibly
 - Uniqueness, foreign-key, and index constraints verified by tests or migration review
-- Rollback of migrations tested in a safe environment
+- Migration application verified against a disposable database
+- Recovery procedure tested: backup/restore, failed-migration resolution and forward corrective migration
+- Data integrity verified after each tested recovery
+- Migration history and schema drift checked before and after recovery
+- Evidence documented in `docs/migration-recovery.md`
+- Remaining limitations explicitly acknowledged; no claim is made that every migration has a tested down path
 
-**Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied.
+**Blockers / Notes:** Verified on 2026-10-21. Schema covers User/UserProfile/Session/AuthToken, Workspace/WorkspaceMembership, Team/TeamMembership, Project/ProjectMembership, Task/TaskAssignee/TaskDependency, Comment, Notification, Invitation, FileAttachment, AuditLog with enums, timestamps, soft deletes where needed, unique composite keys, foreign keys with appropriate cascade/restrict, and indexes. Migration `20261021023018_phase2_nexus_core_schema` created/applied; Prisma client regenerated. Seed script created and tested against ephemeral PostgreSQL (2 users, 1 workspace, 1 team, 1 project, 1 task, 1 comment, 1 invitation, 1 notification). Future models documented in `docs/planned-models.md`. No existing Phase 1 code rebuilt. Dependencies Phase 1 satisfied. The rollback/recovery criterion is satisfied by Phase 2.2: Prisma has no automatic down migrations, so recovery uses backup/restore, failed-migration resolution and forward corrective migrations, verified in `docs/migration-recovery.md`.
+
+---
+
+#### Phase 2.1 — Database model audit `[x]`
+
+**Objective:** Audit the Phase 2 schema against the planned-model list, determine whether any missing models are a genuine defect, and document the result without making unjustified schema changes.
+
+**Deliverables:**
+- Compared `prisma/schema.prisma` with `docs/planned-models.md` and the roadmap.
+- Confirmed the active ORM and migration system is Prisma (`@prisma/client` 6.19.3); the Sequelize packages in `package.json` are unused.
+- Verified all 21 current models and 16 enums against implemented modules, routes, services and tests.
+- Classified every deferred model by its roadmap phase and dependency.
+- Confirmed no implemented Phase 1–6 feature requires messages, meetings, AI usage, generic integrations or generic webhook models.
+- Confirmed `EmailWebhookEvent` covers the Phase 4 provider-webhook requirement, while generic `WebhookSubscription` and `WebhookDelivery` remain Phase 20 work.
+- Documented the audit decision, implemented model inventory, deferred-model mapping and change policy in `docs/planned-models.md`.
+- Made no Prisma schema or migration changes.
+
+**Dependencies:** Phase 2 complete.
+
+**Verification criteria:**
+- The schema validates and the Prisma client generates.
+- All six existing migrations apply to a disposable test database.
+- The migration history matches the schema with no drift.
+- Phase 2 database tests pass.
+- The audit result is documented and the deferred models remain out of scope until their roadmap phases.
+
+**Blockers / Notes:** Audited on 2026-11-01. `npx prisma validate`, `npx prisma generate`, `npx prisma migrate deploy` and `npx prisma migrate diff --exit-code` pass; the migration diff reports no difference. `tests/database-phase2.test.ts` passes 2/2 with `RUN_PHASE2_DB_TESTS=true` against a disposable PostgreSQL 16 container. Conclusion: the deferred models are not a Phase 2 defect; adding them now would be premature. The full database-enabled suite currently reports 176 passed and 10 failed, all failures confined to the pre-existing Phase 6 ownership-transfer integration tests. Those failures are unrelated to Phase 2.1: `tests/phase6-authorization-db.test.ts` reads `data.id` instead of `data.user.id` from `/api/v1/auth/me`, and `src/modules/workspaces/workspace.routes.ts` registers `/:workspaceId/owner` while the OpenAPI contract and tests use `/:workspaceId/owner/:userId`. The Phase 6 blocker is recorded here and left untouched under the Phase 2.1 scope.
+
+---
+
+#### Phase 2.2 — Database migration rollback and recovery `[x]`
+
+**Objective:** Establish and verify a safe recovery strategy for Prisma migrations without assuming that every migration has a reversible down path.
+
+**Deliverables:**
+- Documented the difference between application deployment rollback, schema reversal, failed-migration recovery and backup restoration.
+- Reviewed all six committed migrations and classified their operations and reversal risks.
+- Confirmed Prisma Migrate is the active migration system and that it does not provide automatic down migrations.
+- Documented the recovery policy in `docs/migration-recovery.md`.
+- Added `scripts/verify-migration-recovery.sh`, which tests baseline migration, schema drift, backup/restore, failed-migration resolution and forward corrective migration against a disposable database.
+- Preserved all existing migration files and migration history; no migration was edited, deleted or reset.
+- Verified that a backup restores data, a failed migration can be resolved, and a forward corrective migration preserves existing rows.
+- Updated the Phase 2 verification criteria to distinguish migration application, recovery testing, data integrity, evidence and remaining limitations.
+
+**Dependencies:** Phases 2 and 2.1 complete.
+
+**Verification criteria:**
+- All committed migrations apply to a disposable database.
+- The resulting schema matches `prisma/schema.prisma` with no drift.
+- A backup/restore round trip preserves sentinel data.
+- A failed migration is recorded by Prisma and can be marked rolled back.
+- A forward corrective migration preserves existing data and restores the intended schema shape.
+- The database returns to a known-good six-migration state after testing.
+- The verification procedure is repeatable through the script.
+- Remaining production backup, restore and deployment limitations are documented.
+
+**Blockers / Notes:** Verified on 2026-11-01 against a disposable PostgreSQL 16.15 container using `nexus_test`, `nexus_shadow`, `nexus_probe`, `nexus_probe_corrective` and `nexus_restore` databases. The six committed migrations apply successfully, `prisma migrate diff` reports no difference, and `tests/database-phase2.test.ts` passes 2/2. `scripts/verify-migration-recovery.sh` passed all six stages: baseline application and drift check, sentinel-data backup/restore, failed-migration `P3018` detection and `migrate resolve --rolled-back`, forward add-column and corrective drop-column migrations with data preserved, and final known-good restore. A separate restore into `nexus_restore` also reported the schema up to date. No per-migration down scripts exist by design; destructive changes rely on verified backup restoration or forward corrective migrations. No shared, staging or production database was accessed. The repository still lacks automated backup scheduling, retention, encryption, point-in-time recovery and a staging deployment rollback exercise; those remain Phase 23/24 work. The pre-existing Phase 6 DB test failures remain documented and unchanged.
 
 ---
 
@@ -218,7 +254,121 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 4 — Transactional email and delivery infrastructure `[x]`
+#### Phase 3.1 — Account reactivation and deactivation hardening `[x]`
+
+**Objective:** Close the account-lifecycle gap left by Phase 3: a deactivated account had no supported recovery path, and deactivation left outstanding credentials that could restore access.
+
+**Deliverables:**
+- Self-service reactivation for a deactivated account using its email address and password
+- Reactivation that never creates a session and requires a fresh sign-in
+- Return an unverified account to `PENDING_VERIFICATION` with a new verification email
+- Reject reactivation for active, suspended, deleted and non-deactivated accounts
+- Revoke every session and invalidate every outstanding one-time token on deactivation
+- Prevent email-change confirmation from activating a suspended or deactivated account
+- Security event logging for successful and failed reactivation attempts
+- API, OpenAPI and README documentation
+
+**Dependencies:** Phases 2, 3, 4
+
+**Verification criteria:**
+- A deactivated account can reactivate and sign in again
+- Reactivation returns no access token, refresh token or session
+- Old access and refresh tokens stay invalid after reactivation
+- Deleted and suspended accounts cannot reactivate themselves
+- Pre-deactivation verification, reset and email-change tokens cannot restore access
+- Reactivation is rate limited and does not reveal whether an account exists
+- The Phase 3 authentication suite passes against PostgreSQL and Redis
+
+**Blockers / Notes:** Implemented on 2026-11-01. The original Phase 3 audit findings were not present in the repository, git history, pull requests or issues, so the expected behaviour was derived from the existing account lifecycle and the product requirement that deactivation be reversible. The endpoint is `POST /api/v1/auth/reactivate` with the same `{ email, password }` contract and rate limiters as sign-in. It restores `ACTIVE` only when the address was already verified; otherwise it restores `PENDING_VERIFICATION` and sends a fresh verification link, so reactivation cannot bypass email verification. Active accounts return `409 ACCOUNT_ALREADY_ACTIVE`, suspended accounts `403 ACCOUNT_SUSPENDED`, non-deactivated pending accounts `409 ACCOUNT_NOT_DEACTIVATED`, and deleted or unknown accounts or a wrong password return the same `401 INVALID_CREDENTIALS` response after a bcrypt timing equaliser. The status update is conditional on `status = DEACTIVATED` and `deletedAt IS NULL`, so concurrent requests cannot both succeed. Deactivation is now one transaction that sets the status, revokes every session and marks every unused `AuthToken` as used, not only `EMAIL_VERIFICATION`; reactivation also revokes any remaining session and token before returning the new status. `confirmEmailChange` rejects suspended and deactivated accounts before updating the address, closing the path where a pre-deactivation email-change token could set the status back to `ACTIVE`. Reactivation and failure events are written to `AuditLog` without passwords or tokens. No schema migration was required. The Phase 3 integration suite now has 37 tests, including nine reactivation and credential-invalidation cases; it passes 37/37 with `RUN_PHASE3_DB_TESTS=true TEST_DATABASE_URL=postgresql://test:test@localhost:55435/nexus_test NODE_ENV=test node --import tsx --test tests/auth-phase3.test.ts` against an ephemeral PostgreSQL 16 container and Redis database 15. The full Phase 2-5 database-enabled suite passes 166/166 with the same database and Redis database 15; `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `prisma validate` pass. Remaining limitation: there is no administrator role or suspension endpoint, so reactivation is self-service only; administrative recovery would need an explicit privileged workflow in a later phase.
+
+**Follow-up verification (2026-11-01):** A code review found that valid credentials rejected for an ineligible account were not consistently recorded as failed reactivation events. Those status failures and a concurrent reactivation loss are now audited, and tests assert the status-specific audit reasons. A PostgreSQL trigger test verifies that a failure while revoking sessions rolls back the deactivation status change as well. The updated Phase 3 integration suite passes 39/39; the complete Phase 2–5 database-enabled suite passes 168/168 against a disposable PostgreSQL 16 database. Redis was unavailable in this environment, so rate-limit tests exercised the configured in-process fallback. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `git diff --check` pass. No schema change was needed. Commits `2256a7d` (`Account Reactivation`) and `a1bad1f` (`fix(phase-3.1): preserve concurrent failure audit`) are pushed to `origin/feature/phase-3.1-account-reactivation`.
+
+---
+
+#### Phase 3.2 — Account deletion and workspace ownership `[x]`
+
+**Objective:** Prevent account deletion while the account remains the owner of any persisted workspace.
+
+**Deliverables:**
+- Block deletion for owned workspaces in every persisted state, including `ACTIVE`, `ARCHIVED`, and soft-deleted rows
+- Preserve the existing requirement that ownership be transferred to an existing workspace member before account deletion
+- Keep a rejected deletion side-effect free, including sessions and one-time tokens
+- Serialize account deletion against workspace creation and ownership transfer
+- Keep workspace ownership transfer atomic and restricted to active accounts
+- Align the transfer route with its documented `/workspaces/{workspaceId}/owner/{userId}` contract
+
+**Verification criteria:**
+- Active, archived, soft-deleted, and mixed-status owned workspaces block account deletion
+- Membership and workspaces owned by another account do not block deletion
+- A successful ownership transfer permits deletion by the previous owner
+- A failed transfer leaves ownership unchanged and deletion blocked
+- Database failure rolls back deletion changes
+- Concurrent workspace creation or ownership transfer cannot attach a workspace to a deleted account
+- Phase 3 account lifecycle tests and broader regression checks pass
+
+**Blockers / Notes:** The root defect was an account deletion count filtered by both `deletedAt: null` and `status: 'ACTIVE'`, which omitted archived workspace rows. The workspace model has only `ACTIVE` and `ARCHIVED` states; workspace deletion is soft and sets `deletedAt` while retaining the `ownerId` foreign key (`ON DELETE RESTRICT`). There is no permanent workspace removal path, so any retained row with `ownerId` equal to the account remains relevant, even if soft-deleted. Deletion returns the existing `409 WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED` response until the current owner transfers each workspace to an existing, active member. The ownership check, session revocation, token invalidation, profile anonymisation, and user update now run in one transaction after locking the user row. Workspace creation and ownership transfer take compatible owner-row locks and revalidate account state inside their transactions; transfer also conditionally updates the workspace only if the caller remains its owner. No schema migration was required. The Phase 3 integration suite passes 48/48; the complete regression suite with Phase 2–5 database suites and Phase 6 unit tests passes 177/177. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check`, and `git diff --check` pass. Redis was unavailable, so rate limits used the existing in-process fallback. The separate Phase 6 database suite still has pre-existing fixture defects: it reads the user ID from the wrong `/auth/me` response shape and its teardown deletes users before owner-restricted workspace rows. The new Phase 3 integration tests cover the transfer endpoint and its concurrency behavior. Implementation commit `d851cb1` (`fix(phase-3.2): guard account deletion against retained ownership`) is pushed to `origin/feature/phase-3.2-account-deletion-ownership`.
+
+---
+
+#### Phase 3.3 — Atomic refresh-token rotation `[x]`
+
+**Objective:** Prevent concurrent refresh requests from successfully consuming the same session refresh-token state.
+
+**Deliverables:**
+- Compare-and-swap a refresh only while the session still contains the presented token hash and remains unrevoked and unexpired
+- Preserve existing expired, revoked, invalid-token, and refresh-token reuse responses
+- Return a replacement token only after the conditional database update succeeds
+- Add real PostgreSQL coverage for two simultaneous refresh requests against one session
+
+**Verification criteria:**
+- One of two concurrent requests using the same original token succeeds, and the other receives the established reuse failure
+- The stored current and previous token hashes match the successful rotation
+- Failed persistence returns no replacement token and leaves the previous token state intact
+- Existing refresh, expiry, replay, and logout tests pass
+
+**Blockers / Notes:** Implemented on 2026-11-01. The defect was a lookup by refresh-token hash followed by an unconditional update by session ID, allowing concurrent requests to overwrite each other's replacement hash and both receive a token. Rotation now uses a Prisma `updateMany` compare-and-swap matching the session ID, original refresh-token hash, `revokedAt: null`, and future expiry; the replacement token is returned only after one row is changed and the new hash is read back. A losing request is identified through `previousRefreshTokenHash` and follows the established replay policy: `SESSION_REUSE_DETECTED` and revocation of the account's sessions. No schema or API changes were needed. A deterministic PostgreSQL test locks the session row until both concurrent refresh updates are waiting, then releases them together; exactly one request succeeds, the loser gets the reuse failure, and the database retains the winner's replacement hash and the original previous hash. A trigger-injected persistence failure returns no refresh cookie and leaves the original hashes intact. The Phase 3 PostgreSQL suite passes 52/52, including refresh success, expiry, revocation, invalid token, race, persistence failure, replay, CSRF, and logout checks. The repository-wide `npm test` passes 97 tests with one opt-in Phase 3 DB suite skipped; its loopback HTTP tests required local networking access and passed on rerun. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check`, and `git diff --check` pass. Tests used a disposable PostgreSQL 16 database; Redis was unavailable, so the existing rate-limit fallback was used. No known rotation race remains. By existing policy, a concurrent loser is indistinguishable from reuse and revokes the session family, so an ordinary simultaneous refresh retry can require a fresh sign-in. Implementation commit `7c7be30` (`fix(phase-3.3): make refresh rotation atomic`) is pushed to `origin/feature/phase-3.3-atomic-refresh-token-rotation`.
+
+---
+
+#### Phase 3.4 — Account deletion transaction consistency `[x]`
+
+**Objective:** Keep account deletion and security-state changes consistent when a database operation fails or deletion requests race.
+
+**Deliverables:**
+- Keep ownership validation, session revocation, one-time token invalidation, profile anonymization, and account deletion in one database transaction
+- Preserve workspace ownership safeguards and existing error responses
+- Verify rollback when a later deletion operation fails after session and token updates have executed
+- Verify successful deletion commits session revocation and concurrent deletion requests serialize safely
+
+**Verification criteria:**
+- Workspace ownership rejection leaves the account and sessions unchanged
+- A failure during session revocation or a later account update rolls back account, session, token, and profile changes
+- Successful deletion commits account anonymization and session revocation
+- Concurrent deletion requests produce one successful deletion and one already-deleted response
+- Authentication remains usable after a rolled-back deletion and revoked after a successful deletion
+
+**Blockers / Notes:** Verified on 2026-11-01. The audit described a prior ordering bug: session revocations committed before the account-deletion transaction, so a later transaction failure could leave an active account signed out. That defect was already corrected in Phase 3.2 (`d851cb1`): `deleteAccount` locks the user row with `FOR UPDATE`, checks ownership before mutation, then revokes sessions, invalidates unused one-time tokens, anonymizes the profile, and updates the user inside one Prisma PostgreSQL transaction. Phase 3.4 made no production-code change because this transaction strategy is present; it strengthened integration coverage. A PostgreSQL trigger now fails the final user update after session, token, and profile writes have run, and the test verifies all those records roll back and the account's access token remains usable. Success tests assert `ACCOUNT_DELETED` revocation is committed and the old access token is rejected. A deterministic row-lock test verifies two simultaneous deletion requests return one `204` and one `409`; another races refresh against deletion and verifies the final account and session are deleted/revoked regardless of which update wins the session row. The existing ownership rejection test confirms no account or session changes occur when ownership remains unresolved. The Phase 3 PostgreSQL suite passes 55/55. `npm test` passes 97 tests with one opt-in Phase 3 database suite skipped (that suite was run separately); `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check`, and `git diff --check` pass. Tests used the disposable PostgreSQL 16 database. Redis was unavailable, so rate limits used the existing in-process fallback. The `AccountDeleted` audit event is written after commit via `recordSecurityEvent`, whose established contract makes audit-write failures best-effort and non-fatal; this log row is the only database operation outside the atomic account/session transaction. The flow performs no external calls. Test commits `118cf64` (`test(phase-3.4): verify account deletion rollback`) and `ec29ff8` (`test(phase-3.4): cover refresh deletion race`) are pushed to `origin/feature/phase-3.4-account-deletion-transaction-consistency`.
+
+---
+
+#### Phase 3.5 — Authentication debug cleanup `[x]`
+
+**Objective:** Remove obsolete commented-out debug logging from the authentication module without changing runtime behavior.
+
+**Deliverables:**
+- Remove only obsolete commented `console.log` statements in authentication service and controller code
+- Preserve active code, useful comments, and all runtime logging
+
+**Verification criteria:**
+- Authentication-module search finds no remaining commented `console.log` statements
+- Diff contains no executable logic changes
+- Authentication unit and PostgreSQL integration tests, typecheck, lint, and formatting checks pass
+
+**Blockers / Notes:** Verified on 2026-11-01. Removed four commented debug statements: registration-stage logs for `hashing`, `creating user`, and `queueing email` from `auth.service.ts`, and the `handler reached` log from `auth.controller.ts`. Also removed the two standalone `// ...` placeholder comments interspersed in the same obsolete service debug block. No active logging, explanatory comments, executable logic, or authentication behavior was changed. The auth-module search returns no commented `console.log` calls. `tests/auth-unit.test.ts` passes; `tests/auth-phase3.test.ts` passes 55/55 against disposable PostgreSQL. Typecheck, lint, format check, and `git diff --check` pass. Implementation commit `7de01e0` (`chore(phase-3.5): remove commented auth debug logs`) is pushed to `origin/feature/phase-3.5-auth-debug-cleanup`.
+
+---
+
+#### Phase 4 — Transactional email and delivery infrastructure `[/]`
 
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.
 
@@ -248,69 +398,364 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-### Milestone 2 — Organization and Access Control
+#### Phase 4.1 — Bounded email delivery retries `[x]`
+
+**Objective:** Remove the infinite email retry path found in the Phase 4 audit and guarantee that every delivery attempt sequence ends in a terminal state.
+
+**Deliverables:**
+- One bounded retry decision shared by provider failures and unexpected worker errors
+- Attempt counter persisted atomically on claim and never reset by retry scheduling
+- Retry exhaustion transitions the delivery to `FAILED`
+- Permanent provider failures continue to stop immediately
+- Existing idempotency, suppression and webhook processing preserved
+- Regression tests for transient, permanent, unexpected, exhausted, duplicate and recovery cases
+
+**Dependencies:** Phase 4
+
+**Verification criteria:**
+- A transient failure retries with backoff and succeeds when the provider recovers
+- Repeated transient failures stop at `EMAIL_MAX_ATTEMPTS`
+- A permanent failure does not retry
+- Unexpected transport or worker errors obey the same limit
+- An exhausted row never reaches the provider again
+- Concurrent workers do not claim or send the same row twice
+
+**Blockers / Notes:** Verified on 2026-11-01. Root cause: the provider-error branch already checked `attempts < maxAttempts`, but the unexpected-error catch in `processPending` called `markRetry` unconditionally. Any thrown error — from the transport, the suppression lookup, or an outcome persistence write — therefore returned the row to `QUEUED` forever while each claim incremented `attempts`. The retry decision is now centralized in `retryOrFail`: it schedules exponential backoff with jitter only while `delivery.attempts < delivery.maxAttempts`, and otherwise writes the terminal `FAILED` state with the last error and `failedAt`. Both the provider retry path and the unexpected-error path use it. `claimDue` now excludes rows whose attempts are already exhausted, and `failExhaustedQueued` repairs any legacy `QUEUED` row at or past its limit before the claim runs, so stale rows never reach the provider again. The counter is still incremented atomically in the claim query and is not reset by a retry. Permanent failures still fail immediately. No schema migration or new environment variable was needed. The existing policy settings are `EMAIL_MAX_ATTEMPTS` (default 5, maximum 10), `EMAIL_RETRY_BASE_DELAY_MS` and `EMAIL_RETRY_MAX_DELAY_MS`. Delivery idempotency, suppression, provider webhook verification and event deduplication are unchanged. `tests/email-phase4-db.test.ts` now has 18 integration tests, adding repeated transient failures up to the limit, terminal state after exhaustion, repair of an exhausted queued row, unexpected transport failure bounded at the limit, recovery after a temporary worker failure, retry counter persistence, and concurrent workers claiming and sending only once; the Phase 4 suite passes 18/18. With the Phase 2–5 database suites enabled the full suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. Remaining limitation: delivery is at-least-once. If the provider accepts a message but the process fails before `markAccepted` persists that outcome, a retry can send one duplicate; provider-side idempotency would be needed for exactly-once delivery. Rows left in `SENDING` by a hard worker crash are not automatically reclaimed; this phase only bounds retries and repairs exhausted `QUEUED` rows. The separate Phase 6 database suite currently fails for pre-existing reasons unrelated to this change (its `/auth/me` fixture reads `data.id` while the endpoint returns `data.user.id`, and the repository `.env` supplies an invalid `TRUST_PROXY` value through `prisma.config.ts`); it is outside Phase 4.1.
 
 ---
 
-#### Phase 5 — Workspaces, memberships and invitations `[x]`
+#### Phase 4.2 — Recipient email privacy in logs `[x]`
 
-**Objective:** Let users create and join workspaces and manage invitations securely.
+**Objective:** Remove recipient email addresses from the transactional email logs without losing the delivery metadata needed to operate and troubleshoot the outbox.
 
 **Deliverables:**
-- Create, retrieve, update, archive, and delete workspaces
-- Creator assigned initial Owner role on creation
-- Add, list, update, and remove workspace members
-- Workspace switching and membership-aware queries
-- Secure invitation tokens with expiry
-- Invite registered users and unregistered email addresses
-- Email invitations with workspace name, inviter identity, intended role, expiry, and acceptance link
-- Single-use acceptance link; backend validates token and intended recipient before granting access
-- Resend, revoke, and expire invitations
-- Rejection of expired, revoked, or already-used tokens
-- Handle invitee who registers after receiving an invitation
-- Handle users already belonging to the workspace
-- Notify inviter when invitation is accepted
-- Track pending / accepted / expired / revoked invitation states
-- Membership changes recorded in audit log
+- Recipient addresses removed from the queued, console, disabled and logging-sender events
+- Error text from providers, workers and persistence failures redacted before logging
+- Delivery ID, template, provider, attempt, maximum attempts, retry delay and failure category retained
+- Regression tests for queued, sent, provider-failure, unexpected-worker-failure and development-transport logs
 
-**Dependencies:** Phases 1, 2, 3, 4
+**Dependencies:** Phase 4.1
 
 **Verification criteria:**
-- Workspace creation, invitation, acceptance, cancellation, and member removal work end-to-end
-- Expired and revoked links are rejected
-- Duplicate invitations handled correctly
-- Unauthorized attempts to join are denied
-- Invitation email content verified
+- `email_delivery_queued` contains no recipient address or `to` field
+- Structured log metadata contains no recipient address
+- Provider responses and unexpected worker errors cannot reintroduce an address through their message or stack
+- Operational metadata for correlation and retry diagnosis remains available
+- Existing delivery, retry, suppression and webhook behaviour is unchanged
 
-**Blockers / Notes:** Verified on 2026-10-21 and re-verified on 2026-10-22. The workspace is the boundary of the product, so this phase implements the workspace, its members and the invitations that grant access to it, and it enforces the access rules for those resources itself. Implemented as `src/modules/workspaces` (`workspace.service.ts` for the workspace and the members, `invitation.service.ts` for the invitations, `authorization.ts` for the role matrix and the membership checks, `workspace.schemas.ts` for the request validation, `workspace.types.ts` for the response shapes, `workspace.routes.ts` and `invitation.routes.ts` for the HTTP layer), `src/services/audit.ts` for the audit trail and `src/services/notifications.ts` for the in-app notifications. The role matrix is deliberately small and explicit at this stage: every role may read a workspace and its member list, the owner and a project manager may change a workspace and manage members and invitations, and only the owner may archive or delete a workspace. Phase 6 replaces these checks with the centralized policy matrix, so the capability table in `authorization.ts` is the seam for it. The role that a client sends in a request body is never trusted: every check reads the membership row of the caller from the database, and a workspace that the caller does not belong to is reported as forbidden while a workspace that does not exist is reported as missing, so the endpoints cannot be used to probe for identifiers. The creator of a workspace becomes its owner, and the owner role is not part of the assignable roles, so a workspace always has exactly one owner that cannot be demoted or removed. A project manager may manage members but not another project manager, so a role can only be widened by the owner. Every change to a workspace, a member or an invitation is written to `AuditLog` inside the transaction that performs the change, so a change and its audit entry always happen together. Invitations are single use links: only the SHA-256 digest of the token is stored, the token expires after `WORKSPACE_INVITATION_TTL_SECONDS` (default 7 days), and the acceptance is applied with a guarded update on the status, so a second use is rejected even when it arrives at the same moment as the first one. The recipient is checked: an invitation that is bound to an account belongs to that account, and an unbound invitation belongs to the address it was sent to, so a link cannot be used by somebody else. An invitation that was sent before the address had an account is bound to that account when it registers, which is handled in the registration flow of the auth service. The invitation mail carries the workspace name, the inviter, the intended role, the expiry and the acceptance link, and the preview endpoint masks the address, because a forwarded mail carries the link with it. A pending invitation is unique per address and workspace, while an accepted, revoked or expired invitation never blocks a new one: the unique index on `(workspaceId, email)` was replaced by a nullable `pendingKey` column that only holds a value while the invitation is pending, applied through migration `20261021140000_phase5_workspace_invitations`, which also adds the foreign key for the accepting account. Deleting a workspace is a soft delete, so the records that point at it keep their history, and the pending invitations of a deleted workspace are revoked. Tests: `tests/phase5-workspaces.test.ts` (12 unit tests) covers the role matrix, the slug of a workspace, the masking of an address and the validation of the request bodies, including that unknown fields are rejected. `tests/phase5-workspaces-db.test.ts` (19 integration tests) runs against PostgreSQL and drives the real HTTP application: the workspace lifecycle, the membership aware list, the access of somebody outside the workspace, the content of the invitation mail, an invitee that registers after the invitation was sent, the single use token, expired, revoked and duplicate invitations, an invitation that belongs to another account, a resend that replaces the token, the member rules for the owner and for a project manager, the audit trail of every membership change, the state of the workspace after an archive and a deletion, and the invitation list with its states. The full suite is 125 tests, all passing, with the database integration tests of the earlier phases enabled as well. A flaky timing issue in the Phase 4 retry test was fixed by adding a 50 ms sleep between consecutive `processPending` calls in `tests/email-phase4-db.test.ts`; all 125 tests pass consistently across repeated runs. Left to the later phases: the team and project invitations, which reuse the same service with the scope of the invitation, and the project and team level permission checks of Phase 6.
+**Blockers / Notes:** Verified on 2026-11-01. The audit identified `email_delivery_queued`, which logged the `to` field. The field was removed; the event still carries the delivery ID and template so a message can be correlated through the outbox and provider message ID. The same recipient field was present in the `console` and `disabled` transports and the legacy logging sender, so those lifecycle events were corrected together while keeping delivery ID, template, subject and provider where available. A small `src/services/email/log-privacy.ts` helper now redacts email-shaped text from unexpected worker errors, retry-persistence failures and worker-pass failures, including the serialized stack; provider error codes are redacted before being logged. The raw provider error can still be stored in `EmailDelivery.lastError` for operational recovery, but it is never written to the application log by these paths. No delivery, retry, suppression, webhook or queue behaviour changed, and no schema or environment change was needed. Tests: `tests/email-phase4.test.ts` adds redaction and development-transport coverage; `tests/email-phase4-db.test.ts` adds queued/sent, provider-error and unexpected-worker-error assertions, verifies required metadata, and checks that the delivery still reaches `ACCEPTED` or `FAILED` as appropriate. The test SMTP helper now clears its envelope buffer after a simulated 451 or 550 so a pooled connection cannot leak state into the next case; this removed an existing intermittent Phase 4 failure. The Phase 4 database suite passed on three consecutive runs (21 subtests). The Phase 4 unit suite passes 18/18, the full suite with the Phase 2–5 database integrations enabled passes 194/194, and `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `git diff --check` pass. The pre-existing Phase 6 database suite failures documented in Phase 4.1 are unchanged and outside this phase.
 
 ---
 
-#### Phase 6 — Roles, permissions and authorization `[x]`
+#### Phase 4.3 — Task assignment and mention email integration `[/]`
 
-**Objective:** Ensure users can only access and modify resources they are authorized to use.
+**Objective:** Connect the existing `task_assignment` and `mention` templates to reusable post-commit notifiers that the authoritative task and comment workflows can call after they persist an assignment or mention.
 
 **Deliverables:**
-- Workspace-level roles: Owner, Project Manager, Member, Viewer, Collaborator
-- Project-level membership and permission checks
-- Team membership and team permissions
-- Centralized authorization policies and reusable middleware / service checks
-- Permission enforcement for: view, create, edit, delete, archive, assign, approve
-- Permission checks extended to files, messages, AI context, and meetings
-- Role changes and membership removal
-- Workspace ownership transfer rules
-- Protection against self-removal that leaves a workspace ownerless
-- Explicit access rules for external collaborators and guests
-- Audit records for sensitive permission changes
+- Reusable task-assignment notifier around the existing template and transactional outbox
+- Reusable mention notifier around the existing template and transactional outbox
+- Recipient validation against active workspace and project membership
+- Suppression-list handling and task/comment link generation from configuration
+- Stable per-event idempotency and non-fatal delivery failure handling
+- PostgreSQL integration tests for context, reassignment, duplicate processing, suppression, ineligible recipients and failure isolation
+- Runtime callers from the authoritative task assignment and comment/mention workflows
 
-**Dependencies:** Phases 1, 2, 3, 5
+**Dependencies:** Phase 4.2, Phase 9, Phase 14
 
 **Verification criteria:**
-- Automated tests prove unauthorized users cannot read or modify resources across workspace, project, and team boundaries
-- Role escalation and cross-workspace access are denied in tests
-- Ownership transfer edge cases covered
+- The existing task-assignment and mention templates have real runtime callers
+- Task assignment triggers the expected email to the new assignee
+- A mention triggers the expected email to the mentioned workspace member
+- Correct recipients and contextual data are used
+- Duplicate processing and comment edits do not enqueue duplicate emails
+- Existing task, comment, in-app notification and email behaviour remains intact
+- Relevant tests pass
 
-**Blockers / Notes:** Verified on 2026-10-23. The centralized authorization module was implemented at `src/modules/authorization/` with three policy files: `workspace.policy.ts` (workspace capability matrix, `requireWorkspaceAccess`, `assertMayManageMember`, `assertOwnershipSafe`), `project.policy.ts` (project capability matrix keyed by both workspace role and explicit project role, `requireProjectAccess`), and `team.policy.ts` (team capability matrix keyed by workspace role and explicit team role, `requireTeamAccess`), plus a barrel `index.ts` and shared `types.ts`. `src/modules/workspaces/authorization.ts` was converted to a compatibility shim that re-exports the same surface so all Phase 5 import paths remain valid. Workspace ownership transfer was added: `PATCH /api/v1/workspaces/{workspaceId}/owner/{userId}` is gated on `workspace:transfer_ownership` (OWNER only), validates the new owner is an existing member and not the caller themselves, atomically updates the `ownerId` column and both membership roles in one transaction, writes a `workspace.ownership_transferred` audit entry, and notifies the new owner. `assertOwnershipSafe` was wired into `removeMember` to prevent the owner from removing themselves. No Prisma schema changes were needed. Tests: `tests/phase6-authorization.test.ts` (44 unit tests) covers all workspace/project/team capability matrices, `assertMayManageMember`, `assertOwnershipSafe`, and `transferOwnershipSchema`. `tests/phase6-authorization-db.test.ts` (integration tests) covers cross-workspace access denial, role-based enforcement, owner-removal protection, and the full ownership transfer flow with audit log verification. Verification: `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run build` and `npm test` (97/97, 1 skipped — DB tests requiring an explicit flag) all pass. Committed in four chunks on `feature/phase-6-roles-permissions` (cbe270a, fb5efe3, e6fa0ef, d6c070f).
+**Blockers / Notes:** Partially implemented on 2026-11-01 and extended on 2026-11-03. The repository does not yet contain the Phase 9 task service, task routes or assignment workflow, nor the Phase 14 comment creation/mention parsing workflow, so the notifier-only option was retained rather than implementing those future phases without authorization. `src/services/task-assignment-notifier.ts` turns a persisted `TaskAssignee` into the existing `task_assignment` email. `src/services/mention-email-notifier.ts` turns a persisted comment mention into the existing `mention` email. Both require an active user with workspace access and project membership (or workspace management/project ownership), enforce existing address suppression, and call the existing non-fatal `sendEmail` outbox seam. Links are built from `EMAIL_APP_URL` plus the configurable `TASK_ASSIGNMENT_LINK_PATH` and `COMMENT_MENTION_LINK_PATH`. Task idempotency uses the persisted assignment timestamp; mention idempotency uses the comment and recipient, so repeated processing or a comment edit cannot enqueue a second email. Lookup and delivery failures are caught and reported without modifying task, comment or notification data. Tests: the task-assignment integration suite has 7 PostgreSQL/outbox tests and the mention integration suite has 10, covering valid delivery, reassignment, duplicate events, edited comments, invalid/unresolved mentions, self-mentions, suppression, ineligible recipients, delivery failure and preservation of in-app notifications. After merging the current `main`, the full suite with the Phase 2–5 database integrations enabled passes 265 tests with two intentionally skipped database suites (Phase 6 and Phase 7), 267 total. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `git diff --check` pass. The completion criteria are not met because no production task-assignment or comment/mention runtime caller exists, and the schema has no notification-preference model, so suppression is the only preference mechanism currently available. Phase 4.3 stays in progress until the Phase 9 assignment workflow and Phase 14 comment/mention workflow call these notifiers after a successful commit and the end-to-end paths are verified.
+
+---
+
+#### Phase 4.4 — Mention, meeting and team-invitation email integration `[/]`
+
+**Objective:** Connect the existing mention, meeting-invitation and team-invitation templates to their authoritative collaboration workflows without duplicating event parsing, invitation creation or notification state.
+
+**Deliverables:**
+- Post-commit mention email integration using existing persisted comment and workspace membership data
+- Post-commit pending meeting-invitation email integration using the invitation workflow's authorized context, including workspace/project context
+- Post-commit team-invitation email integration using a persisted `TEAM` invitation, its owning team and a digest-verified single-use token
+- Configurable frontend paths rooted at `EMAIL_APP_URL`, including the team acceptance link
+- Stable event idempotency, existing suppression enforcement and non-fatal delivery failures
+- Tests for recipient selection, template context, duplicate processing, suppression, invitation status and failure isolation
+- Runtime callers from the mention, meeting-invitation and team-invitation workflows
+
+**Dependencies:** Phase 4.2, Phase 7 teams, Phase 14 messaging/mentions, Phase 17 meetings
+
+**Verification criteria:**
+- All three existing templates have runtime callers
+- Mention events target the mentioned workspace member, excluding the author
+- Meeting mail is sent only for a valid pending invitation and does not independently grant access
+- Team mail is sent only for a valid pending `TEAM` invitation and never creates, revokes, expires or accepts an invitation
+- Invitation tokens never appear in logs, outbox metadata or idempotency keys
+- Repeated events do not enqueue duplicate messages
+- Existing reschedule/cancellation behavior is preserved
+- Relevant tests, type checks, lint and build pass
+
+**Blockers / Notes:** Partially implemented on 2026-11-01 and extended on 2026-11-03. `src/services/collaboration-email-notifier.ts` is the post-commit integration boundary. It resolves mention recipients from active users with workspace membership, excludes the comment author, uses the persisted task/comment context, and enforces the existing suppression list. Meeting invitations are gated on `PENDING`, accept optional workspace/project context, validate the recipient and start time, and build the join link from `EMAIL_APP_URL` plus `MEETING_INVITATION_LINK_PATH`. Team invitations load a persisted `Invitation` of type `TEAM`, require a pending, unexpired invitation bound to an active workspace, team and inviter, verify `hashSecret(token)` against the stored `tokenHash`, and build the acceptance link from `EMAIL_APP_URL` plus the new `TEAM_INVITATION_LINK_PATH`. The token is used only for the link and its digest; it is never logged, stored in outbox metadata or embedded in the idempotency key. Team idempotency uses the invitation and the persisted token digest, so re-processing the same token collapses into one outbox row while a resend with a new token creates one new mail. A team invitation lookup, status, token or delivery failure returns a result without modifying the invitation, so acceptance validation, expiration and single-use semantics stay in the owning workflow. The notifier never creates, revokes, expires or accepts an invitation.
+
+The repository still has no meeting schema, meeting routes, meeting participant management or meeting invitation workflow, no team invitation creation/acceptance workflow, and no comment creation/mention parsing workflow. The Phase 7 team service only adds existing workspace members, and `Invitation.teamId` / `Invitation.projectId` remain schema placeholders without relations. Therefore none of the three notifiers has a production runtime caller yet, and the unit and PostgreSQL/outbox suites exercise the boundaries directly. Notification preferences are still not modelled; the existing address suppression list is the only email preference control. The meeting reschedule/cancellation requirement also cannot be verified because no meeting lifecycle exists; the notifier remains invitation-creation only and should not be treated as implementing updates or cancellations. Phase 4.4 remains in progress pending the authoritative Phase 7, Phase 14 and Phase 17 workflows and end-to-end tests.
+
+---
+
+#### Phase 4.5 — Project invitation email integration and final email audit `[/]`
+
+**Objective:** Connect the existing project-invitation template to the authoritative project invitation workflow, then complete the Phase 4 email subsystem audit.
+
+**Deliverables:**
+- Post-commit project invitation email integration using a persisted `PROJECT` invitation, its project and a digest-verified single-use token
+- Project name, inviter, workspace context, expiration and a configurable acceptance link
+- Stable idempotency, existing suppression enforcement and non-fatal delivery failures
+- A final audit of delivery, retries, terminal failures, deduplication, logging privacy, all five collaboration integrations, and webhook verification/idempotency/suppression/bounce/complaint handling
+- Tests for delivery, duplicates, resend, expiration, wrong type, missing or archived project, invalid recipient, inactive inviter, token mismatch, suppression and failure isolation
+- Documentation of the remaining runtime-caller dependency
+
+**Dependencies:** Phases 4.1–4.4 and Phase 8 projects.
+
+**Verification criteria:**
+- Project mail includes the project name, inviter, workspace context, expiration and the configured acceptance link
+- Only a pending, unexpired `PROJECT` invitation for a live project in an active workspace is emailed
+- Invitation tokens never appear in logs, outbox metadata or idempotency keys
+- Repeated processing does not enqueue duplicate messages
+- Sending never creates, accepts, revokes or expires an invitation
+- Existing delivery, retry, privacy, webhook, suppression, bounce and complaint tests pass
+- Typecheck, lint, format and build pass
+
+**Blockers / Notes:** Implemented on 2026-11-03. `notifyProjectInvitation` in `src/services/collaboration-email-notifier.ts` loads a persisted `Invitation` of type `PROJECT`, requires a pending, unexpired invitation in an active workspace with an active inviter, resolves the live (non-archived) project by `projectId` and `workspaceId`, verifies `hashSecret(token)` against the stored `tokenHash`, and builds the acceptance link from `EMAIL_APP_URL` plus the new `PROJECT_INVITATION_LINK_PATH`. The template now renders the project name, workspace name, inviter, expiry and role when supplied. The raw token is used only for the link and its digest: it is never logged, stored in outbox metadata or embedded in the idempotency key. Idempotency uses the invitation and token digest, so re-processing one token collapses into one outbox row while a resend with a new token creates one new mail. A lookup, status, project, token or delivery failure returns a result without modifying the invitation, so acceptance validation, expiration and single-use semantics stay in the owning workflow. The notifier never creates, revokes, expires or accepts an invitation.
+
+The repository still has no project invitation creation/acceptance workflow. The Phase 8 project service adds an existing workspace member and sends an in-app notification; it does not issue project invitation tokens, and `Invitation.projectId` has no Prisma relation. The notifier is therefore the tested integration boundary that the Phase 8 workflow must call after committing an invitation, and Phase 4.5 remains in progress until that caller and an end-to-end acceptance path exist. The final audit confirmed the retry bound, terminal `FAILED` state, deduplication, log redaction, webhook verification/idempotency, suppression and bounce/complaint handling. Verification on 2026-11-03: the Phase 4 delivery suite passes 20/20, the collaboration suite 17/17 (including the project invitation cases), task assignment 7/7 and the focused unit suites 48/48; the database-enabled full suite (Phases 3, 4 and 5) passes 284 of 286 tests with 2 skipped and 0 failures; typecheck, lint, format check and build pass. All five collaboration handlers exist, but only the notifier boundaries are exercised; task assignment, mention, meeting, team and project workflows are still absent. Notification preferences are not modelled; the existing address suppression list is the only email preference control.
+
+---
+
+#### Phase 4.6 — Email integration, security, and regression verification `[/]`
+
+**Objective:** Verify the Phase 4 email delivery and security protections, connect all collaboration templates to real workflows, and keep the phase open while required workflows are missing.
+
+**Deliverables:**
+- Regression verification for bounded retries, recipient privacy, webhook verification/idempotency, suppression, bounces and complaints
+- Safe request and error logging for invitation and webhook URL tokens
+- Real workflow callers for task assignment, mentions, meeting invitations, team invitations and project invitations
+- Accurate Phase 4 status and remaining dependency documentation
+
+**Dependencies:** Phases 4.1–4.5 and the owning task, messaging, meeting, team and project workflows.
+
+**Verification criteria:**
+- Retry counters persist, failures terminate at the configured limit, and duplicate processing stays bounded
+- Recipient addresses, invitation tokens and webhook URL tokens are not exposed in logs
+- Existing webhook, suppression, bounce and complaint protections pass regression tests
+- All five collaboration templates have callers from their authoritative application workflows
+- Typecheck, lint, build, and relevant unit and database tests pass
+
+**Blockers / Notes:** Partially verified on 2026-11-01. The retry, privacy, webhook, suppression, bounce and complaint paths pass their existing Phase 4 tests. The audit fixed request/error log exposure of invitation and webhook URL tokens by redacting those paths and sanitized error details; an obsolete `console.log(req.url)` middleware registration was removed from `src/app.ts`. Focused tests pass 27/27; the Phase 4 PostgreSQL/SMTP suite passes 20/20; task-assignment outbox integration passes 7/7; workspace invitation HTTP/database integration passes 19/19; the full suite passes 108 with 0 failures and 1 skipped suite; typecheck, lint, build and format check pass. However, none of the five collaboration email handlers has a production workflow caller: the task-assignment notifier is only exercised by tests and the Phase 9 task workflow is absent; mention and meeting handlers are only exercised by tests and their Phase 14 / Phase 17 workflows are absent; the team and project invitation handlers are only exercised by tests and their Phase 7 / Phase 8 invitation workflows are absent. Workspace invitations continue to use only the workspace template. Phase 4 and Phase 4.6 remain in progress; do not mark them complete until the five real workflow integrations exist and are verified. Notification preference records are not implemented; existing email suppression is honored. The 2026-11-03 Phase 4.5 audit re-ran the delivery, retry, privacy, webhook, suppression and bounce/complaint suites and added the project invitation handler and its unit and PostgreSQL/outbox coverage; the audit found no regression in the webhook implementation, which was left unchanged.
+
+---
+
+# PHASE 2 — Database Architecture and Data Modelling
+
+### Objectives
+Implement a reliable database foundation that supports Nexus's multi-workspace architecture.
+
+### Tasks
+- Review existing database models and migrations.
+- Define the user identity model.
+- Define workspace and organisation models.
+- Define workspace membership models.
+- Define team and department models.
+- Define project and task models.
+- Define messaging and conversation models.
+- Define notification and activity models.
+- Define file and media metadata models.
+- Define subscription and billing models.
+- Define integration connection models.
+- Define calendar and meeting models.
+- Define audit log models.
+- Define AI interaction and approval models.
+- Define indexing and relational constraints.
+- Implement migrations using the existing migration framework.
+- Establish safe migration and rollback procedures.
+
+### Completion Criteria
+- Core database schema is implemented.
+- Relationships and constraints are verified.
+- Migrations run successfully.
+- No destructive migration is introduced without approval.
+- Database documentation is updated.
+
+---
+
+# PHASE 3 — Authentication and User Identity
+
+### Objectives
+Implement secure user authentication and identity management.
+
+### Tasks
+- User registration.
+- User login.
+- Logout and session invalidation.
+- Password hashing and verification.
+- Access token and refresh token management.
+- Secure token rotation and revocation.
+- Email verification.
+- Password reset.
+- Account profile management.
+- Profile image metadata and upload integration.
+- Optional two-factor authentication.
+- Account security settings.
+- Active session management.
+- Device and session tracking where supported.
+- Authentication middleware.
+- Rate limiting for sensitive authentication endpoints.
+- Account deactivation and deletion workflows.
+
+### Completion Criteria
+- Authentication works securely.
+- Refresh token handling is tested.
+- Users cannot access another user's account.
+- Password recovery works.
+- Optional 2FA can be enabled and disabled securely.
+- Authentication events are logged appropriately.
+
+---
+
+# PHASE 4 — Workspace Creation and Workspace Management
+
+### Objectives
+Support Individual, Company, and Institution workspaces within one Nexus platform.
+
+### Tasks
+
+#### Individual Workspaces
+- Automatically create a personal workspace for new individual users.
+- Implement personal workspace settings.
+- Support additional collaborative workspaces.
+- Preserve personal data independently of organisation membership.
+- Keep the personal workspace and assets intact for 30 days after account deletion is requested.
+- Allow password-verified account recovery during the 30-day period without restoring revoked sessions.
+- Permanently remove the personal workspace and exclusively owned relational records after the recovery period.
+- Preserve shared workspace content and anonymize historical attribution as `Deleted user`.
+- Remove the user's shared-workspace memberships and access during permanent deletion.
+- Block deletion requests until organization ownership is transferred and another active owner or administrator remains.
+- Do not remove personal-workspace files until their storage objects can be deleted through the configured object-storage provider.
+
+#### Company Workspaces
+- Company registration.
+- Organisation profile.
+- Company workspace configuration.
+- Initial Owner assignment.
+- Organisation settings.
+- Company-specific workspace structure.
+
+#### Institution Workspaces
+- Institution registration.
+- Institution profile.
+- Institution workspace configuration.
+- Configurable departments and organisational hierarchy.
+- Initial Owner assignment.
+- Institution settings.
+
+### Approved account deletion policy — 2026-11-03
+
+- `POST /auth/delete` requires the current password and exact email confirmation. It sets `PENDING_DELETION`, records `deletionRequestedAt` and `scheduledDeletionAt`, revokes active sessions and unused authentication tokens, and sends a transactional email with the scheduled date.
+- The recovery period is exactly 30 days. The existing password-verified `/auth/reactivate` flow cancels a pending deletion before the deadline. It clears the schedule but does not restore old sessions; the user must sign in again.
+- Permanent deletion removes the marked personal workspace and its workspace-owned relational data, memberships, access, notifications, and pending invitations. A neutral user tombstone remains to preserve foreign keys and shared historical attribution.
+- Company, Institution, and other non-personal shared workspaces are not deleted. Organization owners must transfer ownership first. A final active organization administrator cannot request deletion until another active owner or administrator is available.
+- Shared projects, tasks, comments, and file records remain. Assignments and memberships for the deleted user are removed; shared content displays the tombstone's `Deleted user` identity.
+- This repository has file metadata but no object-storage deletion adapter. Permanent deletion is held when personal workspace file metadata exists, rather than deleting the metadata and orphaning stored objects. Integrating safe object cleanup is a Phase 12 dependency and Phase 4 remains blocked for such accounts.
+
+### Company and Institution profile and settings requirements
+
+These fields and settings are approved product requirements. Phase 4 implements only workspace type and ownership foundations; profile models/APIs and organization administration are assigned to Phase 7 so they can use the organization structure and permission model without expanding the personal-workspace work.
+
+**Company profile:** company name, logo, description, industry/business category, official website, business email, contact information, country/location, organization workspace ID, created/updated timestamps.
+
+**Institution profile:** institution name, logo, description, institution type (university, college, school, research institution, or other), official website, institutional email, contact information, country/location, organization workspace ID, created/updated timestamps. Institution-only fields must not be imposed on Company profiles and vice versa.
+
+**Organization settings:** general profile and contact settings, workspace name and basic preferences, supported notification preferences, member/role views, invitations and member removal, ownership and administrator management, and role-protected security/access settings. Only authorized owners and administrators may change sensitive settings. Subscription, billing, pricing, department hierarchy, logo storage, and complete organization administration are deferred to their designated roadmap phases; no commercial rules are specified here.
+
+#### Shared Functionality
+- Workspace creation and updates.
+- Workspace switching support.
+- Workspace type validation.
+- Workspace status management.
+- Workspace archival and restoration.
+- Workspace ownership management.
+- Workspace deletion safeguards.
+- Workspace membership isolation.
+
+### Completion Criteria
+- All three workspace types can be created.
+- Workspace type controls applicable features.
+- Users can belong to multiple workspaces.
+- Personal workspace data remains independent.
+- Workspace isolation is enforced at the backend level.
+
+### Verified Phase 4 requirement status — 2026-11-03
+
+| Requirement | Status | Evidence / remaining work |
+|---|---|---|
+| Create company, institution, and individual workspace records; validate type; make them private by default; assign initial owner | COMPLETED | `WorkspaceType` migration and API/database tests cover all types and private defaults. Individual workspaces cannot be made public. |
+| Workspace create, list, retrieve, update, switch validation, soft delete, and archive | COMPLETED | API/database tests verify these operations, authorization, audit history, and deleted workspace access denial. |
+| Workspace restoration | COMPLETED | Added owner-only `POST /workspaces/{workspaceId}/restore`, transactional state transition and audit event; targeted regression test verifies role denial, success, repeat restore conflict, and audit. |
+| Membership isolation and ownership controls | COMPLETED | Database-backed workspace and Phase 6 policy tests verify membership scoping, owner protections, and cross-workspace denial. Phase 6 implementation was not changed in this audit. |
+| Workspace invitations and invitation state handling | COMPLETED | Existing Phase 5 integration tests cover invite/accept, single use, expiry, revocation, and workspace scoping. These capabilities remain implemented by the Phase 5 invitation module. |
+| Invitation decline/rejection | NOT STARTED | No invitee decline/rejection endpoint or state transition is present. This is a Phase 5 onboarding gap and was not implemented during this Phase 4 audit. |
+| Automatically provision a personal workspace after email verification | COMPLETED | Verification now transactionally creates or adopts one private `isPersonal` workspace and OWNER membership; migration backfills existing active users. |
+| Personal workspace archive/delete safeguards | COMPLETED | The ordinary workspace archive/delete routes reject personal workspaces; account deletion owns their lifecycle. |
+| Account deletion request, confirmation, and 30-day schedule | COMPLETED | Password and email confirmation, status and timestamps, token/session revocation, rate limiting, response, and transactional email are implemented. |
+| Recovery during the grace period | COMPLETED | Existing password-verified reactivation cancels the schedule without restoring old sessions. |
+| Permanent deletion of personal relational data and shared-data protection | IN PROGRESS | Idempotent locked worker removes personal relational data, memberships, assignments, profile, and pending invitations while anonymizing shared attribution. It holds accounts with personal file metadata because object storage deletion is not implemented. |
+| Last organization owner/administrator protection | COMPLETED | Requests are rejected until organization ownership is transferred and another active owner or administrator remains. |
+| Personal workspace-specific settings | IN PROGRESS | Generic workspace name/description/visibility settings remain available; no distinct personal settings model/API is required by the current foundational scope. |
+| Company profile and organization settings | NOT STARTED | Approved field and permission requirements are documented above and assigned to Phase 7. |
+| Institution profile and organization settings | NOT STARTED | Institution-specific fields are documented above and assigned to Phase 7; department hierarchy remains part of Phase 7. |
+| Frontend integration for onboarding, workspace list/switch, account recovery, and management | IN PROGRESS | Backend endpoints and response contracts are documented; frontend integration is outside this backend repository. |
+| Workspace lifecycle notifications and real-time events | NOT STARTED | Workspace audit logging exists; no Phase 4 workspace notification or real-time event integration was found in this branch. |
+
+---
+
+# PHASE 5 — Organisation Membership, Invitations and Join Requests
+
+### Objectives
+Implement organisation membership and controlled onboarding.
+
+### Tasks
+- Organisation membership management.
+- Direct invitations.
+- Invitation acceptance and rejection.
+- Invitation expiration after 48 hours.
+- Invitation revocation and resending.
+- Public organisation discovery.
+- Organisation join links and codes.
+- Organisation join requests.
+- Join request approval and rejection.
+- Join request withdrawal.
+- Join request expiration after 7 days.
+- Applicant status tracking.
+- Email-domain verification.
+- Prevent automatic membership based solely on matching email domains.
+- Team or department assignment during approval or afterward.
+- Support multiple team memberships.
+- Pending applicants must not access private workspace resources.
+- Membership removal.
+- Membership suspension and restoration.
+- Ownership transfer.
+- Task reassignment when members leave.
+- Preserve organisation assets and audit history after member removal.
+
+### Completion Criteria
+- Invitations and join requests follow their separate rules.
+- Expiration is enforced server-side.
+- Applicants cannot access private workspace resources.
+- Approved users receive the correct membership.
+- Membership removal does not delete the user's Nexus identity or personal workspace.
 
 ---
 
@@ -340,585 +785,975 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-### Milestone 3 — Project Management
+# PHASE 7 — Teams, Departments and Groups
+
+### Objectives
+Implement collaboration structures within Company and Institution workspaces.
+
+### Tasks
+- Add Company profile fields: name, logo reference, description, industry/business category, official website, business email, contact information, country/location, workspace ID, and timestamps.
+- Add Institution profile fields: name, logo reference, description, institution type, official website, institutional email, contact information, country/location, workspace ID, and timestamps.
+- Keep Company and Institution profile schemas distinct; do not require organization-specific fields on the other type.
+- Add general organization profile/settings operations with owner/admin authorization.
+- Add supported workspace preferences and notification preferences using the existing notification architecture.
+- Reuse Phase 5 membership and Phase 6 role/permission operations for member and administrator management; do not duplicate those APIs.
+- Create and manage teams.
+- Create and manage departments.
+- Create and manage institution groups.
+- Assign team leads and department administrators.
+- Add and remove members.
+- Support multiple team memberships.
+- Implement team-specific settings.
+- Implement department-specific settings.
+- Implement team membership permissions.
+- Implement team activity records.
+- Implement team-level project access.
+- Implement team-level communication access.
+
+### Completion Criteria
+- Company and Institution profiles are independently validated and workspace-scoped.
+- Only authorized owners and administrators can change sensitive organization settings.
+- Profile updates preserve workspace isolation and audit history.
+- Teams and departments work independently.
+- Users can belong to multiple teams.
+- Team permissions do not override organisation-level restrictions.
+- Team and department resources respect workspace visibility.
 
 ---
 
-#### Phase 8 — Projects and project collaboration `[ ]`
+# PHASE 8 — Projects and Project Visibility
 
-**Objective:** Build the project management foundation.
+### Objectives
+Implement the shared project management foundation.
 
-**Deliverables:**
-- Create, list, retrieve, update, archive, and delete projects
-- Project fields: name, description, status, start date, due date, settings
-- Project owner / manager assignment
-- Project membership and project-level roles
-- Project visibility and access policies
-- Project-specific task lists, labels, and custom fields where needed
-- Project activity history
-- Project overview and summary endpoints
-- Filtering, sorting, and pagination
-- Project member invitations or workspace-member assignment
-- Project status transitions and archival rules
-- Notifications when a user is added to a project or key details change
+### Tasks
+- Project creation and management.
+- Project descriptions and metadata.
+- Project ownership.
+- Project managers and contributors.
+- Project members and viewers.
+- Project status and lifecycle.
+- Project milestones.
+- Project deadlines.
+- Project categories and labels.
+- Project activity history.
+- Project archival and restoration.
+- Project-level settings.
+- Project membership management.
 
-**Dependencies:** Phases 1, 2, 5, 6, 7
+### Project Visibility
 
-**Verification criteria:**
-- Project CRUD operations pass tests
-- Project resources are isolated per workspace
-- Unauthorized users cannot access or modify projects
-- Pagination and filter endpoints return correct subsets
+Implement three visibility levels:
 
-**Blockers / Notes:** _None recorded._
+1. Organisation-wide.
+2. Department/team-only.
+3. Private/invitation-only.
 
----
+### Important Requirements
+- Project visibility must apply to all related resources.
+- Project messages, files, meetings, tasks, and activity history must follow project access rules.
+- Changing project visibility must not expose previously private resources.
+- Organisation Admins must not automatically gain access to private projects unless their permissions explicitly allow it.
 
-#### Phase 9 — Tasks, workflow and dependencies `[ ]`
-
-**Objective:** Implement Nexus's core work-tracking engine.
-
-**Deliverables:**
-- Create, retrieve, update, archive, and delete tasks
-- Task fields: title, description, status, priority, due date, start date, labels, ordering
-- Single or multiple assignees per product rules
-- Task creator and project association
-- Subtasks and parent-child relationships
-- Task watchers / subscribers
-- Search, filtering, sorting, and pagination
-- Workflow states: `ASSIGNED` → `IN_PROGRESS` → `SUBMITTED` → `UNDER_REVIEW` → `APPROVED`; `CHANGES_REQUESTED` supported
-- Role-based transition permissions enforced on the backend
-- Transition history: who changed status and when
-- Review decisions and feedback recorded
-- Task dependencies and blockers; circular dependency prevention
-- Due-date validation and overdue detection
-- Task reassignment and completion rules
-- Progress calculation using a documented formula
-
-**Dependencies:** Phases 1, 2, 5, 6, 8
-
-**Verification criteria:**
-- All valid workflow transitions pass; invalid transitions are rejected
-- Circular dependencies are detected and prevented
-- Role-based transition restrictions enforced in tests
-- Task search and pagination work correctly
-
-**Blockers / Notes:** _None recorded._
+### Completion Criteria
+- Projects can be created and managed.
+- All visibility levels work correctly.
+- Project resources inherit the appropriate access restrictions.
+- Project access is tested against different workspace roles.
 
 ---
 
-#### Phase 10 — Comments, activity history and audit logs `[ ]`
+# PHASE 9 — Task and Work Management
 
-**Objective:** Preserve context behind work and provide accountability.
+### Objectives
+Implement Nexus task management and project execution capabilities.
 
-**Deliverables:**
-- Task comments and threaded replies
-- Edit and delete policies for comments
-- Project discussions and activity entries
-- Activity feed with pagination and filters; linked to workspace, project, or task
-- User mentions in comments
-- Important resource change records: actor, action, target, timestamp, change metadata
-- Audit log distinct from user-facing activity feed
-- Notifications for replies and relevant updates triggered from this module
-- Retention and access policies on audit records
-- Ordinary users cannot modify security audit entries
+### Tasks
+- Task creation and updates.
+- Task descriptions.
+- Multiple assignees where appropriate.
+- Task creator and responsible owner.
+- Task status.
+- Priority levels.
+- Start and due dates.
+- Subtasks and checklists.
+- Labels and categories.
+- Task comments.
+- Task attachments.
+- @mentions.
+- Task dependencies.
+- Task activity history.
+- Task assignment and reassignment.
+- Task completion and reopening.
+- Task archival.
+- Task filtering and sorting.
+- Board, List, Timeline, and Calendar views using shared task data.
+- Task access control.
+- Task notifications.
 
-**Dependencies:** Phases 1, 2, 5, 6, 8, 9
+### Message-to-Task Conversion
+- Convert an eligible message into a task.
+- Preserve the original message reference.
+- Preserve the conversation context.
+- Notify relevant assignees.
+- Prevent duplicate conversion where appropriate.
 
-**Verification criteria:**
-- Activity feed shows correct events in order with correct pagination
-- Audit records cannot be edited by non-admin users
-- Mentions trigger notifications (requires Phase 14 integration)
-- Comment edit/delete policies enforced by role
-
-**Blockers / Notes:** _None recorded._
-
----
-
-### Milestone 4 — Files and Collaboration
-
----
-
-#### Phase 11 — File and attachment management `[ ]`
-
-**Objective:** Let users safely upload, retrieve, and share files throughout Nexus.
-
-**Deliverables:**
-- S3-compatible object-storage provider configured
-- File metadata records in PostgreSQL (uploader, size, content type, storage key)
-- Short-lived signed upload and download URLs
-- File attachments for tasks, comments, projects, messages, and meetings
-- File size, allowed type, and ownership validation
-- Storage quotas if required
-- Deletion and detachment policies
-- Private-file access restricted by authorization checks
-- Asynchronous preview / thumbnail generation where appropriate
-- Handling for incomplete uploads, missing objects, and storage-provider failures
-- Malware scanning hook for production deployments
-- No predictable public URLs for private files
-
-**Dependencies:** Phases 1, 2, 5, 6
-
-**Verification criteria:**
-- Authorized users can upload and download files
-- Unauthorized users cannot obtain private file content by guessing IDs or URLs
-- Signed URLs expire and cannot be reused after expiry
-- File type and size limits are enforced
-
-**Blockers / Notes:** _Storage provider credentials and bucket configuration required before production verification._
+### Completion Criteria
+- Task lifecycle works.
+- Multiple task views use consistent data.
+- Task permissions are enforced.
+- Message-to-task conversion preserves context.
+- Task activity and notification events are generated correctly.
 
 ---
 
-#### Phase 12 — Real-time infrastructure and presence `[ ]`
+# PHASE 10 — Real-Time Messaging and Conversations
 
-**Objective:** Make Nexus respond to live changes without polling.
+### Objectives
+Implement Nexus communication infrastructure.
 
-**Deliverables:**
-- Socket.IO configured alongside Express HTTP server
-- Authenticated socket connections
-- Authorization before joining workspace, project, or conversation rooms
-- Versioned, consistently structured event payloads
-- Connection and disconnection handling
-- Online presence tracking and last-seen timestamps
-- Typing indicators and presence subscriptions
-- Task, project, message, and notification events broadcast to authorized rooms
-- Reconnect and stale-connection handling; duplicate-event prevention
-- Persistent events stored in PostgreSQL before broadcasting
-- Redis-backed cross-instance event coordination (Socket.IO adapter) for multi-instance deployments
-- Event rate limits and incoming-payload validation
+### Conversation Types
+- Direct messages.
+- Group conversations.
+- Team channels.
+- Project conversations.
+- Announcements.
 
-**Dependencies:** Phases 1, 5, 6
+### Tasks
+- Conversation creation.
+- Conversation membership.
+- Message sending and receiving.
+- Real-time message delivery.
+- Message persistence.
+- Message editing and deletion.
+- Replies and threads.
+- Reactions.
+- @mentions.
+- Attachments.
+- Read receipts.
+- Typing indicators.
+- Online presence.
+- Message pinning.
+- Saved messages.
+- Conversation search.
+- Message pagination.
+- Conversation permissions.
+- Unread message counts.
+- Message notification separation.
 
-**Verification criteria:**
-- Authenticated users receive only events for rooms they are authorized to join
-- Unauthorized room-join attempts are rejected
-- Real-time functionality recovers cleanly after disconnects
-- No private event data leaks between workspaces
+### Channel Management
 
-**Blockers / Notes:** _None recorded._
+Channels are controlled by authorised workspace administrators.
 
----
+- Owners have full control.
+- Admins can create and manage channels according to permissions.
+- Team Leads may manage channels within assigned teams when authorised.
+- Members cannot create channels by default.
+- Guests can access only explicitly shared channels.
 
-#### Phase 13 — Messaging and connected communication `[ ]`
+Support:
+- Workspace-public channels.
+- Private channels.
+- Read-only announcement channels.
+- Project-linked channels.
 
-**Objective:** Connect conversations directly to work.
-
-**Deliverables:**
-- Direct conversations, group conversations, workspace/team/project channels, task-linked discussions
-- Conversation membership and access permissions
-- Create, rename, archive, and manage conversations
-- Send, retrieve, and paginate messages
-- Edit and delete messages according to policy
-- Threaded replies
-- Reactions and emoji responses
-- File attachments on messages
-- @mentions and user resolution
-- Typing indicators, read receipts, and unread counts
-- Pin important messages
-- Message search filtered by conversation or author
-- Idempotent message creation to prevent duplicates on retry
-- Consistent message ordering and timestamps
-- Convert a message to a task; link messages to projects and tasks
-- Preserve access control when a user loses membership
-- Real-time delivery via Socket.IO (Phase 12)
-
-**Dependencies:** Phases 1, 2, 5, 6, 7, 11, 12
-
-**Verification criteria:**
-- Messages persist correctly and are returned in consistent order
-- Authorized users receive real-time updates; unauthorized users do not
-- Conversation access revoked correctly on membership removal
-- Message-to-task conversion does not create duplicates
-
-**Blockers / Notes:** _None recorded._
+### Completion Criteria
+- Messages persist in PostgreSQL.
+- Real-time delivery works.
+- Conversation membership is enforced.
+- Unread counts work independently.
+- Channel permissions are enforced.
+- Message notifications remain separate from general notifications.
 
 ---
 
-#### Phase 14 — In-app notifications and preferences `[ ]`
+# PHASE 11 — Notification and Activity Infrastructure
 
-**Objective:** Build one notification system that all Nexus modules can use.
+### Objectives
+Implement a centralised notification and activity system.
 
-**Deliverables:**
-- Central notification service
-- Persistent notification records in PostgreSQL
-- Unread counts and mark-as-read operations
-- Mark-all-as-read and optional dismissal / archive
-- Real-time notification delivery via Socket.IO
-- Notification preferences per user and, where appropriate, per workspace
-- Channel preferences: in-app, email, and later push
-- Notification categories, priority, and grouping
-- Deduplication for repeated events
-- Email delivery integration (Phase 4)
-- Notification history with pagination
-- Scheduled reminders for tasks and meetings
-- Preference-aware delivery rules
-- Retention and cleanup of old notifications
-- Events covered: mentions, task assignment/reassignment/due-soon, review outcomes, comments/replies, membership changes, invitation accepted, meeting events, important project and admin events
+### Tasks
+- Central event service.
+- Persistent notification records.
+- Activity feed.
+- Recipient resolution.
+- Notification preferences.
+- Notification deduplication.
+- Real-time notification delivery.
+- Email notification integration.
+- Notification read and unread states.
+- Notification grouping.
+- Notification pagination.
+- Notification retention policies.
+- Retry and failure handling.
+- Notification audit records.
 
-**Dependencies:** Phases 1, 2, 4, 5, 6, 9, 10, 12, 13
+### General Notification Events
+- Task assignments.
+- Task mentions and comments.
+- Meeting invitations.
+- Meeting changes.
+- Join request decisions.
+- Directly shared files.
+- Security and access changes.
+- Other important workspace activities.
 
-**Verification criteria:**
-- Notification creation is consistent across all producing modules
-- Delivery preferences are respected; security-critical messages are not suppressible
-- Email send failure does not erase the in-app notification record
-- Real-time delivery confirmed over Socket.IO
+### Strict Message Notification Separation
 
-**Blockers / Notes:** _None recorded._
+- Direct messages must appear only in the Messages area.
+- Group messages must appear only in the Messages area.
+- Channel messages must appear only in the Messages area.
+- Message @mentions must not generate duplicate general notification alerts.
+- Message-to-task conversion may generate a general task notification.
+- General notification counts and message unread counts must remain independent.
 
----
+### Smart Notification Behaviour
+- Important events should alert immediately.
+- Less important events may be grouped.
+- Relevant activities should remain available in the activity feed.
+- Notification preferences must be respected.
+- Duplicate alerts must be prevented.
 
-### Milestone 5 — Productivity
-
----
-
-#### Phase 15 — Search and filtering `[ ]`
-
-**Objective:** Allow users to find information across their authorized workspace data.
-
-**Deliverables:**
-- Search users and workspace members
-- Search workspaces and projects the current user can access
-- Search tasks by title, description, status, assignee, priority, and due date
-- Search messages and comments within access permissions
-- Filter by team, project, author, status, and date range
-- Sorting and pagination on all search results
-- Consistent input validation
-- PostgreSQL full-text search for suitable text fields
-- Appropriate database indexes; query performance reviewed
-- Optional saved filters or views
-- Semantic search with embeddings / pgvector deferred to a later enhancement
-
-**Dependencies:** Phases 1, 2, 5, 6, 9, 10, 13
-
-**Verification criteria:**
-- Search never returns data the user is not authorized to access
-- Results are paginated and performant under normal load
-- Full-text search indexes confirmed in migration review
-- Cross-workspace result leakage tested and absent
-
-**Blockers / Notes:** _None recorded._
+### Completion Criteria
+- Events are persisted reliably.
+- Notification delivery works.
+- Message notifications are separated from general notifications.
+- Retry mechanisms are bounded.
+- Users can configure notification preferences.
 
 ---
 
-#### Phase 16 — Calendar, scheduling and reminders `[ ]`
+# PHASE 12 — File Management and Nexus Drive
 
-**Objective:** Make deadlines, planned work, and meetings available as coordinated backend data.
+### Objectives
+Implement secure file storage and management.
 
-**Deliverables:**
-- Task start dates and due dates surfaced in calendar queries
-- Project timelines
-- Calendar event models for independent events where needed
-- Meeting scheduling and participant invitations
-- Time-zone-aware date and timestamp handling (UTC storage; time-zone context preserved for recurring events)
-- Recurring reminders where required
-- Upcoming and overdue task queries
-- Reminder scheduling, cancellation, and rescheduling (replaces outdated jobs)
-- Email and in-app reminders via Phases 4 and 14
-- User and workspace calendar settings
-- Calendar integration preparation for external providers if required
+### Tasks
+- Private object storage integration.
+- File upload.
+- File download.
+- File metadata persistence.
+- Signed URL generation where applicable.
+- File ownership.
+- File sharing.
+- Workspace file organisation.
+- Project file organisation.
+- Folder management.
+- File permissions.
+- File replacement and versioning foundations.
+- File deletion and recovery policies.
+- File size and type validation.
+- Upload restrictions.
+- Secure file access.
+- Storage usage tracking.
+- File activity history.
 
-**Dependencies:** Phases 1, 2, 4, 9, 14
+### Security Requirements
+- Private storage by default.
+- Do not expose private storage credentials.
+- Validate permissions before issuing access links.
+- Validate file metadata and upload constraints.
+- Prevent cross-workspace file access.
+- Do not trust client-supplied storage paths.
 
-**Verification criteria:**
-- Scheduled reminder arrives at the correct time and respects user preferences
-- Reminder is not sent after the associated event is cancelled or rescheduled
-- Time-zone handling verified with tests using multiple zones
-- Overdue detection returns correct task sets
-
-**Blockers / Notes:** _None recorded._
-
----
-
-### Milestone 6 — Advanced Capabilities
-
----
-
-#### Phase 17 — Audio/video meetings `[ ]`
-
-**Objective:** Integrate a managed calling provider so users can communicate live.
-
-**Deliverables:**
-- Create and schedule meetings; associate with projects, teams, conversations, and tasks
-- Add and remove participants
-- Secure meeting invitations via email (Phase 4)
-- Generate or retrieve provider room identifiers
-- Backend authorization for who can create, join, and manage meetings
-- Short-lived provider credentials issued through the backend
-- Meeting status, start time, end time, and participant records
-- Call history endpoints
-- Cancellation and rescheduling support
-- Real-time events: participant joined/left, meeting started/ended, invitation, cancellation (Phase 12)
-- Notifications to participants (Phase 14)
-- Provider webhook verification and idempotent processing
-- Provider credentials kept server-side
-- Recording and transcription deferred: requires consent and access-control design
-
-**Dependencies:** Phases 1, 2, 4, 5, 6, 12, 14, 16
-
-**Verification criteria:**
-- User can create a meeting, invite participants, obtain authorized credentials, and join via managed SDK
-- Unauthorized users are denied access to meeting rooms
-- Meeting history records are accurate
-- Provider webhooks verified and processed idempotently
-
-**Blockers / Notes:** _Calling provider selection and credentials required before production verification._
+### Completion Criteria
+- Files can be uploaded and retrieved securely.
+- File access follows workspace and project permissions.
+- Metadata is persisted.
+- Storage operations are tested.
 
 ---
 
-#### Phase 18 — AI services and workspace intelligence `[ ]`
+# PHASE 13 — Document Collaboration
 
-**Objective:** Introduce AI features using a managed API, keeping authorization and costs under control.
+### Objectives
+Provide document collaboration capabilities within Nexus.
 
-**Deliverables:**
-- Provider adapter and configurable model selection (`src/services/providers/ai`)
-- Dedicated AI service layer
-- Secure server-side provider credentials
-- Request validation, timeouts, retries for safe failures, rate limits
-- Input and output size limits
-- Structured output validation
-- Usage, latency, error, and cost tracking
-- User and workspace quotas
-- Safe handling of provider failures and unavailable models
-- Prompt versioning; tests for critical AI workflows
-- Features: task planning from project goals, task breakdown, dependency suggestions, draft descriptions, project/task/conversation summaries, meeting summaries, blocker and workload analysis, authorized workspace Q&A, workflow suggestions
-- Authorization check before retrieving any workspace context
-- Retrieval limited to minimum authorized data
-- Untrusted-input treatment for retrieved messages, files, and user content
-- Human confirmation required before consequential actions (create, delete, invite, etc.)
-- No prompt-injection bypass of application permissions
-- Transparent errors on AI request failures
+### Tasks
+- Document creation.
+- Document metadata.
+- Document access control.
+- Document sharing.
+- Document comments.
+- Document revisions and version history.
+- Document activity.
+- Document attachment to projects and tasks.
+- Document search indexing.
+- Document permissions.
+- Integration with Nexus Drive.
 
-**Dependencies:** Phases 1, 2, 5, 6, 9, 13, 17
-
-**Verification criteria:**
-- AI features enforce workspace permissions; unauthorized context is not retrieved
-- Usage quotas enforced and exceeded-quota errors handled gracefully
-- Provider failure does not break core project-management operations
-- Consequential actions require explicit user confirmation in tests
-
-**Blockers / Notes:** _AI provider API key required before production verification._
+### Completion Criteria
+- Documents can be managed securely.
+- Access permissions are enforced.
+- Document history is maintained where supported.
+- Documents can be connected to relevant workspace resources.
 
 ---
 
-#### Phase 19 — Automation and background jobs `[ ]`
+# PHASE 14 — Calendar and Scheduling
 
-**Objective:** Move slow, scheduled, and retryable work out of HTTP request handlers.
+### Objectives
+Implement the shared Nexus calendar and scheduling infrastructure.
 
-**Deliverables:**
-- BullMQ workers with Redis queues for: email delivery, task/meeting reminders, invitation expiry, AI summaries, file processing/thumbnails, notification fan-out, scheduled reports, data cleanup/retention, webhook delivery, provider reconciliation
-- Retry and exponential-backoff policies per job type
-- Dead-letter / failed-job handling and recovery process
-- Idempotent job handlers
-- Job status tracking and operational metrics
-- Queue concurrency limits
-- Graceful worker shutdown
-- Transactional outbox pattern for critical database changes that must reliably trigger async events
+### Tasks
+- Calendar creation and management.
+- Personal calendars.
+- Workspace calendars.
+- Team calendars.
+- Project calendars.
+- Event creation and updates.
+- Event invitations.
+- Participant management.
+- Availability management.
+- Recurring events.
+- Event reminders.
+- Event cancellation.
+- Calendar access permissions.
+- Calendar aggregation across authorised workspaces.
+- External calendar connection foundations.
 
-**Dependencies:** Phases 1, 2, 4, 9, 14, 17, 18
+### Two-Way External Synchronisation
+- Google Calendar integration.
+- Microsoft Outlook Calendar integration.
+- OAuth connection management.
+- Event mapping.
+- Two-way event synchronisation.
+- Conflict detection.
+- Duplicate prevention.
+- Update and deletion synchronisation.
+- Sync history.
+- Origin tracking.
+- Idempotency to prevent sync loops.
 
-**Verification criteria:**
-- Temporary provider outage does not permanently lose work; jobs retry correctly
-- Jobs are idempotent — retrying does not duplicate messages, emails, or business operations
-- Dead-letter queue captures unrecoverable failures
-- Graceful shutdown confirmed under load
+### Privacy
+- Private event details must remain hidden from unauthorised users.
+- Calendar aggregation must respect workspace membership and permissions.
 
-**Blockers / Notes:** _None recorded._
-
----
-
-#### Phase 20 — Integrations and webhooks `[ ]`
-
-**Objective:** Allow Nexus to exchange events and data with external systems.
-
-**Deliverables:**
-- Standard integration / provider interface
-- Secure credential storage for integrations
-- Webhook registration and revocation
-- Signed outgoing webhooks
-- Incoming webhook signature validation
-- Retry, deduplication, and delivery history for outgoing webhooks
-- Integration permission scopes
-- Audit logs for integration changes
-- Event subscriptions for task creation, project updates, and other useful events
-- Integration health and failure reporting
-- Specific integrations (calendar, identity, file services, project tools) implemented only when a clear product requirement exists
-
-**Dependencies:** Phases 1, 2, 5, 6, 9, 19
-
-**Verification criteria:**
-- Integrations can be authorized, revoked, and retried
-- Outgoing webhook signatures verified by a test receiver
-- Duplicate webhook delivery handled idempotently
-- Integration credentials are not exposed in API responses or logs
-
-**Blockers / Notes:** _None recorded._
+### Completion Criteria
+- Internal calendar operations work.
+- Event permissions are enforced.
+- Synchronisation is reliable and does not create duplicate events.
+- Sync conflicts are handled safely.
 
 ---
 
-### Milestone 7 — Production Readiness
+# PHASE 15 — Meetings and Calling Integration
+
+### Objectives
+Integrate the managed audio/video calling SDK.
+
+### Tasks
+- Meeting creation.
+- Instant meetings.
+- Scheduled meetings.
+- One-to-one calls.
+- Group calls.
+- Meeting invitations.
+- Meeting participant management.
+- Meeting access tokens.
+- Meeting join and leave events.
+- Meeting chat integration.
+- Screen-sharing support through the provider.
+- Participant permissions.
+- Meeting recordings where supported and authorised.
+- Meeting status tracking.
+- Project-linked meetings.
+- Calendar-linked meetings.
+- Meeting notifications.
+- Meeting history.
+
+### Security
+- Generate provider credentials server-side.
+- Validate meeting access.
+- Prevent unauthorised meeting joins.
+- Respect project and workspace permissions.
+- Never expose provider secret keys.
+
+### Completion Criteria
+- Meetings can be created and joined.
+- Provider integration works.
+- Access is permission-controlled.
+- Meeting events and notifications are recorded.
 
 ---
 
-#### Phase 21 — Security, reliability and performance hardening `[ ]`
+# PHASE 16 — Forms and Surveys
 
-**Objective:** Verify and strengthen the complete system's security posture and operational resilience.
+### Objectives
+Implement reusable forms and survey capabilities.
 
-_Security is implemented from Phase 1. This phase audits and hardens the whole platform._
+### Tasks
+- Form creation.
+- Form editing.
+- Form publishing.
+- Form fields and field types.
+- Required and optional fields.
+- Form access settings.
+- Public and workspace-restricted forms.
+- Form sharing links.
+- Response submission.
+- Response validation.
+- Response storage.
+- Response permissions.
+- Response export foundations.
+- Form activity records.
+- Survey results and summary foundations.
 
-**Deliverables:**
-- Centralized authentication and authorization audit
-- Input validation and output shaping review across all routes
-- SQL-injection protection verified via safe ORM usage
-- XSS and CSRF defenses reviewed
-- CORS restrictions and HTTP security headers reviewed
-- Request-size and upload limits reviewed
-- Rate limiting on sensitive and expensive endpoints
-- Secure password hashing and session management review
-- Secret management and rotation procedures documented
-- Brute-force and account-enumeration protection verified
-- Safe production error responses (no stack traces or secrets)
-- Workspace and project access checks on all applicable endpoints
-- Resource-level authorization for tasks, messages, files, AI, and meetings
-- Cross-workspace data-leakage tests
-- Safe membership removal and ownership transfer edge cases
-- Explicit access policies for archived resources and external collaborators
-- Database indexes and query-performance analysis
-- Connection pooling and transaction management review
-- Redis timeouts, cache invalidation, and graceful degradation
-- HTTP and provider timeout configuration
-- Retry policies reviewed for idempotency
-- Socket and worker resource management
-- Database backup and restore procedures exercised (not merely documented)
-- Dependency and vulnerability scan
-- Log redaction and sensitive-data handling
-- Account deletion, data-retention, and export rules
-- AI data handling and provider-retention policy review
-- Meeting recording and transcription consent review
-- Audit-log retention and access controls
-- Incident response procedures documented
-
-**Dependencies:** All prior phases
-
-**Verification criteria:**
-- Security tests cover critical permission boundaries
-- Cross-workspace access is denied in automated tests
-- Backup and restore procedure successfully exercised in a staging environment
-- No known high-severity vulnerabilities in dependency scan
-- Incident response runbook exists
-
-**Blockers / Notes:** _None recorded._
+### Completion Criteria
+- Forms can be created and published.
+- Responses are validated and stored.
+- Access restrictions are enforced.
+- Form data remains isolated by workspace.
 
 ---
 
-#### Phase 22 — Testing and quality assurance `[ ]`
+# PHASE 17 — Subscription, Plans and Billing
 
-**Objective:** Verify the backend behaves correctly across all modules and integrations.
+### Objectives
+Implement Nexus subscription and payment management.
 
-**Deliverables:**
-- Unit tests: business logic, permission policies, workflow transitions
-- Integration tests against a real test PostgreSQL database
-- Redis integration tests: cache, rate limits, queue behavior
-- API tests for every major route
-- Authentication, session expiry, and password-reset tests
-- Workspace and project authorization tests
-- Email template, invitation, and delivery-retry tests
-- Socket.IO authorization and event-delivery tests
-- File access and signed-URL tests
-- AI provider mocking and output-validation tests
-- Calling-provider webhook and meeting-permission tests
-- Background job retry and idempotency tests
-- Load tests for important endpoints and real-time connections
-- Migration and fresh-environment tests
-- End-to-end tests for critical workflows (see SKILL.md §4 Phase 22)
-- CI checks for linting, formatting, type-checking, and tests
+### Subscription Structure
 
-**Critical end-to-end scenarios covered:**
-1. Register → receive email → verify → login
-2. Owner invites user → email received → invitation accepted
-3. Project Manager creates project → assigns task → submits for review
-4. Reviewer approves or requests changes
-5. User mentions teammate → notification delivered
-6. Authorized upload and download of private file
-7. Schedule meeting → invite participants → join via calling provider
-8. AI summarizes an accessible project
-9. Unauthorized user is denied access to another workspace's tasks, files, messages, and AI context
-10. Email and AI provider outage occurs → system recovers per retry policy
+#### Individual
+- Free plan.
+- Premium plan.
+- Monthly and yearly billing.
+- Optional saved payment method for authorised auto-renewal.
 
-**Dependencies:** All prior phases
+#### Company
+- Free plan.
+- Paid organisation plans.
+- Included seats and additional seat pricing.
+- Owner-controlled billing.
 
-**Verification criteria:**
-- Critical user journeys pass in CI
-- No major feature is considered complete based solely on manual demonstration
-- Test failures are reproducible and traceable to specific changes
+#### Institution
+- Free plan.
+- Institution-specific paid plans.
+- Member-category allowances.
+- Owner-controlled billing.
 
-**Blockers / Notes:** _None recorded._
+### Tasks
+- Plan definitions.
+- Subscription records.
+- Subscription creation.
+- 14-day Premium trial without requiring a card.
+- Explicit user subscription after trial.
+- Monthly and annual billing.
+- Payment provider integration.
+- Payment verification.
+- Webhook processing.
+- Payment history.
+- Invoice records.
+- Saved payment method support through provider tokenisation.
+- Explicit consent for recurring charges.
+- Subscription renewal.
+- Subscription cancellation.
+- Failed payment handling.
+- Grace periods where applicable.
+- Plan upgrades and downgrades.
+- Seat and usage tracking.
+- Organisation billing ownership.
+- Ownership transfer for billing.
+- Subscription entitlement middleware.
+
+### Approved commercial and membership rules
+
+These approved prices and rules are recorded in 2026-11-03 product decisions. The preparatory helper code in `src/modules/billing/` implements server-owned price/seat calculations and lifecycle policy calculations only. It does not start or complete Phase 17 because billing persistence, routes, a provider, verified payments, and entitlement enforcement are absent.
+
+| Plan | Monthly | Annual | Included members | Extra active member |
+|---|---:|---:|---:|---:|
+| Pro | $10/month | $50/year | 15 | $0.50/member/month |
+| Business | $15/month | $70/year | 25 | $1/member/month |
+
+- The workspace owner counts once and consumes an included seat.
+- Only active memberships with active accounts count. Pending invitations, suspended, removed, and deactivated memberships do not count. Admin roles do not have a separate billing exclusion.
+- Additional members are billed monthly, including on annual base subscriptions.
+- Upgrades and seat increases apply immediately only after server-verified successful payment and are prorated. Downgrades, seat reductions, and cancellation take effect at renewal/period end; paid access remains through the already-paid period. Seat conflicts never cause automatic member or data deletion.
+- No automatic refunds. Refund requests are handled manually under the business's approved policy and applicable law.
+- Failed-payment policy is deferred; retry behavior, grace periods, notifications, access timing, and additional-seat treatment remain undecided. Do not invent failure timelines or grant paid access without verified payment.
+
+### Important Rules
+- A trial must not silently convert into a paid subscription.
+- If the user does not upgrade, the subscription falls back to the applicable Free plan.
+- Company and Institution subscriptions belong to the organisation.
+- Ordinary organisation members do not separately pay for organisation features.
+- Personal subscriptions remain independent of organisation subscriptions.
+- Leaving an organisation must not affect the user's personal workspace.
+- Downgrades must not silently delete user data.
+- Over-limit features should be restricted gracefully.
+- Never store raw card details or CVV.
+
+### Current implementation status — policy preparation only
+
+- `src/modules/billing/pricing.ts`, `membership-billing.ts`, and `lifecycle-policy.ts` contain the approved integer-cent catalog, authoritative workspace-scoped active-member query/count calculation, prorated charge calculations, schedule policy, owner guard, and deferred failed-payment policy.
+- Unit tests cover the pure rules and database-scoped query helper. They do not establish provider payment verification or durable idempotency.
+- No subscription tables/migrations, routes, provider adapter/configuration, payment webhooks, invoice/history functionality, or subscription entitlement integration exist. Do not enable checkout or call Phase 17 complete.
+- Provider selection and legal review remain external dependencies. The exact implementation requirements are in the frontend repository's `docs/SUBSCRIPTION_BILLING_BACKEND_REQUIREMENTS.md`.
+
+### Completion Criteria
+- Payment flows are verified.
+- Webhooks are secure and idempotent.
+- Subscription entitlements are enforced.
+- Personal and organisation billing remain independent.
+- Trial expiration and downgrade behaviour work correctly.
 
 ---
 
-#### Phase 23 — Deployment, monitoring and operations `[ ]`
+# PHASE 18 — Global Search and Full Document Search
 
-**Objective:** Make the complete backend production-ready and maintainable.
+### Objectives
+Implement a unified search service across all workspaces a user is authorised to access.
 
-**Deliverables:**
-- Separate development, staging, and production environments
-- Production PostgreSQL and Redis provisioned
-- Secure deployment-time environment configuration
-- Automated build, test, and deployment pipelines (CI/CD)
-- Controlled database migration strategy for deployments
-- API health, readiness, and dependency checks in production
-- Centralized logs and error monitoring
-- Metrics: request latency, error rates, database performance, queue depth
-- Alerts for repeated failures and service degradation
-- Email delivery, AI usage, and calling-provider monitoring
-- Database backup scheduling and restore verification
-- Worker and scheduled-job deployment
-- Socket.IO deployment configuration; Redis shared adapter for multi-instance
-- HTTPS, domain, and CORS configuration
-- Deployment rollback procedure
-- Dependency update and security patch process
-- Operational documentation and runbooks
+### Search Categories
+- People.
+- Workspaces.
+- Teams.
+- Departments.
+- Projects.
+- Tasks.
+- Messages.
+- Conversations.
+- Files.
+- Documents.
+- Meetings.
+- Announcements.
 
-**Dependencies:** Phases 1, 4, 17, 18, 19, 21, 22
+### Tasks
+- Central search service.
+- PostgreSQL full-text search foundation.
+- Search indexing.
+- Search result ranking.
+- Search filters.
+- Workspace filters.
+- Category filters.
+- Recent searches.
+- Search suggestions.
+- Search pagination.
+- Search permissions.
+- Index updates on create, edit, and delete.
+- Index updates on permission changes.
+- Document content extraction.
+- Searchable PDF content.
+- Searchable Word document content.
+- Searchable text document content.
+- File metadata and filename search.
+- Search history privacy.
 
-**Verification criteria:**
-- Backend can be deployed from a clean checkout without manual steps
-- Health endpoints reflect true dependency status in production
-- Backup and restore exercise completed on staging
-- Alert rules fire correctly under simulated failure conditions
-- Rollback procedure tested
+### Security Requirements
+- Apply permission filtering before returning results.
+- Never expose private workspace content.
+- Remove access when membership is revoked.
+- Do not rely solely on frontend filtering.
+- Search indexes must respect resource visibility.
 
-**Blockers / Notes:** _Cloud provider and infrastructure choices must be confirmed before this phase begins._
+### Completion Criteria
+- Search spans authorised workspaces.
+- Full document search works for supported file formats.
+- Search results respect permissions.
+- Indexes remain synchronised with resource changes.
 
 ---
 
-#### Phase 24 — Production verification and ongoing operations `[ ]`
+# PHASE 19 — Integrations Framework
 
-**Objective:** Validate the complete platform through production-readiness checks and establish ongoing operations.
+### Objectives
+Create a reusable integrations architecture.
 
-**Deliverables:**
-- Production-readiness checklist completed
-- Critical user journeys executed against production or production-equivalent environment
-- Load test results within acceptable thresholds
-- Backup restoration verified in production or production-equivalent environment
-- Incident response procedures exercised (tabletop or simulation)
-- Provider failure simulations run and recovery confirmed
-- Operational documentation finalized: architecture, runbooks, escalation paths
-- Monitoring dashboards reviewed and thresholds tuned
-- Post-launch: dependency patching schedule established
-- Post-launch: regular backup verification schedule established
-- Post-launch: periodic load and reliability reviews scheduled
+### Supported Integration Categories
 
-**Dependencies:** Phases 21, 22, 23
+#### File Storage
+- Google Drive.
+- OneDrive.
+- Dropbox.
 
-**Verification criteria:**
-- All critical user journeys pass in the production environment
-- Load test results documented and within agreed SLAs
-- Backup restoration confirmed with timing recorded
-- At least one incident simulation completed with a written outcome
-- Operational documentation reviewed by a second party
+#### Communication
+- Gmail.
+- Outlook.
+- Slack.
+- Microsoft Teams.
 
-**Blockers / Notes:** _None recorded._
+#### Calendar
+- Google Calendar.
+- Microsoft Outlook Calendar.
 
+#### Development
+- GitHub.
+- GitLab.
+
+#### Automation
+- Webhooks.
+- Supported automation providers.
+
+### Tasks
+- Integration registry.
+- OAuth connection management.
+- OAuth callback handling.
+- Token encryption.
+- Token refresh.
+- Token revocation.
+- Integration permissions.
+- Personal integrations.
+- Workspace integrations.
+- Integration enable/disable controls.
+- Integration status.
+- Sync jobs.
+- Integration error handling.
+- Integration audit history.
+
+### Important Rules
+- Integrations are available to Individual, Company, and Institution workspaces.
+- Each workspace independently controls enabled integrations.
+- Personal connections and shared workspace connections must remain separate.
+- Personal account connections must not automatically become workspace connections.
+- Disconnecting an integration must not delete provider-side data.
+- Request only necessary OAuth scopes.
+
+### Completion Criteria
+- Integration connections are secure.
+- Tokens are protected.
+- Personal and workspace connections remain isolated.
+- Disconnect and revocation work correctly.
+
+---
+
+# PHASE 20 — Automation and Workflow Engine
+
+### Objectives
+Build reusable backend automation capabilities.
+
+### Tasks
+- Automation definitions.
+- Trigger registration.
+- Event-based triggers.
+- Scheduled triggers.
+- Conditional execution.
+- Action execution.
+- Automation permissions.
+- Automation ownership.
+- Workspace-specific automation.
+- Execution history.
+- Failure tracking.
+- Retry policies.
+- Idempotency.
+- Execution limits.
+- Automation enable/disable controls.
+
+### Completion Criteria
+- Automations execute from authorised triggers.
+- Actions respect permissions.
+- Failed jobs are recoverable.
+- Infinite retry loops are prevented.
+- Execution history is available.
+
+---
+
+# PHASE 21 — Python AI Service Integration
+
+### Objectives
+Integrate the independently deployable Python AI service with the main Express backend.
+
+### Architecture
+- Python.
+- FastAPI.
+- Managed AI API.
+- Independent deployment.
+- Express remains the authoritative application backend.
+
+### Tasks
+- Define Express-to-Python communication.
+- Define authenticated service-to-service requests.
+- Define request and response schemas.
+- Implement AI service health checks.
+- Implement timeouts and failure handling.
+- Implement AI request logging.
+- Implement usage tracking.
+- Implement context retrieval interfaces.
+- Implement authorised context preparation.
+- Implement source reference handling.
+- Implement AI conversation persistence where appropriate.
+- Implement AI response streaming where supported.
+
+### AI Capabilities
+- AI conversations.
+- Workspace-aware assistance.
+- Project summaries.
+- Task summaries.
+- Document analysis.
+- Meeting summaries.
+- Action-item extraction.
+- Writing assistance.
+- Research assistance.
+- Recommendations.
+- Contextual questions and answers.
+
+### Mandatory Architecture Rules
+- Express authenticates the user.
+- Express verifies permissions.
+- Express prepares authorised context.
+- Python must not bypass application permissions.
+- Python must not independently write to the main application database by default.
+- Core Nexus features must continue working when the AI service is unavailable.
+
+### Completion Criteria
+- Express and Python communicate securely.
+- AI context is permission-filtered.
+- Source references are returned where relevant.
+- AI failures do not break core application features.
+
+---
+
+# PHASE 22 — Nexus Write
+
+### Objectives
+Implement Grammarly-like writing assistance as part of Nexus.
+
+### Capabilities
+- Spelling correction.
+- Grammar correction.
+- Punctuation correction.
+- Clarity improvements.
+- Vocabulary suggestions.
+- Tone detection.
+- Tone adjustment.
+- Sentence rewriting.
+- Paragraph rewriting.
+- Summarisation.
+- Translation.
+- Explanation of corrections.
+- Writing improvement recommendations.
+
+### Tasks
+- Writing analysis API.
+- Selected-text analysis.
+- Incremental analysis.
+- Debounced processing.
+- Suggestion generation.
+- Suggestion categorisation.
+- Accept and dismiss suggestion support.
+- Rewriting endpoints.
+- Tone adjustment endpoints.
+- User preference support.
+- Usage tracking.
+- AI provider error handling.
+
+### User Experience Requirements
+- Never silently replace user writing.
+- Users must accept or dismiss suggestions.
+- Preserve original text until a suggestion is accepted.
+- Avoid sending unnecessary document content.
+- Minimise retention of private text.
+- Support integration with Nexus editors and relevant text inputs.
+
+### Completion Criteria
+- Writing analysis works.
+- Suggestions are returned in a structured format.
+- User text is not modified without consent.
+- AI service failures are handled gracefully.
+
+---
+
+# PHASE 23 — AI Action Approval and Execution
+
+### Objectives
+Allow Nexus AI to recommend and execute approved actions safely.
+
+### Tasks
+- Define AI action types.
+- Implement read-only AI actions.
+- Implement recommendation responses.
+- Implement proposed mutation actions.
+- Implement approval records.
+- Implement approval expiration.
+- Implement action validation.
+- Recheck user permissions at execution time.
+- Execute approved actions through Express services.
+- Record execution outcomes.
+- Record audit events.
+- Prevent duplicate execution.
+- Support rejection and cancellation.
+
+### Mandatory Rule
+AI must never perform a mutation merely because it suggested the action.
+
+Every mutation requires specific user approval. Express must revalidate permissions before executing the approved action.
+
+### Completion Criteria
+- Read, recommend, and act workflows are separated.
+- Mutation approval is explicit.
+- Permissions are rechecked.
+- Duplicate and unauthorised actions are prevented.
+- Actions are auditable.
+
+---
+
+# PHASE 24 — Redis, Background Jobs and Event Processing
+
+### Objectives
+Implement reliable asynchronous processing and real-time coordination.
+
+### Tasks
+- Redis cache management.
+- Cache invalidation.
+- Rate-limit storage.
+- Background job infrastructure.
+- Email jobs.
+- Notification jobs.
+- File processing jobs.
+- Search indexing jobs.
+- Calendar synchronisation jobs.
+- Integration synchronisation jobs.
+- AI processing jobs where appropriate.
+- Job status tracking.
+- Retry policies.
+- Dead-letter or failed-job handling.
+- Job deduplication.
+- Idempotent processing.
+- Worker health monitoring.
+
+### Important Rules
+- Redis must not be treated as the permanent source of truth for messages or notifications.
+- Persistent application data belongs in PostgreSQL.
+- Retry attempts must be bounded.
+- Failed jobs must be observable and recoverable.
+- Prevent infinite retry loops.
+- Use appropriate job priorities and concurrency limits.
+
+### Completion Criteria
+- Background processing works.
+- Jobs survive expected application restarts according to the chosen queue implementation.
+- Retry behaviour is bounded.
+- Failed jobs can be inspected.
+- Redis failures are handled safely.
+
+---
+
+# PHASE 25 — Email Delivery and Communication
+
+### Objectives
+Implement reliable transactional and notification email delivery.
+
+### Tasks
+- Email provider integration.
+- Central email service.
+- Email templates.
+- Email verification.
+- Password recovery emails.
+- Organisation invitations.
+- Join request updates.
+- Meeting invitations.
+- Task assignment notifications.
+- Mention notifications where applicable.
+- Subscription and billing emails.
+- Security emails.
+- Email preferences.
+- Delivery status tracking.
+- Bounce and failure handling.
+- Retry limits.
+- Email delivery logs.
+- Provider webhook processing.
+
+### Security and Privacy
+- Avoid exposing recipient addresses in unnecessary logs.
+- Never log passwords, tokens, or sensitive email contents.
+- Prevent duplicate email delivery.
+- Respect user notification preferences.
+
+### Completion Criteria
+- Transactional email delivery works.
+- Templates are consistent.
+- Delivery failures are observable.
+- Retry attempts are bounded.
+- Sensitive information is not exposed in logs.
+
+---
+
+# PHASE 26 — Audit Logging and Security Monitoring
+
+### Objectives
+Provide reliable audit trails and security monitoring.
+
+### Tasks
+- Central audit logging service.
+- Authentication events.
+- Session events.
+- Role changes.
+- Permission changes.
+- Workspace membership changes.
+- Project visibility changes.
+- File access and sharing events.
+- Billing changes.
+- Integration connection changes.
+- AI action approvals and execution.
+- Administrative actions.
+- Security event classification.
+- Audit log access permissions.
+- Retention policies.
+- Suspicious activity detection foundations.
+
+### Completion Criteria
+- Important actions are recorded.
+- Audit logs cannot be modified by ordinary users.
+- Audit access is permission-controlled.
+- Sensitive information is not unnecessarily stored in logs.
+
+---
+
+# PHASE 27 — Reporting and Analytics
+
+### Objectives
+Provide workspace-aware reporting and analytics.
+
+### Tasks
+- Workspace activity metrics.
+- Project progress metrics.
+- Task completion metrics.
+- Team productivity metrics.
+- Member activity metrics.
+- Meeting statistics.
+- File usage statistics.
+- Subscription usage metrics.
+- Storage usage metrics.
+- Institution-specific reporting.
+- Company-specific reporting.
+- Individual productivity summaries.
+- Reporting date filters.
+- Permission-aware analytics.
+- Aggregated analytics endpoints.
+
+### Completion Criteria
+- Metrics are calculated consistently.
+- Reports respect workspace permissions.
+- Analytics do not expose private project information.
+- Expensive queries are optimised.
+
+---
+
+# PHASE 28 — API Documentation and Developer Experience
+
+### Objectives
+Make the backend easy to understand, integrate, and maintain.
+
+### Tasks
+- API documentation.
+- OpenAPI/Swagger documentation where appropriate.
+- Authentication documentation.
+- Endpoint request and response examples.
+- Error response documentation.
+- Pagination standards.
+- Filtering and sorting conventions.
+- WebSocket event documentation.
+- Webhook documentation.
+- Integration documentation.
+- Environment variable documentation.
+- Local development instructions.
+- Deployment instructions.
+- Database migration instructions.
+
+### Completion Criteria
+- API documentation reflects actual implementation.
+- Developers can run the backend using documented instructions.
+- Environment variables are documented without exposing secrets.
+- Examples match real endpoint behaviour.
 
 ---
 
@@ -930,49 +1765,131 @@ _Security is implemented from Phase 1. This phase audits and hardens the whole p
 
 ---
 
-### Outstanding Blockers
+# PHASE 30 — Performance, Scalability and Production Hardening
 
-_No blockers recorded._
+### Objectives
+Prepare the backend for production workloads and future horizontal scaling.
 
----
+### Tasks
+- Database query optimisation.
+- Database indexing review.
+- Connection pooling.
+- Cache strategy.
+- Cache invalidation strategy.
+- Background worker scaling.
+- API rate-limit review.
+- Real-time scaling strategy.
+- Shared Redis coordination where required.
+- File processing optimisation.
+- Search optimisation.
+- Pagination optimisation.
+- Resource usage monitoring.
+- Graceful degradation.
+- Timeout policies.
+- Circuit-breaker patterns where appropriate.
+- Load testing.
+- Production security review.
 
-### Known Issues
-
-_No issues recorded._
-
----
-
-### Important Architecture Decisions
-
-| Decision | Status | Notes |
-|---|---|---|
-| Authentication strategy (JWT vs session) | Confirmed — hybrid | 15-minute HS256 access token in the `Authorization` header plus an opaque rotating refresh token in the httpOnly `nexus_rt` cookie. The session row is re-checked on every request, so revocation is immediate. See Phase 3. |
-| Transactional email provider | Confirmed — provider-agnostic SMTP transport | Resend, Brevo and Amazon SES all expose an SMTP endpoint, so the adapter speaks SMTP and only the connection details change when the provider changes. `nodemailer` is the transport library and was already a dependency. The provider account and the sending domain DNS still have to be configured. See Phase 4. |
-| Workspace owner | Confirmed — one fixed owner per workspace | The creator of a workspace owns it. The owner role is not assignable, so the owner cannot be demoted or removed and a workspace always has exactly one owner. The team level owner model is part of Phase 6. See Phase 5. |
-| Invitation uniqueness | Confirmed — nullable `pendingKey` column | A pending invitation is unique per address and workspace, while an accepted, revoked or expired invitation never blocks a new one. A nullable unique column gives exactly that behaviour in PostgreSQL. See Phase 5. |
-| Calling / audio-video provider | Not yet determined | To be decided in Phase 17 |
-| AI model provider | Not yet determined | To be decided in Phase 18 |
-| S3-compatible storage provider | Not yet determined | To be decided in Phase 11 |
-| Background job queue (BullMQ confirmed) | Confirmed — BullMQ with Redis | Per AGENTS.md and SKILL.md |
-| ORM (Prisma confirmed) | Confirmed — Prisma | Per AGENTS.md and SKILL.md |
-| Real-time layer (Socket.IO confirmed) | Confirmed — Socket.IO | Per AGENTS.md and SKILL.md |
-| Multi-instance Redis Socket.IO adapter | Required when scaling beyond one instance | Phase 12 deliverable |
-
----
-
-### Deferred Work
-
-| Item | Deferred to | Reason |
-|---|---|---|
-| Semantic search / pgvector | Post-Phase 15 enhancement | PostgreSQL full-text search sufficient for initial launch |
-| Meeting recording and transcription | Post-Phase 17, requires consent design | Consent and privacy requirements must be defined first |
-| External calendar integrations | Phase 20 or later | Product requirement not yet confirmed |
-| Push notifications | Post-Phase 14 enhancement | In-app and email notifications sufficient for initial launch |
-| Saved search filters / views | Post-Phase 15 enhancement | Basic search required first |
+### Completion Criteria
+- Critical queries are optimised.
+- API and worker scaling strategies are documented.
+- Rate limiting works across multiple API instances.
+- Failure of optional services does not unnecessarily take down core functionality.
 
 ---
 
-### Verification Notes
+# PHASE 31 — Deployment and Production Operations
+
+### Objectives
+Prepare and deploy the backend and Python AI service.
+
+### Tasks
+- Production environment configuration.
+- Production database configuration.
+- Redis production configuration.
+- Object storage configuration.
+- Email provider configuration.
+- Payment provider configuration.
+- Calling provider configuration.
+- AI service deployment.
+- Express backend deployment.
+- Database migration deployment procedure.
+- Health checks.
+- Readiness checks.
+- Logging and monitoring.
+- Error reporting.
+- Backup strategy.
+- Restore procedure.
+- Deployment rollback strategy.
+- Secret management.
+- Domain and CORS configuration.
+- Production smoke tests.
+
+### Completion Criteria
+- Backend deploys successfully.
+- Python AI service deploys independently.
+- Production environment variables are verified.
+- Database migrations are safe.
+- Health checks work.
+- Backup and recovery procedures are documented.
+- Production smoke tests pass.
+
+---
+
+# PHASE 32 — Final Backend Review and Release Readiness
+
+### Objectives
+Verify that the backend is ready for the intended Nexus release.
+
+### Tasks
+- Review all completed phases.
+- Verify phase completion evidence.
+- Check for unfinished endpoints.
+- Check for placeholder implementations.
+- Check for duplicated business logic.
+- Check for missing permission checks.
+- Check workspace isolation.
+- Check subscription entitlements.
+- Check real-time event delivery.
+- Check notification separation.
+- Check file access security.
+- Check search permissions.
+- Check AI service boundaries.
+- Check environment configuration.
+- Check migration consistency.
+- Check logging for sensitive information.
+- Verify frontend integration contracts.
+- Update backend documentation.
+- Record known limitations.
+- Prepare release notes.
+
+### Completion Criteria
+- All required release phases are completed.
+- Critical workflows work end to end.
+- No unresolved critical security issues remain.
+- API documentation is current.
+- Deployment and recovery procedures are documented.
+- Release readiness is explicitly recorded.
+
+---
+
+# FUTURE ENHANCEMENTS — NOT PART OF THE INITIAL IMPLEMENTATION
+
+These features must remain outside the initial implementation unless explicitly approved and moved into the active phase plan.
+
+Potential future backend capabilities include:
+
+- Advanced collaborative whiteboards.
+- Advanced knowledge base and wiki engine.
+- Native mobile application support.
+- Advanced enterprise security dashboard.
+- Custom role and permission builder.
+- Advanced workflow marketplace.
+- Advanced AI agents and autonomous workflows.
+- Expanded analytics and business intelligence.
+- Advanced document collaboration.
+- Additional third-party integrations.
+- Advanced organisation-wide reporting.
 
 | Phase | Date | Result |
 |---|---|---|
@@ -980,10 +1897,16 @@ _No issues recorded._
 | 2 — Core domain schema | 2026-10-21 | Migrations apply to PostgreSQL 16, the constraint and index checks pass, the `npm test` suite passes with the database integration tests enabled. |
 | 3 — Authentication and account lifecycle | 2026-10-21 | 63 tests pass with the database integration tests enabled, covering the full account lifecycle, the session rotation, the CSRF enforcement, the rate limits and the audit trail. |
 | 4 — Transactional email | 2026-10-21 | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account. |
+| 4.1 — Bounded email delivery retries | 2026-11-01 | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. |
+| 4.2 — Recipient email privacy in logs | 2026-11-01 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. New unit and PostgreSQL integration tests pass, the Phase 4 database suite passed three consecutive runs, the full Phase 2–5 database-enabled suite passes 194/194, and build, typecheck, lint and format check pass. |
+| 4.3 — Task assignment email integration | 2026-11-01 | Partial. The reusable task-assignment notifier and 7 PostgreSQL/outbox integration tests pass, including reassignment, duplicate events, suppression, ineligible recipients and delivery failure isolation. No runtime caller exists because the Phase 9 task workflow is not implemented, so the phase remains in progress. |
+| 4.4 — Mention and meeting-invitation email integration | 2026-11-01 | Partial. Added post-commit notifier boundaries and configurable application links for both existing templates. Four focused unit tests pass; typecheck, lint and build pass. No comment mention or meeting workflow exists to supply authoritative runtime callers; the phase remains in progress pending Phases 14 and 17. |
+| 4.5 — Team and project invitation email integration | 2026-11-01 | Deferred / not started. The current invitation workflow is workspace-only. Team and project invitation creation and acceptance depend on Phases 7 and 8; optional schema fields do not provide those workflows. Phase 4.6 must track these outstanding integrations or their dependencies when that phase is defined. |
+| 4.6 — Email integration, security, and regression verification | 2026-11-01 | Partial. Retry, recipient privacy, token-path logging, webhook verification/idempotency, suppression and bounce/complaint checks pass. The full suite is 108 passed, 1 skipped; dedicated Phase 4, task assignment, and workspace-invitation database suites pass. All five collaboration templates still lack production workflow callers, so Phase 4 and 4.6 remain in progress. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 | 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |
 
 ---
 
-_Last updated: 2026-10-23. Phases 1 to 7 are implemented and verified. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-03. Phases 1 to 7 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3, 4.4, 4.5 and 4.6 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging, meeting, team and project workflows. The document also describes the planned state of the later phases._

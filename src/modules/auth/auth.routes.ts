@@ -112,6 +112,15 @@ export function createAuthRouter({
     message: 'Too many password requests for this account. Please try again later.',
   });
 
+  const accountDeletionLimit = createRateLimiter({
+    namespace: `${config.rateLimitNamespace}:auth:account-deletion`,
+    windowMs,
+    limit: 3,
+    keyGenerator: (req) => `${req.ip ?? 'unknown'}:${req.auth?.userId ?? 'unknown'}`,
+    code: 'RATE_LIMITED',
+    message: 'Too many account deletion requests. Please try again later.',
+  });
+
   router.post(
     '/register',
     registerIpLimit,
@@ -139,6 +148,13 @@ export function createAuthRouter({
     loginAccountLimit,
     validateBody(loginSchema),
     controller.login,
+  );
+  router.post(
+    '/reactivate',
+    loginIpLimit,
+    loginAccountLimit,
+    validateBody(loginSchema),
+    controller.reactivate,
   );
   router.post('/refresh', validateBody(refreshSchema), controller.refresh);
   router.post('/logout', validateBody(refreshSchema), controller.logout);
@@ -181,7 +197,13 @@ export function createAuthRouter({
   );
 
   router.post('/deactivate', requireAuth, validateBody(accountActionSchema), controller.deactivate);
-  router.post('/delete', requireAuth, validateBody(accountDeleteSchema), controller.remove);
+  router.post(
+    '/delete',
+    requireAuth,
+    accountDeletionLimit,
+    validateBody(accountDeleteSchema),
+    controller.remove,
+  );
 
   return router;
 }

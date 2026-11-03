@@ -1,19 +1,29 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
+import type { PrismaClient } from '@prisma/client';
+import type { AppConfig } from '../src/config/env';
 import {
   assertMayManageMember,
+  assertMayAssignRole,
   roleCan,
   WorkspaceCapability,
 } from '../src/modules/workspaces/authorization';
-import { maskInvitationEmail } from '../src/modules/workspaces/invitation.service';
+import {
+  createInvitationService,
+  maskInvitationEmail,
+} from '../src/modules/workspaces/invitation.service';
 import { slugifyWorkspaceName } from '../src/modules/workspaces/workspace.service';
 import {
   addMemberSchema,
+  approveJoinRequestSchema,
   assignableRoleSchema,
   createInvitationSchema,
+  createJoinRequestSchema,
   createWorkspaceSchema,
+  discoverWorkspacesQuerySchema,
   updateWorkspaceSchema,
 } from '../src/modules/workspaces/workspace.schemas';
+import { AppError } from '../src/utils/errors';
 
 /**
  * Phase 5 unit tests.
@@ -79,6 +89,20 @@ describe('Phase 5 workspace rules', () => {
     );
   });
 
+  test('only the workspace owner may grant the project manager role', () => {
+    assert.throws(
+      () => assertMayAssignRole({ actorRole: 'PROJECT_MANAGER', requestedRole: 'PROJECT_MANAGER' }),
+      /Only the owner of a workspace can grant the project manager role/i,
+    );
+
+    assert.doesNotThrow(() =>
+      assertMayAssignRole({ actorRole: 'OWNER', requestedRole: 'PROJECT_MANAGER' }),
+    );
+    assert.doesNotThrow(() =>
+      assertMayAssignRole({ actorRole: 'PROJECT_MANAGER', requestedRole: 'MEMBER' }),
+    );
+  });
+
   test('a slug keeps the name readable', () => {
     assert.equal(slugifyWorkspaceName('Acme Rockets'), 'acme-rockets');
     assert.equal(slugifyWorkspaceName('  Ünïcode & Spaces  '), 'unicode-spaces');
@@ -127,5 +151,162 @@ describe('Phase 5 workspace rules', () => {
     const parsed = createInvitationSchema.parse({ email: '  Person@Example.COM ' });
 
     assert.equal(parsed.email, 'person@example.com');
+  });
+
+  test('a workspace records its type and starts private', () => {
+    const company = createWorkspaceSchema.parse({ name: 'Acme' });
+    assert.equal(company.type, 'COMPANY');
+    assert.equal(company.visibility, 'PRIVATE');
+
+    const institution = createWorkspaceSchema.parse({
+      name: 'State University',
+      type: 'INSTITUTION',
+      visibility: 'PUBLIC',
+    });
+    assert.equal(institution.type, 'INSTITUTION');
+    assert.equal(institution.visibility, 'PUBLIC');
+
+    assert.equal(
+      createWorkspaceSchema.safeParse({ name: 'Acme', type: 'GOVERNMENT' }).success,
+      false,
+    );
+    assert.equal(
+      createWorkspaceSchema.safeParse({ name: 'Acme', visibility: 'HIDDEN' }).success,
+      false,
+    );
+  });
+
+  test('the workspace type cannot be changed through an update', () => {
+    assert.equal(updateWorkspaceSchema.safeParse({ type: 'INSTITUTION' }).success, false);
+    assert.equal(updateWorkspaceSchema.safeParse({ visibility: 'PUBLIC' }).success, true);
+  });
+
+  test('join discovery is paginated and a join request cannot choose a role', () => {
+    assert.equal(discoverWorkspacesQuerySchema.parse({}).limit, 20);
+    assert.equal(discoverWorkspacesQuerySchema.safeParse({ limit: '51' }).success, false);
+    assert.equal(
+      createJoinRequestSchema.safeParse({ message: 'Hello', role: 'PROJECT_MANAGER' }).success,
+      false,
+    );
+  });
+
+  test('only assignable roles may be granted on approval', () => {
+    assert.equal(approveJoinRequestSchema.safeParse({ role: 'OWNER' }).success, false);
+    assert.equal(approveJoinRequestSchema.safeParse({ role: 'MEMBER' }).success, true);
+  });
+});
+
+describe('Phase 5 invitation state guards', () => {
+  const config = {
+    frontendUrl: 'https://app.example.com',
+    workspaceInvitationLinkPath: '/workspaces/invitations/accept',
+    workspaceInvitationTtlSeconds: 172_800,
+    appName: 'Nexus',
+    emailFromName: 'Nexus',
+    emailSupportAddress: undefined,
+    emailAppUrl: undefined,
+  } as unknown as AppConfig;
+
+  function serviceWith(invitation: Record<string, unknown>, onWrite: () => void) {
+    const client = {
+      invitation: {
+        findUnique: async () => invitation,
+        update: async () => {
+          onWrite();
+          throw new Error('An expired invitation must not be rewritten on accept');
+        },
+        updateMany: async () => {
+          onWrite();
+          return { count: 0 };
+        },
+      },
+      workspaceMembership: {
+        findUnique: async () => null,
+        create: async () => {
+          onWrite();
+          throw new Error('An expired invitation must not create a membership');
+        },
+      },
+    } as unknown as PrismaClient;
+
+    return createInvitationService(config, client);
+  }
+
+  test('an invitation already marked expired is rejected before any membership write', async () => {
+    let wrote = false;
+    const service = serviceWith(
+      {
+        id: 'invitation-1',
+        workspaceId: 'workspace-1',
+        email: 'invitee@example.com',
+        role: 'MEMBER',
+        type: 'WORKSPACE',
+        status: 'EXPIRED',
+        tokenHash: 'digest',
+        forUserId: null,
+        invitedById: 'owner-1',
+        expiresAt: new Date(Date.now() + 60_000),
+        acceptedAt: null,
+        revokedAt: null,
+        createdAt: new Date(),
+        workspace: { id: 'workspace-1', name: 'Acme' },
+        invitedBy: { id: 'owner-1', name: 'Owner' },
+      },
+      () => {
+        wrote = true;
+      },
+    );
+
+    await assert.rejects(
+      service.accept(
+        { userId: 'invitee-1', token: 'token' },
+        { ip: undefined, userAgent: undefined },
+      ),
+      (error) =>
+        error instanceof AppError &&
+        error.statusCode === 410 &&
+        error.code === 'INVITATION_EXPIRED',
+    );
+
+    assert.equal(wrote, false);
+  });
+
+  test('a revoked invitation can never be accepted', async () => {
+    let wrote = false;
+    const service = serviceWith(
+      {
+        id: 'invitation-2',
+        workspaceId: 'workspace-1',
+        email: 'invitee@example.com',
+        role: 'MEMBER',
+        type: 'WORKSPACE',
+        status: 'REVOKED',
+        tokenHash: 'digest',
+        forUserId: null,
+        invitedById: 'owner-1',
+        expiresAt: new Date(Date.now() + 60_000),
+        acceptedAt: null,
+        revokedAt: new Date(),
+        createdAt: new Date(),
+        workspace: { id: 'workspace-1', name: 'Acme' },
+        invitedBy: { id: 'owner-1', name: 'Owner' },
+      },
+      () => {
+        wrote = true;
+      },
+    );
+
+    await assert.rejects(
+      service.accept(
+        { userId: 'invitee-1', token: 'token' },
+        { ip: undefined, userAgent: undefined },
+      ),
+      (error) =>
+        error instanceof AppError &&
+        error.statusCode === 409 &&
+        error.code === 'INVITATION_REVOKED',
+    );
+
+    assert.equal(wrote, false);
   });
 });

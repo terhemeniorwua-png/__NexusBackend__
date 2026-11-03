@@ -342,6 +342,15 @@ export function createAuthController({
       res.status(204).end();
     },
 
+    async reactivate(req: Request, res: Response): Promise<void> {
+      const body = req.validated?.body as LoginInput;
+      const result = await service.reactivateAccount(body, context(req));
+
+      clearSessionCookies(res);
+
+      sendSuccess(res, { user: result.user });
+    },
+
     async remove(req: Request, res: Response): Promise<void> {
       const auth = req.auth;
 
@@ -351,13 +360,19 @@ export function createAuthController({
 
       const body = req.validated?.body as AccountDeleteInput;
 
-      await service.deleteAccount({ ...body, userId: auth.userId }, context(req));
+      const result = await service.deleteAccount({ ...body, userId: auth.userId }, context(req));
 
       clearSessionCookies(res);
 
-      // console.log('register: handler reached');
-
-      res.status(204).end();
+      sendSuccess(
+        res,
+        {
+          status: 'PENDING_DELETION',
+          scheduledDeletionAt: result.scheduledDeletionAt,
+          recoveryMethod: 'Sign in through account recovery with your email address and password',
+        },
+        202,
+      );
     },
   };
 }

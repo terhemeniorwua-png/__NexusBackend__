@@ -1,4 +1,5 @@
 import type { PrismaClient, Workspace, WorkspaceMembership, WorkspaceRole } from '@prisma/client';
+import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
 import { AppError } from '../../utils/errors';
 
 /**
@@ -42,6 +43,9 @@ export const WorkspaceCapability = {
   // Invitation management
   ViewInvitations: 'invitation:view',
   ManageInvitations: 'invitation:manage',
+  // Join requests (discovery is public to authenticated accounts)
+  ViewJoinRequests: 'join_request:view',
+  ManageJoinRequests: 'join_request:manage',
   // Ownership transfer (owner only)
   TransferOwnership: 'workspace:transfer_ownership',
 } as const;
@@ -70,6 +74,8 @@ const WORKSPACE_CAPABILITIES: Record<WorkspaceCapabilityValue, readonly Workspac
   'member:manage': ['OWNER', 'PROJECT_MANAGER'],
   'invitation:view': ['OWNER', 'PROJECT_MANAGER'],
   'invitation:manage': ['OWNER', 'PROJECT_MANAGER'],
+  'join_request:view': ['OWNER', 'PROJECT_MANAGER'],
+  'join_request:manage': ['OWNER', 'PROJECT_MANAGER'],
 };
 
 /**
@@ -89,6 +95,7 @@ export function workspaceRoleCan(
 export interface WorkspaceAccess {
   workspace: Workspace;
   membership: WorkspaceMembership;
+  effectiveRole: WorkspaceRole;
 }
 
 /**
@@ -118,7 +125,34 @@ export async function requireWorkspaceAccess(
     throw new AppError(403, 'WORKSPACE_ACCESS_DENIED', 'You are not a member of this workspace');
   }
 
-  if (!workspaceRoleCan(membership.role, input.capability)) {
+  // A suspended membership keeps the row (and its history) but grants no
+  // access until an administrator restores it.
+  if (membership.status === 'SUSPENDED') {
+    throw new AppError(
+      403,
+      'MEMBERSHIP_SUSPENDED',
+      'Your membership of this workspace is suspended',
+    );
+  }
+
+  if (
+    membership.organizationRole &&
+    !isOrganizationRoleForWorkspace(workspace.type, membership.organizationRole)
+  ) {
+    throw new AppError(
+      403,
+      'ORGANIZATION_ROLE_WORKSPACE_MISMATCH',
+      'The organization role is not valid for this workspace',
+    );
+  }
+
+  const effectiveRole = effectiveWorkspaceRole(
+    workspace.type,
+    membership.role,
+    membership.organizationRole,
+  );
+
+  if (!workspaceRoleCan(effectiveRole, input.capability)) {
     throw new AppError(
       403,
       'INSUFFICIENT_ROLE',
@@ -126,7 +160,7 @@ export async function requireWorkspaceAccess(
     );
   }
 
-  return { workspace, membership };
+  return { workspace, membership, effectiveRole };
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +194,24 @@ export function assertMayManageMember(input: {
       403,
       'INSUFFICIENT_ROLE',
       'Only the owner of a workspace can manage a project manager',
+    );
+  }
+}
+
+/**
+ * Asserts that the acting workspace role may grant the requested role.
+ * Project managers can manage lower-privilege members, but only the workspace
+ * owner may grant project-manager privileges.
+ */
+export function assertMayAssignRole(input: {
+  actorRole: WorkspaceRole;
+  requestedRole: WorkspaceRole;
+}): void {
+  if (input.actorRole !== 'OWNER' && input.requestedRole === 'PROJECT_MANAGER') {
+    throw new AppError(
+      403,
+      'INSUFFICIENT_ROLE',
+      'Only the owner of a workspace can grant the project manager role',
     );
   }
 }

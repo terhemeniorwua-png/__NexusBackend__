@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { createApp } from './app';
 import { loadEnv, type AppConfig } from './config/env';
-import { connectDatabase, disconnectDatabase } from './db/prisma';
+import { connectDatabase, disconnectDatabase, getPrismaClient } from './db/prisma';
 import { connectRedis, disconnectRedis } from './db/redis';
 import {
   createEmailWorker,
@@ -9,6 +9,7 @@ import {
   installOutboxEmailSender,
 } from './services/email';
 import { logger as baseLogger, type Logger } from './utils/logger';
+import { createAccountDeletionWorker } from './modules/auth/account-deletion.service';
 
 export interface RunningServer {
   server: Server;
@@ -78,11 +79,18 @@ export async function startServer(): Promise<RunningServer> {
     emailWorker.start();
   }
 
+  const accountDeletionWorker = createAccountDeletionWorker({
+    prisma: getPrismaClient(),
+    logger,
+    bcryptSaltRounds: config.bcryptSaltRounds,
+  });
+  accountDeletionWorker.start();
+
   try {
     await listen(server, config.port);
   } catch (error) {
     logger.error('server_listen_failed', { error, port: config.port });
-    await emailWorker.stop();
+    await Promise.all([emailWorker.stop(), accountDeletionWorker.stop()]);
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
   }
@@ -122,6 +130,7 @@ export async function startServer(): Promise<RunningServer> {
     const results = await Promise.allSettled([
       closeServer,
       emailWorker.stop(),
+      accountDeletionWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);

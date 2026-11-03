@@ -44,6 +44,10 @@ export interface EmailChangeEmailInput extends AccountEmailInput {
   newEmail: string;
 }
 
+export interface AccountDeletionScheduledEmailInput extends AccountEmailInput {
+  scheduledDeletionAt: Date;
+}
+
 export interface SecurityNotificationEmailInput extends AccountEmailInput {
   subject: string;
   detail: string;
@@ -164,6 +168,37 @@ export function buildEmailChangeEmail(input: EmailChangeEmailInput): EmailMessag
     html,
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
     metadata: { expiresAt: input.expiresAt.toISOString(), newEmail: input.newEmail },
+  };
+}
+
+export function buildAccountDeletionScheduledEmail(
+  input: AccountDeletionScheduledEmailInput,
+): EmailMessage {
+  const deletionDate = input.scheduledDeletionAt.toUTCString();
+  const { html, text } = renderEmailDocument(
+    {
+      heading: 'Your account is scheduled for deletion',
+      preheader: `Your account is scheduled for permanent deletion on ${deletionDate}.`,
+      paragraphs: [
+        `Hi ${input.name},`,
+        `Your ${input.brand.appName} account is now pending deletion. Your account and personal workspace will remain intact until ${deletionDate}.`,
+        'Permanent deletion is scheduled after a 30-day recovery period.',
+        'To cancel the deletion, use the account recovery option and sign in with your email address and password before that date. Recovery will not restore sessions that were signed out.',
+        'Organization workspaces and shared content are retained. If you did not request this, recover your account immediately.',
+      ],
+      footerNote: 'This is an automated message. Please do not reply to it.',
+    },
+    input.brand,
+  );
+
+  return {
+    to: input.to,
+    subject: `Your ${input.brand.appName} account is scheduled for deletion`,
+    template: 'account_deletion_scheduled',
+    text,
+    html,
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    metadata: { scheduledDeletionAt: input.scheduledDeletionAt.toISOString() },
   };
 }
 

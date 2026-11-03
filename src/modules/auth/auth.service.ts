@@ -2,6 +2,7 @@ import type { AuthTokenPurpose, PrismaClient, User } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import {
   buildEmailBrand,
+  buildAccountDeletionScheduledEmail,
   buildEmailChangeEmail,
   buildPasswordChangedEmail,
   buildPasswordResetEmail,
@@ -23,6 +24,11 @@ import {
   rotateSession,
 } from './session.service';
 import { recordSecurityEvent, SecurityAction } from './security-events';
+import {
+  isLastActiveOrganizationAdministrator,
+  scheduledAccountDeletionAt,
+} from './account-deletion.service';
+import { ensurePersonalWorkspace } from '../workspaces/personal-workspace.service';
 import type {
   AuthenticationResult,
   PublicUser,
@@ -87,7 +93,11 @@ export interface AuthService {
     input: { userId: string; currentPassword: string },
     ctx: RequestContext,
   ): Promise<void>;
-  deleteAccount(input: AccountDeleteInput & { userId: string }, ctx: RequestContext): Promise<void>;
+  reactivateAccount(input: LoginInput, ctx: RequestContext): Promise<{ user: PublicUser }>;
+  deleteAccount(
+    input: AccountDeleteInput & { userId: string },
+    ctx: RequestContext,
+  ): Promise<{ scheduledDeletionAt: Date }>;
 }
 
 export function createAuthService(config: AppConfig, prisma?: PrismaClient): AuthService {
@@ -183,6 +193,14 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     if (user.status === 'DEACTIVATED') {
       throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
     }
+
+    if (user.status === 'PENDING_DELETION') {
+      throw new AppError(
+        403,
+        'ACCOUNT_PENDING_DELETION',
+        'This account is pending deletion. Recover it before signing in.',
+      );
+    }
   }
 
   async function requirePassword(user: User, password: string): Promise<void> {
@@ -265,17 +283,50 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       input: { token: string },
       ctx: RequestContext,
     ): Promise<{ user: PublicUser }> {
-      const record = await consumeAuthToken(client, {
-        token: input.token,
-        purpose: 'EMAIL_VERIFICATION',
-      });
+      const user = await client.$transaction(async (tx) => {
+        const record = await consumeAuthToken(tx, {
+          token: input.token,
+          purpose: 'EMAIL_VERIFICATION',
+        });
 
-      const user = await client.user.update({
-        where: { id: record.userId },
-        data: {
-          status: 'ACTIVE',
-          emailVerifiedAt: new Date(),
-        },
+        const verified = await tx.user.updateMany({
+          where: {
+            id: record.userId,
+            deletedAt: null,
+            status: { in: ['PENDING_VERIFICATION', 'ACTIVE'] },
+          },
+          data: {
+            status: 'ACTIVE',
+            emailVerifiedAt: new Date(),
+          },
+        });
+
+        if (verified.count === 0) {
+          const current = await tx.user.findUnique({ where: { id: record.userId } });
+
+          if (!current || current.deletedAt) {
+            throw new AppError(
+              400,
+              'TOKEN_INVALID',
+              'This link is invalid or has already been used',
+            );
+          }
+
+          if (current.status === 'SUSPENDED') {
+            throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+          }
+
+          if (current.status === 'DEACTIVATED' || current.status === 'PENDING_DELETION') {
+            throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account is not active');
+          }
+
+          throw new AppError(409, 'ACCOUNT_NOT_VERIFIABLE', 'This account cannot be verified');
+        }
+
+        const verifiedUser = await tx.user.findUniqueOrThrow({ where: { id: record.userId } });
+        await ensurePersonalWorkspace(tx, verifiedUser);
+
+        return verifiedUser;
       });
 
       await recordSecurityEvent(client, {
@@ -505,7 +556,12 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       const user = await findUserByEmail(input.email);
 
       // The response never reveals whether the address is registered.
-      if (!user || user.deletedAt || user.status === 'DEACTIVATED') {
+      if (
+        !user ||
+        user.deletedAt ||
+        user.status === 'DEACTIVATED' ||
+        user.status === 'PENDING_DELETION'
+      ) {
         return;
       }
 
@@ -541,6 +597,24 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         token: input.token,
         purpose: 'PASSWORD_RESET',
       });
+
+      const account = await client.user.findUnique({ where: { id: record.userId } });
+
+      if (!account || account.deletedAt) {
+        throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+      }
+
+      if (account.status === 'PENDING_DELETION') {
+        throw new AppError(
+          403,
+          'ACCOUNT_PENDING_DELETION',
+          'Recover the account before changing its password',
+        );
+      }
+
+      if (account.status === 'DEACTIVATED') {
+        throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+      }
 
       assertPasswordLength(input.password);
 
@@ -720,6 +794,20 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
       }
 
+      const current = await client.user.findUnique({ where: { id: record.userId } });
+
+      if (!current || current.deletedAt) {
+        throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+      }
+
+      if (current.status === 'SUSPENDED') {
+        throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+      }
+
+      if (current.status === 'DEACTIVATED' || current.status === 'PENDING_DELETION') {
+        throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+      }
+
       const existing = await findUserByEmail(record.targetEmail);
 
       if (existing && existing.id !== record.userId) {
@@ -730,14 +818,38 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         );
       }
 
-      const user = await client.user.update({
-        where: { id: record.userId },
+      const changed = await client.user.updateMany({
+        where: {
+          id: record.userId,
+          deletedAt: null,
+          status: { in: ['PENDING_VERIFICATION', 'ACTIVE'] },
+        },
         data: {
           email: record.targetEmail,
           emailVerifiedAt: new Date(),
           status: 'ACTIVE',
         },
       });
+
+      if (changed.count === 0) {
+        const latest = await client.user.findUnique({ where: { id: record.userId } });
+
+        if (!latest || latest.deletedAt) {
+          throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+        }
+
+        if (latest.status === 'SUSPENDED') {
+          throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+        }
+
+        if (latest.status === 'DEACTIVATED' || latest.status === 'PENDING_DELETION') {
+          throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+        }
+
+        throw new AppError(409, 'ACCOUNT_NOT_CHANGEABLE', 'This account cannot be changed');
+      }
+
+      const user = await client.user.findUniqueOrThrow({ where: { id: record.userId } });
 
       await recordSecurityEvent(client, {
         action: SecurityAction.EmailChanged,
@@ -763,19 +875,23 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       await requirePassword(user, input.currentPassword);
 
-      await client.user.update({
-        where: { id: user.id },
-        data: { status: 'DEACTIVATED' },
-      });
+      const deactivatedAt = new Date();
 
-      await revokeAllSessions(client, {
-        userId: user.id,
-        reason: 'ACCOUNT_DEACTIVATED',
-      });
+      await client.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: { status: 'DEACTIVATED' },
+        });
 
-      await invalidateAuthTokens(client, {
-        userId: user.id,
-        purpose: 'EMAIL_VERIFICATION',
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: deactivatedAt, revokedReason: 'ACCOUNT_DEACTIVATED' },
+        });
+
+        await tx.authToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: deactivatedAt },
+        });
       });
 
       await recordSecurityEvent(client, {
@@ -788,10 +904,179 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       });
     },
 
+    async reactivateAccount(input: LoginInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
+      const user = await findUserByEmail(input.email);
+
+      async function recordReactivationFailure(userId: string, reason: string): Promise<void> {
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: userId,
+          actorId: userId,
+          metadata: { reason },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+      }
+
+      if (!user || user.deletedAt) {
+        await verifyPassword(input.password, TIMING_EQUALIZER_HASH);
+
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: user?.id ?? 'unknown',
+          ...(user ? { actorId: user.id } : {}),
+          metadata: { emailHash: hashSecret(input.email), reason: 'INVALID_CREDENTIALS' },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        throw new AppError(
+          401,
+          'INVALID_CREDENTIALS',
+          'The email address or password is incorrect',
+        );
+      }
+
+      const matches = await verifyPassword(input.password, user.passwordHash);
+
+      if (!matches) {
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: user.id,
+          actorId: user.id,
+          metadata: { reason: 'INVALID_CREDENTIALS' },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        throw new AppError(
+          401,
+          'INVALID_CREDENTIALS',
+          'The email address or password is incorrect',
+        );
+      }
+
+      if (user.status === 'SUSPENDED') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_SUSPENDED');
+        throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+      }
+
+      if (user.status === 'ACTIVE') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_ALREADY_ACTIVE');
+        throw new AppError(409, 'ACCOUNT_ALREADY_ACTIVE', 'This account is already active');
+      }
+
+      const pendingDeletion = user.status === 'PENDING_DELETION';
+
+      if (
+        pendingDeletion &&
+        (!user.scheduledDeletionAt || user.scheduledDeletionAt <= new Date())
+      ) {
+        await recordReactivationFailure(user.id, 'DELETION_RECOVERY_PERIOD_EXPIRED');
+        throw new AppError(
+          409,
+          'DELETION_RECOVERY_PERIOD_EXPIRED',
+          'The account recovery period has ended',
+        );
+      }
+
+      if (user.status !== 'DEACTIVATED' && !pendingDeletion) {
+        await recordReactivationFailure(user.id, 'ACCOUNT_NOT_DEACTIVATED');
+        throw new AppError(409, 'ACCOUNT_NOT_DEACTIVATED', 'This account is not deactivated');
+      }
+
+      const nextStatus = user.emailVerifiedAt ? 'ACTIVE' : 'PENDING_VERIFICATION';
+      const recoveredAt = new Date();
+
+      const reactivated = await client.$transaction(async (tx) => {
+        const updated = await tx.user.updateMany({
+          where: {
+            id: user.id,
+            status: user.status,
+            deletedAt: null,
+            ...(pendingDeletion ? { scheduledDeletionAt: { gt: recoveredAt } } : {}),
+          },
+          data: {
+            status: nextStatus,
+            deletionRequestedAt: null,
+            scheduledDeletionAt: null,
+          },
+        });
+
+        if (updated.count === 0) {
+          return null;
+        }
+
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: new Date(), revokedReason: 'ACCOUNT_REACTIVATED' },
+        });
+
+        await tx.authToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+
+        const restored = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+
+        if (restored.status === 'ACTIVE') {
+          await ensurePersonalWorkspace(tx, restored);
+        }
+
+        return restored;
+      });
+
+      if (!reactivated) {
+        await recordReactivationFailure(user.id, 'ACCOUNT_NOT_REACTIVATABLE');
+        throw new AppError(
+          409,
+          'ACCOUNT_NOT_REACTIVATABLE',
+          'This account can no longer be reactivated',
+        );
+      }
+
+      if (reactivated.status === 'PENDING_VERIFICATION') {
+        await issueAndSend(
+          {
+            user: reactivated,
+            purpose: 'EMAIL_VERIFICATION',
+            ttlSeconds: config.verificationTokenTtlSeconds,
+          },
+          (token, expiresAt, tokenId) =>
+            buildVerificationEmail({
+              to: reactivated.email,
+              name: reactivated.name,
+              brand,
+              verificationUrl: buildLink(config.authVerificationLinkPath, token),
+              expiresAt,
+              idempotencyKey: `auth:email_verification:${tokenId}`,
+            }),
+        );
+      }
+
+      await recordSecurityEvent(client, {
+        action: SecurityAction.AccountReactivated,
+        targetType: 'User',
+        targetId: reactivated.id,
+        actorId: reactivated.id,
+        metadata: {
+          status: reactivated.status,
+          verificationRequired: reactivated.status === 'PENDING_VERIFICATION',
+        },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+
+      return { user: toPublicUser(reactivated) };
+    },
+
     async deleteAccount(
       input: AccountDeleteInput & { userId: string },
-      ctx: RequestContext,
-    ): Promise<void> {
+      _ctx: RequestContext,
+    ): Promise<{ scheduledDeletionAt: Date }> {
       const user = await client.user.findUnique({ where: { id: input.userId } });
 
       if (!user) {
@@ -808,66 +1093,147 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         );
       }
 
-      const ownedWorkspaces = await client.workspace.count({
-        where: {
-          ownerId: user.id,
-          deletedAt: null,
-          status: 'ACTIVE',
-        },
-      });
-
-      if (ownedWorkspaces > 0) {
-        throw new AppError(
-          409,
-          'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED',
-          'Transfer ownership of your workspaces before deleting your account',
-        );
-      }
-
-      await revokeAllSessions(client, {
-        userId: user.id,
-        reason: 'ACCOUNT_DELETED',
-      });
+      const requestedAt = new Date();
+      const scheduledDeletionAt = scheduledAccountDeletionAt(requestedAt);
 
       await client.$transaction(async (tx) => {
+        const [lockedUser] = await tx.$queryRaw<
+          Array<{ status: string; deletedAt: Date | null }>
+        >`SELECT "status"::text AS "status", "deletedAt"
+          FROM "User"
+          WHERE "id" = ${user.id}
+          FOR UPDATE`;
+
+        if (!lockedUser) {
+          throw new AppError(404, 'USER_NOT_FOUND', 'The requested account was not found');
+        }
+
+        if (lockedUser.deletedAt || lockedUser.status === 'DEACTIVATED') {
+          throw new AppError(
+            409,
+            'ACCOUNT_ALREADY_DELETED',
+            'This account has already been deleted or deactivated',
+          );
+        }
+
+        if (lockedUser.status === 'PENDING_DELETION') {
+          throw new AppError(
+            409,
+            'ACCOUNT_DELETION_ALREADY_REQUESTED',
+            'This account is already scheduled for deletion',
+          );
+        }
+
+        if (lockedUser.status === 'SUSPENDED') {
+          throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+        }
+
+        const sharedPersonalWorkspace = await tx.workspace.findFirst({
+          where: {
+            ownerId: user.id,
+            isPersonal: true,
+            deletedAt: null,
+            members: { some: { userId: { not: user.id } } },
+          },
+          select: { id: true },
+        });
+
+        if (sharedPersonalWorkspace) {
+          throw new AppError(
+            409,
+            'PERSONAL_WORKSPACE_SHARED',
+            'Remove or transfer collaborators from your personal workspace before requesting account deletion',
+          );
+        }
+
+        const organizationOwnerRole = await tx.workspaceMembership.findFirst({
+          where: {
+            userId: user.id,
+            status: 'ACTIVE',
+            organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] },
+            workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
+          },
+          select: { workspaceId: true },
+        });
+
+        if (organizationOwnerRole) {
+          throw new AppError(
+            409,
+            'ORGANIZATION_OWNERSHIP_TRANSFER_REQUIRED',
+            'Transfer or relinquish organization owner roles before requesting account deletion',
+          );
+        }
+
+        const ownedOrganization = await tx.workspace.findFirst({
+          where: { ownerId: user.id, type: { in: ['COMPANY', 'INSTITUTION'] } },
+          select: { id: true },
+        });
+
+        if (ownedOrganization) {
+          throw new AppError(
+            409,
+            'ORGANIZATION_OWNERSHIP_TRANSFER_REQUIRED',
+            'Transfer ownership of each Company or Institution workspace before requesting account deletion',
+          );
+        }
+
+        const otherOwnedWorkspace = await tx.workspace.findFirst({
+          where: { ownerId: user.id, isPersonal: false },
+          select: { id: true },
+        });
+
+        if (otherOwnedWorkspace) {
+          throw new AppError(
+            409,
+            'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED',
+            'Transfer ownership of other shared workspaces before requesting account deletion',
+          );
+        }
+
+        if (await isLastActiveOrganizationAdministrator(tx, user.id)) {
+          throw new AppError(
+            409,
+            'LAST_ORGANIZATION_ADMIN',
+            'Assign another active owner or administrator before requesting account deletion',
+          );
+        }
+
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: requestedAt, revokedReason: 'ACCOUNT_PENDING_DELETION' },
+        });
         await tx.authToken.updateMany({
           where: { userId: user.id, usedAt: null },
-          data: { usedAt: new Date() },
+          data: { usedAt: requestedAt },
         });
-
-        await tx.userProfile.updateMany({
-          where: { userId: user.id },
-          data: { bio: null, jobTitle: null, avatarUrl: null },
-        });
-
         await tx.user.update({
           where: { id: user.id },
           data: {
-            // The address is released so the person can register again.
-            email: `deleted+${user.id}@nexus.invalid`,
-            name: 'Deleted user',
-            // The password can never be matched again.
-            passwordHash: TIMING_EQUALIZER_HASH,
-            status: 'DEACTIVATED',
-            deletedAt: new Date(),
+            status: 'PENDING_DELETION',
+            deletionRequestedAt: requestedAt,
+            scheduledDeletionAt,
           },
         });
       });
 
       await recordSecurityEvent(client, {
-        action: SecurityAction.AccountDeleted,
+        action: SecurityAction.AccountDeletionRequested,
         targetType: 'User',
         targetId: user.id,
         actorId: user.id,
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
+        metadata: { scheduledDeletionAt: scheduledDeletionAt.toISOString() },
       });
+      await sendEmail(
+        buildAccountDeletionScheduledEmail({
+          to: user.email,
+          name: user.name,
+          brand,
+          scheduledDeletionAt,
+          idempotencyKey: `auth:deletion_requested:${user.id}:${requestedAt.getTime()}`,
+        }),
+      );
 
-      //       console.log('register: hashing');
-      // // ...
-      // console.log('register: creating user');
-      // // ...
-      // console.log('register: queueing email');
+      return { scheduledDeletionAt };
     },
   };
 }

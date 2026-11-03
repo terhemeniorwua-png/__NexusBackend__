@@ -1,5 +1,6 @@
 import { logger } from '../../../utils/logger';
 import type { AppConfig } from '../../../config/env';
+import { redactEmailAddresses } from '../../email/log-privacy';
 import { createConsoleTransport } from './console-transport';
 import { createSmtpTransport } from './smtp-transport';
 import type { EmailTransport, EmailTransportRequest, EmailTransportResult } from './types';
@@ -18,8 +19,7 @@ export function createDisabledTransport(): EmailTransport {
     async send(request: EmailTransportRequest): Promise<EmailTransportResult> {
       logger.warn('email_delivery_disabled', {
         deliveryId: request.deliveryId,
-        to: request.to,
-        subject: request.subject,
+        subject: redactEmailAddresses(request.subject),
       });
 
       return {

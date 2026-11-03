@@ -19,7 +19,7 @@ export interface AuthContext {
   sessionId: string;
   email: string;
   name: string;
-  status: 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+  status: 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED' | 'PENDING_DELETION';
 }
 
 function extractBearerToken(header: string | undefined): string | null {
@@ -73,6 +73,14 @@ export function createRequireAuth(config: AppConfig): RequestHandler {
 
       if (user.status === 'DEACTIVATED') {
         throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+      }
+
+      if (user.status === 'PENDING_DELETION') {
+        throw new AppError(
+          403,
+          'ACCOUNT_PENDING_DELETION',
+          'This account is pending deletion. Recover it before continuing.',
+        );
       }
 
       req.auth = {
