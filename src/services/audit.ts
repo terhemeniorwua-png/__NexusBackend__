@@ -27,6 +27,7 @@ export const WorkspaceAuditAction = {
   InvitationResent: 'workspace.invitation_resent',
   InvitationRevoked: 'workspace.invitation_revoked',
   InvitationAccepted: 'workspace.invitation_accepted',
+  TaskReassigned: 'task.reassigned',
 } as const;
 
 export type WorkspaceAuditActionValue =

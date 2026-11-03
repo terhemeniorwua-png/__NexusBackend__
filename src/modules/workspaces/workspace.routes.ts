@@ -15,6 +15,7 @@ import {
   invitationParamsSchema,
   listInvitationsQuerySchema,
   memberParamsSchema,
+  removeWorkspaceMemberSchema,
   transferOwnershipSchema,
   updateMemberRoleSchema,
   updateWorkspaceSchema,
@@ -23,6 +24,7 @@ import {
   type CreateInvitationInput,
   type CreateWorkspaceInput,
   type ListInvitationsQuery,
+  type RemoveWorkspaceMemberInput,
   type TransferOwnershipInput,
   type UpdateMemberRoleInput,
   type UpdateWorkspaceInput,
@@ -247,15 +249,16 @@ export function createWorkspaceRouter({
     '/:workspaceId/members/:userId',
     requireAuth,
     requireActiveAccount,
-    validate({ params: memberParamsSchema }),
+    validate({ params: memberParamsSchema, body: removeWorkspaceMemberSchema }),
     async (req, res) => {
       const { workspaceId, userId: targetUserId } = req.validated?.params as {
         workspaceId: string;
         userId: string;
       };
+      const input = req.validated?.body as RemoveWorkspaceMemberInput;
 
       await service.removeMember(
-        { userId: requireUser(req), workspaceId, targetUserId },
+        { userId: requireUser(req), workspaceId, targetUserId, ...input },
         context(req),
       );
 

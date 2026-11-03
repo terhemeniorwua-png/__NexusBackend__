@@ -1159,8 +1159,26 @@ paths:
       tags: [Workspaces]
       operationId: removeWorkspaceMember
       summary: Remove a member
+      description: |
+        Removes a member from this workspace. If they hold active assignments
+        on open tasks, provide an eligible replacement who is an active member
+        of this workspace and can access every affected project. Assignment
+        changes, audit records, notifications, and membership removal are
+        applied atomically; assignment email notices are sent after commit.
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reassignTasksToUserId:
+                  type: string
+                  format: uuid
+                  description: Active workspace member eligible to access all affected projects.
       responses:
         '200':
           description: The member was removed.
@@ -1190,6 +1208,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: The workspace or the membership does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Active task assignments require an eligible replacement before removal.
           content:
             application/json:
               schema:
