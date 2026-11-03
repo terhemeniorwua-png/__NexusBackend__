@@ -5,6 +5,8 @@ import type {
   Workspace,
   WorkspaceMembership,
   WorkspaceRole,
+  WorkspaceType,
+  WorkspaceVisibility,
 } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import type { AppConfig } from '../../config/env';
@@ -45,7 +47,14 @@ import { reassignOpenTasksBeforeMemberRemoval } from './task-reassignment';
 
 export interface WorkspaceService {
   create(
-    input: { userId: string; name: string; description?: string | null; slug?: string },
+    input: {
+      userId: string;
+      name: string;
+      description?: string | null;
+      slug?: string;
+      type: WorkspaceType;
+      visibility: WorkspaceVisibility;
+    },
     ctx: RequestContext,
   ): Promise<WorkspaceSummary>;
   list(userId: string): Promise<WorkspaceSummary[]>;
@@ -55,6 +64,10 @@ export interface WorkspaceService {
     ctx: RequestContext,
   ): Promise<WorkspaceSummary>;
   archive(
+    input: { userId: string; workspaceId: string },
+    ctx: RequestContext,
+  ): Promise<WorkspaceSummary>;
+  restore(
     input: { userId: string; workspaceId: string },
     ctx: RequestContext,
   ): Promise<WorkspaceSummary>;
@@ -78,6 +91,14 @@ export interface WorkspaceService {
     },
     ctx: RequestContext,
   ): Promise<void>;
+  suspendMember(
+    input: { userId: string; workspaceId: string; targetUserId: string },
+    ctx: RequestContext,
+  ): Promise<WorkspaceMember>;
+  restoreMember(
+    input: { userId: string; workspaceId: string; targetUserId: string },
+    ctx: RequestContext,
+  ): Promise<WorkspaceMember>;
   transferOwnership(
     input: {
       userId: string;
@@ -119,15 +140,28 @@ function toSummary(
     name: workspace.name,
     slug: workspace.slug,
     description: workspace.description,
+    type: workspace.type,
+    visibility: workspace.visibility,
     status: workspace.status,
     ownerId: workspace.ownerId,
     role,
+    joinCodeEnabled: Boolean(workspace.joinCodeHash),
     memberCount: counts.members,
     projectCount: counts.projects,
     teamCount: counts.teams,
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt,
   };
+}
+
+function assertVisibilityAllowed(type: WorkspaceType, visibility: WorkspaceVisibility): void {
+  if (type === 'INDIVIDUAL' && visibility === 'PUBLIC') {
+    throw new AppError(
+      400,
+      'INDIVIDUAL_WORKSPACE_NOT_DISCOVERABLE',
+      'A personal workspace cannot be publicly discoverable',
+    );
+  }
 }
 
 function toMember(
@@ -141,6 +175,7 @@ function toMember(
     email: membership.user.email,
     status: membership.user.status,
     role: membership.role,
+    membershipStatus: membership.status,
     joinedAt: membership.joinedAt,
     owner: membership.user.id === ownerId,
   };
@@ -148,6 +183,7 @@ function toMember(
 
 export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient): WorkspaceService {
   const client = prisma ?? getPrismaClient();
+  const taskAssignmentNotifier = createTaskAssignmentNotifier(config, { prisma: client });
 
   async function counts(workspaceId: string): Promise<WorkspaceCounts> {
     const counted = await client.workspace.findUnique({
@@ -228,6 +264,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
 
   return {
     async create(input, ctx): Promise<WorkspaceSummary> {
+      assertVisibilityAllowed(input.type, input.visibility);
+
       const slug = await uniqueSlug(input.name, input.slug);
 
       const workspace = await client.$transaction(async (tx) => {
@@ -239,6 +277,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           data: {
             name: input.name,
             slug,
+            type: input.type,
+            visibility: input.visibility,
             ...(input.description !== undefined ? { description: input.description } : {}),
             ownerId: input.userId,
           },
@@ -259,7 +299,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           action: WorkspaceAuditAction.WorkspaceCreated,
           targetType: 'Workspace',
           targetId: created.id,
-          metadata: { name: created.name, slug: created.slug },
+          metadata: {
+            name: created.name,
+            slug: created.slug,
+            type: created.type,
+            visibility: created.visibility,
+          },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
@@ -272,7 +317,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
 
     async list(userId: string): Promise<WorkspaceSummary[]> {
       const memberships = await client.workspaceMembership.findMany({
-        where: { userId },
+        where: { userId, status: 'ACTIVE' },
         include: {
           workspace: {
             include: {
@@ -311,12 +356,17 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         capability: WorkspaceCapability.UpdateWorkspace,
       });
 
+      if (input.visibility !== undefined) {
+        assertVisibilityAllowed(access.workspace.type, input.visibility);
+      }
+
       const updated = await client.$transaction(async (tx) => {
         const changed = await tx.workspace.update({
           where: { id: access.workspace.id },
           data: {
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
+            ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
           },
         });
 
@@ -329,6 +379,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           metadata: {
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
+            ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
@@ -368,6 +419,61 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       });
 
       return toSummary(archived, access.membership.role, await counts(archived.id));
+    },
+
+    async restore(input, ctx): Promise<WorkspaceSummary> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ArchiveWorkspace,
+      });
+
+      const restored = await client.$transaction(async (tx) => {
+        const changed = await tx.workspace.updateMany({
+          where: {
+            id: access.workspace.id,
+            status: 'ARCHIVED',
+            deletedAt: null,
+          },
+          data: { status: 'ACTIVE' },
+        });
+
+        if (changed.count === 0) {
+          const existing = await tx.workspace.findFirst({
+            where: { id: access.workspace.id, deletedAt: null },
+            select: { id: true },
+          });
+
+          if (!existing) {
+            throw new AppError(404, 'WORKSPACE_NOT_FOUND', 'That workspace does not exist');
+          }
+
+          throw new AppError(
+            409,
+            'WORKSPACE_NOT_ARCHIVED',
+            'Only an archived workspace can be restored',
+          );
+        }
+
+        const workspace = await tx.workspace.findUniqueOrThrow({
+          where: { id: access.workspace.id },
+        });
+
+        await recordAuditEvent(tx, {
+          workspaceId: workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.WorkspaceRestored,
+          targetType: 'Workspace',
+          targetId: workspace.id,
+          metadata: { name: workspace.name },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        return workspace;
+      });
+
+      return toSummary(restored, access.membership.role, await counts(restored.id));
     },
 
     async remove(input, ctx): Promise<void> {
@@ -701,12 +807,151 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           link: workspaceLink(access.workspace.id),
           data: { workspaceId: access.workspace.id },
         });
+
         return taskReassignment.notices;
       });
 
       for (const notice of reassigned) {
         await taskAssignmentNotifier.notify(notice);
       }
+    },
+
+    async suspendMember(input, ctx): Promise<WorkspaceMember> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ManageMembers,
+      });
+
+      if (input.targetUserId === input.userId) {
+        throw new AppError(403, 'CANNOT_SUSPEND_SELF', 'You cannot suspend your own membership');
+      }
+
+      const target = await client.workspaceMembership.findUnique({
+        where: {
+          workspaceId_userId: { workspaceId: access.workspace.id, userId: input.targetUserId },
+        },
+        include: { user: { select: { id: true, name: true, email: true, status: true } } },
+      });
+
+      if (!target) {
+        throw new AppError(
+          404,
+          'MEMBER_NOT_FOUND',
+          'This account is not a member of the workspace',
+        );
+      }
+
+      assertMayManageMember({
+        actorRole: access.membership.role,
+        targetRole: target.role,
+        targetIsOwner: target.user.id === access.workspace.ownerId,
+      });
+
+      if (target.status === 'SUSPENDED') {
+        throw new AppError(
+          409,
+          'MEMBERSHIP_ALREADY_SUSPENDED',
+          'This membership is already suspended',
+        );
+      }
+
+      const updated = await client.$transaction(async (tx) => {
+        const changed = await tx.workspaceMembership.update({
+          where: { id: target.id },
+          data: { status: 'SUSPENDED' },
+          include: { user: { select: { id: true, name: true, email: true, status: true } } },
+        });
+
+        await recordAuditEvent(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.MemberSuspended,
+          targetType: 'WorkspaceMembership',
+          targetId: changed.id,
+          metadata: { userId: target.user.id, role: target.role },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        await createNotification(tx, {
+          userId: target.user.id,
+          type: 'MEMBERSHIP_SUSPENDED',
+          title: `Your access to ${access.workspace.name} is suspended`,
+          body: 'An administrator suspended your membership. Contact the workspace owner to restore it.',
+          link: workspaceLink(access.workspace.id),
+          data: { workspaceId: access.workspace.id },
+        });
+
+        return changed;
+      });
+
+      return toMember(updated, access.workspace.ownerId);
+    },
+
+    async restoreMember(input, ctx): Promise<WorkspaceMember> {
+      const access = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ManageMembers,
+      });
+
+      const target = await client.workspaceMembership.findUnique({
+        where: {
+          workspaceId_userId: { workspaceId: access.workspace.id, userId: input.targetUserId },
+        },
+        include: { user: { select: { id: true, name: true, email: true, status: true } } },
+      });
+
+      if (!target) {
+        throw new AppError(
+          404,
+          'MEMBER_NOT_FOUND',
+          'This account is not a member of the workspace',
+        );
+      }
+
+      assertMayManageMember({
+        actorRole: access.membership.role,
+        targetRole: target.role,
+        targetIsOwner: target.user.id === access.workspace.ownerId,
+      });
+
+      if (target.status !== 'SUSPENDED') {
+        throw new AppError(409, 'MEMBERSHIP_NOT_SUSPENDED', 'This membership is not suspended');
+      }
+
+      const updated = await client.$transaction(async (tx) => {
+        const changed = await tx.workspaceMembership.update({
+          where: { id: target.id },
+          data: { status: 'ACTIVE' },
+          include: { user: { select: { id: true, name: true, email: true, status: true } } },
+        });
+
+        await recordAuditEvent(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.MemberRestored,
+          targetType: 'WorkspaceMembership',
+          targetId: changed.id,
+          metadata: { userId: target.user.id, role: target.role },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        await createNotification(tx, {
+          userId: target.user.id,
+          type: 'MEMBERSHIP_RESTORED',
+          title: `Your access to ${access.workspace.name} was restored`,
+          body: 'An administrator restored your membership.',
+          link: workspaceLink(access.workspace.id),
+          data: { workspaceId: access.workspace.id },
+        });
+
+        return changed;
+      });
+
+      return toMember(updated, access.workspace.ownerId);
     },
 
     async transferOwnership(input, ctx): Promise<WorkspaceSummary> {

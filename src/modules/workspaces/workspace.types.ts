@@ -1,9 +1,13 @@
 import type {
   InvitationStatus,
   InvitationType,
+  JoinRequestStatus,
   UserStatus,
+  WorkspaceMembershipStatus,
   WorkspaceRole,
   WorkspaceStatus,
+  WorkspaceType,
+  WorkspaceVisibility,
 } from '@prisma/client';
 
 /**
@@ -18,10 +22,14 @@ export interface WorkspaceSummary {
   name: string;
   slug: string;
   description: string | null;
+  type: WorkspaceType;
+  visibility: WorkspaceVisibility;
   status: WorkspaceStatus;
   ownerId: string;
   /** The role of the caller inside this workspace. */
   role: WorkspaceRole;
+  /** True when an administrator has enabled a join code. */
+  joinCodeEnabled: boolean;
   memberCount: number;
   projectCount: number;
   teamCount: number;
@@ -36,6 +44,7 @@ export interface WorkspaceMember {
   email: string;
   status: UserStatus;
   role: WorkspaceRole;
+  membershipStatus: WorkspaceMembershipStatus;
   joinedAt: Date;
   /** True for the account that owns the workspace. */
   owner: boolean;
@@ -80,4 +89,38 @@ export interface InvitationResult {
   invitation: InvitationSummary;
   /** False when the invitation could not be handed to the mail provider. */
   emailSent: boolean;
+}
+
+/** A workspace shown in organisation discovery. */
+export interface DiscoveredWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  type: WorkspaceType;
+  memberCount: number;
+}
+
+export interface JoinRequestSummary {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  status: JoinRequestStatus;
+  role: WorkspaceRole;
+  teamId: string | null;
+  message: string | null;
+  reviewedBy: { id: string; name: string } | null;
+  reviewedAt: Date | null;
+  decisionNote: string | null;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
+export interface JoinCodeResult {
+  workspaceId: string;
+  code: string;
+  link: string;
 }

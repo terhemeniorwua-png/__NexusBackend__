@@ -7,6 +7,11 @@ import {
   createInvitationService,
   type InvitationService,
 } from '../modules/workspaces/invitation.service';
+import { createJoinRequestRouter } from '../modules/workspaces/join-request.routes';
+import {
+  createJoinRequestService,
+  type JoinRequestService,
+} from '../modules/workspaces/join-request.service';
 import { createUsersRouter } from '../modules/users/users.routes';
 import { createUsersService, type UsersService } from '../modules/users/users.service';
 import { createWorkspaceRouter } from '../modules/workspaces/workspace.routes';
@@ -24,6 +29,7 @@ interface ApiRouterOptions {
   usersService?: UsersService;
   workspaceService?: WorkspaceService;
   invitationService?: InvitationService;
+  joinRequestService?: JoinRequestService;
 }
 
 export function createApiRouter({
@@ -33,12 +39,16 @@ export function createApiRouter({
   usersService = createUsersService(),
   workspaceService = createWorkspaceService(config),
   invitationService = createInvitationService(config),
+  joinRequestService = createJoinRequestService(config),
 }: ApiRouterOptions): Router {
   const router = Router();
 
   router.use('/health', createHealthRouter({ config, readinessProbe }));
   router.use('/auth', createAuthRouter({ config, service: authService }));
   router.use('/users', createUsersRouter({ config, service: usersService }));
+  // Discovery and join routes must be registered before the workspace router
+  // so `/workspaces/discover` is not read as a workspace id.
+  router.use('/workspaces', createJoinRequestRouter({ config, service: joinRequestService }));
   router.use(
     '/workspaces',
     createWorkspaceRouter({ config, service: workspaceService, invitationService }),

@@ -1047,6 +1047,63 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     );
   });
 
+  test('only the workspace owner can restore an archived workspace and the change is audited', async () => {
+    const ownerEmail = uniqueEmail('restore-owner');
+    const managerEmail = uniqueEmail('restore-manager');
+    const owner = await createUser('Restore Owner', ownerEmail);
+    const manager = await createUser('Restore Manager', managerEmail);
+    const ownerToken = await login(ownerEmail);
+    const managerToken = await login(managerEmail);
+    const workspace = await createWorkspace(ownerToken);
+
+    await prisma.workspaceMembership.create({
+      data: { workspaceId: workspace.id, userId: manager.id, role: 'PROJECT_MANAGER' },
+    });
+
+    const archived = await api(`/workspaces/${workspace.id}/archive`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(archived.status, 200, JSON.stringify(archived.body));
+
+    const managerRestore = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: managerToken,
+    });
+    assert.equal(managerRestore.status, 403);
+
+    const restored = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+    assert.equal((restored.body.data as { status: string }).status, 'ACTIVE');
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { workspaceId: workspace.id, action: 'workspace.restored' },
+    });
+    assert.equal(audit?.actorId, owner.id);
+
+    const redundantRestore = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(redundantRestore.status, 409);
+    assert.equal(redundantRestore.body.error?.code, 'WORKSPACE_NOT_ARCHIVED');
+
+    const deleted = await api(`/workspaces/${workspace.id}`, {
+      method: 'DELETE',
+      token: ownerToken,
+    });
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+
+    const restoreDeleted = await api(`/workspaces/${workspace.id}/restore`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(restoreDeleted.status, 404);
+  });
+
   test('the invitations of a workspace are listed with their state', async () => {
     const ownerEmail = uniqueEmail('list-invite-owner');
 

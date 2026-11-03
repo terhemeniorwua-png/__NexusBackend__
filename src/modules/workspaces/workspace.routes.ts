@@ -148,6 +148,22 @@ export function createWorkspaceRouter({
     },
   );
 
+  router.post(
+    '/:workspaceId/restore',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: workspaceIdParamsSchema }),
+    async (req, res) => {
+      const { workspaceId } = req.validated?.params as { workspaceId: string };
+      const workspace = await service.restore(
+        { userId: requireUser(req), workspaceId },
+        context(req),
+      );
+
+      sendSuccess(res, workspace);
+    },
+  );
+
   router.delete(
     '/:workspaceId',
     requireAuth,
@@ -263,6 +279,44 @@ export function createWorkspaceRouter({
       );
 
       sendSuccess(res, { userId: targetUserId, removed: true });
+    },
+  );
+
+  router.post(
+    '/:workspaceId/members/:userId/suspend',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: memberParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, userId: targetUserId } = req.validated?.params as {
+        workspaceId: string;
+        userId: string;
+      };
+      const member = await service.suspendMember(
+        { userId: requireUser(req), workspaceId, targetUserId },
+        context(req),
+      );
+
+      sendSuccess(res, member);
+    },
+  );
+
+  router.post(
+    '/:workspaceId/members/:userId/restore',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: memberParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, userId: targetUserId } = req.validated?.params as {
+        workspaceId: string;
+        userId: string;
+      };
+      const member = await service.restoreMember(
+        { userId: requireUser(req), workspaceId, targetUserId },
+        context(req),
+      );
+
+      sendSuccess(res, member);
     },
   );
 

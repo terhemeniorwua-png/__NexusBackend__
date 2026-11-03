@@ -23,6 +23,30 @@ enum WorkspaceStatus {
   ARCHIVED
 }
 
+enum WorkspaceType {
+  INDIVIDUAL
+  COMPANY
+  INSTITUTION
+}
+
+enum WorkspaceVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum WorkspaceMembershipStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  EXPIRED
+}
+
 enum WorkspaceRole {
   OWNER
   PROJECT_MANAGER
@@ -98,7 +122,12 @@ enum NotificationType {
   CHANGES_REQUESTED
   COMMENT_REPLY
   MEMBERSHIP_CHANGED
+  MEMBERSHIP_SUSPENDED
+  MEMBERSHIP_RESTORED
   INVITATION_ACCEPTED
+  JOIN_REQUEST_RECEIVED
+  JOIN_REQUEST_APPROVED
+  JOIN_REQUEST_REJECTED
   MEETING_INVITE
   MEETING_RESCHEDULED
   MEETING_CANCELLED
@@ -163,6 +192,8 @@ model User {
   ownedProjects        Project[]             @relation("ProjectOwner")
   ledTeams             Team[]                @relation("TeamLead")
   taskAssignments      TaskAssignee[]        @relation("TaskAssigner")
+  joinRequests         JoinRequest[]         @relation("JoinRequestApplicant")
+  reviewedJoinRequests JoinRequest[]         @relation("JoinRequestReviewer")
 
   @@index([status])
   @@index([createdAt])
@@ -230,8 +261,13 @@ model Workspace {
   name        String
   slug        String          @unique
   description String?
+  type        WorkspaceType   @default(COMPANY)
+  visibility  WorkspaceVisibility @default(PRIVATE)
   status      WorkspaceStatus @default(ACTIVE)
   ownerId     String
+  /// SHA-256 digest of the join code. The plaintext code is only returned
+  /// when an administrator generates or rotates it.
+  joinCodeHash String?        @unique
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
   deletedAt   DateTime?
@@ -241,11 +277,14 @@ model Workspace {
   teams       Team[]
   projects    Project[]
   invitations Invitation[]
+  joinRequests JoinRequest[]
   files       FileAttachment[]
   auditLogs   AuditLog[]
 
   @@index([ownerId])
   @@index([status])
+  @@index([type])
+  @@index([visibility])
 }
 
 model WorkspaceMembership {
@@ -253,6 +292,7 @@ model WorkspaceMembership {
   workspaceId String
   userId      String
   role        WorkspaceRole @default(MEMBER)
+  status      WorkspaceMembershipStatus @default(ACTIVE)
   joinedAt    DateTime      @default(now())
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
@@ -263,6 +303,7 @@ model WorkspaceMembership {
   @@unique([workspaceId, userId])
   @@index([userId])
   @@index([workspaceId, role])
+  @@index([workspaceId, status])
 }
 
 model Team {
@@ -280,6 +321,7 @@ model Team {
   lead      User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
   members   TeamMembership[]
   projects  Project[]
+  joinRequests JoinRequest[]
 
   @@index([workspaceId])
   @@index([leadId])
@@ -499,6 +541,39 @@ model Invitation {
   @@index([status, expiresAt])
   @@index([invitedById])
   @@index([forUserId])
+}
+
+model JoinRequest {
+  id           String            @id @default(uuid())
+  workspaceId  String
+  userId       String
+  status       JoinRequestStatus @default(PENDING)
+  /// The role the applicant will receive if the request is approved.
+  role         WorkspaceRole     @default(MEMBER)
+  teamId       String?
+  message      String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  decisionNote String?
+  expiresAt    DateTime
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  /// Set while the request is pending and cleared when it leaves that state,
+  /// so one applicant cannot hold two live requests for the same workspace
+  /// while a settled request never blocks a new one.
+  pendingKey String? @unique
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user       User      @relation("JoinRequestApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?     @relation("JoinRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  team       Team?     @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([userId, status])
+  @@index([status, expiresAt])
+  @@index([reviewedById])
+  @@index([teamId])
 }
 
 model FileAttachment {
