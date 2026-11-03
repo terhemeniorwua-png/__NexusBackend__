@@ -1,4 +1,10 @@
-import type { Invitation, OrganizationRole, PrismaClient, WorkspaceRole } from '@prisma/client';
+import {
+  Prisma,
+  type Invitation,
+  type OrganizationRole,
+  type PrismaClient,
+  type WorkspaceRole,
+} from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import { getPrismaClient } from '../../db/prisma';
 import type { RequestContext } from '../auth/auth.types';
@@ -86,6 +92,10 @@ function pendingKeyFor(workspaceId: string, email: string): string {
   return `workspace:${workspaceId}:email:${email}`;
 }
 
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
 export function createInvitationService(
   config: AppConfig,
   prisma?: PrismaClient,
@@ -149,6 +159,21 @@ export function createInvitationService(
       },
       data: { status: 'EXPIRED', pendingKey: null },
     });
+  }
+
+  async function lockActiveWorkspace(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+  ): Promise<void> {
+    const rows = await tx.$queryRaw<Array<{ status: string; deletedAt: Date | null }>>`
+      SELECT "status"::text AS "status", "deletedAt"
+      FROM "Workspace"
+      WHERE "id" = ${workspaceId}
+      FOR UPDATE
+    `;
+    if (!rows[0] || rows[0].status !== 'ACTIVE' || rows[0].deletedAt) {
+      throw new AppError(409, 'WORKSPACE_NOT_ACTIVE', 'This workspace is not active');
+    }
   }
 
   /**
@@ -243,64 +268,80 @@ export function createInvitationService(
         }
       }
 
-      const pending = await client.invitation.findFirst({
-        where: {
-          workspaceId: access.workspace.id,
-          email: input.email,
-          status: 'PENDING',
-        },
-        select: { id: true, expiresAt: true },
-      });
-
-      if (pending) {
-        throw new AppError(
-          409,
-          'INVITATION_EXISTS',
-          'An invitation for this address is still pending. Resend it instead.',
-        );
-      }
-
       const token = generateSecureToken();
       const tokenHash = hashSecret(token);
       const expiresAt = new Date(Date.now() + config.workspaceInvitationTtlSeconds * 1_000);
 
-      const invitation = await client.$transaction(async (tx) => {
-        const created = await tx.invitation.create({
-          data: {
+      let invitation: Invitation;
+      try {
+        invitation = await client.$transaction(async (tx) => {
+          await lockActiveWorkspace(tx, access.workspace.id);
+          await tx.invitation.updateMany({
+            where: {
+              workspaceId: access.workspace.id,
+              email: input.email,
+              status: 'PENDING',
+              expiresAt: { lte: new Date() },
+            },
+            data: { status: 'EXPIRED', pendingKey: null },
+          });
+          const pending = await tx.invitation.findFirst({
+            where: { workspaceId: access.workspace.id, email: input.email, status: 'PENDING' },
+            select: { id: true },
+          });
+          if (pending) {
+            throw new AppError(
+              409,
+              'INVITATION_EXISTS',
+              'An invitation for this address is still pending. Resend it instead.',
+            );
+          }
+          const created = await tx.invitation.create({
+            data: {
+              workspaceId: access.workspace.id,
+              email: input.email,
+              role: assignedRole,
+              organizationRole: input.organizationRole ?? null,
+              type: 'WORKSPACE',
+              tokenHash,
+              status: 'PENDING',
+              invitedById: input.userId,
+              // The invitation is bound to the account as soon as one exists,
+              // so only that account can accept it.
+              ...(existingUser && !existingUser.deletedAt ? { forUserId: existingUser.id } : {}),
+              expiresAt,
+              pendingKey: pendingKeyFor(access.workspace.id, input.email),
+            },
+          });
+
+          await recordAuditEvent(tx, {
             workspaceId: access.workspace.id,
-            email: input.email,
-            role: assignedRole,
-            organizationRole: input.organizationRole ?? null,
-            type: 'WORKSPACE',
-            tokenHash,
-            status: 'PENDING',
-            invitedById: input.userId,
-            // The invitation is bound to the account as soon as one exists,
-            // so only that account can accept it.
-            ...(existingUser && !existingUser.deletedAt ? { forUserId: existingUser.id } : {}),
-            expiresAt,
-            pendingKey: pendingKeyFor(access.workspace.id, input.email),
-          },
-        });
+            actorId: input.userId,
+            action: WorkspaceAuditAction.InvitationCreated,
+            targetType: 'Invitation',
+            targetId: created.id,
+            metadata: {
+              email: input.email,
+              role: assignedRole,
+              organizationRole: input.organizationRole ?? null,
+              type: 'WORKSPACE',
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
 
-        await recordAuditEvent(tx, {
-          workspaceId: access.workspace.id,
-          actorId: input.userId,
-          action: WorkspaceAuditAction.InvitationCreated,
-          targetType: 'Invitation',
-          targetId: created.id,
-          metadata: {
-            email: input.email,
-            role: assignedRole,
-            organizationRole: input.organizationRole ?? null,
-            type: 'WORKSPACE',
-          },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          return created;
         });
-
-        return created;
-      });
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new AppError(
+            409,
+            'INVITATION_EXISTS',
+            'An invitation for this address is still pending. Resend it instead.',
+          );
+        }
+        throw error;
+      }
 
       const emailSent = await sendInvitationMail({
         invitationId: invitation.id,
@@ -399,8 +440,8 @@ export function createInvitationService(
       }
 
       if (invitation.status === 'EXPIRED' || invitation.expiresAt.getTime() <= Date.now()) {
-        await client.invitation.update({
-          where: { id: invitation.id },
+        await client.invitation.updateMany({
+          where: { id: invitation.id, status: 'PENDING', expiresAt: { lte: new Date() } },
           data: { status: 'EXPIRED', pendingKey: null },
         });
 
@@ -418,10 +459,24 @@ export function createInvitationService(
       const expiresAt = new Date(Date.now() + config.workspaceInvitationTtlSeconds * 1_000);
 
       const updated = await client.$transaction(async (tx) => {
-        const changed = await tx.invitation.update({
-          where: { id: invitation.id },
+        await lockActiveWorkspace(tx, access.workspace.id);
+        const result = await tx.invitation.updateMany({
+          where: {
+            id: invitation.id,
+            workspaceId: access.workspace.id,
+            status: 'PENDING',
+            expiresAt: { gt: new Date() },
+          },
           data: { tokenHash, expiresAt },
         });
+        if (!result.count) {
+          throw new AppError(
+            409,
+            'INVITATION_NOT_PENDING',
+            'This invitation can no longer be resent',
+          );
+        }
+        const changed = await tx.invitation.findUniqueOrThrow({ where: { id: invitation.id } });
 
         await recordAuditEvent(tx, {
           workspaceId: access.workspace.id,
@@ -495,10 +550,23 @@ export function createInvitationService(
       }
 
       const revoked = await client.$transaction(async (tx) => {
-        const changed = await tx.invitation.update({
-          where: { id: invitation.id },
+        await lockActiveWorkspace(tx, access.workspace.id);
+        const result = await tx.invitation.updateMany({
+          where: {
+            id: invitation.id,
+            workspaceId: access.workspace.id,
+            status: { in: ['PENDING', 'DECLINED', 'EXPIRED'] },
+          },
           data: { status: 'REVOKED', revokedAt: new Date(), pendingKey: null },
         });
+        if (!result.count) {
+          throw new AppError(
+            409,
+            'INVITATION_STATE_CHANGED',
+            'The invitation state changed; refresh and try again',
+          );
+        }
+        const changed = await tx.invitation.findUniqueOrThrow({ where: { id: invitation.id } });
 
         await recordAuditEvent(tx, {
           workspaceId: access.workspace.id,
@@ -528,7 +596,9 @@ export function createInvitationService(
       const invitation = await client.invitation.findUnique({
         where: { tokenHash: hashSecret(token) },
         include: {
-          workspace: { select: { id: true, name: true, slug: true } },
+          workspace: {
+            select: { id: true, name: true, slug: true, status: true, deletedAt: true },
+          },
           invitedBy: { select: { id: true, name: true } },
         },
       });
@@ -537,13 +607,21 @@ export function createInvitationService(
         throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
       }
 
+      if (invitation.workspace.status !== 'ACTIVE' || invitation.workspace.deletedAt) {
+        throw new AppError(
+          410,
+          'INVITATION_WORKSPACE_UNAVAILABLE',
+          'This workspace is no longer available',
+        );
+      }
+
       if (invitation.status === 'EXPIRED') {
         throw new AppError(410, 'INVITATION_EXPIRED', 'This invitation link has expired');
       }
 
       if (invitation.status === 'PENDING' && invitation.expiresAt.getTime() <= Date.now()) {
-        await client.invitation.update({
-          where: { id: invitation.id },
+        await client.invitation.updateMany({
+          where: { id: invitation.id, status: 'PENDING', expiresAt: { lte: new Date() } },
           data: { status: 'EXPIRED', pendingKey: null },
         });
 
@@ -604,8 +682,8 @@ export function createInvitationService(
 
       if (expired) {
         if (invitation.status !== 'EXPIRED') {
-          await client.invitation.update({
-            where: { id: invitation.id },
+          await client.invitation.updateMany({
+            where: { id: invitation.id, status: 'PENDING', expiresAt: { lte: new Date() } },
             data: { status: 'EXPIRED', pendingKey: null },
           });
         }
@@ -647,7 +725,7 @@ export function createInvitationService(
       }
 
       const accepted = await client.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "Workspace" WHERE "id" = ${invitation.workspaceId} FOR UPDATE`;
+        await lockActiveWorkspace(tx, invitation.workspaceId);
         const existing = await tx.workspaceMembership.findUnique({
           where: {
             workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id },
@@ -669,7 +747,13 @@ export function createInvitationService(
         // The status guard makes the acceptance single use, even when two
         // requests arrive with the same token at the same time.
         const updated = await tx.invitation.updateMany({
-          where: { id: invitation.id, status: 'PENDING' },
+          where: {
+            id: invitation.id,
+            workspaceId: invitation.workspaceId,
+            tokenHash: hashSecret(input.token),
+            status: 'PENDING',
+            expiresAt: { gt: new Date() },
+          },
           data: {
             status: 'ACCEPTED',
             acceptedAt: new Date(),
@@ -775,9 +859,15 @@ export function createInvitationService(
       }
 
       const declined = await client.$transaction(async (tx) => {
+        await lockActiveWorkspace(tx, invitation.workspaceId);
         const now = new Date();
         const updated = await tx.invitation.updateMany({
-          where: { id: invitation.id, status: 'PENDING', expiresAt: { gt: now } },
+          where: {
+            id: invitation.id,
+            tokenHash: hashSecret(input.token),
+            status: 'PENDING',
+            expiresAt: { gt: now },
+          },
           data: { status: 'DECLINED', declinedAt: now, pendingKey: null },
         });
 

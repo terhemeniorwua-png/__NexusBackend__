@@ -80,6 +80,13 @@ listed here is not evidence that a roadmap phase is complete.
 Personal workspaces cannot be archived or removed through the ordinary
 workspace lifecycle routes; account deletion owns that lifecycle.
 
+Archiving an organization workspace expires pending invitations whose deadline
+has passed and revokes the remaining pending invitations in the same
+transaction. Archived workspaces cannot be switched into or used to create,
+resend, or accept invitations. Restoring a workspace does not reactivate
+invitations that were revoked during archival; administrators can issue new
+invitations.
+
 ## Teams
 
 All team routes are nested under a workspace and require an authenticated,
