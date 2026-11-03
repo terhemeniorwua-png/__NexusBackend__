@@ -4,6 +4,7 @@ import type { Express } from 'express';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { getPrismaClient } from '../src/db/prisma';
+import { connectRedis, disconnectRedis } from '../src/db/redis';
 import { setEmailSender } from '../src/services/email';
 import type { EmailMessage } from '../src/services/email';
 import { hashPassword } from '../src/services/password';
@@ -97,6 +98,8 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     prisma = getPrismaClient(database.url);
     config = buildConfig();
 
+    await connectRedis({ redisUrl: 'redis://localhost:6379/15' });
+
     // The invitation mail is captured instead of sent, so the content can be
     // asserted on.
     sent = [];
@@ -124,6 +127,7 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     await prisma?.notification.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma?.workspace.deleteMany({ where: { id: { in: createdWorkspaceIds } } });
     await prisma?.user.deleteMany({ where: { id: { in: createdUserIds } } });
+    await disconnectRedis();
     await prisma?.$disconnect();
   });
 
