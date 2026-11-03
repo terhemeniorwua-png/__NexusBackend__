@@ -160,3 +160,90 @@ The standard `npm test` command passed 116 tests with 0 failures and 1 skipped o
 - Resolve the role taxonomy before proceeding through Phase 6.
 - Audit Phase 7 and Phase 8 branches if they are brought into the active branch.
 - Remove unused Sequelize dependencies and legacy `.js` dead code after approval.
+
+---
+
+## 6. Merged-branch audit — 2026-11-03
+
+### Documentation and roadmap findings
+
+The repository uses `AGENTS.md` and `PHASES.md`; the requested filenames
+`agent.md`, `phases.md`, and `skill.md` do not exist. No `branding.md` or
+separate backend architecture/security/API skill document was found. The
+current `PHASES.md` contains overlapping phase numbering: an email Phase 4.6
+is still in progress, the workspace Phase 4 section is also present, and a
+Phase 7 completion note conflicted with the fuller Phase 7 acceptance criteria.
+The tracker now records Phase 7 as in progress and holds Phase 8. Invitation
+decline is implemented and its stale `NOT STARTED` row is corrected.
+
+### Phase status from source and verification
+
+These classifications apply to the project-level 0–32 roadmap supplied for
+this audit. The repository contains a second 1–24 roadmap; the number collision
+is a documentation issue and must be resolved before future phase advancement.
+
+| Phase | Verified status | Evidence / remaining work |
+| --- | --- | --- |
+| 0 — Repository audit | VERIFIED COMPLETE | Architecture, actual modules, dependencies, missing services and documentation drift recorded in this audit. |
+| 1 — Core infrastructure | VERIFIED COMPLETE | TypeScript, lint, build and HTTP foundation/unit checks pass. |
+| 2 — Database architecture | VERIFIED COMPLETE | Eleven migrations deploy on isolated PostgreSQL; Phase 2 schema/constraint tests pass 2/2. |
+| 3 — Authentication and identity | VERIFIED COMPLETE | Database lifecycle suite passes 59/59, including account deletion, recovery and shared-record preservation. |
+| 4 — Workspaces / transactional email | PARTIALLY COMPLETE | Workspace lifecycle and email persistence work. Personal file deletion is safely held because no private object-storage deletion adapter exists; Phase 4.6 still lacks several production workflow callers. |
+| 5 — Membership and onboarding | VERIFIED COMPLETE | Join, invitation decline/acceptance, expiry, suspension, reassignment and isolation DB suites pass 34/34. |
+| 6 — Roles and access control | VERIFIED COMPLETE | Authorization DB suite passes 20/20; centralized policy unit coverage runs in the standard test suite. Custom roles remain explicitly deferred. |
+| 7 — Teams and organization structure | PARTIALLY COMPLETE | Team lifecycle DB suite passes 38/38. Company/Institution profiles and settings, institution groups and project/channel integrations remain absent. |
+| 8 — Projects and project visibility | PARTIALLY COMPLETE | Project schema and authorization policy exist; no project HTTP/business workflow is registered. |
+| 9 — Tasks and work management | PARTIALLY COMPLETE | Task schema and assignment notifier exist; task CRUD/workflow APIs and their integrations are absent. |
+| 10 — Messaging | NOT IMPLEMENTED | No persistent conversation/message service, route or realtime delivery path found. |
+| 11 — Notifications and activity | PARTIALLY COMPLETE | Notification persistence/service and audit writes exist; complete event producers, read-state APIs and activity feed are absent. |
+| 12 — Files and storage | PARTIALLY COMPLETE | File metadata exists; private upload/download authorization, object storage adapter and signed URL workflow are absent. |
+| 13 — Document collaboration | NOT IMPLEMENTED | No document collaboration module or routes found. |
+| 14 — Calendar and scheduling | NOT IMPLEMENTED | No calendar/scheduling module or routes found. |
+| 15 — Meetings and calling | NOT IMPLEMENTED | No meeting provider integration or meeting routes found. |
+| 16 — Forms and surveys | NOT IMPLEMENTED | No forms/surveys module or routes found. |
+| 17 — Subscription and billing | PARTIALLY COMPLETE | Pricing and lifecycle policy helpers exist; billing persistence, routes and payment-provider integration do not. |
+| 18 — Search | NOT IMPLEMENTED | No search service or API routes found. |
+| 19 — Integrations | NOT IMPLEMENTED | No OAuth integration framework or provider connection routes found. |
+| 20 — Automation | NOT IMPLEMENTED | No workflow/automation engine found. |
+| 21 — Python AI integration | NOT IMPLEMENTED | No Express-to-FastAPI orchestration module found. |
+| 22 — Nexus Write | NOT IMPLEMENTED | No writing assistance API/integration found. |
+| 23 — AI action approval | NOT IMPLEMENTED | No approval or approved-action execution service found. |
+| 24 — Redis/jobs/events | PARTIALLY COMPLETE | Redis-backed rate limiting and bounded email delivery worker exist; no general durable job/event processing layer exists. |
+| 25 — Email delivery | PARTIALLY COMPLETE | Outbox, retries, privacy, webhooks and notifier tests work; real task/mention/meeting/team/project workflow callers are incomplete. |
+| 26 — Audit/security monitoring | PARTIALLY COMPLETE | Transactional audit records are written for sensitive workspace/team changes; a complete security monitoring pipeline is absent. |
+| 27 — Reporting and analytics | NOT IMPLEMENTED | No reporting or analytics API/module found. |
+| 28 — API documentation | PARTIALLY COMPLETE | Human route index and OpenAPI include the registered team routes; no automated route/spec parity check exists. |
+| 29 — Testing and QA | PARTIALLY COMPLETE | Unit and selected PostgreSQL suites pass; the full product security, integration and external-service matrix is not implemented. |
+| 30 — Performance hardening | NOT IMPLEMENTED | No load/performance verification or production query review artifact found. |
+| 31 — Deployment operations | NOT IMPLEMENTED | No complete production deployment/operations implementation found. |
+| 32 — Release readiness | NOT IMPLEMENTED | The backend remains a partial product build; release criteria are not met. |
+
+### Remediation and verification in this audit
+
+- Fixed `/api/v1` router construction to instantiate and inject the already
+  imported join-request service; otherwise application creation failed with
+  `ReferenceError: joinRequestService is not defined`.
+- Preserved explicit team membership for organization roles while restoring
+  mapped owner/admin team capabilities for teams they belong to. No access is
+  granted to every team based only on an organization role.
+- Corrected stale Phase 5/6/7 database fixtures for the current `/auth/me`
+  response, Redis-backed rate limiter setup, last-owner conflict responses,
+  cross-workspace non-member concealment, and cleanup of test-owned workspaces.
+- Corrected account deletion after a co-owner transfer: deletion now blocks
+  only when the user is the last active owner/admin, while still preserving a
+  primary `Workspace.ownerId` transfer safeguard. Account-deletion rate-limit
+  keys normalize IPv6 addresses.
+- Updated `docs/API.md` and `docs/openapi.yaml` with the eleven team operations
+  (six nested path shapes); the OpenAPI document parses with 57 paths and no
+  unresolved component references.
+- PostgreSQL integration results: Phase 3 59/59; Phase 4 email 54/54; Phase 5
+  membership/onboarding 34/34; Phase 6 authorization 20/20; Phase 7 team
+  lifecycle 38/38. Phase 2 schema checks pass 2/2.
+- Standard `npm test`: 197 passed, 0 failed, 2 skipped. The skips are opt-in
+  database suites; the named DB suites above were run separately on disposable
+  PostgreSQL databases after deploying all 11 migrations.
+
+Phase 7 remains the earliest incomplete item in the project-level sequence.
+Do not start Phase 8 until the remaining Phase 7 criteria and the roadmap's
+numbering/sequence conflict are resolved. Phase 4.6 remains separately open
+because its workflow dependencies span task, meeting, team and project modules.

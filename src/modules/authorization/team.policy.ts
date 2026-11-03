@@ -244,6 +244,14 @@ export async function requireTeamAccess(
     );
   }
 
+  // Organization owners and admins keep their mapped workspace-level team
+  // capabilities when they have explicit membership in the team. This keeps
+  // team administration available without granting access to every team by
+  // virtue of an organization role alone.
+  if (workspaceRoleCanOnTeam(effectiveRole, input.capability)) {
+    return { team, teamMembership, workspaceRole: effectiveRole };
+  }
+
   if (!teamRoleCan(teamMembership.role, input.capability)) {
     throw new AppError(403, 'INSUFFICIENT_TEAM_ROLE', 'Your team role does not allow this action');
   }

@@ -706,7 +706,7 @@ These fields and settings are approved product requirements. Phase 4 implements 
 | Workspace restoration | COMPLETED | Added owner-only `POST /workspaces/{workspaceId}/restore`, transactional state transition and audit event; targeted regression test verifies role denial, success, repeat restore conflict, and audit. |
 | Membership isolation and ownership controls | COMPLETED | Database-backed workspace and Phase 6 policy tests verify membership scoping, owner protections, and cross-workspace denial. Phase 6 implementation was not changed in this audit. |
 | Workspace invitations and invitation state handling | COMPLETED | Existing Phase 5 integration tests cover invite/accept, single use, expiry, revocation, and workspace scoping. These capabilities remain implemented by the Phase 5 invitation module. |
-| Invitation decline/rejection | NOT STARTED | No invitee decline/rejection endpoint or state transition is present. This is a Phase 5 onboarding gap and was not implemented during this Phase 4 audit. |
+| Invitation decline/rejection | COMPLETED | Authenticated, recipient-bound `POST /invitations/{token}/decline` transitions pending invitations to `DECLINED`, records the audit event, and prevents reuse. The Phase 5 PostgreSQL suite now covers this lifecycle. |
 | Automatically provision a personal workspace after email verification | COMPLETED | Verification now transactionally creates or adopts one private `isPersonal` workspace and OWNER membership; migration backfills existing active users. |
 | Personal workspace archive/delete safeguards | COMPLETED | The ordinary workspace archive/delete routes reject personal workspaces; account deletion owns their lifecycle. |
 | Account deletion request, confirmation, and 30-day schedule | COMPLETED | Password and email confirmation, status and timestamps, token/session revocation, rate limiting, response, and transactional email are implemented. |
@@ -759,7 +759,7 @@ Implement organisation membership and controlled onboarding.
 
 ---
 
-#### Phase 7 — Teams and organizational structure `[x]`
+#### Phase 7 — Teams and organizational structure `[/]`
 
 **Objective:** Support teams within workspaces and make team membership meaningful across the platform.
 
@@ -782,6 +782,8 @@ Implement organisation membership and controlled onboarding.
 - Membership change notifications delivered
 
 **Blockers / Notes:** Verified on 2026-10-23. The team module is implemented at `src/modules/teams/` with `team.schemas.ts` (Zod validation for create, update, member add/update, lead change), `team.types.ts` (TeamSummary, TeamMemberSummary, TeamLeadSummary response shapes) and `team.service.ts` (full CRUD: create, list, get, update, archive, delete; membership: addMember, updateMemberRole, removeMember; lead management: changeLead). The HTTP layer lives in `team.routes.ts` and is mounted at `/api/v1/workspaces/:workspaceId/teams` via `src/routes/index.ts`. Authorization is enforced through the Phase 6 centralized module: workspace OWNER and PROJECT_MANAGER have full team capabilities; TEAM_LEAD may update and manage members of their own team; workspace MEMBER may list and view teams; workspace COLLABORATOR and VIEWER have no default access. The role that a client sends in a request body is never trusted. Every create, update, archive, delete, membership add/update/remove, and lead change is written to the `AuditLog` table inside the same transaction. Notifications are sent to affected members on add, role change, removal and lead assignment using `createNotification` from `src/services/notifications`. `TeamAuditAction` constants (`team.created`, `team.updated`, `team.archived`, `team.deleted`, `team.member_added`, `team.member_role_changed`, `team.member_removed`, `team.lead_changed`) were added to `src/services/audit.ts`. Team creation automatically adds the creator as a team member (TEAM_LEAD for OWNER/PM, MEMBER otherwise) and optionally adds a specified lead. Deleting a team is a soft-delete (`deletedAt` set); archived teams are filtered from the default list but visible with `?includeArchived=true`. Tests: `tests/phase7-teams.test.ts` (35 unit tests covering capability matrices, schema validation, audit constants) and `tests/phase7-teams-db.test.ts` (integration tests covering full lifecycle, member management, lead management, authorization enforcement, audit trail, and notifications). Verification: `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` all pass; `npm test` passes 136/137 (1 skipped — Phase 7 DB tests requiring `RUN_PHASE7_DB_TESTS=true`). Committed in two chunks on `feature/phase-7-teams` (90ee444 and 8245c69), pushed to `origin/feature/phase-7-teams`.
+
+**Audit update — 2026-11-03:** The team HTTP lifecycle passed 38/38 PostgreSQL tests after fixing the route dependency wiring, explicit organization-owner/admin team capabilities, current `/auth/me` fixture shape, and test cleanup. The full Phase 7 acceptance criteria below remain incomplete: Company/Institution profile and settings APIs, institution groups, and team integrations with project/channel workflows are absent. Keep Phase 7 in progress and do not advance to Phase 8 until these requirements are implemented and verified.
 
 ---
 
@@ -1761,7 +1763,7 @@ Make the backend easy to understand, integrate, and maintain.
 
 ### Current Phase
 
-**Current phase:** Phase 7 is complete and verified. The next phase to begin is Phase 8, projects and project collaboration.
+**Current phase:** Phase 7 remains in progress. The team lifecycle is verified, but the Company/Institution profile, institution group, and project/channel integration requirements in the detailed Phase 7 section remain outstanding. Phase 8 must not begin until Phase 7 acceptance criteria are resolved. Phase 4.6 also remains in progress; the roadmap does not define how its email workflow dependencies are sequenced against Phase 7/8, so treat this as a recorded sequencing ambiguity rather than skipping the dependency.
 
 ---
 

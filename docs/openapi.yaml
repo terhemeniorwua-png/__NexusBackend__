@@ -41,6 +41,8 @@ tags:
     description: Workspaces, memberships, discovery, join requests and invitations
   - name: Invitations
     description: Invitation links, their preview and their acceptance
+  - name: Teams
+    description: Workspace-scoped teams and team membership
 paths:
   /workspaces/discover:
     get:
@@ -1938,6 +1940,379 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /workspaces/{workspaceId}/teams:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Teams]
+      operationId: listTeams
+      summary: List teams in a workspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: includeArchived
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['true', 'false']
+            default: 'false'
+      responses:
+        '200':
+          description: Teams visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamListResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller cannot access this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Teams]
+      operationId: createTeam
+      summary: Create a team
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTeamRequest'
+      responses:
+        '201':
+          description: Team created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '400':
+          description: Invalid team fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller cannot create teams in this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/teams/{teamId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/TeamId'
+    get:
+      tags: [Teams]
+      operationId: getTeam
+      summary: Read a team
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Team visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team is unavailable in this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags: [Teams]
+      operationId: updateTeam
+      summary: Update a team
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTeamRequest'
+      responses:
+        '200':
+          description: Team updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '400':
+          description: Invalid or empty update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller cannot update this team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team is unavailable in this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Teams]
+      operationId: deleteTeam
+      summary: Soft-delete a team
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Team deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamDeletedResponse'
+        '403':
+          description: The caller cannot delete this team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team is unavailable in this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/teams/{teamId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/TeamId'
+    post:
+      tags: [Teams]
+      operationId: archiveTeam
+      summary: Archive a team
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Team archived.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '403':
+          description: The caller cannot archive this team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team is unavailable in this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/teams/{teamId}/members:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/TeamId'
+    get:
+      tags: [Teams]
+      operationId: listTeamMembers
+      summary: List team members
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Members visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMemberListResponse'
+        '403':
+          description: The caller cannot access this team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team is unavailable in this workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Teams]
+      operationId: addTeamMember
+      summary: Add a workspace member to a team
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddTeamMemberRequest'
+      responses:
+        '201':
+          description: Team member added.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMemberResponse'
+        '400':
+          description: Invalid member or role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller cannot manage this team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team or target workspace member is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/teams/{teamId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/TeamId'
+      - $ref: '#/components/parameters/TeamUserId'
+    patch:
+      tags: [Teams]
+      operationId: updateTeamMemberRole
+      summary: Change a team member's role
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTeamMemberRoleRequest'
+      responses:
+        '200':
+          description: Team member updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMemberResponse'
+        '400':
+          description: Invalid team role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller cannot manage this team member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team or member is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Teams]
+      operationId: removeTeamMember
+      summary: Remove a member from a team
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Team member removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMemberRemovedResponse'
+        '403':
+          description: The caller cannot remove this team member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team or member is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/teams/{teamId}/lead:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/TeamId'
+    patch:
+      tags: [Teams]
+      operationId: changeTeamLead
+      summary: Assign or clear the team lead
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeTeamLeadRequest'
+      responses:
+        '200':
+          description: Team lead updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamResponse'
+        '400':
+          description: Invalid lead identifier.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The caller cannot change this team lead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The team or target workspace member is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /workspaces/{workspaceId}/invitations:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2323,6 +2698,22 @@ components:
       in: path
       required: true
       description: The workspace.
+      schema:
+        type: string
+        format: uuid
+    TeamId:
+      name: teamId
+      in: path
+      required: true
+      description: The workspace team.
+      schema:
+        type: string
+        format: uuid
+    TeamUserId:
+      name: userId
+      in: path
+      required: true
+      description: The workspace user whose team membership is targeted.
       schema:
         type: string
         format: uuid
@@ -3354,6 +3745,205 @@ components:
           default: MEMBER
         organizationRole:
           $ref: '#/components/schemas/OrganizationRole'
+    TeamRole:
+      type: string
+      enum: [TEAM_LEAD, MEMBER]
+    Team:
+      type: object
+      required: [id, workspaceId, name, description, status, leadId, lead, memberCount, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, 'null']
+        status:
+          type: string
+          enum: [ACTIVE, ARCHIVED]
+        leadId:
+          type: [string, 'null']
+          format: uuid
+        lead:
+          oneOf:
+            - $ref: '#/components/schemas/TeamLead'
+            - type: 'null'
+        memberCount:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TeamLead:
+      type: object
+      required: [id, name, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+    TeamMember:
+      type: object
+      required: [id, userId, teamId, role, name, email, joinedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        teamId:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/TeamRole'
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        joinedAt:
+          type: string
+          format: date-time
+    TeamResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Team'
+    TeamListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Team'
+    TeamMemberResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/TeamMember'
+    TeamMemberListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamMember'
+    TeamDeletedResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [id, deleted]
+          properties:
+            id:
+              type: string
+              format: uuid
+            deleted:
+              type: boolean
+              const: true
+    TeamMemberRemovedResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [userId, removed]
+          properties:
+            userId:
+              type: string
+              format: uuid
+            removed:
+              type: boolean
+              const: true
+    CreateTeamRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        leadId:
+          type: [string, 'null']
+          format: uuid
+    UpdateTeamRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        description:
+          type: [string, 'null']
+          maxLength: 500
+    AddTeamMemberRequest:
+      type: object
+      required: [userId]
+      additionalProperties: false
+      properties:
+        userId:
+          type: string
+          format: uuid
+        role:
+          allOf:
+            - $ref: '#/components/schemas/TeamRole'
+          default: MEMBER
+    UpdateTeamMemberRoleRequest:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role:
+          $ref: '#/components/schemas/TeamRole'
+    ChangeTeamLeadRequest:
+      type: object
+      required: [leadId]
+      additionalProperties: false
+      properties:
+        leadId:
+          type: [string, 'null']
+          format: uuid
     EmailWebhookResponse:
       type: object
       required: [success, data]

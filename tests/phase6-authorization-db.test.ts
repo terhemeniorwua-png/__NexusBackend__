@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { createApp } from '../src/app';
 import { connectRedis, disconnectRedis } from '../src/db/redis';
+import {
+  ProjectCapability,
+  requireProjectAccess,
+  requireTeamAccess,
+  TeamCapability,
+} from '../src/modules/authorization';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { CookieJar, jsonRequest, startServer, type RunningServer } from './helpers/test-server';
 
@@ -170,18 +176,20 @@ function runTests(dbUrl: string): void {
     baseUrl = server.baseUrl;
 
     // Clean up any leftover test data from previous runs.
-    await db.prisma.user.deleteMany({
-      where: {
-        email: {
-          in: [
-            'phase6-owner@test.example',
-            'phase6-pm@test.example',
-            'phase6-member@test.example',
-            'phase6-outsider@test.example',
-          ],
-        },
-      },
+    const testEmails = [
+      'phase6-owner@test.example',
+      'phase6-pm@test.example',
+      'phase6-member@test.example',
+      'phase6-outsider@test.example',
+    ];
+    const staleUsers = await db.prisma.user.findMany({
+      where: { email: { in: testEmails } },
+      select: { id: true },
     });
+    await db.prisma.workspace.deleteMany({
+      where: { ownerId: { in: staleUsers.map(({ id }) => id) } },
+    });
+    await db.prisma.user.deleteMany({ where: { id: { in: staleUsers.map(({ id }) => id) } } });
     await db.prisma.$disconnect();
 
     // Register all four test users.
@@ -207,8 +215,7 @@ function runTests(dbUrl: string): void {
     await server.close();
     await disconnectRedis();
     const db = await connectTestDatabase(dbUrl);
-    await db.prisma.workspace.deleteMany({ where: { id: workspaceId } });
-    await db.prisma.user.deleteMany({
+    const testUsers = await db.prisma.user.findMany({
       where: {
         email: {
           in: [
@@ -219,6 +226,13 @@ function runTests(dbUrl: string): void {
           ],
         },
       },
+      select: { id: true },
+    });
+    await db.prisma.workspace.deleteMany({
+      where: { OR: [{ id: workspaceId }, { ownerId: { in: testUsers.map(({ id }) => id) } }] },
+    });
+    await db.prisma.user.deleteMany({
+      where: { id: { in: testUsers.map(({ id }) => id) } },
     });
     await db.prisma.$disconnect();
   });
@@ -302,7 +316,8 @@ function runTests(dbUrl: string): void {
           jar: pm.jar,
         },
       );
-      assert.equal(unauthorizedPromotion.status, 403, JSON.stringify(unauthorizedPromotion.body));
+      // A non-member is hidden as not found to avoid disclosing membership.
+      assert.equal(unauthorizedPromotion.status, 404, JSON.stringify(unauthorizedPromotion.body));
 
       const demoteAdditionalOwner = await jsonRequest(
         `${baseUrl}/api/v1/workspaces/${companyId}/members/${secondOwner.id}`,
@@ -565,7 +580,7 @@ function runTests(dbUrl: string): void {
           },
         );
         assert.equal(res.status, 403);
-        assert.equal((res.body.error as { code: string }).code, 'OWNER_CANNOT_BE_MODIFIED');
+        assert.equal((res.body.error as { code: string }).code, 'ORGANIZATION_OWNER_REQUIRED');
       });
 
       test('the owner cannot remove themselves (self-removal block)', async () => {
@@ -577,14 +592,9 @@ function runTests(dbUrl: string): void {
             jar: owner.jar,
           },
         );
-        assert.equal(res.status, 403);
-        // OWNER_CANNOT_BE_MODIFIED fires first because assertMayManageMember
-        // checks targetIsOwner before assertOwnershipSafe checks self-removal.
+        assert.equal(res.status, 409);
         const code = (res.body.error as { code: string }).code;
-        assert.ok(
-          code === 'OWNER_CANNOT_BE_MODIFIED' || code === 'OWNER_CANNOT_LEAVE',
-          `Unexpected error code: ${code}`,
-        );
+        assert.equal(code, 'LAST_ORGANIZATION_OWNER');
       });
     });
 
