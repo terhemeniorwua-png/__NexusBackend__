@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
+import { connectRedis, disconnectRedis } from '../src/db/redis';
 import { getPrismaClient } from '../src/db/prisma';
 import { setEmailSender } from '../src/services/email';
 import type { EmailMessage } from '../src/services/email';
@@ -60,6 +61,8 @@ describe(
         WORKSPACE_JOIN_REQUEST_TTL_SECONDS: '604800',
       });
 
+      await connectRedis(config);
+
       setEmailSender({
         async send(_message: EmailMessage) {
           return { accepted: true, providerMessageId: 'phase5-remediation-test' };
@@ -71,6 +74,7 @@ describe(
 
     after(async () => {
       await server?.close();
+      await disconnectRedis();
       await prisma?.notification.deleteMany({ where: { userId: { in: userIds } } });
       await prisma?.workspace.deleteMany({ where: { id: { in: workspaceIds } } });
       await prisma?.user.deleteMany({ where: { id: { in: userIds } } });

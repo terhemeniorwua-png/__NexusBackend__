@@ -125,7 +125,14 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
       },
     });
     await prisma?.notification.deleteMany({ where: { userId: { in: createdUserIds } } });
-    await prisma?.workspace.deleteMany({ where: { id: { in: createdWorkspaceIds } } });
+    await prisma?.workspace.deleteMany({
+      where: {
+        OR: [
+          { id: { in: createdWorkspaceIds } },
+          { ownerId: { in: createdUserIds }, isPersonal: true },
+        ],
+      },
+    });
     await prisma?.user.deleteMany({ where: { id: { in: createdUserIds } } });
     await disconnectRedis();
     await prisma?.$disconnect();
@@ -818,16 +825,16 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
       body: { role: 'MEMBER' },
     });
 
-    assert.equal(demoted.status, 403);
-    assert.equal(demoted.body.error?.code, 'OWNER_CANNOT_BE_MODIFIED');
+    assert.equal(demoted.status, 409);
+    assert.equal(demoted.body.error?.code, 'LAST_ORGANIZATION_OWNER');
 
     const removed = await api(`/workspaces/${workspace.id}/members/${owner.id}`, {
       method: 'DELETE',
       token: ownerToken,
     });
 
-    assert.equal(removed.status, 403);
-    assert.equal(removed.body.error?.code, 'OWNER_CANNOT_BE_MODIFIED');
+    assert.equal(removed.status, 409);
+    assert.equal(removed.body.error?.code, 'LAST_ORGANIZATION_OWNER');
   });
 
   test('a project manager cannot manage another project manager', async () => {

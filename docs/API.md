@@ -80,6 +80,26 @@ listed here is not evidence that a roadmap phase is complete.
 Personal workspaces cannot be archived or removed through the ordinary
 workspace lifecycle routes; account deletion owns that lifecycle.
 
+## Teams
+
+All team routes are nested under a workspace and require an authenticated,
+active account. Workspace membership and team-level permissions are enforced
+by the team service; knowing a team or user ID does not grant access.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/workspaces/{workspaceId}/teams` | Authorized workspace member | List teams; `includeArchived=true` includes archived teams. |
+| POST | `/workspaces/{workspaceId}/teams` | Authorized workspace member with create permission | Create a team and optionally assign its lead. |
+| GET | `/workspaces/{workspaceId}/teams/{teamId}` | Authorized workspace/team member | Read a team. |
+| PATCH | `/workspaces/{workspaceId}/teams/{teamId}` | Authorized team manager | Update the team name or description. |
+| POST | `/workspaces/{workspaceId}/teams/{teamId}/archive` | Authorized team manager | Archive a team. |
+| DELETE | `/workspaces/{workspaceId}/teams/{teamId}` | Authorized team manager | Soft-delete a team. |
+| GET | `/workspaces/{workspaceId}/teams/{teamId}/members` | Authorized team member | List team members. |
+| POST | `/workspaces/{workspaceId}/teams/{teamId}/members` | Authorized team manager | Add a workspace member to the team. |
+| PATCH | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager | Change a team member's role. |
+| DELETE | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager | Remove a member from the team. |
+| PATCH | `/workspaces/{workspaceId}/teams/{teamId}/lead` | Authorized team manager | Assign or clear the team lead. |
+
 ## Invitations
 
 | Method | Path | Access | Purpose |

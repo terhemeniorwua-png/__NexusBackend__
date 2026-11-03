@@ -31,6 +31,7 @@ interface ApiRouterOptions {
   usersService?: UsersService;
   workspaceService?: WorkspaceService;
   invitationService?: InvitationService;
+  joinRequestService?: JoinRequestService;
   teamService?: TeamService;
 }
 
@@ -41,6 +42,7 @@ export function createApiRouter({
   usersService = createUsersService(),
   workspaceService = createWorkspaceService(config),
   invitationService = createInvitationService(config),
+  joinRequestService = createJoinRequestService(config),
   teamService = createTeamService(),
 }: ApiRouterOptions): Router {
   const router = Router();

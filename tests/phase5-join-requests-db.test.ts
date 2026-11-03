@@ -3,6 +3,7 @@ import test, { after, before, describe } from 'node:test';
 import type { Express } from 'express';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
+import { connectRedis, disconnectRedis } from '../src/db/redis';
 import { getPrismaClient } from '../src/db/prisma';
 import { setEmailSender } from '../src/services/email';
 import type { EmailMessage } from '../src/services/email';
@@ -85,6 +86,8 @@ describe('Phase 5 discovery, join requests and suspension', { skip: skipReason |
       WORKSPACE_JOIN_REQUEST_TTL_SECONDS: '604800',
     });
 
+    await connectRedis(config);
+
     setEmailSender({
       async send(_message: EmailMessage) {
         return { accepted: true, providerMessageId: 'phase5-join' };
@@ -98,6 +101,7 @@ describe('Phase 5 discovery, join requests and suspension', { skip: skipReason |
 
   after(async () => {
     await server?.close();
+    await disconnectRedis();
 
     await prisma?.joinRequest.deleteMany({
       where: {

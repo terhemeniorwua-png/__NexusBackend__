@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { createApp } from '../src/app';
+import { connectRedis, disconnectRedis } from '../src/db/redis';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { CookieJar, jsonRequest, startServer, type RunningServer } from './helpers/test-server';
 
@@ -92,11 +93,11 @@ function runTests(rawDbUrl: string): void {
     assert.equal(login.status, 200, `login failed for ${email}`);
     const accessToken = (login.body.data as { accessToken: string }).accessToken;
 
-    const meRes = await jsonRequest<{ id: string }>(`${baseUrl}/api/v1/auth/me`, {
+    const meRes = await jsonRequest<{ user: { id: string } }>(`${baseUrl}/api/v1/auth/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       jar,
     });
-    const id = (meRes.body.data as { id: string }).id;
+    const id = (meRes.body.data as { user: { id: string } }).user.id;
 
     return { id, email, accessToken, jar };
   }
@@ -151,23 +152,26 @@ function runTests(rawDbUrl: string): void {
   before(async () => {
     const db = await connectTestDatabase(rawDbUrl);
     const config = (await import('../src/config/env')).loadEnv();
+    await connectRedis(config);
     const app = createApp({ config });
     server = await startServer(app);
     baseUrl = server.baseUrl;
 
     // Clean up stale data from previous interrupted runs.
-    await db.prisma.user.deleteMany({
-      where: {
-        email: {
-          in: [
-            'p7-owner@test.example',
-            'p7-pm@test.example',
-            'p7-member@test.example',
-            'p7-outsider@test.example',
-          ],
-        },
-      },
+    const testEmails = [
+      'p7-owner@test.example',
+      'p7-pm@test.example',
+      'p7-member@test.example',
+      'p7-outsider@test.example',
+    ];
+    const staleUsers = await db.prisma.user.findMany({
+      where: { email: { in: testEmails } },
+      select: { id: true },
     });
+    await db.prisma.workspace.deleteMany({
+      where: { OR: [{ id: workspaceId }, { ownerId: { in: staleUsers.map(({ id }) => id) } }] },
+    });
+    await db.prisma.user.deleteMany({ where: { id: { in: staleUsers.map(({ id }) => id) } } });
     await db.prisma.$disconnect();
 
     owner = await register('P7 Owner', 'p7-owner@test.example', 'TestPass123!');
@@ -191,9 +195,10 @@ function runTests(rawDbUrl: string): void {
   });
 
   after(async () => {
-    await server.close();
+    await server?.close();
+    await disconnectRedis();
     const db = await connectTestDatabase(rawDbUrl);
-    await db.prisma.user.deleteMany({
+    const testUsers = await db.prisma.user.findMany({
       where: {
         email: {
           in: [
@@ -204,6 +209,13 @@ function runTests(rawDbUrl: string): void {
           ],
         },
       },
+      select: { id: true },
+    });
+    await db.prisma.workspace.deleteMany({
+      where: { OR: [{ id: workspaceId }, { ownerId: { in: testUsers.map(({ id }) => id) } }] },
+    });
+    await db.prisma.user.deleteMany({
+      where: { id: { in: testUsers.map(({ id }) => id) } },
     });
     await db.prisma.$disconnect();
   });
