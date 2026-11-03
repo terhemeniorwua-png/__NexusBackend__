@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { createApp } from '../src/app';
+import { connectRedis, disconnectRedis } from '../src/db/redis';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { CookieJar, jsonRequest, startServer, type RunningServer } from './helpers/test-server';
 
@@ -156,6 +157,9 @@ function runTests(dbUrl: string): void {
   before(async () => {
     const db = await connectTestDatabase(dbUrl);
     const config = (await import('../src/config/env')).loadEnv();
+
+    await connectRedis({ redisUrl: 'redis://localhost:6379/15' });
+
     const app = createApp({ config });
     server = await startServer(app);
     baseUrl = server.baseUrl;
@@ -196,6 +200,7 @@ function runTests(dbUrl: string): void {
 
   after(async () => {
     await server.close();
+    await disconnectRedis();
     const db = await connectTestDatabase(dbUrl);
     await db.prisma.workspace.deleteMany({ where: { id: workspaceId } });
     await db.prisma.user.deleteMany({

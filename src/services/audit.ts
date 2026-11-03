@@ -43,6 +43,19 @@ export const WorkspaceAuditAction = {
 export type WorkspaceAuditActionValue =
   (typeof WorkspaceAuditAction)[keyof typeof WorkspaceAuditAction];
 
+export const TeamAuditAction = {
+  TeamCreated: 'team.created',
+  TeamUpdated: 'team.updated',
+  TeamArchived: 'team.archived',
+  TeamDeleted: 'team.deleted',
+  MemberAdded: 'team.member_added',
+  MemberRoleChanged: 'team.member_role_changed',
+  MemberRemoved: 'team.member_removed',
+  LeadChanged: 'team.lead_changed',
+} as const;
+
+export type TeamAuditActionValue = (typeof TeamAuditAction)[keyof typeof TeamAuditAction];
+
 export interface AuditEventInput {
   workspaceId?: string | null;
   actorId?: string | null;
