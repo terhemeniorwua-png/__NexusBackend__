@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { ipKeyGenerator } from 'express-rate-limit';
 import type { AppConfig } from '../../config/env';
 import { createRequireAuth } from '../../middleware/authenticate';
 import { accountKeyGenerator, createRateLimiter } from '../../middleware/rate-limit';
@@ -116,7 +117,8 @@ export function createAuthRouter({
     namespace: `${config.rateLimitNamespace}:auth:account-deletion`,
     windowMs,
     limit: 3,
-    keyGenerator: (req) => `${req.ip ?? 'unknown'}:${req.auth?.userId ?? 'unknown'}`,
+    keyGenerator: (req) =>
+      `${ipKeyGenerator(req.ip ?? 'unknown')}:${req.auth?.userId ?? 'unknown'}`,
     code: 'RATE_LIMITED',
     message: 'Too many account deletion requests. Please try again later.',
   });

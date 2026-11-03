@@ -25,7 +25,7 @@ import {
 } from './session.service';
 import { recordSecurityEvent, SecurityAction } from './security-events';
 import {
-  isLastActiveOrganizationAdministrator,
+  isLastActiveOrganizationOwnerOrAdministrator,
   scheduledAccountDeletionAt,
 } from './account-deletion.service';
 import { ensurePersonalWorkspace } from '../workspaces/personal-workspace.service';
@@ -1146,24 +1146,6 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           );
         }
 
-        const organizationOwnerRole = await tx.workspaceMembership.findFirst({
-          where: {
-            userId: user.id,
-            status: 'ACTIVE',
-            organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] },
-            workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
-          },
-          select: { workspaceId: true },
-        });
-
-        if (organizationOwnerRole) {
-          throw new AppError(
-            409,
-            'ORGANIZATION_OWNERSHIP_TRANSFER_REQUIRED',
-            'Transfer or relinquish organization owner roles before requesting account deletion',
-          );
-        }
-
         const ownedOrganization = await tx.workspace.findFirst({
           where: { ownerId: user.id, type: { in: ['COMPANY', 'INSTITUTION'] } },
           select: { id: true },
@@ -1190,7 +1172,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           );
         }
 
-        if (await isLastActiveOrganizationAdministrator(tx, user.id)) {
+        if (await isLastActiveOrganizationOwnerOrAdministrator(tx, user.id)) {
           throw new AppError(
             409,
             'LAST_ORGANIZATION_ADMIN',

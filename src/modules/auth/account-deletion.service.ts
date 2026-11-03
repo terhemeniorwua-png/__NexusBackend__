@@ -12,7 +12,7 @@ export function scheduledAccountDeletionAt(requestedAt: Date): Date {
   return new Date(requestedAt.getTime() + ACCOUNT_DELETION_GRACE_PERIOD_MS);
 }
 
-export async function isLastActiveOrganizationAdministrator(
+export async function isLastActiveOrganizationOwnerOrAdministrator(
   tx: Prisma.TransactionClient,
   userId: string,
 ): Promise<boolean> {
@@ -21,8 +21,17 @@ export async function isLastActiveOrganizationAdministrator(
       userId,
       status: 'ACTIVE',
       OR: [
-        { organizationRole: { in: ['COMPANY_ADMIN', 'INSTITUTION_ADMIN'] } },
-        { role: 'PROJECT_MANAGER', organizationRole: null },
+        {
+          organizationRole: {
+            in: [
+              'COMPANY_OWNER',
+              'COMPANY_ADMIN',
+              'INSTITUTION_OWNER',
+              'INSTITUTION_ADMIN',
+            ],
+          },
+        },
+        { role: { in: ['OWNER', 'PROJECT_MANAGER'] }, organizationRole: null },
       ],
       workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
     },
@@ -38,7 +47,7 @@ export async function isLastActiveOrganizationAdministrator(
               OR: [
                 { organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] } },
                 { organizationRole: { in: ['COMPANY_ADMIN', 'INSTITUTION_ADMIN'] } },
-                { role: 'PROJECT_MANAGER', organizationRole: null },
+                { role: { in: ['OWNER', 'PROJECT_MANAGER'] }, organizationRole: null },
               ],
             },
             select: {
@@ -69,7 +78,7 @@ export async function isLastActiveOrganizationAdministrator(
         user.deletedAt === null &&
         (organizationRole === 'COMPANY_ADMIN' ||
           organizationRole === 'INSTITUTION_ADMIN' ||
-          (!organizationRole && role === 'PROJECT_MANAGER')),
+          (!organizationRole && (role === 'PROJECT_MANAGER' || role === 'OWNER'))),
     );
 
     return !activeOwner && !activeAdministrator;
@@ -140,17 +149,7 @@ export async function processPendingAccountDeletions(
         select: { id: true },
       });
 
-      const organizationOwnerMembership = await tx.workspaceMembership.findFirst({
-        where: {
-          userId: candidate.id,
-          status: 'ACTIVE',
-          organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] },
-          workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
-        },
-        select: { workspaceId: true },
-      });
-
-      if (organization || organizationOwnerMembership) {
+      if (organization) {
         blocked.push({ userId: candidate.id, reason: 'ORGANIZATION_OWNERSHIP' });
         continue;
       }
@@ -165,7 +164,7 @@ export async function processPendingAccountDeletions(
         continue;
       }
 
-      if (await isLastActiveOrganizationAdministrator(tx, candidate.id)) {
+      if (await isLastActiveOrganizationOwnerOrAdministrator(tx, candidate.id)) {
         blocked.push({ userId: candidate.id, reason: 'LAST_ORGANIZATION_ADMIN' });
         continue;
       }

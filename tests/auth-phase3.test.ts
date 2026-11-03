@@ -1962,7 +1962,12 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       'Retained shared organization',
     );
     await prisma.workspaceMembership.create({
-      data: { workspaceId: sharedWorkspaceId, userId: member.userId, role: 'MEMBER' },
+      data: {
+        workspaceId: sharedWorkspaceId,
+        userId: member.userId,
+        role: 'OWNER',
+        organizationRole: 'COMPANY_OWNER',
+      },
     });
 
     const personalProject = await prisma.project.create({
@@ -2047,6 +2052,12 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       include: { author: true },
     });
     assert.equal(retainedWorkspace.ownerId, organizationOwner.userId);
+    assert.equal(
+      await prisma.workspaceMembership.count({
+        where: { workspaceId: sharedWorkspaceId, userId: member.userId },
+      }),
+      0,
+    );
     assert.equal(retainedComment.body, 'Keep this shared comment');
     assert.equal(retainedComment.author.name, 'Deleted user');
     assert.equal(await prisma.taskAssignee.count({ where: { taskId: sharedTask.id } }), 0);
