@@ -86,6 +86,20 @@ test('parseEnv exposes the authentication settings with their defaults', () => {
   assert.equal(config.authRegisterRateLimitMax, 5);
   assert.equal(config.frontendUrl, 'https://app.example.com');
   assert.equal(config.authVerificationLinkPath, '/verify-email');
+  assert.equal(config.taskAssignmentLinkPath, '/projects/:projectId/tasks/:taskId');
+  assert.equal(
+    config.commentMentionLinkPath,
+    '/projects/:projectId/tasks/:taskId#comment-:commentId',
+  );
+});
+
+test('parseEnv rejects a comment mention path that cannot identify the comment', () => {
+  assert.throws(
+    () => parseEnv({ ...baseEnv, COMMENT_MENTION_LINK_PATH: '/projects/:projectId/tasks/:taskId' }),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'COMMENT_MENTION_LINK_PATH'),
+  );
 });
 
 test('parseEnv forces secure cookies in production', () => {
