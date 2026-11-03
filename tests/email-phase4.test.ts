@@ -417,6 +417,18 @@ test('email addresses are removed from error text before it is logged', () => {
   assert.match(summary.stack as string, /\[REDACTED_EMAIL\]/);
 });
 
+test('single-use tokens are removed from email error text before it is logged', () => {
+  const token = 'single-use-invitation-secret-token';
+
+  const summary = summarizeErrorForLog(
+    new Error(`Delivery failed for /api/v1/invitations/${token}/accept and ?token=${token}`),
+  );
+
+  const serialized = JSON.stringify(summary);
+  assert.equal(serialized.includes(token), false);
+  assert.match(serialized, /\[REDACTED\]/);
+});
+
 test('development transports log delivery metadata without the recipient address', async () => {
   const email = 'private.recipient@example.com';
   const request = {
