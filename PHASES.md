@@ -17,7 +17,7 @@
 
 _Update this table whenever a phase status changes._
 
-Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. Phases 2.1 and 2.2 are database audit and migration-recovery subphases of Phase 2. They are tracked below but do not change the 24-phase roadmap count.
+Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. They are tracked below but do not change the 24-phase roadmap count.
 
 ---
 
