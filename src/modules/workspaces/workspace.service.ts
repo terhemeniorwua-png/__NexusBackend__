@@ -12,6 +12,7 @@ import { getPrismaClient } from '../../db/prisma';
 import type { RequestContext } from '../auth/auth.types';
 import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
+import { createTaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import { AppError } from '../../utils/errors';
 import {
   assertMayManageMember,
@@ -27,6 +28,7 @@ import type {
   UpdateWorkspaceInput,
 } from './workspace.schemas';
 import type { WorkspaceMember, WorkspaceSummary } from './workspace.types';
+import { reassignOpenTasksBeforeMemberRemoval } from './task-reassignment';
 
 /**
  * Workspaces and their members.
@@ -68,7 +70,12 @@ export interface WorkspaceService {
     ctx: RequestContext,
   ): Promise<WorkspaceMember>;
   removeMember(
-    input: { userId: string; workspaceId: string; targetUserId: string },
+    input: {
+      userId: string;
+      workspaceId: string;
+      targetUserId: string;
+      reassignTasksToUserId?: string | undefined;
+    },
     ctx: RequestContext,
   ): Promise<void>;
   transferOwnership(
@@ -606,8 +613,66 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceOwnerId: access.workspace.ownerId,
       });
 
-      await client.$transaction(async (tx) => {
-        await tx.workspaceMembership.delete({ where: { id: target.id } });
+      const reassigned = await client.$transaction(async (tx) => {
+        const [actorMembership, currentTarget] = await Promise.all([
+          tx.workspaceMembership.findUnique({
+            where: {
+              workspaceId_userId: { workspaceId: access.workspace.id, userId: input.userId },
+            },
+          }),
+          tx.workspaceMembership.findUnique({
+            where: {
+              workspaceId_userId: {
+                workspaceId: access.workspace.id,
+                userId: input.targetUserId,
+              },
+            },
+          }),
+        ]);
+
+        if (!actorMembership || actorMembership.status !== 'ACTIVE' || !currentTarget) {
+          throw new AppError(
+            409,
+            'MEMBERSHIP_CHANGED',
+            'Workspace membership changed before the removal could complete',
+          );
+        }
+
+        assertMayManageMember({
+          actorRole: actorMembership.role,
+          targetRole: currentTarget.role,
+          targetIsOwner: input.targetUserId === access.workspace.ownerId,
+        });
+
+        assertOwnershipSafe({
+          actorId: input.userId,
+          targetUserId: input.targetUserId,
+          targetRole: currentTarget.role,
+          workspaceOwnerId: access.workspace.ownerId,
+        });
+
+        const taskReassignment = await reassignOpenTasksBeforeMemberRemoval(tx, {
+          workspaceId: access.workspace.id,
+          actorId: input.userId,
+          memberId: input.targetUserId,
+          reassignToUserId: input.reassignTasksToUserId,
+        });
+
+        const removed = await tx.workspaceMembership.deleteMany({
+          where: {
+            id: currentTarget.id,
+            workspaceId: access.workspace.id,
+            userId: input.targetUserId,
+          },
+        });
+
+        if (removed.count !== 1) {
+          throw new AppError(
+            409,
+            'MEMBERSHIP_CHANGED',
+            'Workspace membership changed before the removal could complete',
+          );
+        }
 
         await recordAuditEvent(tx, {
           workspaceId: access.workspace.id,
@@ -615,7 +680,15 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           action: WorkspaceAuditAction.MemberRemoved,
           targetType: 'WorkspaceMembership',
           targetId: target.id,
-          metadata: { userId: target.user.id, email: target.user.email, role: target.role },
+          metadata: {
+            userId: target.user.id,
+            email: target.user.email,
+            role: currentTarget.role,
+            reassignedTaskCount: taskReassignment.taskCount,
+            ...(input.reassignTasksToUserId
+              ? { reassignTasksToUserId: input.reassignTasksToUserId }
+              : {}),
+          },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
@@ -628,7 +701,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           link: workspaceLink(access.workspace.id),
           data: { workspaceId: access.workspace.id },
         });
+        return taskReassignment.notices;
       });
+
+      for (const notice of reassigned) {
+        await taskAssignmentNotifier.notify(notice);
+      }
     },
 
     async transferOwnership(input, ctx): Promise<WorkspaceSummary> {

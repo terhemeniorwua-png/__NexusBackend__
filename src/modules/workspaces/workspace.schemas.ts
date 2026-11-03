@@ -101,6 +101,17 @@ export const updateMemberRoleSchema = z
   })
   .strict();
 
+export const removeWorkspaceMemberSchema = z
+  .object({
+    reassignTasksToUserId: z
+      .string()
+      .trim()
+      .uuid('The replacement user id is not valid')
+      .optional(),
+  })
+  .strict()
+  .default({});
+
 export const createInvitationSchema = z
   .object({
     email: emailSchema,
@@ -133,6 +144,7 @@ export type CreateWorkspaceInput = z.infer<typeof createWorkspaceSchema>;
 export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceSchema>;
 export type AddMemberInput = z.infer<typeof addMemberSchema>;
 export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
+export type RemoveWorkspaceMemberInput = z.infer<typeof removeWorkspaceMemberSchema>;
 export type CreateInvitationInput = z.infer<typeof createInvitationSchema>;
 export type ListInvitationsQuery = z.infer<typeof listInvitationsQuerySchema>;
 export type AssignableRole = z.infer<typeof assignableRoleSchema>;
