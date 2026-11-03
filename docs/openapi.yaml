@@ -693,14 +693,16 @@ paths:
     post:
       tags: [Authentication]
       operationId: reactivateAccount
-      summary: Reactivate a deactivated account
+      summary: Reactivate a deactivated account or cancel pending deletion
       description: |
-        Self-service reactivation for an account whose status is `DEACTIVATED`.
+        Self-service recovery for a `DEACTIVATED` account or cancellation of a
+        `PENDING_DELETION` request before its scheduled deletion date.
         The email address and password are required, and the route is rate
         limited like sign-in. Reactivation never creates a session: the account
         must sign in again. An account that had not verified its email address
         returns to `PENDING_VERIFICATION` and a new verification email is sent.
-        Deleted and suspended accounts cannot be reactivated.
+        Recovery clears the deletion schedule but never restores revoked
+        sessions. Permanently deleted and suspended accounts cannot be recovered.
       requestBody:
         required: true
         content:
@@ -738,7 +740,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The account is already active or is not deactivated.
+          description: The account is already active, not recoverable, or its 30-day recovery period has ended.
           content:
             application/json:
               schema:
@@ -1030,11 +1032,16 @@ paths:
     post:
       tags: [Authentication]
       operationId: deleteAccount
-      summary: Delete the signed-in account
+      summary: Schedule deletion of the signed-in account
       description: |
-        The account is anonymised: the address is released, the profile is
-        cleared and every session is revoked. The owner of an active workspace
-        must transfer ownership first.
+        Requires the current password and exact account email confirmation.
+        The account enters `PENDING_DELETION`, sessions and authentication
+        tokens are revoked, and the account plus personal workspace remain
+        intact for 30 days. The account can be recovered with email and
+        password through `/auth/reactivate` before the scheduled date. The
+        response includes the scheduled date. Company/Institution ownership
+        must be transferred, and a final organization administrator must be
+        replaced, before deletion can be requested.
       security:
         - bearerAuth: []
       requestBody:
@@ -1044,8 +1051,12 @@ paths:
             schema:
               $ref: '#/components/schemas/AccountDeleteRequest'
       responses:
-        '204':
-          description: The account was deleted.
+        '202':
+          description: Deletion was scheduled and the current session was signed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDeletionScheduledResponse'
         '400':
           description: The confirmation does not match the email address.
           content:
@@ -1058,8 +1069,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The account still owns an active workspace.
+          description: The user still owns a shared workspace, their personal workspace has collaborators, or they are the final active organization administrator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many account deletion requests.
           content:
             application/json:
               schema:
@@ -2340,6 +2363,25 @@ components:
         confirmation:
           type: string
           description: The email address of the account, typed exactly.
+    AccountDeletionScheduledResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [status, scheduledDeletionAt, recoveryMethod]
+          properties:
+            status:
+              type: string
+              const: PENDING_DELETION
+            scheduledDeletionAt:
+              type: string
+              format: date-time
+            recoveryMethod:
+              type: string
     UpdateProfileRequest:
       type: object
       additionalProperties: false
@@ -2378,7 +2420,7 @@ components:
           type: string
         status:
           type: string
-          enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED]
+          enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED, PENDING_DELETION]
         emailVerifiedAt:
           type: [string, 'null']
           format: date-time
@@ -2439,7 +2481,7 @@ components:
                   type: string
                 status:
                   type: string
-                  enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED]
+                  enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED, PENDING_DELETION]
                 emailVerified:
                   type: boolean
     AuthenticationResponse:
@@ -2560,6 +2602,7 @@ components:
         - name
         - slug
         - type
+        - isPersonal
         - visibility
         - status
         - ownerId
@@ -2580,6 +2623,9 @@ components:
           type: [string, 'null']
         type:
           $ref: '#/components/schemas/WorkspaceType'
+        isPersonal:
+          type: boolean
+          description: Server-managed marker for the account's protected personal workspace.
         visibility:
           $ref: '#/components/schemas/WorkspaceVisibility'
         status:
@@ -2647,7 +2693,7 @@ components:
           format: email
         status:
           type: string
-          enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED]
+          enum: [PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED, PENDING_DELETION]
         role:
           $ref: '#/components/schemas/WorkspaceRole'
         membershipStatus:

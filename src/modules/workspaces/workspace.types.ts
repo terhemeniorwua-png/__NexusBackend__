@@ -23,6 +23,7 @@ export interface WorkspaceSummary {
   slug: string;
   description: string | null;
   type: WorkspaceType;
+  isPersonal: boolean;
   visibility: WorkspaceVisibility;
   status: WorkspaceStatus;
   ownerId: string;

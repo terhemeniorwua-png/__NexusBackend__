@@ -18,7 +18,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 | 1 — Core infrastructure | COMPLETED | Type checking, lint, build, and HTTP foundation tests pass. |
 | 2 — Database architecture | COMPLETED | Prisma migrations deploy to an isolated PostgreSQL test database; schema and migration tests pass. |
 | 3 — Authentication and identity | COMPLETED | Database-backed lifecycle suite passes, including session rotation, recovery, and account deletion cases. |
-| 4 — Workspace management | BLOCKED | Core workspace CRUD, type validation, isolation, membership lifecycle, archive/restore, and migrations are verified. Automatic personal-workspace provisioning is absent and conflicts with the existing account-deletion ownership rule until a retention policy is decided. Company/institution-specific setup, settings, and department hierarchy are also incomplete. No changes were committed or pushed. |
+| 4 — Workspace management | BLOCKED | Verified email now provisions one private personal workspace. Account deletion now schedules a 30-day recovery period, revokes sessions/tokens, supports password-verified cancellation, and runs an idempotent database purge that preserves shared records. Company/Institution profile and settings requirements are documented for Phase 7. Permanent deletion is held for personal workspaces with file metadata because this repository has no object-storage deletion adapter. |
 | 5 — Organisation membership and onboarding | BLOCKED | Phase 5 join, invitation acceptance, discovery, suspension, and reassignment regression suites pass (31 passed, 0 failed). Invitation decline/rejection is not exposed by the current API. Member removal atomically reassigns active tasks only to active workspace members eligible for each project; verified domain matching does not grant membership. Phase 4 remains open and blocks phase closeout. |
 | 6 — Roles and access control | BLOCKED | Current database/API roles do not match the Company and Institution role names in the product requirements. A compatible role mapping must be agreed before changing persisted role values. |
 | 7–32 | NOT STARTED | No implementation from these phases is included in the active feature branch. |
@@ -195,6 +195,13 @@ Support Individual, Company, and Institution workspaces within one Nexus platfor
 - Implement personal workspace settings.
 - Support additional collaborative workspaces.
 - Preserve personal data independently of organisation membership.
+- Keep the personal workspace and assets intact for 30 days after account deletion is requested.
+- Allow password-verified account recovery during the 30-day period without restoring revoked sessions.
+- Permanently remove the personal workspace and exclusively owned relational records after the recovery period.
+- Preserve shared workspace content and anonymize historical attribution as `Deleted user`.
+- Remove the user's shared-workspace memberships and access during permanent deletion.
+- Block deletion requests until organization ownership is transferred and another active owner or administrator remains.
+- Do not remove personal-workspace files until their storage objects can be deleted through the configured object-storage provider.
 
 #### Company Workspaces
 - Company registration.
@@ -211,6 +218,25 @@ Support Individual, Company, and Institution workspaces within one Nexus platfor
 - Configurable departments and organisational hierarchy.
 - Initial Owner assignment.
 - Institution settings.
+
+### Approved account deletion policy — 2026-11-03
+
+- `POST /auth/delete` requires the current password and exact email confirmation. It sets `PENDING_DELETION`, records `deletionRequestedAt` and `scheduledDeletionAt`, revokes active sessions and unused authentication tokens, and sends a transactional email with the scheduled date.
+- The recovery period is exactly 30 days. The existing password-verified `/auth/reactivate` flow cancels a pending deletion before the deadline. It clears the schedule but does not restore old sessions; the user must sign in again.
+- Permanent deletion removes the marked personal workspace and its workspace-owned relational data, memberships, access, notifications, and pending invitations. A neutral user tombstone remains to preserve foreign keys and shared historical attribution.
+- Company, Institution, and other non-personal shared workspaces are not deleted. Organization owners must transfer ownership first. A final active organization administrator cannot request deletion until another active owner or administrator is available.
+- Shared projects, tasks, comments, and file records remain. Assignments and memberships for the deleted user are removed; shared content displays the tombstone's `Deleted user` identity.
+- This repository has file metadata but no object-storage deletion adapter. Permanent deletion is held when personal workspace file metadata exists, rather than deleting the metadata and orphaning stored objects. Integrating safe object cleanup is a Phase 12 dependency and Phase 4 remains blocked for such accounts.
+
+### Company and Institution profile and settings requirements
+
+These fields and settings are approved product requirements. Phase 4 implements only workspace type and ownership foundations; profile models/APIs and organization administration are assigned to Phase 7 so they can use the organization structure and permission model without expanding the personal-workspace work.
+
+**Company profile:** company name, logo, description, industry/business category, official website, business email, contact information, country/location, organization workspace ID, created/updated timestamps.
+
+**Institution profile:** institution name, logo, description, institution type (university, college, school, research institution, or other), official website, institutional email, contact information, country/location, organization workspace ID, created/updated timestamps. Institution-only fields must not be imposed on Company profiles and vice versa.
+
+**Organization settings:** general profile and contact settings, workspace name and basic preferences, supported notification preferences, member/role views, invitations and member removal, ownership and administrator management, and role-protected security/access settings. Only authorized owners and administrators may change sensitive settings. Subscription, billing, pricing, department hierarchy, logo storage, and complete organization administration are deferred to their designated roadmap phases; no commercial rules are specified here.
 
 #### Shared Functionality
 - Workspace creation and updates.
@@ -239,11 +265,16 @@ Support Individual, Company, and Institution workspaces within one Nexus platfor
 | Membership isolation and ownership controls | COMPLETED | Database-backed workspace and Phase 6 policy tests verify membership scoping, owner protections, and cross-workspace denial. Phase 6 implementation was not changed in this audit. |
 | Workspace invitations and invitation state handling | COMPLETED | Existing Phase 5 integration tests cover invite/accept, single use, expiry, revocation, and workspace scoping. These capabilities remain implemented by the Phase 5 invitation module. |
 | Invitation decline/rejection | NOT STARTED | No invitee decline/rejection endpoint or state transition is present. This is a Phase 5 onboarding gap and was not implemented during this Phase 4 audit. |
-| Automatically provision a personal workspace after email verification | BLOCKED | Not implemented. The account-deletion service rejects deletion while the user owns any workspace. A product decision is required for the lifecycle of this automatically created workspace when its owner deletes their account. |
-| Personal workspace-specific settings | IN PROGRESS | Generic name, description, and visibility updates exist; no distinct personal settings model/API is evidenced. |
-| Company registration, organisation profile, company-specific configuration/settings | NOT STARTED | Workspace type can be selected through generic creation; no company onboarding/profile/configuration module is evidenced. |
-| Institution profile, institution-specific configuration/settings, and department hierarchy | NOT STARTED | No institution profile or department model/API is evidenced. Department hierarchy depends on later organisational-structure work and needs a Phase 4 dependency plan. |
-| Frontend integration for onboarding, workspace list/switch, and management | IN PROGRESS | The frontend contains presentational workspace switcher components, but the signed-in app says workspace setup is still a next step and no workspace API service integration was found. |
+| Automatically provision a personal workspace after email verification | COMPLETED | Verification now transactionally creates or adopts one private `isPersonal` workspace and OWNER membership; migration backfills existing active users. |
+| Personal workspace archive/delete safeguards | COMPLETED | The ordinary workspace archive/delete routes reject personal workspaces; account deletion owns their lifecycle. |
+| Account deletion request, confirmation, and 30-day schedule | COMPLETED | Password and email confirmation, status and timestamps, token/session revocation, rate limiting, response, and transactional email are implemented. |
+| Recovery during the grace period | COMPLETED | Existing password-verified reactivation cancels the schedule without restoring old sessions. |
+| Permanent deletion of personal relational data and shared-data protection | IN PROGRESS | Idempotent locked worker removes personal relational data, memberships, assignments, profile, and pending invitations while anonymizing shared attribution. It holds accounts with personal file metadata because object storage deletion is not implemented. |
+| Last organization owner/administrator protection | COMPLETED | Requests are rejected until organization ownership is transferred and another active owner or administrator remains. |
+| Personal workspace-specific settings | IN PROGRESS | Generic workspace name/description/visibility settings remain available; no distinct personal settings model/API is required by the current foundational scope. |
+| Company profile and organization settings | NOT STARTED | Approved field and permission requirements are documented above and assigned to Phase 7. |
+| Institution profile and organization settings | NOT STARTED | Institution-specific fields are documented above and assigned to Phase 7; department hierarchy remains part of Phase 7. |
+| Frontend integration for onboarding, workspace list/switch, account recovery, and management | IN PROGRESS | Backend endpoints and response contracts are documented; frontend integration is outside this backend repository. |
 | Workspace lifecycle notifications and real-time events | NOT STARTED | Workspace audit logging exists; no Phase 4 workspace notification or real-time event integration was found in this branch. |
 
 ---
@@ -340,6 +371,12 @@ Implement granular role-based and resource-level authorisation.
 Implement collaboration structures within Company and Institution workspaces.
 
 ### Tasks
+- Add Company profile fields: name, logo reference, description, industry/business category, official website, business email, contact information, country/location, workspace ID, and timestamps.
+- Add Institution profile fields: name, logo reference, description, institution type, official website, institutional email, contact information, country/location, workspace ID, and timestamps.
+- Keep Company and Institution profile schemas distinct; do not require organization-specific fields on the other type.
+- Add general organization profile/settings operations with owner/admin authorization.
+- Add supported workspace preferences and notification preferences using the existing notification architecture.
+- Reuse Phase 5 membership and Phase 6 role/permission operations for member and administrator management; do not duplicate those APIs.
 - Create and manage teams.
 - Create and manage departments.
 - Create and manage institution groups.
@@ -354,6 +391,9 @@ Implement collaboration structures within Company and Institution workspaces.
 - Implement team-level communication access.
 
 ### Completion Criteria
+- Company and Institution profiles are independently validated and workspace-scoped.
+- Only authorized owners and administrators can change sensitive organization settings.
+- Profile updates preserve workspace isolation and audit history.
 - Teams and departments work independently.
 - Users can belong to multiple teams.
 - Team permissions do not override organisation-level restrictions.

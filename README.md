@@ -258,6 +258,33 @@ Authentication must be implemented and enforced server-side.
 
 Never trust frontend authentication state as proof of access.
 
+### Account deletion lifecycle
+
+`POST /auth/delete` requires an authenticated session, the current password,
+and an exact email confirmation. It revokes the user's sessions and unused
+authentication tokens, marks the account `PENDING_DELETION`, and schedules
+permanent deletion 30 days later. The account and its personal workspace stay
+intact during this recovery period. The account is signed out immediately and
+cannot use normal authenticated routes.
+
+Before the scheduled date, the user can cancel deletion through
+`POST /auth/reactivate` using the account email and password. Recovery clears
+the deletion schedule but never restores revoked sessions; the user must sign
+in again. The worker permanently removes the personal workspace and its
+workspace-scoped records, removes shared-workspace memberships and access,
+revokes pending invitations, and replaces the account identity with the
+neutral `Deleted user` identity so shared history retains valid references.
+Company and Institution workspaces are never deleted as part of account
+deletion. Their owners must transfer ownership before requesting deletion;
+the last active organization administrator cannot leave without another
+active owner or administrator.
+
+The backend currently has file metadata but no object-storage deletion
+adapter. A due deletion is therefore held when the personal workspace contains
+file attachments, preserving the metadata rather than orphaning storage
+objects. Storage cleanup must be integrated with the existing provider when
+that provider is implemented.
+
 ---
 
 # 7. Workspace Architecture
@@ -268,6 +295,12 @@ Nexus supports three workspace types.
 
 Provides personal productivity and collaboration.
 
+Email verification provisions one private personal workspace for each
+activated account. It is marked internally as personal, cannot be archived or
+deleted separately, and is removed only when the account's 30-day deletion
+period completes. Ordinary `INDIVIDUAL` workspaces remain distinct from this
+personal workspace marker.
+
 ## Company workspace
 
 Provides organisational collaboration for businesses.
@@ -275,6 +308,12 @@ Provides organisational collaboration for businesses.
 ## Institution workspace
 
 Provides collaboration for institutions, including departments, groups, staff, and students.
+
+Foundational Company and Institution profile fields are tracked in Phase 4.
+Company-specific and Institution-specific profile APIs, branding uploads,
+notification preferences, and full organization settings are deferred to the
+later organization-management work in the roadmap; no subscription or pricing
+rules are defined here.
 
 ### Workspace functionality
 

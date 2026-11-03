@@ -141,6 +141,7 @@ function toSummary(
     slug: workspace.slug,
     description: workspace.description,
     type: workspace.type,
+    isPersonal: workspace.isPersonal,
     visibility: workspace.visibility,
     status: workspace.status,
     ownerId: workspace.ownerId,
@@ -249,7 +250,12 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       FOR KEY SHARE
     `;
 
-    if (!account || account.deletedAt || account.status === 'DEACTIVATED') {
+    if (
+      !account ||
+      account.deletedAt ||
+      account.status === 'DEACTIVATED' ||
+      account.status === 'PENDING_DELETION'
+    ) {
       throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account cannot own a workspace');
     }
 
@@ -398,6 +404,14 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         capability: WorkspaceCapability.ArchiveWorkspace,
       });
 
+      if (access.workspace.isPersonal) {
+        throw new AppError(
+          409,
+          'PERSONAL_WORKSPACE_LIFECYCLE_MANAGED',
+          'A personal workspace can only be archived through account deletion',
+        );
+      }
+
       const archived = await client.$transaction(async (tx) => {
         const changed = await tx.workspace.update({
           where: { id: access.workspace.id },
@@ -482,6 +496,14 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.DeleteWorkspace,
       });
+
+      if (access.workspace.isPersonal) {
+        throw new AppError(
+          409,
+          'PERSONAL_WORKSPACE_LIFECYCLE_MANAGED',
+          'A personal workspace can only be deleted through account deletion',
+        );
+      }
 
       await client.$transaction(async (tx) => {
         // The workspace is removed softly, so the records that point at it

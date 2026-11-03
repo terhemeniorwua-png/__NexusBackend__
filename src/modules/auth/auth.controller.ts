@@ -360,11 +360,19 @@ export function createAuthController({
 
       const body = req.validated?.body as AccountDeleteInput;
 
-      await service.deleteAccount({ ...body, userId: auth.userId }, context(req));
+      const result = await service.deleteAccount({ ...body, userId: auth.userId }, context(req));
 
       clearSessionCookies(res);
 
-      res.status(204).end();
+      sendSuccess(
+        res,
+        {
+          status: 'PENDING_DELETION',
+          scheduledDeletionAt: result.scheduledDeletionAt,
+          recoveryMethod: 'Sign in through account recovery with your email address and password',
+        },
+        202,
+      );
     },
   };
 }

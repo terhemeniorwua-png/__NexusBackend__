@@ -30,6 +30,8 @@ export const SecurityAction = {
   AccountDeactivated: 'auth.account_deactivated',
   AccountReactivated: 'auth.account_reactivated',
   AccountReactivationFailed: 'auth.account_reactivation_failed',
+  AccountDeletionRequested: 'auth.account_deletion_requested',
+  AccountDeletionCancelled: 'auth.account_deletion_cancelled',
   AccountDeleted: 'auth.account_deleted',
 } as const;
 

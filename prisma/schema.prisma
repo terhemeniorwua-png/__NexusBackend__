@@ -16,6 +16,7 @@ enum UserStatus {
   ACTIVE
   SUSPENDED
   DEACTIVATED
+  PENDING_DELETION
 }
 
 enum WorkspaceStatus {
@@ -162,16 +163,18 @@ enum EmailSuppressionReason {
 // ---------------------------------------------------------------------------
 
 model User {
-  id              String     @id @default(uuid())
-  email           String     @unique
-  passwordHash    String
-  name            String
-  status          UserStatus @default(PENDING_VERIFICATION)
-  emailVerifiedAt DateTime?
-  lastLoginAt     DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @default(now())
-  deletedAt       DateTime?
+  id                  String     @id @default(uuid())
+  email               String     @unique
+  passwordHash        String
+  name                String
+  status              UserStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt     DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @default(now())
+  deletedAt           DateTime?
+  deletionRequestedAt DateTime?
+  scheduledDeletionAt DateTime?
 
   profile              UserProfile?
   sessions             Session[]
@@ -197,6 +200,7 @@ model User {
 
   @@index([status])
   @@index([createdAt])
+  @@index([status, scheduledDeletionAt])
 }
 
 model UserProfile {
@@ -257,29 +261,30 @@ model AuthToken {
 // ---------------------------------------------------------------------------
 
 model Workspace {
-  id          String          @id @default(uuid())
-  name        String
-  slug        String          @unique
-  description String?
-  type        WorkspaceType   @default(COMPANY)
-  visibility  WorkspaceVisibility @default(PRIVATE)
-  status      WorkspaceStatus @default(ACTIVE)
-  ownerId     String
+  id           String              @id @default(uuid())
+  name         String
+  slug         String              @unique
+  description  String?
+  type         WorkspaceType       @default(COMPANY)
+  isPersonal   Boolean             @default(false)
+  visibility   WorkspaceVisibility @default(PRIVATE)
+  status       WorkspaceStatus     @default(ACTIVE)
+  ownerId      String
   /// SHA-256 digest of the join code. The plaintext code is only returned
   /// when an administrator generates or rotates it.
-  joinCodeHash String?        @unique
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  deletedAt   DateTime?
+  joinCodeHash String?             @unique
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  deletedAt    DateTime?
 
-  owner       User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members     WorkspaceMembership[]
-  teams       Team[]
-  projects    Project[]
-  invitations Invitation[]
+  owner        User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members      WorkspaceMembership[]
+  teams        Team[]
+  projects     Project[]
+  invitations  Invitation[]
   joinRequests JoinRequest[]
-  files       FileAttachment[]
-  auditLogs   AuditLog[]
+  files        FileAttachment[]
+  auditLogs    AuditLog[]
 
   @@index([ownerId])
   @@index([status])
@@ -288,14 +293,14 @@ model Workspace {
 }
 
 model WorkspaceMembership {
-  id          String        @id @default(uuid())
+  id          String                    @id @default(uuid())
   workspaceId String
   userId      String
-  role        WorkspaceRole @default(MEMBER)
+  role        WorkspaceRole             @default(MEMBER)
   status      WorkspaceMembershipStatus @default(ACTIVE)
-  joinedAt    DateTime      @default(now())
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  joinedAt    DateTime                  @default(now())
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -317,10 +322,10 @@ model Team {
   updatedAt   DateTime   @updatedAt
   deletedAt   DateTime?
 
-  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  lead      User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
-  members   TeamMembership[]
-  projects  Project[]
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead         User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
+  members      TeamMembership[]
+  projects     Project[]
   joinRequests JoinRequest[]
 
   @@index([workspaceId])
