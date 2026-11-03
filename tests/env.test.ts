@@ -128,6 +128,13 @@ test('parseEnv exposes the email settings with their defaults', () => {
   assert.equal(config.emailWebhookSignatureHeader, 'x-nexus-signature');
 });
 
+test('parseEnv defaults the workspace invitation lifetime to 48 hours', () => {
+  const config = parseEnv(baseEnv);
+
+  assert.equal(config.workspaceInvitationTtlSeconds, 172_800);
+  assert.equal(config.workspaceInvitationLinkPath, '/workspaces/invitations/accept');
+});
+
 test('parseEnv requires a frontend URL in production', () => {
   const withoutFrontend: NodeJS.ProcessEnv = { ...baseEnv, NODE_ENV: 'production' };
   delete withoutFrontend.FRONTEND_URL;

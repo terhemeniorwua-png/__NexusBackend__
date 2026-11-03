@@ -884,6 +884,34 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.equal(inviteAsManager.status, 403);
     assert.equal(inviteAsManager.body.error?.code, 'INSUFFICIENT_ROLE');
 
+    // A resend re-issues the role of the stored invitation, so a project
+    // manager must not be able to resend a project-manager invitation that
+    // the owner created. Otherwise the create-time guard is bypassed.
+    const resendTargetEmail = uniqueEmail('grant-role-resend');
+    const ownerInvite = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: resendTargetEmail, role: 'PROJECT_MANAGER' },
+    });
+    assert.equal(ownerInvite.status, 201, JSON.stringify(ownerInvite.body));
+
+    const ownerInvitationId = (ownerInvite.body.data as { invitation: { id: string } }).invitation
+      .id;
+
+    const resendAsManager = await api(
+      `/workspaces/${workspace.id}/invitations/${ownerInvitationId}/resend`,
+      { method: 'POST', token: managerToken },
+    );
+    assert.equal(resendAsManager.status, 403);
+    assert.equal(resendAsManager.body.error?.code, 'INSUFFICIENT_ROLE');
+
+    // The owner can still resend the same invitation.
+    const resendAsOwner = await api(
+      `/workspaces/${workspace.id}/invitations/${ownerInvitationId}/resend`,
+      { method: 'POST', token: ownerToken },
+    );
+    assert.equal(resendAsOwner.status, 200, JSON.stringify(resendAsOwner.body));
+
     assert.equal(
       await prisma.workspaceMembership
         .findUnique({

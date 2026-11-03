@@ -1318,6 +1318,11 @@ paths:
         The address may belong to an account or not. A pending invitation for
         the same address and workspace is refused, because the existing one can
         be resent.
+
+        The invitation link is valid for 48 hours by default
+        (`WORKSPACE_INVITATION_TTL_SECONDS`). Only the workspace owner may
+        invite an address as `PROJECT_MANAGER`; a project manager may invite
+        the remaining assignable roles.
       security:
         - bearerAuth: []
       requestBody:
@@ -1408,7 +1413,12 @@ paths:
       summary: Send the invitation again
       description: |
         The resend issues a new token, so a link that was sent before stops
-        working.
+        working. The new link is valid for the configured invitation lifetime
+        (48 hours by default).
+
+        A resend re-issues the role stored on the invitation, so it is held to
+        the same rule as creating the invitation: only the workspace owner may
+        resend a `PROJECT_MANAGER` invitation.
       security:
         - bearerAuth: []
       responses:
@@ -1521,6 +1531,10 @@ paths:
       description: |
         The accepting account has to be the one the invitation was meant for.
         The token works exactly once.
+
+        Only an invitation in the `PENDING` state can be accepted. An
+        invitation that has expired, been revoked or already been accepted is
+        rejected before any membership is created.
       security:
         - bearerAuth: []
       responses:
@@ -1549,7 +1563,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The invitation was accepted or revoked already.
+          description: The invitation is no longer pending because it was accepted, revoked or expired.
           content:
             application/json:
               schema:
