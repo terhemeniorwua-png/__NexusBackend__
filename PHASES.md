@@ -499,29 +499,34 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 4.4 — Mention and meeting-invitation email integration `[/]`
+#### Phase 4.4 — Mention, meeting and team-invitation email integration `[/]`
 
-**Objective:** Connect the existing mention and meeting-invitation templates to their authoritative collaboration workflows without duplicating event parsing or notification state.
+**Objective:** Connect the existing mention, meeting-invitation and team-invitation templates to their authoritative collaboration workflows without duplicating event parsing, invitation creation or notification state.
 
 **Deliverables:**
 - Post-commit mention email integration using existing persisted comment and workspace membership data
-- Post-commit pending meeting-invitation email integration using the invitation workflow's authorized context
-- Configurable frontend paths rooted at `EMAIL_APP_URL`
+- Post-commit pending meeting-invitation email integration using the invitation workflow's authorized context, including workspace/project context
+- Post-commit team-invitation email integration using a persisted `TEAM` invitation, its owning team and a digest-verified single-use token
+- Configurable frontend paths rooted at `EMAIL_APP_URL`, including the team acceptance link
 - Stable event idempotency, existing suppression enforcement and non-fatal delivery failures
 - Tests for recipient selection, template context, duplicate processing, suppression, invitation status and failure isolation
-- Runtime callers from the mention and meeting-invitation workflows
+- Runtime callers from the mention, meeting-invitation and team-invitation workflows
 
-**Dependencies:** Phase 4.2, Phase 14 messaging/mentions, Phase 17 meetings
+**Dependencies:** Phase 4.2, Phase 7 teams, Phase 14 messaging/mentions, Phase 17 meetings
 
 **Verification criteria:**
-- Both existing templates have runtime callers
+- All three existing templates have runtime callers
 - Mention events target the mentioned workspace member, excluding the author
 - Meeting mail is sent only for a valid pending invitation and does not independently grant access
+- Team mail is sent only for a valid pending `TEAM` invitation and never creates, revokes, expires or accepts an invitation
+- Invitation tokens never appear in logs, outbox metadata or idempotency keys
 - Repeated events do not enqueue duplicate messages
 - Existing reschedule/cancellation behavior is preserved
 - Relevant tests, type checks, lint and build pass
 
-**Blockers / Notes:** Partially implemented on 2026-11-01. Added `src/services/collaboration-email-notifier.ts` as a post-commit integration boundary. It resolves mention recipients from active users with workspace membership, excludes the comment author, uses the persisted task/comment context, checks the existing suppression list, generates links from `EMAIL_APP_URL` plus configurable `COMMENT_MENTION_LINK_PATH` / `MEETING_INVITATION_LINK_PATH`, and uses stable event keys through the transactional outbox. Meeting invitation sends are gated on `PENDING`; the handler takes invitation context from its owning workflow because no meeting or meeting-invitation model exists yet. Delivery failures are reported without mutating collaboration data. Four focused tests pass; `pnpm typecheck`, `pnpm lint`, `pnpm build` and `git diff --check` pass. The repository has no comment creation/mention parsing service or notification caller, no meeting schema/routes/workflow, and no email preference model. Therefore no production runtime caller can be connected here without implementing later messaging and meetings phases; notification suppression is the only existing email preference control. The meeting handler cannot independently confirm persisted authorization or invitation state until the Phase 17 workflow exists. Phase 4.4 remains in progress pending those authoritative workflows and end-to-end tests.
+**Blockers / Notes:** Partially implemented on 2026-11-01 and extended on 2026-11-03. `src/services/collaboration-email-notifier.ts` is the post-commit integration boundary. It resolves mention recipients from active users with workspace membership, excludes the comment author, uses the persisted task/comment context, and enforces the existing suppression list. Meeting invitations are gated on `PENDING`, accept optional workspace/project context, validate the recipient and start time, and build the join link from `EMAIL_APP_URL` plus `MEETING_INVITATION_LINK_PATH`. Team invitations load a persisted `Invitation` of type `TEAM`, require a pending, unexpired invitation bound to an active workspace, team and inviter, verify `hashSecret(token)` against the stored `tokenHash`, and build the acceptance link from `EMAIL_APP_URL` plus the new `TEAM_INVITATION_LINK_PATH`. The token is used only for the link and its digest; it is never logged, stored in outbox metadata or embedded in the idempotency key. Team idempotency uses the invitation and the persisted token digest, so re-processing the same token collapses into one outbox row while a resend with a new token creates one new mail. A team invitation lookup, status, token or delivery failure returns a result without modifying the invitation, so acceptance validation, expiration and single-use semantics stay in the owning workflow. The notifier never creates, revokes, expires or accepts an invitation.
+
+The repository still has no meeting schema, meeting routes, meeting participant management or meeting invitation workflow, no team invitation creation/acceptance workflow, and no comment creation/mention parsing workflow. The Phase 7 team service only adds existing workspace members, and `Invitation.teamId` / `Invitation.projectId` remain schema placeholders without relations. Therefore none of the three notifiers has a production runtime caller yet, and the unit and PostgreSQL/outbox suites exercise the boundaries directly. Notification preferences are still not modelled; the existing address suppression list is the only email preference control. The meeting reschedule/cancellation requirement also cannot be verified because no meeting lifecycle exists; the notifier remains invitation-creation only and should not be treated as implementing updates or cancellations. Phase 4.4 remains in progress pending the authoritative Phase 7, Phase 14 and Phase 17 workflows and end-to-end tests.
 
 ---
 
@@ -1260,11 +1265,11 @@ _No issues recorded._
 | 4.1 — Bounded email delivery retries | 2026-11-01 | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. |
 | 4.2 — Recipient email privacy in logs | 2026-11-01 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. New unit and PostgreSQL integration tests pass, the Phase 4 database suite passed three consecutive runs, the full Phase 2–5 database-enabled suite passes 194/194, and build, typecheck, lint and format check pass. |
 | 4.3 — Task assignment email integration | 2026-11-01 | Partial. The reusable task-assignment notifier and 7 PostgreSQL/outbox integration tests pass, including reassignment, duplicate events, suppression, ineligible recipients and delivery failure isolation. No runtime caller exists because the Phase 9 task workflow is not implemented, so the phase remains in progress. |
-| 4.4 — Mention and meeting-invitation email integration | 2026-11-01 | Partial. Added post-commit notifier boundaries and configurable application links for both existing templates. Four focused unit tests pass; typecheck, lint and build pass. No comment mention or meeting workflow exists to supply authoritative runtime callers; the phase remains in progress pending Phases 14 and 17. |
+| 4.4 — Mention, meeting and team-invitation email integration | 2026-11-03 | Partial. Added post-commit notifier boundaries and configurable application links for the mention, meeting-invitation and team-invitation templates. Team invitations use a persisted `TEAM` invitation, a digest-verified single-use token and a configured acceptance link; the token is never logged or stored in metadata or idempotency keys. The 10-test PostgreSQL/outbox suite covers team delivery, duplicates, resend, expiration, wrong type, missing team, invalid recipient, inactive inviter, token mismatch, suppression and failure isolation, plus meeting context, duplicate, suppression and failure paths. Unit tests cover template context, acceptance links and key stability. No comment mention, meeting or team invitation workflow exists to supply authoritative runtime callers, so the phase remains in progress pending Phases 7, 14 and 17. |
 | 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
 | 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
 | 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |
 
 ---
 
-_Last updated: 2026-10-23. Phases 1 to 7 are implemented and verified. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-03. Phases 1 to 7 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3 and 4.4 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging, team and meeting workflows. The document also describes the planned state of the later phases._

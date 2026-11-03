@@ -148,6 +148,11 @@ const envSchema = z
         'MEETING_INVITATION_LINK_PATH must include :meetingId',
       )
       .default('/meetings/:meetingId'),
+    TEAM_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .default('/teams/invitations/accept'),
 
     // Prefix for Redis keys. Environments that share a Redis instance must use
     // different namespaces so their rate-limit counters stay separate.
@@ -341,6 +346,7 @@ export interface AppConfig {
   taskAssignmentLinkPath: string;
   commentMentionLinkPath: string;
   meetingInvitationLinkPath: string;
+  teamInvitationLinkPath: string;
   emailProvider: 'smtp' | 'console' | 'disabled';
   emailSmtpHost: string;
   emailSmtpPort: number;
@@ -455,6 +461,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     taskAssignmentLinkPath: values.TASK_ASSIGNMENT_LINK_PATH,
     commentMentionLinkPath: values.COMMENT_MENTION_LINK_PATH,
     meetingInvitationLinkPath: values.MEETING_INVITATION_LINK_PATH,
+    teamInvitationLinkPath: values.TEAM_INVITATION_LINK_PATH,
     emailProvider: values.EMAIL_PROVIDER,
     emailSmtpHost: values.EMAIL_SMTP_HOST,
     emailSmtpPort: values.EMAIL_SMTP_PORT,
