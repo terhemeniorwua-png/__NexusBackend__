@@ -15,6 +15,7 @@ import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
 import {
   assertMayManageMember,
+  assertMayAssignRole,
   assertOwnershipSafe,
   requireWorkspaceAccess,
   WorkspaceCapability,
@@ -433,6 +434,11 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         capability: WorkspaceCapability.ManageMembers,
       });
 
+      assertMayAssignRole({
+        actorRole: access.membership.role,
+        requestedRole: input.role as WorkspaceRole,
+      });
+
       const user = await client.user.findUnique({
         where: { email: input.email },
         select: { id: true, name: true, email: true, status: true, deletedAt: true },
@@ -520,6 +526,10 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         actorRole: access.membership.role,
         targetRole: target.role,
         targetIsOwner: target.user.id === access.workspace.ownerId,
+      });
+      assertMayAssignRole({
+        actorRole: access.membership.role,
+        requestedRole: input.role as WorkspaceRole,
       });
 
       const updated = await client.$transaction(async (tx) => {

@@ -106,15 +106,16 @@ const envSchema = z
 
     // --- Workspaces and invitations (Phase 5) ------------------------------
     //
-    // An invitation is a single use link with a deadline. The lifetime is
-    // generous enough for a person to notice the mail and the path points at
-    // the frontend page that shows the invitation.
+    // An invitation is a single use link with a deadline. The product rule is
+    // 48 hours, which is long enough for a person to notice the mail while
+    // keeping an unused invitation from staying live indefinitely. The path
+    // points at the frontend page that shows the invitation.
     WORKSPACE_INVITATION_TTL_SECONDS: z.coerce
       .number()
       .int()
       .positive()
       .max(2_592_000)
-      .default(604_800),
+      .default(172_800),
     WORKSPACE_INVITATION_LINK_PATH: z
       .string()
       .trim()
@@ -139,6 +140,25 @@ const envSchema = z
         'COMMENT_MENTION_LINK_PATH must include :projectId, :taskId and :commentId',
       )
       .default('/projects/:projectId/tasks/:taskId#comment-:commentId'),
+    MEETING_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .refine(
+        (value) => value.includes(':meetingId'),
+        'MEETING_INVITATION_LINK_PATH must include :meetingId',
+      )
+      .default('/meetings/:meetingId'),
+    TEAM_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .default('/teams/invitations/accept'),
+    PROJECT_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .default('/projects/invitations/accept'),
 
     // Prefix for Redis keys. Environments that share a Redis instance must use
     // different namespaces so their rate-limit counters stay separate.
@@ -331,6 +351,9 @@ export interface AppConfig {
   workspaceInvitationLinkPath: string;
   taskAssignmentLinkPath: string;
   commentMentionLinkPath: string;
+  meetingInvitationLinkPath: string;
+  teamInvitationLinkPath: string;
+  projectInvitationLinkPath: string;
   emailProvider: 'smtp' | 'console' | 'disabled';
   emailSmtpHost: string;
   emailSmtpPort: number;
@@ -444,6 +467,9 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     workspaceInvitationLinkPath: values.WORKSPACE_INVITATION_LINK_PATH,
     taskAssignmentLinkPath: values.TASK_ASSIGNMENT_LINK_PATH,
     commentMentionLinkPath: values.COMMENT_MENTION_LINK_PATH,
+    meetingInvitationLinkPath: values.MEETING_INVITATION_LINK_PATH,
+    teamInvitationLinkPath: values.TEAM_INVITATION_LINK_PATH,
+    projectInvitationLinkPath: values.PROJECT_INVITATION_LINK_PATH,
     emailProvider: values.EMAIL_PROVIDER,
     emailSmtpHost: values.EMAIL_SMTP_HOST,
     emailSmtpPort: values.EMAIL_SMTP_PORT,

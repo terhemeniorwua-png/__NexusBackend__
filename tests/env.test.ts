@@ -86,20 +86,9 @@ test('parseEnv exposes the authentication settings with their defaults', () => {
   assert.equal(config.authRegisterRateLimitMax, 5);
   assert.equal(config.frontendUrl, 'https://app.example.com');
   assert.equal(config.authVerificationLinkPath, '/verify-email');
-  assert.equal(config.taskAssignmentLinkPath, '/projects/:projectId/tasks/:taskId');
-  assert.equal(
-    config.commentMentionLinkPath,
-    '/projects/:projectId/tasks/:taskId#comment-:commentId',
-  );
-});
-
-test('parseEnv rejects a comment mention path that cannot identify the comment', () => {
-  assert.throws(
-    () => parseEnv({ ...baseEnv, COMMENT_MENTION_LINK_PATH: '/projects/:projectId/tasks/:taskId' }),
-    (error) =>
-      error instanceof ConfigurationError &&
-      error.issues.some((issue) => issue.field === 'COMMENT_MENTION_LINK_PATH'),
-  );
+  assert.equal(config.meetingInvitationLinkPath, '/meetings/:meetingId');
+  assert.equal(config.teamInvitationLinkPath, '/teams/invitations/accept');
+  assert.equal(config.projectInvitationLinkPath, '/projects/invitations/accept');
 });
 
 test('parseEnv forces secure cookies in production', () => {
@@ -140,6 +129,13 @@ test('parseEnv exposes the email settings with their defaults', () => {
   assert.equal(config.emailMaxAttempts, 5);
   assert.equal(config.emailWorkerEnabled, true);
   assert.equal(config.emailWebhookSignatureHeader, 'x-nexus-signature');
+});
+
+test('parseEnv defaults the workspace invitation lifetime to 48 hours', () => {
+  const config = parseEnv(baseEnv);
+
+  assert.equal(config.workspaceInvitationTtlSeconds, 172_800);
+  assert.equal(config.workspaceInvitationLinkPath, '/workspaces/invitations/accept');
 });
 
 test('parseEnv requires a frontend URL in production', () => {
