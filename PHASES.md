@@ -757,6 +757,26 @@ Implement organisation membership and controlled onboarding.
 - Approved users receive the correct membership.
 - Membership removal does not delete the user's Nexus identity or personal workspace.
 
+### Backend audit update — 2026-11-03
+
+**Status: IN PROGRESS.** Audit found and corrected invitation lifecycle races and missing archived-workspace guards. The rest of the Phase 5 service/routes were present on inspection; the Phase 5 PostgreSQL integration suites could not be run because no test `DATABASE_URL` is configured and the local PostgreSQL instance has no role for the current OS account. Do not treat code inspection or the unit suite as database-backed completion evidence.
+
+| Requirement area | Audit result | Evidence / remaining verification |
+|---|---|---|
+| Workspace membership, role restrictions, isolation, and ownership transfer | Existing implementation found; no change required | Central workspace policies and service transactions are in place. Database-backed route and cross-workspace tests are present but were skipped without the guarded test database. |
+| Invitation creation, recipient binding, acceptance/rejection, 48-hour expiry, revoke/resend, single use | Existing implementation found; lifecycle race guards strengthened | Invitation state and token digest are conditionally checked; targeted PostgreSQL regressions were added but are not yet executed. |
+| Duplicate invitation prevention | Fixed race found during audit | Creation now serializes on the workspace row, expires stale pending records before checking, and maps uniqueness conflicts to the established 409 response. Concurrent duplicate integration test added, not yet run. |
+| Archived/deleted workspace invitation behavior | Missing behavior fixed during audit | Archive transaction expires already-due pending invites and revokes the rest; creation, resend, acceptance, preview, decline, and switching now reject unavailable workspaces/states. Regression test added, not yet run. |
+| Join discovery/codes, approval/rejection/withdrawal, 7-day expiry, applicant privacy and email-domain handling | Existing implementation found; no change required | Implemented in `join-request.service.ts`; dedicated unit and PostgreSQL test suites exist. PostgreSQL suite was skipped in this run. |
+| Membership removal, task reassignment, preservation of personal identity/assets and audit history | Existing implementation found; no change required | Removal and reassignment use transactional services; the dedicated Phase 5.1 PostgreSQL suite exists but was skipped. |
+| Frontend API contract compatibility | Static contract review passed | Frontend workspace service paths/payloads align with registered workspace routes and response envelope. No live authenticated backend flow was exercised. Invitation UI is a separate frontend roadmap phase. |
+
+**Changes:** `src/modules/workspaces/invitation.service.ts`, `src/modules/workspaces/workspace.service.ts`, and `tests/phase5-workspaces-db.test.ts`; no schema or migration change and no endpoint or payload change. `docs/API.md` and `docs/openapi.yaml` describe the archive and invitation lifecycle behavior.
+
+**Validation:** Full backend `npm test` passed 197 tests with 0 failures; guarded PostgreSQL suites, including Phase 5, were skipped because no test database URL/role is available. Backend typecheck, lint, and production build passed. `npm run format:check` remains failing on the unrelated pre-existing `src/modules/auth/account-deletion.service.ts`; changed TypeScript files pass formatting. Frontend focused workspace/provider/page tests passed 16/16 and frontend `npx tsc --noEmit` passed. Live frontend/backend verification remains unperformed.
+
+**Remaining before completion:** run the Phase 5, join-request, and membership-removal PostgreSQL suites (including the new concurrency/archive regressions) against an explicitly provisioned disposable test database. Phase 5 remains **IN PROGRESS** until database-backed acceptance tests pass.
+
 ---
 
 #### Phase 7 — Teams and organizational structure `[/]`
