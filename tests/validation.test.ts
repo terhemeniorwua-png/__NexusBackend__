@@ -3,7 +3,9 @@ import { once } from 'node:events';
 import type { Server } from 'node:http';
 import test from 'node:test';
 import express, { type Express } from 'express';
+import Joi from 'joi';
 import { z } from 'zod';
+import { billingTargetSchema } from '../src/modules/billing/billing.schemas';
 import { createErrorHandler } from '../src/middleware/error-handler';
 import { notFoundHandler } from '../src/middleware/not-found';
 import { requestId } from '../src/middleware/request-id';
@@ -20,6 +22,16 @@ function createTestApp(): Express {
   app.use(requestId);
   app.use(express.json({ limit: '1kb' }));
   app.post('/echo', validateBody(schema), (req, res) => {
+    res.json({ success: true, data: req.body });
+  });
+  app.post(
+    '/joi',
+    validateBody(Joi.object({ displayName: Joi.string().trim().min(2).required() }).unknown(false)),
+    (req, res) => {
+      res.json({ success: true, data: req.body });
+    },
+  );
+  app.post('/billing-target', validateBody(billingTargetSchema), (req, res) => {
     res.json({ success: true, data: req.body });
   });
   app.get('/boom', () => {
@@ -89,6 +101,41 @@ test('validation middleware returns field-level errors', async () => {
     assert.equal(body.error.code, 'VALIDATION_ERROR');
     assert.ok(body.error.details.some((issue) => issue.field === 'body.name'));
     assert.ok(body.error.details.some((issue) => issue.field === 'body.email'));
+  });
+});
+
+test('Joi validation normalizes input and rejects unrecognized fields', async () => {
+  await withServer(createTestApp(), async (baseUrl) => {
+    const accepted = await fetch(`${baseUrl}/joi`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: '  Ada  ' }),
+    });
+    const acceptedBody = (await accepted.json()) as { data: { displayName: string } };
+
+    assert.equal(accepted.status, 200);
+    assert.equal(acceptedBody.data.displayName, 'Ada');
+
+    const rejected = await fetch(`${baseUrl}/joi`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Ada', role: 'OWNER' }),
+    });
+    const rejectedBody = (await rejected.json()) as {
+      error: { code: string; details: Array<{ field: string; message: string }> };
+    };
+
+    assert.equal(rejected.status, 400);
+    assert.equal(rejectedBody.error.code, 'VALIDATION_ERROR');
+    assert.ok(rejectedBody.error.details.some((issue) => issue.message.includes('role')));
+
+    const forgedBillingTarget = await fetch(`${baseUrl}/billing-target`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ plan: 'PRO', interval: 'MONTHLY', billableSeats: 1 }),
+    });
+
+    assert.equal(forgedBillingTarget.status, 400);
   });
 });
 
