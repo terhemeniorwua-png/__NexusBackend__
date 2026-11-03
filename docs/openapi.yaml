@@ -1467,6 +1467,11 @@ paths:
       tags: [Workspaces]
       operationId: archiveWorkspace
       summary: Archive a workspace
+      description: |
+        Archiving and invitation invalidation are atomic. Pending invitations
+        whose deadline has passed become `EXPIRED`; all other pending
+        invitations become `REVOKED`. Restoring the workspace does not
+        reactivate those invitations.
       security:
         - bearerAuth: []
       responses:
@@ -1530,6 +1535,7 @@ paths:
       tags: [Workspaces]
       operationId: switchWorkspace
       summary: Validate the membership and return the workspace to work in
+      description: Archived workspaces cannot be switched into, even by an active member.
       security:
         - bearerAuth: []
       responses:
@@ -2366,7 +2372,10 @@ paths:
       description: |
         The address may belong to an account or not. A pending invitation for
         the same address and workspace is refused, because the existing one can
-        be resent.
+        be resent. Creation is serialized per workspace and duplicate pending
+        invitations are rejected with `409`, including concurrent requests.
+
+        Invitations cannot be created for an archived or soft-deleted workspace.
 
         The invitation link is valid for 48 hours by default
         (`WORKSPACE_INVITATION_TTL_SECONDS`). Only the workspace owner may
@@ -2464,6 +2473,9 @@ paths:
         The resend issues a new token, so a link that was sent before stops
         working. The new link is valid for the configured invitation lifetime
         (48 hours by default).
+
+        Resending is allowed only while the workspace and invitation are
+        active and pending. The state check and token rotation are atomic.
 
         A resend re-issues the role stored on the invitation, so it is held to
         the same rule as creating the invitation: only the workspace owner may
@@ -2584,6 +2596,9 @@ paths:
         Only an invitation in the `PENDING` state can be accepted. An
         invitation that has expired, been revoked or already been accepted is
         rejected before any membership is created.
+
+        Workspace availability, the token digest, the pending state, and the
+        deadline are rechecked transactionally before membership is granted.
       security:
         - bearerAuth: []
       responses:

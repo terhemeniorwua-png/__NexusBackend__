@@ -643,6 +643,35 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.equal(second.body.error?.code, 'INVITATION_EXISTS');
   });
 
+  test('concurrent duplicate invitations create only one pending invitation', async () => {
+    const ownerEmail = uniqueEmail('concurrent-invite-owner');
+    await createUser('Concurrent Invite Owner', ownerEmail);
+    const ownerToken = await login(ownerEmail);
+    const workspace = await createWorkspace(ownerToken);
+    const inviteeEmail = uniqueEmail('concurrent-invitee');
+
+    const responses = await Promise.all([
+      api(`/workspaces/${workspace.id}/invitations`, {
+        method: 'POST',
+        token: ownerToken,
+        body: { email: inviteeEmail },
+      }),
+      api(`/workspaces/${workspace.id}/invitations`, {
+        method: 'POST',
+        token: ownerToken,
+        body: { email: inviteeEmail },
+      }),
+    ]);
+
+    assert.deepEqual(responses.map(({ status }) => status).sort(), [201, 409]);
+    assert.equal(
+      await prisma.invitation.count({
+        where: { workspaceId: workspace.id, email: inviteeEmail, status: 'PENDING' },
+      }),
+      1,
+    );
+  });
+
   test('an invitation for a member of the workspace is refused', async () => {
     const ownerEmail = uniqueEmail('member-invite-owner');
 
@@ -1111,6 +1140,49 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.ok(
       !(list.body.data as Array<{ id: string }>).some((entry) => entry.id === workspace.id),
     );
+  });
+
+  test('archiving revokes pending invitations and prevents invitation use or workspace switching', async () => {
+    const ownerEmail = uniqueEmail('archive-invite-owner');
+    const inviteeEmail = uniqueEmail('archive-invitee');
+    await createUser('Archive Invite Owner', ownerEmail);
+    await createUser('Archive Invitee', inviteeEmail);
+    const ownerToken = await login(ownerEmail);
+    const inviteeToken = await login(inviteeEmail);
+    const workspace = await createWorkspace(ownerToken);
+    const invited = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail },
+    });
+    assert.equal(invited.status, 201, JSON.stringify(invited.body));
+    const invite = (invited.body.data as { invitation: { id: string } }).invitation;
+    const inviteToken = tokenFromEmail(lastInvitationEmail());
+
+    const archived = await api(`/workspaces/${workspace.id}/archive`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(archived.status, 200, JSON.stringify(archived.body));
+
+    const stored = await prisma.invitation.findUnique({ where: { id: invite.id } });
+    assert.equal(stored?.status, 'REVOKED');
+    assert.equal(stored?.pendingKey, null);
+    const preview = await api(`/invitations/${inviteToken}`);
+    assert.equal(preview.status, 410);
+    assert.equal(preview.body.error?.code, 'INVITATION_WORKSPACE_UNAVAILABLE');
+    const accept = await api(`/invitations/${inviteToken}/accept`, {
+      method: 'POST',
+      token: inviteeToken,
+    });
+    assert.equal(accept.status, 409);
+    assert.equal(accept.body.error?.code, 'INVITATION_REVOKED');
+    const switchResult = await api(`/workspaces/${workspace.id}/switch`, {
+      method: 'POST',
+      token: ownerToken,
+    });
+    assert.equal(switchResult.status, 409);
+    assert.equal(switchResult.body.error?.code, 'WORKSPACE_NOT_ACTIVE');
   });
 
   test('only the workspace owner can restore an archived workspace and the change is audited', async () => {

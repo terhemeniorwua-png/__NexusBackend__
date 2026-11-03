@@ -529,6 +529,16 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           data: { status: 'ARCHIVED' },
         });
 
+        const archivedAt = new Date();
+        await tx.invitation.updateMany({
+          where: { workspaceId: changed.id, status: 'PENDING', expiresAt: { lte: archivedAt } },
+          data: { status: 'EXPIRED', pendingKey: null },
+        });
+        await tx.invitation.updateMany({
+          where: { workspaceId: changed.id, status: 'PENDING', expiresAt: { gt: archivedAt } },
+          data: { status: 'REVOKED', revokedAt: archivedAt, pendingKey: null },
+        });
+
         await recordAuditEvent(tx, {
           workspaceId: changed.id,
           actorId: input.userId,
@@ -663,6 +673,10 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+
+      if (access.workspace.status !== 'ACTIVE') {
+        throw new AppError(409, 'WORKSPACE_NOT_ACTIVE', 'This workspace is not active');
+      }
 
       return toSummary(
         access.workspace,
