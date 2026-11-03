@@ -386,22 +386,43 @@ Nexus supports organisational discovery and membership workflows.
 
 Permissions must be enforced in the backend.
 
+Organization roles are stored on workspace memberships, never globally on a
+user. Company workspaces use `COMPANY_OWNER`, `COMPANY_ADMIN`,
+`COMPANY_PROJECT_MANAGER`, `COMPANY_MEMBER`, `COMPANY_COLLABORATOR`, and
+`COMPANY_VIEWER`. Institution workspaces use `INSTITUTION_OWNER`,
+`INSTITUTION_ADMIN`, `INSTITUTION_DEPARTMENT_HEAD`,
+`INSTITUTION_LECTURER_STAFF`, `INSTITUTION_STUDENT`,
+`INSTITUTION_COLLABORATOR`, and `INSTITUTION_VIEWER`.
+
+These roles map into the existing centralized workspace, project, and team
+policies; they do not replace them or grant implicit access to every project or
+team. Organization-role members need explicit project/team assignment.
+Institution Department Heads are further limited to departments where they
+have department-head membership. Existing persisted `OWNER`,
+`PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, and `VIEWER` roles remain valid in
+their existing contexts. Multiple organization owners are supported and the
+last owner cannot be removed or demoted through member management. Custom
+organization role definitions and permission builders are deferred to a later
+phase.
+
 ## Company roles
 
-- Owner.
-- Admin.
-- Team Lead.
-- Member.
-- Guest.
+- `COMPANY_OWNER`.
+- `COMPANY_ADMIN`.
+- `COMPANY_PROJECT_MANAGER`.
+- `COMPANY_MEMBER`.
+- `COMPANY_COLLABORATOR`.
+- `COMPANY_VIEWER`.
 
 ## Institution roles
 
-- Owner.
-- Institution Admin.
-- Department Admin.
-- Team/Group Lead.
-- Member.
-- Guest.
+- `INSTITUTION_OWNER`.
+- `INSTITUTION_ADMIN`.
+- `INSTITUTION_DEPARTMENT_HEAD`.
+- `INSTITUTION_LECTURER_STAFF`.
+- `INSTITUTION_STUDENT`.
+- `INSTITUTION_COLLABORATOR`.
+- `INSTITUTION_VIEWER`.
 
 ### Confirmed permission rules
 

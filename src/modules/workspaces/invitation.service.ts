@@ -1,4 +1,4 @@
-import type { Invitation, PrismaClient, WorkspaceRole } from '@prisma/client';
+import type { Invitation, OrganizationRole, PrismaClient, WorkspaceRole } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import { getPrismaClient } from '../../db/prisma';
 import type { RequestContext } from '../auth/auth.types';
@@ -9,6 +9,10 @@ import { createNotification } from '../../services/notifications';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
 import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
+import {
+  assertCanAssignOrganizationRole,
+  effectiveWorkspaceRole,
+} from '../authorization/organization-role';
 import type { CreateInvitationInput } from './workspace.schemas';
 import type { InvitationPreview, InvitationResult, InvitationSummary } from './workspace.types';
 
@@ -95,6 +99,12 @@ export function createInvitationService(
     return `${base}${config.workspaceInvitationLinkPath}?token=${encodeURIComponent(token)}`;
   }
 
+  function roleLabel(role: WorkspaceRole, organizationRole: OrganizationRole | null): string {
+    return organizationRole
+      ? organizationRole.toLowerCase().replaceAll('_', ' ')
+      : ROLE_LABELS[role];
+  }
+
   function toSummary(
     invitation: Invitation & {
       workspace: { id: string; name: string };
@@ -107,6 +117,7 @@ export function createInvitationService(
       workspaceName: invitation.workspace.name,
       email: invitation.email,
       role: invitation.role,
+      organizationRole: invitation.organizationRole,
       type: invitation.type,
       status: invitation.status,
       invitedBy: { id: invitation.invitedBy.id, name: invitation.invitedBy.name },
@@ -153,6 +164,7 @@ export function createInvitationService(
     inviterName: string;
     workspaceName: string;
     role: WorkspaceRole;
+    organizationRole: OrganizationRole | null;
     token: string;
     tokenHash: string;
     expiresAt: Date;
@@ -165,7 +177,7 @@ export function createInvitationService(
         inviterName: input.inviterName,
         workspaceName: input.workspaceName,
         acceptUrl: acceptUrl(input.token),
-        role: ROLE_LABELS[input.role],
+        role: roleLabel(input.role, input.organizationRole),
         expiresAt: input.expiresAt,
         idempotencyKey: `workspace-invitation:${input.invitationId}:${input.tokenHash}`,
       }),
@@ -182,10 +194,22 @@ export function createInvitationService(
         capability: WorkspaceCapability.ManageInvitations,
       });
 
-      assertMayAssignRole({
-        actorRole: access.membership.role,
-        requestedRole: input.role as WorkspaceRole,
-      });
+      if (input.organizationRole) {
+        assertCanAssignOrganizationRole({
+          workspaceType: access.workspace.type,
+          actorLegacyRole: access.effectiveRole,
+          actorOrganizationRole: access.membership.organizationRole,
+          requestedRole: input.organizationRole,
+        });
+      } else {
+        assertMayAssignRole({
+          actorRole: access.effectiveRole,
+          requestedRole: input.role as WorkspaceRole,
+        });
+      }
+      const assignedRole = input.organizationRole
+        ? effectiveWorkspaceRole(access.workspace.type, 'MEMBER', input.organizationRole)
+        : (input.role as WorkspaceRole);
 
       const inviter = await client.user.findUnique({
         where: { id: input.userId },
@@ -245,7 +269,8 @@ export function createInvitationService(
           data: {
             workspaceId: access.workspace.id,
             email: input.email,
-            role: input.role as WorkspaceRole,
+            role: assignedRole,
+            organizationRole: input.organizationRole ?? null,
             type: 'WORKSPACE',
             tokenHash,
             status: 'PENDING',
@@ -264,7 +289,12 @@ export function createInvitationService(
           action: WorkspaceAuditAction.InvitationCreated,
           targetType: 'Invitation',
           targetId: created.id,
-          metadata: { email: input.email, role: input.role, type: 'WORKSPACE' },
+          metadata: {
+            email: input.email,
+            role: assignedRole,
+            organizationRole: input.organizationRole ?? null,
+            type: 'WORKSPACE',
+          },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
@@ -279,6 +309,7 @@ export function createInvitationService(
         inviterName: inviter.name,
         workspaceName: access.workspace.name,
         role: invitation.role,
+        organizationRole: invitation.organizationRole,
         token,
         tokenHash,
         expiresAt,
@@ -337,10 +368,19 @@ export function createInvitationService(
       // assignment rule as creating the invitation. Otherwise a project
       // manager could not create a project-manager invitation but could
       // extend one that an owner created.
-      assertMayAssignRole({
-        actorRole: access.membership.role,
-        requestedRole: invitation.role,
-      });
+      if (invitation.organizationRole) {
+        assertCanAssignOrganizationRole({
+          workspaceType: access.workspace.type,
+          actorLegacyRole: access.effectiveRole,
+          actorOrganizationRole: access.membership.organizationRole,
+          requestedRole: invitation.organizationRole,
+        });
+      } else {
+        assertMayAssignRole({
+          actorRole: access.effectiveRole,
+          requestedRole: invitation.role,
+        });
+      }
 
       if (invitation.status === 'ACCEPTED') {
         throw new AppError(
@@ -409,6 +449,7 @@ export function createInvitationService(
         inviterName: invitation.invitedBy.name,
         workspaceName: access.workspace.name,
         role: updated.role,
+        organizationRole: updated.organizationRole,
         token,
         tokenHash,
         expiresAt,
@@ -525,6 +566,7 @@ export function createInvitationService(
         workspace: invitation.workspace,
         invitedBy: invitation.invitedBy,
         role: invitation.role,
+        organizationRole: invitation.organizationRole,
         status: invitation.status,
         expiresAt: invitation.expiresAt,
         maskedEmail: maskInvitationEmail(invitation.email),
@@ -605,6 +647,7 @@ export function createInvitationService(
       }
 
       const accepted = await client.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "Workspace" WHERE "id" = ${invitation.workspaceId} FOR UPDATE`;
         const existing = await tx.workspaceMembership.findUnique({
           where: {
             workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id },
@@ -618,6 +661,7 @@ export function createInvitationService(
               workspaceId: invitation.workspaceId,
               userId: user.id,
               role: invitation.role,
+              organizationRole: invitation.organizationRole,
             },
           });
         }

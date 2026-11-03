@@ -8,6 +8,10 @@ import { createNotification } from '../../services/notifications';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
 import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
+import {
+  assertCanAssignOrganizationRole,
+  effectiveWorkspaceRole,
+} from '../authorization/organization-role';
 import type {
   ApproveJoinRequestInput,
   CreateJoinRequestInput,
@@ -97,6 +101,7 @@ function toSummary(request: JoinRequestWithRelations): JoinRequestSummary {
     userEmail: request.user.email,
     status: request.status,
     role: request.role,
+    organizationRole: request.organizationRole,
     teamId: request.teamId,
     message: request.message,
     reviewedBy: request.reviewedBy,
@@ -458,8 +463,20 @@ export function createJoinRequestService(
         );
       }
 
-      const role = (input.role ?? request.role) as WorkspaceRole;
-      assertMayAssignRole({ actorRole: access.membership.role, requestedRole: role });
+      const organizationRole = input.organizationRole ?? null;
+      const role = organizationRole
+        ? effectiveWorkspaceRole(access.workspace.type, 'MEMBER', organizationRole)
+        : ((input.role ?? request.role) as WorkspaceRole);
+      if (organizationRole) {
+        assertCanAssignOrganizationRole({
+          workspaceType: access.workspace.type,
+          actorLegacyRole: access.effectiveRole,
+          actorOrganizationRole: access.membership.organizationRole,
+          requestedRole: organizationRole,
+        });
+      } else {
+        assertMayAssignRole({ actorRole: access.effectiveRole, requestedRole: role });
+      }
 
       const teamId = input.teamId ?? null;
 
@@ -502,12 +519,14 @@ export function createJoinRequestService(
 
       const approved = await client
         .$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "Workspace" WHERE "id" = ${access.workspace.id} FOR UPDATE`;
           const changed = await transitionPendingRequest(
             tx,
             { id: request.id, workspaceId: access.workspace.id },
             {
               status: 'APPROVED',
               role,
+              organizationRole,
               teamId,
               reviewedById: input.userId,
               reviewedAt: new Date(),
@@ -520,6 +539,7 @@ export function createJoinRequestService(
               workspaceId: access.workspace.id,
               userId: request.user.id,
               role,
+              organizationRole,
               status: 'ACTIVE',
             },
           });
@@ -538,7 +558,7 @@ export function createJoinRequestService(
             action: WorkspaceAuditAction.JoinRequestApproved,
             targetType: 'JoinRequest',
             targetId: changed.id,
-            metadata: { userId: request.user.id, role, teamId },
+            metadata: { userId: request.user.id, role, organizationRole, teamId },
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });
@@ -549,7 +569,12 @@ export function createJoinRequestService(
             action: WorkspaceAuditAction.MemberAdded,
             targetType: 'WorkspaceMembership',
             targetId: membership.id,
-            metadata: { userId: request.user.id, role, source: 'join_request' },
+            metadata: {
+              userId: request.user.id,
+              role,
+              organizationRole,
+              source: 'join_request',
+            },
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });
@@ -560,7 +585,7 @@ export function createJoinRequestService(
             title: `You joined ${access.workspace.name}`,
             body: `Your request to join ${access.workspace.name} was approved.`,
             link: workspaceLink(access.workspace.id),
-            data: { workspaceId: access.workspace.id, role, teamId },
+            data: { workspaceId: access.workspace.id, role, organizationRole, teamId },
           });
 
           return changed;

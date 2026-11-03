@@ -20,12 +20,14 @@ This tracker must be treated as the authoritative implementation sequence for ba
 | 3 — Authentication and identity | COMPLETED | Database-backed lifecycle suite passes, including session rotation, recovery, and account deletion cases. |
 | 4 — Workspace management | BLOCKED | Verified email now provisions one private personal workspace. Account deletion now schedules a 30-day recovery period, revokes sessions/tokens, supports password-verified cancellation, and runs an idempotent database purge that preserves shared records. Company/Institution profile and settings requirements are documented for Phase 7. Permanent deletion is held for personal workspaces with file metadata because this repository has no object-storage deletion adapter. |
 | 5 — Organisation membership and onboarding | BLOCKED | Added authenticated, recipient-bound invitation decline with a distinct terminal status and audit event. Existing join, acceptance, discovery, suspension, and reassignment behavior remains in place. Database verification for the new migration and decline flow still requires the optional Phase 5 test database; Phase 4 remains open and blocks phase closeout. |
-| 6 — Roles and access control | BLOCKED | Current database/API roles do not match the Company and Institution role names in the product requirements. A compatible role mapping must be agreed before changing persisted role values. |
+| 6 — Roles and access control | BLOCKED | Added workspace-scoped Company/Institution role values, conservative mappings into centralized policies, multiple-owner safeguards, and Institution department assignment checks. Existing role values remain intact. Unit authorization coverage passes (36/36); Phase 6 database-backed verification and full suite are still required. Organization-role members now need explicit project/team access; Department Heads are limited to assigned department resources. Custom role definitions/editors are deferred. |
 | 7–32 | NOT STARTED | No implementation from these phases is included in the active feature branch. |
 
-Phase 4 remains the earliest incomplete phase; do not proceed to Phase 6. On 2026-11-03, the complete suite ran serially against disposable PostgreSQL with database flags for Phases 2–5: 231 passed, 0 failed, 0 skipped, including the Phase 2 migration assertion. A parallel run had one intermittent Phase 4 email retry failure; that suite passed alone (20/20), and the serial full suite passed. The added workspace restoration regression test passed in the targeted workspace integration suite (22/22). Type checking, lint, formatting, build, migration deployment/status, and OpenAPI YAML parsing passed. Phase 4 is not complete; the audit matrix below records the remaining requirements.
+Phase 4 remains the earliest incomplete roadmap phase. This task was explicitly authorized to resolve the Phase 6 role-mapping blocker without starting Phase 7. On 2026-11-03, an earlier complete suite ran serially against disposable PostgreSQL with database flags for Phases 2–5: 231 passed, 0 failed, 0 skipped, including the Phase 2 migration assertion. That historical run does not verify the current Phase 6 migration or role integration. The audit matrix below records remaining Phase 4 requirements.
 
 Current audit run: `npm test` passed 116 tests with 0 failures and 1 skipped optional Phase 2 migration assertion. The database-backed Phase 3–6 suites were skipped because no test database was configured. `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run build`, `git diff --check`, and parsing `docs/openapi.yaml` with PyYAML passed. This unit-only run does not replace the earlier database-backed verification recorded above and does not change any phase status.
+
+Phase 6 role work in progress: the isolated Phase 6 unit test file passes 36/36 after introducing the organization-role mappings. The database-backed Phase 6 suite has not yet been run against a configured test database. Phase 6 remains BLOCKED until schema/migration, database authorization, regression, and repository quality checks are verified. Existing persisted roles remain valid and unchanged. Company and Institution roles are workspace-membership scoped; organization owners/admins do not gain implicit access to every project or team. Department Head access requires assignment to the target department. Custom organization role definitions are deferred beyond Phase 6.
 
 ## 4. Technology Stack
 
@@ -324,19 +326,14 @@ Implement granular role-based and resource-level authorisation.
 
 ### Tasks
 - Define Individual workspace permissions.
-- Define Company workspace roles:
-  - Owner
-  - Admin
-  - Team Lead
-  - Member
-  - Guest
-- Define Institution workspace roles:
-  - Owner
-  - Institution Admin
-  - Department Admin
-  - Team/Group Lead
-  - Member
-  - Guest
+- Define workspace-scoped Company roles: `COMPANY_OWNER`, `COMPANY_ADMIN`, `COMPANY_PROJECT_MANAGER`, `COMPANY_MEMBER`, `COMPANY_COLLABORATOR`, and `COMPANY_VIEWER`.
+- Define workspace-scoped Institution roles: `INSTITUTION_OWNER`, `INSTITUTION_ADMIN`, `INSTITUTION_DEPARTMENT_HEAD`, `INSTITUTION_LECTURER_STAFF`, `INSTITUTION_STUDENT`, `INSTITUTION_COLLABORATOR`, and `INSTITUTION_VIEWER`.
+- Preserve the legacy `OWNER`, `PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, and `VIEWER` values and behavior for existing memberships.
+- Map organization roles to the existing centralized workspace, project, and team policies; never store an organization role globally on a user.
+- Require explicit project/team assignment for organization-role members and apply project-role ceilings by organization role.
+- Scope Institution Department Heads to assigned departments using department membership.
+- Support multiple organization owners, ownership transfer, and transactional last-owner protection.
+- Defer custom organization role definitions and permission builders to a later phase.
 - Implement organisation-level permissions.
 - Implement team-level permissions.
 - Implement project-level permissions.
@@ -362,6 +359,8 @@ Implement granular role-based and resource-level authorisation.
 - Role escalation is prevented.
 - Workspace, team, and project permissions are tested.
 - Ownership rules are enforced.
+- Roles are isolated by workspace and workspace type; legacy roles retain their existing meaning.
+- Database-backed role, ownership-race, department-isolation, API, and legacy regression tests pass.
 
 ---
 
@@ -836,6 +835,22 @@ Implement Nexus subscription and payment management.
 - Ownership transfer for billing.
 - Subscription entitlement middleware.
 
+### Approved commercial and membership rules
+
+These approved prices and rules are recorded in 2026-11-03 product decisions. The preparatory helper code in `src/modules/billing/` implements server-owned price/seat calculations and lifecycle policy calculations only. It does not start or complete Phase 17 because billing persistence, routes, a provider, verified payments, and entitlement enforcement are absent.
+
+| Plan | Monthly | Annual | Included members | Extra active member |
+|---|---:|---:|---:|---:|
+| Pro | $10/month | $50/year | 15 | $0.50/member/month |
+| Business | $15/month | $70/year | 25 | $1/member/month |
+
+- The workspace owner counts once and consumes an included seat.
+- Only active memberships with active accounts count. Pending invitations, suspended, removed, and deactivated memberships do not count. Admin roles do not have a separate billing exclusion.
+- Additional members are billed monthly, including on annual base subscriptions.
+- Upgrades and seat increases apply immediately only after server-verified successful payment and are prorated. Downgrades, seat reductions, and cancellation take effect at renewal/period end; paid access remains through the already-paid period. Seat conflicts never cause automatic member or data deletion.
+- No automatic refunds. Refund requests are handled manually under the business's approved policy and applicable law.
+- Failed-payment policy is deferred; retry behavior, grace periods, notifications, access timing, and additional-seat treatment remain undecided. Do not invent failure timelines or grant paid access without verified payment.
+
 ### Important Rules
 - A trial must not silently convert into a paid subscription.
 - If the user does not upgrade, the subscription falls back to the applicable Free plan.
@@ -846,6 +861,13 @@ Implement Nexus subscription and payment management.
 - Downgrades must not silently delete user data.
 - Over-limit features should be restricted gracefully.
 - Never store raw card details or CVV.
+
+### Current implementation status — policy preparation only
+
+- `src/modules/billing/pricing.ts`, `membership-billing.ts`, and `lifecycle-policy.ts` contain the approved integer-cent catalog, authoritative workspace-scoped active-member query/count calculation, prorated charge calculations, schedule policy, owner guard, and deferred failed-payment policy.
+- Unit tests cover the pure rules and database-scoped query helper. They do not establish provider payment verification or durable idempotency.
+- No subscription tables/migrations, routes, provider adapter/configuration, payment webhooks, invoice/history functionality, or subscription entitlement integration exist. Do not enable checkout or call Phase 17 complete.
+- Provider selection and legal review remain external dependencies. The exact implementation requirements are in the frontend repository's `docs/SUBSCRIPTION_BILLING_BACKEND_REQUIREMENTS.md`.
 
 ### Completion Criteria
 - Payment flows are verified.

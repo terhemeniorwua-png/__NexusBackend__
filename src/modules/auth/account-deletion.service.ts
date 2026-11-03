@@ -20,7 +20,10 @@ export async function isLastActiveOrganizationAdministrator(
     where: {
       userId,
       status: 'ACTIVE',
-      role: 'PROJECT_MANAGER',
+      OR: [
+        { organizationRole: { in: ['COMPANY_ADMIN', 'INSTITUTION_ADMIN'] } },
+        { role: 'PROJECT_MANAGER', organizationRole: null },
+      ],
       workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
     },
     select: {
@@ -32,9 +35,17 @@ export async function isLastActiveOrganizationAdministrator(
             where: {
               userId: { not: userId },
               status: 'ACTIVE',
-              role: 'PROJECT_MANAGER',
+              OR: [
+                { organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] } },
+                { organizationRole: { in: ['COMPANY_ADMIN', 'INSTITUTION_ADMIN'] } },
+                { role: 'PROJECT_MANAGER', organizationRole: null },
+              ],
             },
-            select: { user: { select: { status: true, deletedAt: true } } },
+            select: {
+              role: true,
+              organizationRole: true,
+              user: { select: { status: true, deletedAt: true } },
+            },
           },
         },
       },
@@ -43,11 +54,22 @@ export async function isLastActiveOrganizationAdministrator(
 
   return administratorMemberships.some(({ workspace }) => {
     const activeOwner =
-      workspace.ownerId !== userId &&
-      workspace.owner.status === 'ACTIVE' &&
-      workspace.owner.deletedAt === null;
+      (workspace.ownerId !== userId &&
+        workspace.owner.status === 'ACTIVE' &&
+        workspace.owner.deletedAt === null) ||
+      workspace.members.some(
+        ({ user, organizationRole }) =>
+          (organizationRole === 'COMPANY_OWNER' || organizationRole === 'INSTITUTION_OWNER') &&
+          user.status === 'ACTIVE' &&
+          user.deletedAt === null,
+      );
     const activeAdministrator = workspace.members.some(
-      ({ user }) => user.status === 'ACTIVE' && user.deletedAt === null,
+      ({ user, organizationRole, role }) =>
+        user.status === 'ACTIVE' &&
+        user.deletedAt === null &&
+        (organizationRole === 'COMPANY_ADMIN' ||
+          organizationRole === 'INSTITUTION_ADMIN' ||
+          (!organizationRole && role === 'PROJECT_MANAGER')),
     );
 
     return !activeOwner && !activeAdministrator;
@@ -118,7 +140,17 @@ export async function processPendingAccountDeletions(
         select: { id: true },
       });
 
-      if (organization) {
+      const organizationOwnerMembership = await tx.workspaceMembership.findFirst({
+        where: {
+          userId: candidate.id,
+          status: 'ACTIVE',
+          organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] },
+          workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
+        },
+        select: { workspaceId: true },
+      });
+
+      if (organization || organizationOwnerMembership) {
         blocked.push({ userId: candidate.id, reason: 'ORGANIZATION_OWNERSHIP' });
         continue;
       }
@@ -182,6 +214,7 @@ export async function processPendingAccountDeletions(
       await tx.workspaceMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.teamMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.projectMembership.deleteMany({ where: { userId: candidate.id } });
+      await tx.departmentMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.taskAssignee.deleteMany({ where: { userId: candidate.id } });
       await tx.team.updateMany({ where: { leadId: candidate.id }, data: { leadId: null } });
       await tx.notification.deleteMany({ where: { userId: candidate.id } });
