@@ -62,6 +62,7 @@ export interface InvitationSummary {
   invitedBy: { id: string; name: string };
   expiresAt: Date;
   acceptedAt: Date | null;
+  declinedAt: Date | null;
   revokedAt: Date | null;
   createdAt: Date;
 }

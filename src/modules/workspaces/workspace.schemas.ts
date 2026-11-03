@@ -126,7 +126,7 @@ export const createInvitationSchema = z
   .strict();
 
 export const listInvitationsQuerySchema = z.object({
-  status: z.enum(['PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
+  status: z.enum(['PENDING', 'ACCEPTED', 'DECLINED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
 });
 
 /**

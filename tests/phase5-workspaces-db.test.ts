@@ -426,6 +426,61 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.ok(audit, 'The acceptance has to be recorded');
   });
 
+  test('the invited person can decline once without receiving membership', async () => {
+    const ownerEmail = uniqueEmail('decline-owner');
+    const inviteeEmail = uniqueEmail('decline-invitee');
+    const otherEmail = uniqueEmail('decline-other');
+    await createUser('Decline Owner', ownerEmail);
+    const invitee = await createUser('Decline Invitee', inviteeEmail);
+    await createUser('Other Account', otherEmail);
+
+    const ownerToken = await login(ownerEmail);
+    const inviteeToken = await login(inviteeEmail);
+    const otherToken = await login(otherEmail);
+    const workspace = await createWorkspace(ownerToken);
+    sent = [];
+
+    const created = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const token = tokenFromEmail(lastInvitationEmail());
+
+    const wrongAccount = await api(`/invitations/${token}/decline`, {
+      method: 'POST',
+      token: otherToken,
+    });
+    assert.equal(wrongAccount.status, 403, JSON.stringify(wrongAccount.body));
+
+    const declined = await api(`/invitations/${token}/decline`, {
+      method: 'POST',
+      token: inviteeToken,
+    });
+    assert.equal(declined.status, 200, JSON.stringify(declined.body));
+    assert.equal((declined.body.data as { status: string }).status, 'DECLINED');
+    assert.ok((declined.body.data as { declinedAt: string | null }).declinedAt);
+
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: { workspaceId_userId: { workspaceId: workspace.id, userId: invitee.id } },
+    });
+    assert.equal(membership, null);
+
+    const repeated = await api(`/invitations/${token}/decline`, {
+      method: 'POST',
+      token: inviteeToken,
+    });
+    assert.equal(repeated.status, 409, JSON.stringify(repeated.body));
+
+    const reinvited = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail },
+    });
+    assert.equal(reinvited.status, 201, JSON.stringify(reinvited.body));
+  });
+
   test('an invitation can only be used once', async () => {
     const ownerEmail = uniqueEmail('single-owner');
 

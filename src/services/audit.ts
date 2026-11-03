@@ -28,6 +28,7 @@ export const WorkspaceAuditAction = {
   InvitationResent: 'workspace.invitation_resent',
   InvitationRevoked: 'workspace.invitation_revoked',
   InvitationAccepted: 'workspace.invitation_accepted',
+  InvitationDeclined: 'workspace.invitation_declined',
   JoinRequestCreated: 'workspace.join_request_created',
   JoinRequestApproved: 'workspace.join_request_approved',
   JoinRequestRejected: 'workspace.join_request_rejected',

@@ -1831,7 +1831,7 @@ paths:
           description: The state to filter on. `ALL` returns every invitation.
           schema:
             type: string
-            enum: [PENDING, ACCEPTED, REVOKED, EXPIRED, ALL]
+            enum: [PENDING, ACCEPTED, DECLINED, REVOKED, EXPIRED, ALL]
             default: ALL
       responses:
         '200':
@@ -2115,6 +2115,61 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: The invitation is no longer pending because it was accepted, revoked or expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: The invitation expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /invitations/{token}/decline:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: The single-use token of the invitation link.
+        schema:
+          type: string
+    post:
+      tags: [Invitations]
+      operationId: declineInvitation
+      summary: Decline the invitation
+      description: |
+        Requires authentication as the account the invitation was sent to.
+        This single-use transition releases the pending invitation slot so
+        the workspace may invite the address again.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The invitation was declined.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The invitation belongs to another account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The invitation token is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The invitation is no longer pending.
           content:
             application/json:
               schema:
@@ -2745,7 +2800,7 @@ components:
           enum: [WORKSPACE, TEAM, PROJECT]
         status:
           type: string
-          enum: [PENDING, ACCEPTED, REVOKED, EXPIRED]
+          enum: [PENDING, ACCEPTED, DECLINED, REVOKED, EXPIRED]
         invitedBy:
           type: object
           required: [id, name]
@@ -2759,6 +2814,9 @@ components:
           type: string
           format: date-time
         acceptedAt:
+          type: [string, 'null']
+          format: date-time
+        declinedAt:
           type: [string, 'null']
           format: date-time
         revokedAt:
@@ -2834,7 +2892,7 @@ components:
               $ref: '#/components/schemas/WorkspaceRole'
             status:
               type: string
-              enum: [PENDING, ACCEPTED, REVOKED, EXPIRED]
+              enum: [PENDING, ACCEPTED, DECLINED, REVOKED, EXPIRED]
             expiresAt:
               type: string
               format: date-time

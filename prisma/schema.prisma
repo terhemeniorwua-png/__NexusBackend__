@@ -112,6 +112,7 @@ enum InvitationStatus {
   ACCEPTED
   REVOKED
   EXPIRED
+  DECLINED
 }
 
 enum NotificationType {
@@ -526,6 +527,7 @@ model Invitation {
   acceptedAt   DateTime?
   acceptedById String?
   revokedAt    DateTime?
+  declinedAt   DateTime?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 
