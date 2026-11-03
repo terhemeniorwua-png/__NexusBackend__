@@ -765,7 +765,101 @@ The backend supports Nexus calendar functionality.
 
 ## Two-way synchronisation
 
-Calendar synchronisation must support changes in both directions.
+| Variable or setting | Purpose |
+|---|---|
+| `NODE_ENV` | Runtime environment |
+| `PORT` | HTTP server port |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string; required for distributed rate limiting |
+| `FRONTEND_URL` | Trusted frontend origin |
+| `JWT_SECRET` | JWT signing secret, if JWT is used |
+| `SESSION_SECRET` | Session signing secret, if applicable |
+| `EMAIL_*` | Email provider configuration |
+| `AI_*` | AI provider configuration, if integrated |
+| `MEETING_*` | Meeting provider configuration, if integrated |
+| `STORAGE_*` | File storage configuration, if integrated |
+
+These names are examples, not a guarantee of the repository's current variable names. Inspect the configuration code and `.env.example` before using them.
+
+Use strong secrets in development and production. Never expose backend secrets to the frontend.
+
+### Authentication settings
+
+The variables below are read by `src/config/env.ts`. All of them have defaults except `JWT_ACCESS_SECRET`, which must be at least 32 characters and must not be a placeholder.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JWT_ACCESS_SECRET` | none | Signs the access token and derives the CSRF signing key |
+| `JWT_ACCESS_TTL_SECONDS` | `900` | Access token lifetime |
+| `REFRESH_TOKEN_TTL_SECONDS` | `2592000` | Refresh token and session lifetime |
+| `BCRYPT_SALT_ROUNDS` | `12` | Password hashing cost |
+| `VERIFICATION_TOKEN_TTL_SECONDS` | `3600` | Email verification token lifetime |
+| `PASSWORD_RESET_TOKEN_TTL_SECONDS` | `1800` | Password reset token lifetime |
+| `EMAIL_CHANGE_TOKEN_TTL_SECONDS` | `3600` | Email change token lifetime |
+| `AUTH_COOKIE_SECURE` | `false` (`true` in production) | Marks the session cookies as secure |
+| `AUTH_COOKIE_SAME_SITE` | `lax` | `SameSite` attribute of the session cookies. `none` requires `AUTH_COOKIE_SECURE=true` |
+| `AUTH_COOKIE_DOMAIN` | empty | Optional cookie domain |
+| `AUTH_RATE_LIMIT_WINDOW_MS` | `900000` | Window of the authentication rate limits |
+| `AUTH_LOGIN_RATE_LIMIT_MAX` | `10` | Sign-in attempts per window per IP address and per account |
+| `AUTH_REGISTER_RATE_LIMIT_MAX` | `5` | Registrations per window per IP address and per account |
+| `AUTH_PASSWORD_RATE_LIMIT_MAX` | `5` | Password requests per window per IP address and per account |
+| `AUTH_VERIFICATION_RATE_LIMIT_MAX` | `5` | Verification requests per window per IP address and per account |
+| `AUTH_VERIFICATION_LINK_PATH` | `/verify-email` | Frontend path that receives the verification link |
+| `AUTH_PASSWORD_RESET_LINK_PATH` | `/reset-password` | Frontend path that receives the reset link |
+| `AUTH_EMAIL_CHANGE_LINK_PATH` | `/settings/email` | Frontend path that receives the email change link |
+| `RATE_LIMIT_NAMESPACE` | `nexus` | Prefix for the Redis rate limit keys. Use a different value per environment when they share a Redis instance |
+
+The verification, reset and email change links are built from `FRONTEND_URL` and the configured path, so the frontend contract can change without a backend deployment.
+
+### Workspace settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WORKSPACE_INVITATION_TTL_SECONDS` | `604800` | Lifetime of an invitation link |
+| `WORKSPACE_INVITATION_LINK_PATH` | `/workspaces/invitations/accept` | Frontend route that receives the acceptance link |
+| `TASK_ASSIGNMENT_LINK_PATH` | `/projects/:projectId/tasks/:taskId` | Frontend route for an assigned task. `:projectId` and `:taskId` are replaced with encoded identifiers |
+| `COMMENT_MENTION_LINK_PATH` | `/projects/:projectId/tasks/:taskId#comment-:commentId` | Frontend route for a comment mention. Route parameters are replaced with encoded identifiers |
+| `MEETING_INVITATION_LINK_PATH` | `/meetings/:meetingId` | Frontend route for a meeting invitation. `:meetingId` is replaced with an encoded identifier |
+| `TEAM_INVITATION_LINK_PATH` | `/teams/invitations/accept` | Frontend route that accepts a team invitation. The single-use token is appended as the `token` query parameter |
+| `PROJECT_INVITATION_LINK_PATH` | `/projects/invitations/accept` | Frontend route that accepts a project invitation. The single-use token is appended as the `token` query parameter |
+
+### Email settings
+
+The variables below are read by `src/config/env.ts` and drive the Phase 4 transactional email service.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EMAIL_PROVIDER` | `disabled` in production, `console` otherwise | Transport: `smtp`, `console` or `disabled`. Production requires `smtp` |
+| `EMAIL_SMTP_HOST` | none | SMTP host. Required when the provider is `smtp` |
+| `EMAIL_SMTP_PORT` | `587` | SMTP port. Port `465` requires `EMAIL_SMTP_SECURE=true` |
+| `EMAIL_SMTP_SECURE` | `false` | Use TLS on connect instead of STARTTLS |
+| `EMAIL_SMTP_USER` | empty | SMTP username |
+| `EMAIL_SMTP_PASSWORD` | empty | SMTP password |
+| `EMAIL_SMTP_TLS_REJECT_UNAUTHORIZED` | `true` | Reject untrusted SMTP certificates |
+| `EMAIL_FROM_ADDRESS` | none | Sender address. Its domain needs SPF, DKIM and DMARC |
+| `EMAIL_FROM_NAME` | `Nexus` | Sender display name |
+| `EMAIL_REPLY_TO_ADDRESS` | empty | Optional reply-to address |
+| `EMAIL_SUPPORT_ADDRESS` | empty | Optional support address shown in the email footer |
+| `EMAIL_APP_URL` | falls back to `FRONTEND_URL` | Public base URL used for links in emails |
+| `EMAIL_WEBHOOK_SECRET` | empty | Shared secret for provider webhooks. At least 32 characters. The webhook endpoint is disabled while empty |
+| `EMAIL_WEBHOOK_TOKEN` | empty | Token for providers that do not sign their events, Brevo among them. At least 32 characters. The webhook URL then ends with the token |
+| `EMAIL_WEBHOOK_SIGNATURE_HEADER` | `x-nexus-signature` | Header that carries the provider signature |
+| `EMAIL_WEBHOOK_TOLERANCE_SECONDS` | `300` | Accepted age of a signed webhook timestamp |
+| `EMAIL_MAX_ATTEMPTS` | `5` | Delivery attempts before a message is given up |
+| `EMAIL_RETRY_BASE_DELAY_MS` | `30000` | Base delay of the exponential retry backoff |
+| `EMAIL_RETRY_MAX_DELAY_MS` | `3600000` | Upper bound of the retry delay |
+| `EMAIL_REQUEST_TIMEOUT_MS` | `15000` | Timeout of a single provider request |
+| `EMAIL_WORKER_ENABLED` | `true` | Run the background delivery worker |
+| `EMAIL_WORKER_POLL_INTERVAL_MS` | `5000` | Delay between outbox polls |
+| `EMAIL_WORKER_BATCH_SIZE` | `10` | Maximum rows claimed per poll |
+
+## Database Setup
+
+Nexus uses PostgreSQL as its relational data store and Prisma for schema management and database access.
+
+After configuring the database connection, inspect the Prisma scripts in `package.json`.
+
+Typical development commands, if supported by the project, include:
 
 ### Requirements
 
@@ -788,7 +882,15 @@ Private event details must not be exposed to unauthorised workspace members.
 
 ---
 
-# 18. Meetings and Calling
+Prisma Migrate does not provide automatic down migrations. The recovery policy, migration risk review and backup/restore procedures are documented in [`docs/migration-recovery.md`](docs/migration-recovery.md). Verify the procedure against a disposable database with:
+
+```bash
+DATABASE_URL="postgresql://<test-user>:<test-password>@<host>:<port>/<test-database>" \
+SHADOW_DATABASE_URL="postgresql://<test-user>:<test-password>@<host>:<port>/<shadow-database>" \
+./scripts/verify-migration-recovery.sh
+```
+
+## Running the Server
 
 Nexus uses a managed audio/video calling SDK.
 
@@ -893,7 +995,12 @@ Nexus supports individual and organisational subscription models.
 - Ensure idempotent payment processing.
 - Keep billing records auditable.
 
-Pricing, seat counting, and institution-specific allowances must follow approved product decisions rather than assumptions.
+- The server starts successfully.
+- PostgreSQL is reachable.
+- Required migrations have been applied.
+- Redis is reachable; rate limiting fails closed without it.
+- Required environment variables are present.
+- The frontend can reach the API using the configured URL.
 
 ---
 
@@ -945,7 +1052,16 @@ Search must never become a way to bypass resource access controls.
 
 ---
 
-# 22. Integrations Framework
+- Every authenticated request is checked against the `Session` row in PostgreSQL, so signing out, changing a password or resetting a password revokes access immediately instead of waiting for the access token to expire.
+- The refresh token rotates on every use. Presenting a token that was already rotated is treated as a compromise and revokes every session of the account (`SESSION_REUSE_DETECTED`).
+- Requests that rely on the `nexus_rt` cookie must also send the `x-csrf-token` header. The header is required: the `nexus_csrf` cookie alone is not accepted, because a browser attaches cookies to cross-site requests automatically. The cookie only gives the frontend a way to read the value. Requests that present the refresh token in the request body are not cookie-authenticated and do not need one.
+- Only cookie-authenticated requests exist, so the business endpoints never accept the access token from a cookie and are therefore not exposed to cross-site request forgery.
+- One-time tokens (email verification, password reset, email change) are single use, expiring, and stored only as digests. The newest token of a purpose invalidates the older ones.
+- Deactivation revokes every session and invalidates every outstanding one-time token, so a link issued before deactivation cannot restore access or change the account. Reactivation is self-service with the account email address and password, never creates a session, and returns an unverified account to `PENDING_VERIFICATION` with a fresh verification link. Deleted and suspended accounts cannot reactivate themselves.
+- Passwords are hashed with bcrypt, are limited to 72 bytes so nothing is silently truncated, and are never logged or emailed.
+- Endpoints that accept an email address (`resend-verification`, `password/forgot`) always return the same response, so they cannot be used to discover which addresses are registered.
+- Sign-in, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and are shared across backend instances. If Redis is unavailable, rate-limited requests fail closed with `503 RATE_LIMIT_UNAVAILABLE` instead of falling back to a process-local counter.
+- Account level security events are written to the `AuditLog` table with a null `workspaceId`. They never contain passwords, tokens or verification links.
 
 Nexus supports personal and workspace integrations.
 
@@ -1093,70 +1209,28 @@ Suggestions are returned for user review and explicit acceptance through the fro
 
 ---
 
-# 26. AI Action Approval and Execution
+Redis supports the following configured infrastructure needs:
 
-Nexus AI can propose changes to application data.
-
-Examples:
-
-- Creating tasks.
-- Updating tasks.
-- Assigning tasks.
-- Creating projects.
-- Creating calendar events.
-- Updating supported resources.
-
-### Required workflow
-
-1. AI generates a proposed action.
-2. Express validates the proposed action structure.
-3. The proposal is returned to the frontend.
-4. The user explicitly approves or rejects it.
-5. Express receives the approval.
-6. Express independently checks current permissions.
-7. Express validates the operation.
-8. Express executes the operation.
-9. The backend returns the actual result.
-
-### Security requirements
-
-- No silent mutations.
-- No automatic approval.
-- No trust in AI-generated permissions.
-- Revalidate permissions at execution time.
-- Validate all input.
-- Maintain audit records for relevant operations.
-- Handle expired or stale proposals.
-- Ensure duplicate execution is prevented where appropriate.
-
----
-
-# 27. Redis and Background Processing
-
-Redis supports performance and distributed application operations.
-
-### Redis use cases
-
-- Caching.
-- Rate limiting.
-- Presence.
-- Typing indicators.
-- Real-time coordination.
-- Ephemeral state.
-- Queue infrastructure.
-- Distributed coordination.
+- Caching frequently accessed data.
+- Rate limiting (required; requests fail closed when Redis is unavailable).
+- Temporary state.
+- Background-job infrastructure, if configured.
+- Socket.IO cross-instance coordination when the relevant adapter is installed.
 
 ### Background processing use cases
 
-- Email delivery.
-- Notification delivery.
-- Calendar synchronisation.
-- File processing.
-- Search indexing.
-- Integration synchronisation.
-- AI processing jobs where appropriate.
-- Automation execution.
-- Cleanup and expiration tasks.
+### Distributed rate limiting
+
+The global limiter and the route-specific authentication, invitation and workspace limiters use Redis-backed counters. The store has no in-process fallback, so two backend instances sharing the same Redis deployment and `RATE_LIMIT_NAMESPACE` enforce one shared counter set. Keys use the form `rl:{RATE_LIMIT_NAMESPACE}:{limiter}:{client-key}` and expire with the configured window.
+
+- `REDIS_URL` must point at the shared Redis deployment. Use a separate Redis database or namespace per environment and per test run.
+- `RATE_LIMIT_NAMESPACE` separates counters when environments share one Redis instance.
+- `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX` configure the global limiter.
+- `TRUST_PROXY` controls whether Express trusts forwarded addresses. Leave it disabled unless the application is behind a trusted proxy; the limiter uses `req.ip`, not an arbitrary forwarded header.
+
+Health endpoints are exempt from the global limiter. If Redis is unavailable, rate-limited requests are denied with `503 RATE_LIMIT_UNAVAILABLE`; this is deliberate fail-closed behavior for authentication and abuse-sensitive traffic. The readiness endpoint reports Redis status, and the server logs `redis_unavailable` without logging connection credentials. Deployments must provide a reachable Redis instance before relying on the API for authentication or other rate-limited operations.
+
+Define cache expiration and invalidation rules. Do not allow stale cached data to bypass authorization or expose data after permissions change.
 
 ### Reliability requirements
 
@@ -1172,7 +1246,15 @@ Do not implement infinite retries.
 
 Do not log sensitive information such as passwords, access tokens, or unnecessary recipient details.
 
-PostgreSQL remains the durable source of truth.
+- **Provider adapter** — `src/services/providers/email` sends through a provider-agnostic SMTP transport. Resend, Brevo and Amazon SES all expose an SMTP endpoint, so switching provider only changes the connection details. A `console` transport records delivery metadata without sending, and `disabled` accepts messages without sending them. Provider credentials stay server-side. Brevo is the configured provider, see the section below.
+- **Templates** — `src/services/email/templates` renders a responsive branded HTML document and a plain-text alternative from one shared document model. HTML output is escaped. The available templates are `account_verification`, `password_reset`, `password_changed`, `email_change_verification`, `security_notification`, `workspace_invitation`, `team_invitation`, `project_invitation`, `task_assignment`, `mention` and `meeting_invitation`.
+- **Outbox and delivery metadata** — every message is written to `EmailDelivery` with its template, recipient, status, attempt count, provider message id and timestamps. `EmailSuppression` records bounced and complained addresses, `EmailWebhookEvent` records processed provider events.
+- **Background delivery** — a worker polls the outbox and claims due rows with `FOR UPDATE SKIP LOCKED`, so several instances can run it safely. Rows are claimed atomically and the worker stops with the server.
+- **Retries and deduplication** — transient provider failures and unexpected worker errors are retried with exponential backoff and jitter only while `EMAIL_MAX_ATTEMPTS` remains. Permanent failures stop immediately, and an exhausted delivery moves to the terminal `FAILED` state instead of returning to the queue. A unique idempotency key per logical send prevents duplicate rows and duplicate sends.
+- **Provider webhooks** — `POST /api/v1/webhooks/email` verifies an HMAC signature over the raw payload, then applies delivery, bounce and complaint events. Providers that do not sign their events, Brevo among them, are verified with the token in the webhook URL. Repeated events are applied once.
+- **Task assignment notifier** — `src/services/task-assignment-notifier.ts` turns a persisted `TaskAssignee` row into the existing `task_assignment` email. It validates the active workspace and project membership, uses suppression rules, builds the task link from `EMAIL_APP_URL` and `TASK_ASSIGNMENT_LINK_PATH`, and derives its idempotency key from the assignment timestamp. The Phase 9 task service will call it after committing an assignment; delivery failure is reported without changing task data.
+- **Collaboration email notifier** — `src/services/collaboration-email-notifier.ts` provides post-commit handlers for persisted comment mentions, pending meeting invitations, persisted team invitations and persisted project invitations. Mention recipients are looked up from active users with workspace membership and the comment author is excluded. Meeting invitations are sent only for a `PENDING` invitation, include the organizer, time, location and optional workspace/project context, and link to the configured meeting route. Team invitations load a persisted `TEAM` invitation, require an active workspace, team and inviter, verify the raw token against the stored digest, and build the acceptance link from `EMAIL_APP_URL` plus `TEAM_INVITATION_LINK_PATH`. Project invitations load a persisted `PROJECT` invitation, require an active workspace, a live (non-archived) project and an active inviter, and include the project name, workspace name, inviter, expiration and a configured `PROJECT_INVITATION_LINK_PATH` link. All handlers use the transactional outbox, address suppression, stable idempotency keys and links rooted at `EMAIL_APP_URL`. Team and project idempotency use the invitation and token digest, so re-processing one token sends once while a resend with a new token sends once. The raw invitation token is never logged, written to outbox metadata or embedded in an idempotency key. The repository currently has no mention parser, meeting model, or team/project invitation workflow, so these handlers do not create mention events or create, revoke, expire or accept invitations; their owning workflows must call them after commit and supply the persisted context. Notification preferences are not modeled yet; the existing suppression list is enforced.
+- **Logging** — verification tokens, reset links and message bodies are never written to the application log. Delivery logs carry the delivery ID, template, provider, attempt and failure category, but not the recipient email address; provider and worker error text is redacted before it is logged.
 
 ---
 
@@ -1709,7 +1791,7 @@ All coding agents must follow:
 
 This README describes the intended backend architecture and product requirements.
 
-It does not mean every described module has already been implemented.
+The Phase 4 suite covers template rendering in HTML and plain text, configuration validation, transport error classification, outbox enqueue and claiming, idempotent sends, transient retries, permanent failures, the attempt limit, bounded retry of unexpected worker errors, recovery after a temporary worker failure, repair of exhausted queued rows, concurrent claim safety, address suppression, webhook verification and idempotency, that verification tokens never reach the application log, and that queued, sent and failure events do not expose recipient addresses. The Phase 4.3 task-assignment integration suite covers recipient and context selection, reassignment, duplicate events, suppression, ineligible recipients, and delivery failure without assignment corruption. The Phase 4.4/4.5 meeting, team and project invitation suite covers meeting context, time, configured links, duplicate meeting events, team invitation delivery, project invitation delivery with the project and workspace context, expired, archived, wrong-type and missing-target invitations, token mismatch, resend, suppression, inactive inviters, duplicate processing and failure isolation without changing the persisted invitation. The integration tests talk to a local SMTP capture server or the transactional outbox, so no provider credentials and no outbound mail are required.
 
 The actual implementation status must be established by inspecting the repository and the `phases.md` tracker.
 
@@ -1747,7 +1829,7 @@ These features require explicit approval before implementation.
 
 ---
 
-# 44. Definition of Done
+Use backward-compatible database changes when possible. Prepare a rollback or recovery procedure for risky releases. See [`docs/migration-recovery.md`](docs/migration-recovery.md) for the migration recovery policy and the verification script.
 
 A backend feature is complete only when:
 

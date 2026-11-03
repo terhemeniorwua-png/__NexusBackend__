@@ -19,6 +19,8 @@ import {
   createWorkspaceService,
   type WorkspaceService,
 } from '../modules/workspaces/workspace.service';
+import { createTeamRouter } from '../modules/teams/team.routes';
+import { createTeamService, type TeamService } from '../modules/teams/team.service';
 import type { ReadinessProbe } from '../services/health';
 import { createHealthRouter } from './health';
 
@@ -29,7 +31,7 @@ interface ApiRouterOptions {
   usersService?: UsersService;
   workspaceService?: WorkspaceService;
   invitationService?: InvitationService;
-  joinRequestService?: JoinRequestService;
+  teamService?: TeamService;
 }
 
 export function createApiRouter({
@@ -39,7 +41,7 @@ export function createApiRouter({
   usersService = createUsersService(),
   workspaceService = createWorkspaceService(config),
   invitationService = createInvitationService(config),
-  joinRequestService = createJoinRequestService(config),
+  teamService = createTeamService(),
 }: ApiRouterOptions): Router {
   const router = Router();
 
@@ -54,6 +56,9 @@ export function createApiRouter({
     createWorkspaceRouter({ config, service: workspaceService, invitationService }),
   );
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
+  // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
+  // The team router uses mergeParams to access the workspaceId from the parent.
+  router.use('/workspaces/:workspaceId/teams', createTeamRouter({ config, service: teamService }));
 
   return router;
 }
