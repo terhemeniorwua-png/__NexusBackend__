@@ -473,29 +473,31 @@ Follow this cycle for every phase, without exception:
 
 ---
 
-#### Phase 4.3 — Task assignment email integration `[/]`
+#### Phase 4.3 — Task assignment and mention email integration `[/]`
 
-**Objective:** Connect the existing `task_assignment` template to a reusable notifier that the authoritative task assignment workflow can call after it commits an assignment.
+**Objective:** Connect the existing `task_assignment` and `mention` templates to reusable post-commit notifiers that the authoritative task and comment workflows can call after they persist an assignment or mention.
 
 **Deliverables:**
-- Reusable notifier around the existing template and transactional outbox
+- Reusable task-assignment notifier around the existing template and transactional outbox
+- Reusable mention notifier around the existing template and transactional outbox
 - Recipient validation against active workspace and project membership
-- Suppression-list handling and task link generation from configuration
-- Stable per-assignment idempotency and non-fatal delivery failure handling
+- Suppression-list handling and task/comment link generation from configuration
+- Stable per-event idempotency and non-fatal delivery failure handling
 - PostgreSQL integration tests for context, reassignment, duplicate processing, suppression, ineligible recipients and failure isolation
-- Runtime caller from the authoritative task assignment service
+- Runtime callers from the authoritative task assignment and comment/mention workflows
 
-**Dependencies:** Phase 4.2, Phase 9
+**Dependencies:** Phase 4.2, Phase 9, Phase 14
 
 **Verification criteria:**
-- The existing task-assignment template has a real runtime caller
-- Task assignment triggers the expected email
+- The existing task-assignment and mention templates have real runtime callers
+- Task assignment triggers the expected email to the new assignee
+- A mention triggers the expected email to the mentioned workspace member
 - Correct recipients and contextual data are used
-- Duplicate processing is handled safely
-- Existing task and email behavior remains intact
+- Duplicate processing and comment edits do not enqueue duplicate emails
+- Existing task, comment, in-app notification and email behaviour remains intact
 - Relevant tests pass
 
-**Blockers / Notes:** Partially implemented on 2026-11-01. The repository does not yet contain the Phase 9 task service, task routes or assignment workflow, so the user explicitly selected the notifier-only option rather than authorizing a partial Phase 9 implementation. `src/services/task-assignment-notifier.ts` now validates a persisted `TaskAssignee`, requires an active user with workspace access and project membership (or workspace management/project ownership), enforces existing address suppression, and calls the existing `sendEmail` seam with the existing `task_assignment` template. It builds the task link from `EMAIL_APP_URL` and the new `TASK_ASSIGNMENT_LINK_PATH`, adds task/project/workspace metadata, and uses the persisted assignment timestamp in the idempotency key so duplicate events collapse into one outbox row. Delivery errors are caught and reported without modifying task data. The integration suite has 7 passing PostgreSQL/outbox tests; the unit suite adds link and idempotency coverage. The full Phase 2–5 database-enabled suite passes 203/203, and `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `git diff --check` pass. The completion criteria are not met because no production runtime caller or task-assignment endpoint exists, and the schema has no notification-preference model, so suppression is the only preference mechanism currently available. Phase 4.3 stays in progress until the Phase 9 task service calls the notifier after a successful assignment commit and the end-to-end assignment path is verified.
+**Blockers / Notes:** Partially implemented on 2026-11-01 and extended on 2026-11-03. The repository does not yet contain the Phase 9 task service, task routes or assignment workflow, nor the Phase 14 comment creation/mention parsing workflow, so the notifier-only option was retained rather than implementing those future phases without authorization. `src/services/task-assignment-notifier.ts` turns a persisted `TaskAssignee` into the existing `task_assignment` email. `src/services/mention-email-notifier.ts` turns a persisted comment mention into the existing `mention` email. Both require an active user with workspace access and project membership (or workspace management/project ownership), enforce existing address suppression, and call the existing non-fatal `sendEmail` outbox seam. Links are built from `EMAIL_APP_URL` plus the configurable `TASK_ASSIGNMENT_LINK_PATH` and `COMMENT_MENTION_LINK_PATH`. Task idempotency uses the persisted assignment timestamp; mention idempotency uses the comment and recipient, so repeated processing or a comment edit cannot enqueue a second email. Lookup and delivery failures are caught and reported without modifying task, comment or notification data. Tests: the task-assignment integration suite has 7 PostgreSQL/outbox tests and the mention integration suite has 10, covering valid delivery, reassignment, duplicate events, edited comments, invalid/unresolved mentions, self-mentions, suppression, ineligible recipients, delivery failure and preservation of in-app notifications. After merging the current `main`, the full suite with the Phase 2–5 database integrations enabled passes 265 tests with two intentionally skipped database suites (Phase 6 and Phase 7), 267 total. `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and `git diff --check` pass. The completion criteria are not met because no production task-assignment or comment/mention runtime caller exists, and the schema has no notification-preference model, so suppression is the only preference mechanism currently available. Phase 4.3 stays in progress until the Phase 9 assignment workflow and Phase 14 comment/mention workflow call these notifiers after a successful commit and the end-to-end paths are verified.
 
 ---
 

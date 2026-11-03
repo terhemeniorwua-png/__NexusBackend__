@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { PrismaClient } from '@prisma/client';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import {
   buildEmailBrand,
@@ -26,8 +27,15 @@ import {
 import { redactEmailAddresses, summarizeErrorForLog } from '../src/services/email/log-privacy';
 import {
   buildTaskAssignmentUrl,
+  createTaskAssignmentNotifier,
   taskAssignmentIdempotencyKey,
 } from '../src/services/task-assignment-notifier';
+import {
+  buildMentionUrl,
+  createMentionEmailNotifier,
+  mentionEmailIdempotencyKey,
+} from '../src/services/mention-email-notifier';
+import { Logger } from '../src/utils/logger';
 import { createConsoleTransport, createEmailTransport } from '../src/services/providers/email';
 import { captureLogs } from './helpers/test-logger';
 import {
@@ -297,6 +305,84 @@ test('the task assignment key is stable per event and changes for a new assignme
   assert.equal(first, duplicate);
   assert.notEqual(first, nextAssignment);
   assert.equal(first, 'task-assignment:task-1:user-1:2026-11-01T10:00:00.000Z');
+});
+
+test('mention links use the configured public URL and comment fragment', () => {
+  const appConfig = parseEnv({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://nexus:nexus@localhost:5432/nexus_test',
+    REDIS_URL: 'redis://localhost:6379/15',
+    JWT_ACCESS_SECRET: 'phase4-unit-test-access-secret-value-that-is-long',
+    EMAIL_APP_URL: 'https://app.example.com/',
+    COMMENT_MENTION_LINK_PATH: '/projects/:projectId/tasks/:taskId#comment-:commentId',
+  });
+
+  const url = buildMentionUrl(appConfig, {
+    projectId: 'project/with space',
+    taskId: 'task 42',
+    commentId: 'comment 7',
+  });
+
+  assert.equal(
+    url,
+    'https://app.example.com/projects/project%2Fwith%20space/tasks/task%2042#comment-comment%207',
+  );
+});
+
+test('the mention key is stable per comment and recipient', () => {
+  assert.equal(
+    mentionEmailIdempotencyKey('comment-1', 'user-1'),
+    mentionEmailIdempotencyKey('comment-1', 'user-1'),
+  );
+  assert.notEqual(
+    mentionEmailIdempotencyKey('comment-1', 'user-1'),
+    mentionEmailIdempotencyKey('comment-1', 'user-2'),
+  );
+  assert.equal(mentionEmailIdempotencyKey('comment-1', 'user-1'), 'mention:comment-1:user-1');
+});
+
+test('notifier lookup failures are reported without throwing', async () => {
+  const appConfig = parseEnv({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://nexus:nexus@localhost:5432/nexus_test',
+    REDIS_URL: 'redis://localhost:6379/15',
+    JWT_ACCESS_SECRET: 'phase4-unit-test-access-secret-value-that-is-long',
+  });
+  const failingClient = {
+    taskAssignee: {
+      findUnique: async () => {
+        throw new Error('Database unavailable');
+      },
+    },
+    comment: {
+      findUnique: async () => {
+        throw new Error('Database unavailable');
+      },
+    },
+  } as unknown as PrismaClient;
+  const send = async () => ({ accepted: true });
+
+  const taskNotifier = createTaskAssignmentNotifier(appConfig, {
+    prisma: failingClient,
+    logger: new Logger('silent'),
+    send,
+  });
+  const mentionNotifier = createMentionEmailNotifier(appConfig, {
+    prisma: failingClient,
+    logger: new Logger('silent'),
+    send,
+  });
+
+  const taskResult = await taskNotifier.notify({ taskId: 'task-1', assigneeId: 'user-1' });
+  const mentionResult = await mentionNotifier.notify({
+    commentId: 'comment-1',
+    mentionedUserId: 'user-1',
+  });
+
+  assert.equal(taskResult.status, 'failed');
+  assert.equal(taskResult.accepted, false);
+  assert.equal(mentionResult.status, 'failed');
+  assert.equal(mentionResult.accepted, false);
 });
 
 test('an idempotency key is stable for the same message and differs for another one', () => {
