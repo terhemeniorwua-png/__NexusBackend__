@@ -124,6 +124,7 @@ test('parseEnv exposes the email settings with their defaults', () => {
   assert.equal(config.emailFromAddress, 'no-reply@nexus.local');
   assert.equal(config.emailFromName, 'Nexus');
   assert.equal(config.emailMaxAttempts, 5);
+  assert.equal(config.emailSendingStaleMs, 300_000);
   assert.equal(config.emailWorkerEnabled, true);
   assert.equal(config.emailWebhookSignatureHeader, 'x-nexus-signature');
 });

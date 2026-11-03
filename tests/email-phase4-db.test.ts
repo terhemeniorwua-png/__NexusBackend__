@@ -100,6 +100,37 @@ function createThrowingTransport(failuresBeforeSuccess: number): EmailTransport 
   };
 }
 
+/**
+ * A transport that never settles. It exercises the delivery worker's own
+ * provider timeout, which must bound the attempt even when an adapter ignores
+ * its socket timeouts.
+ */
+function createHangingTransport(): EmailTransport & { readonly calls: number } {
+  let calls = 0;
+
+  return {
+    provider: 'hanging',
+
+    get calls(): number {
+      return calls;
+    },
+
+    async send() {
+      calls += 1;
+
+      return new Promise<never>(() => {});
+    },
+
+    async verify(): Promise<void> {
+      // Nothing to verify.
+    },
+
+    async close(): Promise<void> {
+      // Nothing to close.
+    },
+  };
+}
+
 describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
   let smtp: TestSmtpServer;
   let app: Express;
@@ -544,6 +575,160 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.equal(transport.calls, 2);
 
     await transport.close();
+  });
+
+  test('a provider timeout is retried and then fails at the attempt limit', async () => {
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '2',
+      EMAIL_RETRY_BASE_DELAY_MS: '10',
+      EMAIL_RETRY_MAX_DELAY_MS: '20',
+      EMAIL_REQUEST_TIMEOUT_MS: '20',
+    });
+    const transport = createHangingTransport();
+    const limited = createEmailDeliveryService({ prisma, transport, config: limitedConfig });
+
+    const email = uniqueEmail('timeout');
+    const deliveryId = await limited.enqueue({
+      to: email,
+      subject: 'The provider never answers',
+      template: 'security_notification',
+      text: 'The provider never answers',
+      idempotencyKey: `test:timeout:${email}`,
+    });
+    const id = deliveryId.providerMessageId as string;
+
+    const first = await limited.processPending(10);
+    const afterFirst = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(first.retried, 1);
+    assert.equal(afterFirst?.status, 'QUEUED');
+    assert.equal(afterFirst?.attempts, 1);
+    assert.equal(afterFirst?.lastErrorCode, 'PROVIDER_TIMEOUT');
+
+    await sleep(60);
+
+    const second = await limited.processPending(10);
+    const afterSecond = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(second.failed, 1);
+    assert.equal(second.retried, 0);
+    assert.equal(afterSecond?.status, 'FAILED');
+    assert.equal(afterSecond?.attempts, 2);
+    assert.equal(afterSecond?.lastErrorCode, 'PROVIDER_TIMEOUT');
+    assert.ok(afterSecond?.failedAt);
+
+    const afterLimit = await limited.processPending(10);
+
+    assert.equal(afterLimit.claimed, 0);
+    assert.equal(transport.calls, 2);
+
+    await transport.close();
+  });
+
+  test('a delivery left in SENDING by an interrupted worker is recovered and delivered', async () => {
+    smtp.reset();
+
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '3',
+      EMAIL_RETRY_BASE_DELAY_MS: '200',
+      EMAIL_RETRY_MAX_DELAY_MS: '200',
+      EMAIL_REQUEST_TIMEOUT_MS: '1000',
+      EMAIL_SENDING_STALE_MS: '2000',
+    });
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport: getEmailTransport(config),
+      config: limitedConfig,
+    });
+
+    const email = uniqueEmail('interrupted-recover');
+    const id = `eml_interrupted_${process.pid}_${Date.now()}`;
+
+    await prisma.emailDelivery.create({
+      data: {
+        id,
+        toAddress: email,
+        fromAddress: 'Nexus <no-reply@example.com>',
+        template: 'security_notification',
+        subject: 'Recover an interrupted delivery',
+        textBody: 'Recover an interrupted delivery',
+        provider: 'smtp',
+        idempotencyKey: `test:interrupted-recover:${email}`,
+        status: 'SENDING',
+        attempts: 1,
+        maxAttempts: 3,
+        nextAttemptAt: new Date(Date.now() - 10_000),
+        updatedAt: new Date(Date.now() - 10_000),
+      },
+    });
+
+    const recoveryPass = await limited.processPending(10);
+    const recovered = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(recoveryPass.retried, 1);
+    assert.equal(recoveryPass.sent, 0);
+    assert.equal(recovered?.status, 'QUEUED');
+    assert.equal(recovered?.attempts, 1);
+    assert.equal(recovered?.lastErrorCode, 'SENDING_INTERRUPTED');
+
+    await sleep(300);
+
+    const deliveryPass = await limited.processPending(10);
+    const delivered = await prisma.emailDelivery.findUnique({ where: { id } });
+    const sentToAddress = smtp.messages.filter((message) => message.to.includes(email));
+
+    assert.equal(deliveryPass.sent, 1);
+    assert.equal(delivered?.status, 'ACCEPTED');
+    assert.equal(delivered?.attempts, 2);
+    assert.equal(sentToAddress.length, 1);
+  });
+
+  test('a stale SENDING row at the attempt limit becomes terminal without sending', async () => {
+    smtp.reset();
+
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '2',
+      EMAIL_REQUEST_TIMEOUT_MS: '10',
+      EMAIL_SENDING_STALE_MS: '20',
+    });
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport: getEmailTransport(config),
+      config: limitedConfig,
+    });
+
+    const email = uniqueEmail('interrupted-exhausted');
+    const id = `eml_interrupted_exhausted_${process.pid}_${Date.now()}`;
+
+    await prisma.emailDelivery.create({
+      data: {
+        id,
+        toAddress: email,
+        fromAddress: 'Nexus <no-reply@example.com>',
+        template: 'security_notification',
+        subject: 'Already exhausted by an interrupted worker',
+        textBody: 'Already exhausted by an interrupted worker',
+        provider: 'smtp',
+        idempotencyKey: `test:interrupted-exhausted:${email}`,
+        status: 'SENDING',
+        attempts: 2,
+        maxAttempts: 2,
+        nextAttemptAt: new Date(Date.now() - 1_000),
+        updatedAt: new Date(Date.now() - 1_000),
+      },
+    });
+
+    const result = await limited.processPending(10);
+    const failed = await prisma.emailDelivery.findUnique({ where: { id } });
+    const sentToAddress = smtp.messages.filter((message) => message.to.includes(email));
+
+    assert.equal(result.failed, 1);
+    assert.equal(result.sent, 0);
+    assert.equal(failed?.status, 'FAILED');
+    assert.equal(failed?.attempts, 2);
+    assert.equal(failed?.lastErrorCode, 'MAX_ATTEMPTS_EXHAUSTED');
+    assert.ok(failed?.failedAt);
+    assert.equal(sentToAddress.length, 0);
   });
 
   test('concurrent delivery passes never claim or send a row twice', async () => {

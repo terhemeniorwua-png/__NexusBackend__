@@ -200,6 +200,10 @@ const envSchema = z
     EMAIL_RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().default(30_000),
     EMAIL_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().default(3_600_000),
     EMAIL_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+    // A row that stays in SENDING for longer than this was left behind by a
+    // worker that could not record an outcome. It is recovered on the next
+    // pass instead of staying in flight forever.
+    EMAIL_SENDING_STALE_MS: z.coerce.number().int().positive().default(300_000),
     EMAIL_WORKER_ENABLED: booleanString.default(true),
     EMAIL_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),
     EMAIL_WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
@@ -330,6 +334,7 @@ export interface AppConfig {
   emailRetryBaseDelayMs: number;
   emailRetryMaxDelayMs: number;
   emailRequestTimeoutMs: number;
+  emailSendingStaleMs: number;
   emailWorkerEnabled: boolean;
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
@@ -441,6 +446,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailRetryBaseDelayMs: values.EMAIL_RETRY_BASE_DELAY_MS,
     emailRetryMaxDelayMs: values.EMAIL_RETRY_MAX_DELAY_MS,
     emailRequestTimeoutMs: values.EMAIL_REQUEST_TIMEOUT_MS,
+    emailSendingStaleMs: values.EMAIL_SENDING_STALE_MS,
     emailWorkerEnabled: values.EMAIL_WORKER_ENABLED,
     emailWorkerPollIntervalMs: values.EMAIL_WORKER_POLL_INTERVAL_MS,
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
