@@ -4,6 +4,7 @@ import { createBillingService } from '../src/modules/billing/billing.service';
 import type { AppConfig } from '../src/config/env';
 import type { PaystackClient } from '../src/modules/billing/paystack.client';
 import type { PrismaClient } from '@prisma/client';
+import { encryptProviderToken } from '../src/modules/billing/token-cipher';
 
 const config = {
   paystackSecretKey: 'test-secret',
@@ -90,7 +91,12 @@ test('provider reconciliation verifies a paid checkout missed by its webhook', a
     $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({
       billingPayment: { upsert: async () => { paymentWrites += 1; return {}; } },
       subscription: { upsert: async ({ create }: { create: Record<string, unknown> }) => { subscriptionState = { ...create, id: 'subscription-1' }; return subscriptionState; } },
-      billingCheckout: { update: async ({ data }: { data: Record<string, unknown> }) => Object.assign(checkout, data) },
+      billingCheckout: {
+  update: async ({ data }: { data: Record<string, unknown> }) => {
+    if (typeof data.status === 'string') checkoutStatus = data.status;
+    return Object.assign(checkout, data);
+  },
+},
     }),
     
   } as unknown as PrismaClient;
@@ -175,7 +181,8 @@ test('automatic seat reduction schedules a recurring quantity at the original re
     const current = {
       id: 'subscription-row', workspaceId: 'workspace-1', plan: 'PRO', interval: fixture.interval,
       status: 'ACTIVE', billableSeats: fixture.currentSeats, providerCustomerCode: 'customer-1',
-      providerSubscriptionCode: 'old-subscription', providerManageTokenCiphertext: 'encrypted-old-token',
+      providerSubscriptionCode: 'old-subscription',
+      providerManageTokenCiphertext: encryptProviderToken('old-token', config.paystackEncryptionKey),
       pendingSubscriptionCode: null, pendingManageTokenCiphertext: null, pendingPlan: null,
       pendingInterval: null, pendingBillableSeats: null, currentPeriodStart: new Date('2026-11-01T00:00:00.000Z'),
       currentPeriodEnd: startAt, cancelAtPeriodEnd: false,
