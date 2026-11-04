@@ -247,3 +247,32 @@ Phase 7 remains the earliest incomplete item in the project-level sequence.
 Do not start Phase 8 until the remaining Phase 7 criteria and the roadmap's
 numbering/sequence conflict are resolved. Phase 4.6 remains separately open
 because its workflow dependencies span task, meeting, team and project modules.
+
+## 7. Phase 7 follow-up — 2026-11-04
+
+The active branch implements the previously missing Company and Institution
+profile records and institution groups. Company and Institution profiles use
+separate models and request schemas. Workspace creation provisions the matching
+profile in the same transaction; the migration backfills existing organization
+workspaces. Institution groups are separate from departments, with scoped
+membership, a single group lead, membership notifications, audit records, and
+membership cleanup on workspace removal and account deletion. The API index
+and OpenAPI contract describe the newly registered routes.
+
+Verification on this branch: `npx prisma validate`, `npx prisma generate`,
+`npm run typecheck`, `npm run build`, focused organization schema tests (3/3),
+the standard test suite (222 passed, 0 failed, 2 skipped), targeted ESLint, and
+OpenAPI YAML/reference checks pass. The Phase 7 HTTP/database suite passes
+40/40 against an isolated PostgreSQL 16 container, and all migrations apply
+there successfully. The database tests require `NODE_ENV=test`, `DATABASE_URL`
+and `TEST_DATABASE_URL` to point to the same explicit loopback test database;
+the test application's configuration must not fall through to `.env`.
+
+Phase 7 is still **PARTIALLY COMPLETE**. Organization preferences and
+notification preferences, logo upload/storage, department and team settings,
+and end-to-end team project/channel access are outstanding. The current
+repository has no channel module or registered project workflow. The roadmap
+also has an unresolved phase count/sequence conflict (the dashboard says 24
+phases while the document numbers phases through 32, and email subphases
+overlap the product phase numbers); this follow-up did not renumber or rewrite
+the roadmap.

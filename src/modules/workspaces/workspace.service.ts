@@ -390,6 +390,14 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           },
         });
 
+        if (created.type === 'COMPANY') {
+          await tx.companyProfile.create({ data: { workspaceId: created.id, name: created.name } });
+        } else if (created.type === 'INSTITUTION') {
+          await tx.institutionProfile.create({
+            data: { workspaceId: created.id, name: created.name },
+          });
+        }
+
         await recordAuditEvent(tx, {
           workspaceId: created.id,
           actorId: input.userId,
@@ -1410,6 +1418,16 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             userId: input.targetUserId,
             department: { workspaceId: access.workspace.id },
           },
+        });
+        await tx.institutionGroupMembership.deleteMany({
+          where: {
+            userId: input.targetUserId,
+            group: { workspaceId: access.workspace.id },
+          },
+        });
+        await tx.institutionGroup.updateMany({
+          where: { workspaceId: access.workspace.id, leadId: input.targetUserId },
+          data: { leadId: null },
         });
 
         await recordAuditEvent(tx, {

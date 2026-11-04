@@ -107,6 +107,31 @@ by the team service; knowing a team or user ID does not grant access.
 | DELETE | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager | Remove a member from the team. |
 | PATCH | `/workspaces/{workspaceId}/teams/{teamId}/lead` | Authorized team manager | Assign or clear the team lead. |
 
+## Organization profiles and institution groups
+
+Company and institution profiles are separate workspace-scoped records. Profile
+reads require workspace membership; updates require the owner or organization
+administrator. Profile schemas are distinct, and logo references are read-only
+until private object storage is implemented.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/workspaces/{workspaceId}/company-profile` | Company workspace member | Read the company profile. |
+| PATCH | `/workspaces/{workspaceId}/company-profile` | Company owner/admin | Update company profile fields. |
+| GET | `/workspaces/{workspaceId}/institution-profile` | Institution workspace member | Read the institution profile. |
+| PATCH | `/workspaces/{workspaceId}/institution-profile` | Institution owner/admin | Update institution profile fields. |
+| GET | `/workspaces/{workspaceId}/institution-groups` | Institution member; groups scoped to membership | List visible institution groups. |
+| POST | `/workspaces/{workspaceId}/institution-groups` | Institution owner/admin | Create a group and optionally assign its lead. |
+| PATCH | `/workspaces/{workspaceId}/institution-groups/{groupId}` | Institution owner/admin | Update the group name, description, or lead. |
+| DELETE | `/workspaces/{workspaceId}/institution-groups/{groupId}` | Institution owner/admin | Delete a group and its membership records. |
+| GET | `/workspaces/{workspaceId}/institution-groups/{groupId}/members` | Group member or institution owner/admin | List group members. |
+| POST | `/workspaces/{workspaceId}/institution-groups/{groupId}/members` | Institution owner/admin | Add a workspace member to a group. |
+| PATCH | `/workspaces/{workspaceId}/institution-groups/{groupId}/members/{userId}` | Institution owner/admin | Change the member's group role. |
+| DELETE | `/workspaces/{workspaceId}/institution-groups/{groupId}/members/{userId}` | Institution owner/admin | Remove a member from a group. |
+
+Institution groups are independent from departments. They do not grant access
+to departments, teams, projects, or channels by themselves.
+
 ## Invitations
 
 | Method | Path | Access | Purpose |
@@ -172,10 +197,9 @@ for accepted events. See the OpenAPI contract for request and error details.
 
 The current application router does not expose projects, tasks, messaging,
 general notifications, files, documents, calendar, meetings, forms, search,
-integrations, automation, or AI endpoints. Phase 7 organization profile and
-settings operations and institution-group operations are also not exposed.
-Department routes currently cover listing, creation, and member assignment or
-removal; there are no department update/delete or department-settings routes.
+integrations, automation, or AI endpoints. Department routes currently cover
+listing, creation, and member assignment or removal; there are no department
+update/delete or department-settings routes.
 Do not document planned behavior as live API functionality.
 
 ## Updating this API reference

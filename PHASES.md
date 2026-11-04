@@ -807,6 +807,8 @@ Implement organisation membership and controlled onboarding.
 
 **Audit update — 2026-11-03:** The team HTTP lifecycle passed 38/38 PostgreSQL tests after fixing the route dependency wiring, explicit organization-owner/admin team capabilities, current `/auth/me` fixture shape, and test cleanup. The full Phase 7 acceptance criteria below remain incomplete: Company/Institution profile and settings APIs, institution groups, and team integrations with project/channel workflows are absent. Keep Phase 7 in progress and do not advance to Phase 8 until these requirements are implemented and verified.
 
+**Progress update — 2026-11-04:** Added separate workspace-scoped `CompanyProfile` and `InstitutionProfile` records, provisioned them in the workspace-creation transaction, and backfilled existing company/institution workspaces in migration `20261104120000_phase7_organization_profiles_groups`. Added organization-owner/admin profile update routes and separate institution-group lifecycle/member routes. Institution groups are independent from departments; members only see groups they belong to, while owners/admins can manage groups. Group writes, membership changes, audit entries, and notifications use the same database transaction. Workspace member removal and account deletion clean up group membership and lead references. Updated `docs/API.md` and `docs/openapi.yaml` (71 paths). Schema validation/client generation, TypeScript, build, focused organization schema tests (3/3), the full unit suite (222 passed, 0 failed, 2 skipped), and the Phase 7 PostgreSQL HTTP suite (40/40) pass. All migrations, including the new migration, deployed to a disposable PostgreSQL 16 container. Phase 7 remains **IN PROGRESS**. Outstanding requirements include organization preferences/notification preferences, logo upload/reference management, team/department settings and project integration verification, and channel access integration. The project/channel pieces depend on the project and messaging modules, which are not exposed yet; do not start their roadmap phases early.
+
 ---
 
 # PHASE 7 — Teams, Departments and Groups
@@ -1786,7 +1788,7 @@ Make the backend easy to understand, integrate, and maintain.
 
 ### Current Phase
 
-**Current phase:** Phase 7 remains in progress. The team lifecycle is verified, but the Company/Institution profile, institution group, and project/channel integration requirements in the detailed Phase 7 section remain outstanding. Phase 8 must not begin until Phase 7 acceptance criteria are resolved. Phase 4.6 also remains in progress; the roadmap does not define how its email workflow dependencies are sequenced against Phase 7/8, so treat this as a recorded sequencing ambiguity rather than skipping the dependency.
+**Current phase:** Phase 7 remains in progress. Team lifecycle, separate Company/Institution profiles, and institution-group endpoints are implemented. The database-backed suite passes on disposable PostgreSQL 16. Organization preferences and notification preferences, logo storage, team/department settings, and project/channel integration remain outstanding. Phase 8 must not begin until Phase 7 acceptance criteria are resolved. Phase 4.6 also remains in progress; the roadmap does not define how its email workflow dependencies are sequenced against Phase 7/8, so treat this as a recorded sequencing ambiguity rather than skipping the dependency.
 
 ---
 

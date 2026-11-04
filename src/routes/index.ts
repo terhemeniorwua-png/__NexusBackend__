@@ -25,6 +25,7 @@ import type { ReadinessProbe } from '../services/health';
 import { createHealthRouter } from './health';
 import { createBillingRouter } from '../modules/billing/billing.routes';
 import { createBillingService, type BillingService } from '../modules/billing/billing.service';
+import { createOrganizationRouter } from '../modules/organizations/organization.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -63,6 +64,7 @@ export function createApiRouter({
     createWorkspaceRouter({ config, service: workspaceService, invitationService }),
   );
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
+  router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
   router.use('/workspaces/:workspaceId/teams', createTeamRouter({ config, service: teamService }));

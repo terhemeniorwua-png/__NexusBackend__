@@ -214,6 +214,11 @@ export async function processPendingAccountDeletions(
       await tx.teamMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.projectMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.departmentMembership.deleteMany({ where: { userId: candidate.id } });
+      await tx.institutionGroupMembership.deleteMany({ where: { userId: candidate.id } });
+      await tx.institutionGroup.updateMany({
+        where: { leadId: candidate.id },
+        data: { leadId: null },
+      });
       await tx.taskAssignee.deleteMany({ where: { userId: candidate.id } });
       await tx.team.updateMany({ where: { leadId: candidate.id }, data: { leadId: null } });
       await tx.notification.deleteMany({ where: { userId: candidate.id } });

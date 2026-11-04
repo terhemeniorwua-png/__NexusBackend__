@@ -57,6 +57,7 @@ function runTests(rawDbUrl: string): void {
   let outsider: TestUser;
 
   let workspaceId: string;
+  let institutionWorkspaceId: string;
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -191,6 +192,20 @@ function runTests(rawDbUrl: string): void {
 
     await addWorkspaceMember(owner, workspaceId, pm.email, 'PROJECT_MANAGER');
     await addWorkspaceMember(owner, workspaceId, member.email, 'MEMBER');
+    const institution = await jsonRequest<{ id: string }>(`${baseUrl}/api/v1/workspaces`, {
+      method: 'POST',
+      headers: auth(owner),
+      body: JSON.stringify({ name: 'Phase7 Institution', type: 'INSTITUTION' }),
+      jar: owner.jar,
+    });
+    assert.equal(
+      institution.status,
+      201,
+      `institution workspace creation failed: ${JSON.stringify(institution.body)}`,
+    );
+    institutionWorkspaceId = (institution.body.data as { id: string }).id;
+    await addWorkspaceMember(owner, institutionWorkspaceId, member.email, 'MEMBER');
+    await addWorkspaceMember(owner, institutionWorkspaceId, pm.email, 'MEMBER');
     // outsider is NOT added to the workspace.
   });
 
@@ -667,6 +682,110 @@ function runTests(rawDbUrl: string): void {
         headers: auth(owner),
       });
       assert.equal(res.status, 404);
+    });
+  });
+
+  describe('Phase 7 organization profiles and institution groups', () => {
+    test('company profile is provisioned and only company fields are accepted', async () => {
+      const read = await jsonRequest<{ name: string }>(
+        `${baseUrl}/api/v1/workspaces/${workspaceId}/company-profile`,
+        { headers: auth(owner) },
+      );
+      assert.equal(read.status, 200);
+      assert.equal((read.body.data as { name: string }).name, 'Phase7 Test Workspace');
+
+      const updated = await jsonRequest<{ industryCategory: string }>(
+        `${baseUrl}/api/v1/workspaces/${workspaceId}/company-profile`,
+        {
+          method: 'PATCH',
+          headers: auth(owner),
+          body: JSON.stringify({ industryCategory: 'Education' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(updated.status, 200);
+      assert.equal(
+        (updated.body.data as { industryCategory: string }).industryCategory,
+        'Education',
+      );
+
+      const wrongType = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${workspaceId}/institution-profile`,
+        {
+          headers: auth(owner),
+        },
+      );
+      assert.equal(wrongType.status, 404);
+    });
+
+    test('institution profile and groups stay separate from departments and require organization administration', async () => {
+      const profile = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-profile`,
+        {
+          method: 'PATCH',
+          headers: auth(owner),
+          body: JSON.stringify({
+            institutionType: 'UNIVERSITY',
+            institutionalEmail: 'admin@institution.example',
+          }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(profile.status, 200);
+
+      const denied = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups`,
+        {
+          method: 'POST',
+          headers: auth(member),
+          body: JSON.stringify({ name: 'Unauthorized Group' }),
+          jar: member.jar,
+        },
+      );
+      assert.equal(denied.status, 403);
+
+      const created = await jsonRequest<{ id: string }>(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups`,
+        {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ name: 'Research Group' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(created.status, 201);
+      const groupId = (created.body.data as { id: string }).id;
+
+      const added = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups/${groupId}/members`,
+        {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ userId: member.id }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(added.status, 201);
+
+      const visible = await jsonRequest<Array<{ id: string }>>(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups`,
+        { headers: auth(member) },
+      );
+      assert.equal(visible.status, 200);
+      assert.equal(
+        (visible.body.data as Array<{ id: string }>).some((group) => group.id === groupId),
+        true,
+      );
+
+      const outsiderList = await jsonRequest<Array<{ id: string }>>(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups`,
+        { headers: auth(pm) },
+      );
+      assert.equal(outsiderList.status, 200);
+      assert.equal(
+        (outsiderList.body.data as Array<{ id: string }>).some((group) => group.id === groupId),
+        false,
+      );
     });
   });
 }
