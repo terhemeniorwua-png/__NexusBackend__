@@ -733,6 +733,80 @@ function runTests(rawDbUrl: string): void {
       );
       assert.equal(profile.status, 200);
 
+      const createdDepartment = await jsonRequest<{ id: string }>(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/departments`,
+        {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ name: 'Science' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(createdDepartment.status, 201);
+      const departmentId = (createdDepartment.body.data as { id: string }).id;
+      const renamedDepartment = await jsonRequest<{ name: string }>(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/departments/${departmentId}`,
+        {
+          method: 'PATCH',
+          headers: auth(owner),
+          body: JSON.stringify({ name: 'Natural Sciences' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(renamedDepartment.status, 200);
+      assert.equal((renamedDepartment.body.data as { name: string }).name, 'Natural Sciences');
+      const departmentAuditDb = await connectTestDatabase(rawDbUrl);
+      const departmentAudit = await departmentAuditDb.prisma.auditLog.findFirst({
+        where: {
+          action: 'institution.department_updated',
+          workspaceId: institutionWorkspaceId,
+          targetId: departmentId,
+        },
+      });
+      await departmentAuditDb.prisma.$disconnect();
+      assert.ok(departmentAudit, 'department rename should be audited');
+      const deniedDepartmentUpdate = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/departments/${departmentId}`,
+        {
+          method: 'PATCH',
+          headers: auth(member),
+          body: JSON.stringify({ name: 'Unauthorized rename' }),
+          jar: member.jar,
+        },
+      );
+      assert.equal(deniedDepartmentUpdate.status, 403);
+      const crossWorkspaceDepartmentUpdate = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${workspaceId}/departments/${departmentId}`,
+        {
+          method: 'PATCH',
+          headers: auth(owner),
+          body: JSON.stringify({ name: 'Cross-workspace rename' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(crossWorkspaceDepartmentUpdate.status, 404);
+
+      const secondDepartment = await jsonRequest<{ id: string }>(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/departments`,
+        {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ name: 'Arts' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(secondDepartment.status, 201);
+      const duplicateDepartmentName = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/departments/${(secondDepartment.body.data as { id: string }).id}`,
+        {
+          method: 'PATCH',
+          headers: auth(owner),
+          body: JSON.stringify({ name: 'Natural Sciences' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(duplicateDepartmentName.status, 409);
+
       const denied = await jsonRequest(
         `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups`,
         {

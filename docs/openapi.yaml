@@ -2283,6 +2283,52 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/departments/{departmentId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: departmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Workspaces]
+      operationId: updateInstitutionDepartment
+      summary: Rename an institution department
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateDepartmentRequest' }
+      responses:
+        '200':
+          description: The renamed department.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data: { $ref: '#/components/schemas/Department' }
+        '403':
+          description: A department head or institution administrator is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: The department is not in the requested institution workspace.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: Another department already has this name.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /workspaces/{workspaceId}/departments/{departmentId}/members:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -4298,6 +4344,15 @@ components:
         organizationRole:
           $ref: '#/components/schemas/OrganizationRole'
     CreateDepartmentRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+    UpdateDepartmentRequest:
       type: object
       required: [name]
       additionalProperties: false

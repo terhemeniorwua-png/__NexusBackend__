@@ -74,6 +74,7 @@ listed here is not evidence that a roadmap phase is complete.
 | POST | `/workspaces/{workspaceId}/members/{userId}/restore` | Workspace member with permission | Restore a suspended member. |
 | GET | `/workspaces/{workspaceId}/departments` | Authorized workspace member | List visible departments. |
 | POST | `/workspaces/{workspaceId}/departments` | Institution owner/admin | Create a department. |
+| PATCH | `/workspaces/{workspaceId}/departments/{departmentId}` | Department head or institution owner/admin | Rename a department. |
 | POST | `/workspaces/{workspaceId}/departments/{departmentId}/members` | Authorized workspace member | Assign a member to a department. |
 | DELETE | `/workspaces/{workspaceId}/departments/{departmentId}/members/{targetUserId}` | Authorized workspace member | Remove a department assignment. |
 

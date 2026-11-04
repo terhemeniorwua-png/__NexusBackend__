@@ -7,6 +7,7 @@ import {
   updateCompanyProfileSchema,
   updateInstitutionProfileSchema,
 } from '../src/modules/organizations/organization.schemas';
+import { updateDepartmentSchema } from '../src/modules/workspaces/workspace.schemas';
 
 describe('Phase 7 organization profiles and institution groups', () => {
   test('company profiles accept company fields and reject institution-only fields', () => {
@@ -72,6 +73,15 @@ describe('Phase 7 organization profiles and institution groups', () => {
       updateNotificationPreferencesSchema.safeParse({
         preferences: [{ type: 'MESSAGE_RECEIVED', inAppEnabled: false }],
       }).success,
+      false,
+    );
+  });
+
+  test('department settings allow a validated rename only', () => {
+    assert.equal(updateDepartmentSchema.safeParse({ name: 'Research' }).success, true);
+    assert.equal(updateDepartmentSchema.safeParse({ name: 'R' }).success, false);
+    assert.equal(
+      updateDepartmentSchema.safeParse({ name: 'Research', workspaceId: 'other' }).success,
       false,
     );
   });

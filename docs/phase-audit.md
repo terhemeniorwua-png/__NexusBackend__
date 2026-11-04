@@ -298,3 +298,20 @@ in the preceding institution-group migration. The human API index and OpenAPI
 contract now include both operations. Phase 7 remains partially complete
 because general organization preferences, logo storage, team/department
 settings, and project/channel integrations are still outstanding.
+
+### Phase 7 department settings follow-up — 2026-11-05
+
+Added department rename as the existing Department model's defined editable
+setting. `PATCH /workspaces/{workspaceId}/departments/{departmentId}` requires
+department update access (department head or institution owner/admin), checks
+the workspace-scoped unique name constraint, records the old and new name in
+an audit event in the same transaction, and returns 404 for cross-workspace
+department IDs. The Phase 7 PostgreSQL HTTP suite passes 40/40, including
+owner rename, unauthorized-member denial, cross-workspace concealment,
+duplicate-name conflict, and audit persistence. Department deletion and
+unspecified custom settings remain unimplemented; deletion semantics were
+intentionally not inferred. The standard suite passes 224 tests with 2
+database-gated skips; typecheck, build, targeted ESLint/formatting, OpenAPI
+reference validation, and diff checks pass. Repository-wide lint remains
+blocked by the pre-existing unused `data` parameter in
+`tests/billing-service.test.ts:202`; formatting reports 12 unrelated files.
