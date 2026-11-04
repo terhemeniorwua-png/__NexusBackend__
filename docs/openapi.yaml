@@ -43,7 +43,254 @@ tags:
     description: Invitation links, their preview and their acceptance
   - name: Teams
     description: Workspace-scoped teams and team membership
+  - name: Billing
+    description: Workspace subscription and payment management
 paths:
+  /billing/plans:
+    get:
+      tags: [Billing]
+      operationId: listBillingPlans
+      summary: List the available billing plans
+      description: Returns the server-owned USD plan prices and included/additional seat pricing.
+      responses:
+        '200':
+          description: Available billing plans.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingPlansResponse'
+  /billing/workspaces/{workspaceId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Billing]
+      operationId: getWorkspaceBilling
+      summary: Read workspace subscription and seat summary
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Subscription, seat count, pending change, and renewal summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceBillingResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Workspace is unavailable to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /billing/workspaces/{workspaceId}/payments:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Billing]
+      operationId: listWorkspaceBillingPayments
+      summary: List recent workspace payments
+      description: Returns at most the 50 most recent payment records for workspace members.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Recent billing payments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingPaymentsResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Workspace is unavailable to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /billing/workspaces/{workspaceId}/checkout:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Billing]
+      operationId: createBillingCheckout
+      summary: Start hosted checkout for a plan
+      description: Only the workspace owner can start checkout. The backend calculates price and billable seats; a returned provider URL does not itself activate paid access.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BillingTargetRequest'
+      responses:
+        '201':
+          description: Hosted checkout URL and server-generated transaction reference.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingCheckoutResponse'
+        '400':
+          description: Invalid billing target.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Workspace owner access is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: A checkout or billing state conflict prevents a new checkout.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Billing request rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: USD billing is not configured or enabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /billing/workspaces/{workspaceId}/verify:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Billing]
+      operationId: verifyBillingCheckout
+      summary: Verify and fulfill a checkout
+      description: The workspace owner submits the server-generated reference. The backend verifies transaction status, amount, and currency with Paystack before updating subscription state.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BillingVerifyRequest'
+      responses:
+        '200':
+          description: Current subscription and seat summary after verification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceBillingResponse'
+        '402':
+          description: Provider verification did not confirm the expected payment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Workspace owner access is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Verification is processing or requires reconciliation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Billing request rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /billing/workspaces/{workspaceId}/change:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Billing]
+      operationId: scheduleBillingChange
+      summary: Schedule a plan downgrade or seat reduction
+      description: Lower-cost changes are scheduled for the current period end. Upgrades and seat increases require a verified checkout.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BillingTargetRequest'
+      responses:
+        '200':
+          description: Scheduled plan change and effective date.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingChangeResponse'
+        '403':
+          description: Workspace owner access is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Subscription state does not permit the requested schedule change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Billing request rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /billing/workspaces/{workspaceId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Billing]
+      operationId: cancelWorkspaceBilling
+      summary: Cancel renewal at the end of the paid period
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Cancellation state and effective date.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingCancellationResponse'
+        '403':
+          description: Workspace owner access is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No paid subscription was found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Billing request rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /workspaces/discover:
     get:
       tags: [Workspaces]
@@ -1294,6 +1541,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /webhooks/paystack:
+    post:
+      tags: [Webhooks, Billing]
+      operationId: receivePaystackWebhook
+      summary: Receive a signed Paystack event
+      description: |
+        The endpoint verifies `x-paystack-signature` as an HMAC-SHA512 digest
+        of the exact raw request body. It is mounted before the JSON body
+        parser. Repeated payloads are deduplicated by their SHA-256 event key.
+      parameters:
+        - name: x-paystack-signature
+          in: header
+          required: true
+          description: HMAC-SHA512 signature of the raw request body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaystackWebhookRequest'
+      responses:
+        '200':
+          description: The event was accepted for processing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaystackWebhookResponse'
+        '400':
+          description: The body is empty or contains invalid JSON or event data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: The signature is missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /workspaces:
     post:
       tags: [Workspaces]
@@ -1553,6 +1841,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: The workspace does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The workspace is archived and cannot be switched into.
           content:
             application/json:
               schema:
@@ -2572,7 +2866,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '410':
-          description: The invitation expired, was revoked or was accepted already.
+          description: The invitation expired, was revoked, was accepted, or its workspace is archived or deleted.
           content:
             application/json:
               schema:
@@ -3903,6 +4197,278 @@ components:
               type: string
               format: uuid
             removed:
+              type: boolean
+              const: true
+    BillingPlan:
+      type: object
+      required: [id, currency, includedSeats, monthly, annual]
+      properties:
+        id:
+          type: string
+          enum: [PRO, BUSINESS]
+        currency:
+          type: string
+          const: USD
+        includedSeats:
+          type: integer
+          minimum: 1
+        monthly:
+          $ref: '#/components/schemas/BillingPrice'
+        annual:
+          $ref: '#/components/schemas/BillingPrice'
+    BillingPrice:
+      type: object
+      required: [baseCents, additionalSeatCents]
+      properties:
+        baseCents:
+          type: integer
+          minimum: 0
+        additionalSeatCents:
+          type: integer
+          minimum: 0
+    BillingPlansResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingPlan'
+    BillingTargetRequest:
+      type: object
+      required: [plan, interval]
+      additionalProperties: false
+      properties:
+        plan:
+          type: string
+          enum: [PRO, BUSINESS]
+        interval:
+          type: string
+          enum: [MONTHLY, ANNUAL]
+        billableSeats:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          description: Requested target seat quantity. The backend checks it against the authoritative active-member count and calculates the charge; clients do not set a price or payment result.
+    BillingVerifyRequest:
+      type: object
+      required: [reference]
+      additionalProperties: false
+      properties:
+        reference:
+          type: string
+          minLength: 12
+          maxLength: 100
+          pattern: '^[A-Za-z0-9_-]+$'
+    BillingCheckout:
+      type: object
+      required: [authorizationUrl, reference, amountSubunit, currency]
+      properties:
+        authorizationUrl:
+          type: string
+          format: uri
+        reference:
+          type: string
+        amountSubunit:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          const: USD
+    BillingCheckoutResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/BillingCheckout'
+    BillingPendingChange:
+      type: object
+      required: [plan, interval, billableSeats, effectiveAt]
+      properties:
+        plan:
+          type: string
+          enum: [PRO, BUSINESS]
+        interval:
+          type: string
+          enum: [MONTHLY, ANNUAL]
+        billableSeats:
+          type: integer
+          minimum: 1
+        effectiveAt:
+          type: string
+          format: date-time
+    BillingSubscription:
+      type: object
+      required: [id, plan, interval, currency, status, billableSeats, currentPeriodStart, currentPeriodEnd, cancelAtPeriodEnd, pendingChange]
+      properties:
+        id:
+          type: string
+          format: uuid
+        plan:
+          type: string
+          enum: [PRO, BUSINESS]
+        interval:
+          type: string
+          enum: [MONTHLY, ANNUAL]
+        currency:
+          type: string
+          const: USD
+        status:
+          type: string
+          enum: [PENDING, ACTIVE, NON_RENEWING, CANCELLED, ATTENTION]
+        billableSeats:
+          type: integer
+          minimum: 1
+        currentPeriodStart:
+          type: [string, 'null']
+          format: date-time
+        currentPeriodEnd:
+          type: [string, 'null']
+          format: date-time
+        cancelAtPeriodEnd:
+          type: boolean
+        pendingChange:
+          oneOf:
+            - $ref: '#/components/schemas/BillingPendingChange'
+            - type: 'null'
+    WorkspaceBilling:
+      type: object
+      required: [subscription, activeBillableSeats, includedSeats, additionalSeats, nextRenewalAt]
+      properties:
+        subscription:
+          oneOf:
+            - $ref: '#/components/schemas/BillingSubscription'
+            - type: 'null'
+        activeBillableSeats:
+          type: integer
+          minimum: 0
+        includedSeats:
+          type: integer
+          minimum: 0
+        additionalSeats:
+          type: integer
+          minimum: 0
+        nextRenewalAt:
+          type: [string, 'null']
+          format: date-time
+    WorkspaceBillingResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/WorkspaceBilling'
+    BillingPayment:
+      type: object
+      required: [providerReference, amountSubunit, currency, status, paidAt, periodStart, periodEnd, createdAt]
+      properties:
+        providerReference:
+          type: string
+        amountSubunit:
+          type: integer
+        currency:
+          type: string
+          const: USD
+        status:
+          type: string
+          enum: [SUCCESS, FAILED]
+        paidAt:
+          type: [string, 'null']
+          format: date-time
+        periodStart:
+          type: [string, 'null']
+          format: date-time
+        periodEnd:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    BillingPaymentsResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/BillingPayment'
+    BillingChangeResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [pendingChange, workspaceId]
+          properties:
+            pendingChange:
+              $ref: '#/components/schemas/BillingPendingChange'
+            workspaceId:
+              type: string
+              format: uuid
+    BillingCancellationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [cancelAtPeriodEnd, effectiveAt]
+          properties:
+            cancelAtPeriodEnd:
+              type: boolean
+            effectiveAt:
+              type: string
+              format: date-time
+    PaystackWebhookRequest:
+      type: object
+      required: [event, data]
+      properties:
+        event:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+          properties:
+            reference:
+              type: string
+            subscription_code:
+              type: string
+            amount:
+              type: integer
+            currency:
+              type: string
+            paid_at:
+              type: string
+              format: date-time
+    PaystackWebhookResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required: [received]
+          properties:
+            received:
               type: boolean
               const: true
     CreateTeamRequest:

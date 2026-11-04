@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   getBillableMemberIds,
+  getRecurringSubscriptionChargeCents,
   getWorkspaceSeatBillingSummary,
+  assertWorkspaceSeatCapacity,
+  enqueueWorkspaceSeatReduction,
   type MembershipBillingRecord,
 } from '../src/modules/billing/membership-billing';
 import { subscriptionCatalog } from '../src/modules/billing/pricing';
@@ -17,7 +20,7 @@ import {
   scheduleCancellation,
   scheduleDowngrade,
 } from '../src/modules/billing/lifecycle-policy';
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 
 const record = (
   userId: string,
@@ -32,12 +35,14 @@ test('the approved server catalog contains base and additional-member prices and
     annualBaseCents: 5_000,
     includedMembers: 15,
     additionalMemberMonthlyCents: 50,
+    additionalMemberAnnualCents: 50,
   });
   assert.deepEqual(subscriptionCatalog.BUSINESS, {
     monthlyBaseCents: 1_500,
     annualBaseCents: 7_000,
     includedMembers: 25,
     additionalMemberMonthlyCents: 100,
+    additionalMemberAnnualCents: 100,
   });
 });
 
@@ -72,6 +77,68 @@ test('owner consumes one included seat and duplicate membership rows do not infl
   });
   assert.equal(ids.length, 2);
   assert.equal(ids.filter((id) => id === 'owner').length, 1);
+});
+
+test('an active paid subscription prevents activating an additional unpaid member', async () => {
+  const tx = {
+    subscription: { findUnique: async () => ({ status: 'ACTIVE', billableSeats: 2 }) },
+    workspace: {
+      findUnique: async () => ({
+        ownerId: 'owner',
+        owner: { status: 'ACTIVE' },
+        members: [{ userId: 'owner' }, { userId: 'member-1' }],
+      }),
+    },
+  } as unknown as Prisma.TransactionClient;
+
+  await assert.rejects(
+    assertWorkspaceSeatCapacity(tx, { workspaceId: 'workspace-a', userId: 'member-2' }),
+    {
+      code: 'PAID_SEAT_REQUIRED',
+    },
+  );
+});
+
+test('membership activation remains allowed within already-paid seat quantity', async () => {
+  const tx = {
+    subscription: { findUnique: async () => ({ status: 'ACTIVE', billableSeats: 3 }) },
+    workspace: {
+      findUnique: async () => ({
+        ownerId: 'owner',
+        owner: { status: 'ACTIVE' },
+        members: [{ userId: 'owner' }, { userId: 'member-1' }],
+      }),
+    },
+  } as unknown as Prisma.TransactionClient;
+
+  await assert.doesNotReject(
+    assertWorkspaceSeatCapacity(tx, { workspaceId: 'workspace-a', userId: 'member-2' }),
+  );
+});
+
+test('membership reductions enqueue the authoritative active seat count in the same transaction', async () => {
+  let queued: Record<string, unknown> | undefined;
+  const tx = {
+    subscription: {
+      findUnique: async () => ({
+        status: 'ACTIVE', billableSeats: 5, pendingBillableSeats: null,
+        pendingSubscriptionCode: null, cancelAtPeriodEnd: false,
+      }),
+    },
+    workspace: {
+      findUnique: async () => ({
+        ownerId: 'owner', owner: { status: 'ACTIVE' },
+        members: [{ userId: 'owner' }, { userId: 'member-1' }, { userId: 'member-2' }],
+      }),
+    },
+    billingSeatSync: {
+      findUnique: async () => null,
+      upsert: async (args: { create: Record<string, unknown> }) => { queued = args.create; return args.create; },
+    },
+  } as unknown as Prisma.TransactionClient;
+
+  await enqueueWorkspaceSeatReduction(tx, 'workspace-a');
+  assert.deepEqual(queued, { workspaceId: 'workspace-a', requestedSeats: 3 });
 });
 
 test('deactivated owner is not billable and memberships in another workspace are isolated', () => {
@@ -109,6 +176,9 @@ test('database-backed summary scopes its query to the requested workspace and us
     includedMemberCount: 15,
     additionalMemberCount: 0,
     additionalMemberMonthlyChargeCents: 0,
+    additionalMemberChargeCents: 0,
+    additionalMemberBillingInterval: 'MONTHLY',
+    totalSubscriptionChargeCents: 1_000,
   });
 });
 
@@ -134,6 +204,21 @@ test('Pro and Business additional members are calculated at their monthly rates'
   assert.equal(pro.additionalMemberMonthlyChargeCents, 650);
   assert.equal(business.additionalMemberCount, 3);
   assert.equal(business.additionalMemberMonthlyChargeCents, 300);
+});
+
+test('annual seat charges use the annual cadence and approved per-seat amount', () => {
+  assert.equal(
+    getRecurringSubscriptionChargeCents({ plan: 'PRO', interval: 'ANNUAL', billableSeats: 16 }),
+    5_050,
+  );
+  assert.equal(
+    getRecurringSubscriptionChargeCents({
+      plan: 'BUSINESS',
+      interval: 'ANNUAL',
+      billableSeats: 26,
+    }),
+    7_100,
+  );
 });
 
 test('proration uses the supplied UTC period boundaries and rounds to cents', () => {
@@ -175,18 +260,19 @@ test('downgrade is scheduled at renewal and reports conflicts without removing m
   assert.equal(result.membersRemoved, false);
 });
 
-test('additional seats on annual base plans remain monthly and require confirmed payment', () => {
+test('additional seats on annual base plans use the annual cadence and require confirmed payment', () => {
   const result = prepareAdditionalSeatIncrease({
     plan: 'BUSINESS',
+    interval: 'ANNUAL',
     addedSeatCount: 2,
-    monthlySeatPeriod: {
-      startsAt: new Date('2026-03-01T00:00:00.000Z'),
-      endsAt: new Date('2026-04-01T00:00:00.000Z'),
+    seatPeriod: {
+      startsAt: new Date('2026-01-01T00:00:00.000Z'),
+      endsAt: new Date('2027-01-01T00:00:00.000Z'),
     },
-    now: new Date('2026-03-16T00:00:00.000Z'),
+    now: new Date('2026-07-02T00:00:00.000Z'),
   });
-  assert.equal(result.amountCents, 103);
-  assert.equal(result.billingInterval, 'MONTHLY');
+  assert.equal(result.amountCents, 100);
+  assert.equal(result.billingInterval, 'ANNUAL');
   assert.equal(result.effectiveWhen, 'verified-payment');
 });
 

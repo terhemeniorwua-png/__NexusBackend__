@@ -179,6 +179,13 @@ The backend must follow these principles:
 
 The existing repository architecture is authoritative for implementation decisions.
 
+HTTP request validation is centralized in middleware. Joi schemas are used for
+new billing request validation, while the middleware continues to accept the
+existing Zod schemas during migration. Joi validation converts supported input
+values, collects field errors, and rejects unknown keys. Browser CORS policy is
+implemented with the `cors` package and the exact normalized origins configured
+by `CORS_ORIGINS` and `FRONTEND_URL`; wildcard origins are not enabled.
+
 ---
 
 # 5. Main Backend Components

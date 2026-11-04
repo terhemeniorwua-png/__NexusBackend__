@@ -10,6 +10,8 @@ import {
 } from './services/email';
 import { logger as baseLogger, type Logger } from './utils/logger';
 import { createAccountDeletionWorker } from './modules/auth/account-deletion.service';
+import { createBillingService } from './modules/billing/billing.service';
+import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
 
 export interface RunningServer {
   server: Server;
@@ -86,11 +88,22 @@ export async function startServer(): Promise<RunningServer> {
   });
   accountDeletionWorker.start();
 
+  const billingSeatSyncWorker = createBillingSeatSyncWorker({
+    prisma: getPrismaClient(),
+    service: createBillingService(config, { prisma: getPrismaClient() }),
+    logger,
+  });
+  billingSeatSyncWorker.start();
+
   try {
     await listen(server, config.port);
   } catch (error) {
     logger.error('server_listen_failed', { error, port: config.port });
-    await Promise.all([emailWorker.stop(), accountDeletionWorker.stop()]);
+    await Promise.all([
+      emailWorker.stop(),
+      accountDeletionWorker.stop(),
+      billingSeatSyncWorker.stop(),
+    ]);
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
   }
@@ -131,6 +144,7 @@ export async function startServer(): Promise<RunningServer> {
       closeServer,
       emailWorker.stop(),
       accountDeletionWorker.stop(),
+      billingSeatSyncWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);

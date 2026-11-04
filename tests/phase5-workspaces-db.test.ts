@@ -1177,6 +1177,13 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     });
     assert.equal(accept.status, 409);
     assert.equal(accept.body.error?.code, 'INVITATION_REVOKED');
+    const newInvite = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: uniqueEmail('archived-target') },
+    });
+    assert.equal(newInvite.status, 409);
+    assert.equal(newInvite.body.error?.code, 'WORKSPACE_NOT_ACTIVE');
     const switchResult = await api(`/workspaces/${workspace.id}/switch`, {
       method: 'POST',
       token: ownerToken,

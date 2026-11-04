@@ -20,6 +20,7 @@ import type {
   RejectJoinRequestInput,
 } from './workspace.schemas';
 import type { DiscoveredWorkspace, JoinCodeResult, JoinRequestSummary } from './workspace.types';
+import { assertWorkspaceSeatCapacity } from '../billing/membership-billing';
 
 /**
  * Organisation discovery and join requests.
@@ -534,6 +535,10 @@ export function createJoinRequestService(
             },
           );
 
+          await assertWorkspaceSeatCapacity(tx, {
+            workspaceId: access.workspace.id,
+            userId: request.user.id,
+          });
           const membership = await tx.workspaceMembership.create({
             data: {
               workspaceId: access.workspace.id,

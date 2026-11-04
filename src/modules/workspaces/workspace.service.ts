@@ -43,6 +43,10 @@ import {
   ownerOrganizationRole,
 } from '../authorization/organization-role';
 import { DepartmentCapability, requireDepartmentAccess } from '../authorization/department.policy';
+import {
+  assertWorkspaceSeatCapacity,
+  enqueueWorkspaceSeatReduction,
+} from '../billing/membership-billing';
 
 /**
  * Workspaces and their members.
@@ -1006,6 +1010,10 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             requestedRole: input.role as WorkspaceRole,
           });
         }
+        await assertWorkspaceSeatCapacity(tx, {
+          workspaceId: access.workspace.id,
+          userId: user.id,
+        });
         const created = await tx.workspaceMembership.create({
           data: {
             workspaceId: access.workspace.id,
@@ -1389,6 +1397,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           );
         }
 
+        await enqueueWorkspaceSeatReduction(tx, access.workspace.id);
+
         await tx.teamMembership.deleteMany({
           where: { userId: input.targetUserId, team: { workspaceId: access.workspace.id } },
         });
@@ -1519,6 +1529,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           include: { user: { select: { id: true, name: true, email: true, status: true } } },
         });
 
+        await enqueueWorkspaceSeatReduction(tx, access.workspace.id);
+
         await recordAuditEvent(tx, {
           workspaceId: access.workspace.id,
           actorId: input.userId,
@@ -1590,11 +1602,18 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       }
 
       const updated = await client.$transaction(async (tx) => {
+        await lockWorkspaceForOwnerChange(tx, access.workspace.id);
+        await assertWorkspaceSeatCapacity(tx, {
+          workspaceId: access.workspace.id,
+          userId: target.user.id,
+        });
         const changed = await tx.workspaceMembership.update({
           where: { id: target.id },
           data: { status: 'ACTIVE' },
           include: { user: { select: { id: true, name: true, email: true, status: true } } },
         });
+
+        await enqueueWorkspaceSeatReduction(tx, access.workspace.id);
 
         await recordAuditEvent(tx, {
           workspaceId: access.workspace.id,

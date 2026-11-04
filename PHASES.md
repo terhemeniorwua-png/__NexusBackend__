@@ -757,6 +757,28 @@ Implement organisation membership and controlled onboarding.
 - Approved users receive the correct membership.
 - Membership removal does not delete the user's Nexus identity or personal workspace.
 
+### Backend audit update — 2026-11-03
+
+**Status: IN PROGRESS.** Audit found and corrected invitation lifecycle races and missing archived-workspace guards. The rest of the Phase 5 service/routes were present on inspection; the Phase 5 PostgreSQL integration suites could not be run because no test `DATABASE_URL` is configured and the local PostgreSQL instance has no role for the current OS account. Do not treat code inspection or the unit suite as database-backed completion evidence.
+
+| Requirement area | Audit result | Evidence / remaining verification |
+|---|---|---|
+| Workspace membership, role restrictions, isolation, and ownership transfer | Existing implementation found; no change required | Central workspace policies and service transactions are in place. Database-backed route and cross-workspace tests are present but were skipped without the guarded test database. |
+| Invitation creation, recipient binding, acceptance/rejection, 48-hour expiry, revoke/resend, single use | Existing implementation found; lifecycle race guards strengthened | Invitation state and token digest are conditionally checked; targeted PostgreSQL regressions were added but are not yet executed. |
+| Duplicate invitation prevention | Fixed race found during audit | Creation now serializes on the workspace row, expires stale pending records before checking, and maps uniqueness conflicts to the established 409 response. Concurrent duplicate integration test added, not yet run. |
+| Archived/deleted workspace invitation behavior | Missing behavior fixed during audit | Archive transaction expires already-due pending invites and revokes the rest; creation, resend, acceptance, preview, decline, and switching now reject unavailable workspaces/states. Regression test added, not yet run. |
+| Join discovery/codes, approval/rejection/withdrawal, 7-day expiry, applicant privacy and email-domain handling | Existing implementation found; no change required | Implemented in `join-request.service.ts`; dedicated unit and PostgreSQL test suites exist. PostgreSQL suite was skipped in this run. |
+| Membership removal, task reassignment, preservation of personal identity/assets and audit history | Existing implementation found; no change required | `phase5-workspaces-db.test.ts` covers member removal, workspace access revocation, audit history and owner removal protection. `phase5-task-reassignment-db.test.ts` and `phase5-join-requests-db.test.ts` cover reassignment-required and successful transactional reassignment. These suites still require execution against the verified disposable database. |
+| Frontend API contract compatibility | Static contract review passed | Frontend workspace service paths/payloads align with registered workspace routes and response envelope. No live authenticated backend flow was exercised. Invitation UI is a separate frontend roadmap phase. |
+
+**Changes:** `src/modules/workspaces/invitation.service.ts`, `src/modules/workspaces/workspace.service.ts`, and `tests/phase5-workspaces-db.test.ts`; no schema or migration change and no endpoint or payload change. `docs/API.md` and `docs/openapi.yaml` describe the archive and invitation lifecycle behavior.
+
+**Validation:** Full backend `npm test` passed 197 tests with 0 failures; guarded PostgreSQL suites, including Phase 5, were skipped because no test database URL/role is available. Backend typecheck, lint, and production build passed. `npm run format:check` remains failing on the unrelated pre-existing `src/modules/auth/account-deletion.service.ts`; changed TypeScript files pass formatting. Frontend focused workspace/provider/page tests passed 16/16 and frontend `npx tsc --noEmit` passed. Live frontend/backend verification remains unperformed.
+
+**Verification continuation — 2026-11-03:** The required database preflight could not proceed: `RUN_PHASE5_DB_TESTS=true` was not available to the process and `TEST_DATABASE_URL` was unset. Per the safety gate, no connection was attempted, so database identity is unverified, no migration was applied, and none of the three requested PostgreSQL suites was run. The test helper can fall back to `DATABASE_URL`; that fallback was not used. Non-database checks run in this continuation: `npm run lint`, `npm run typecheck`, and `npm run build` all passed. The build emitted Prisma's existing deprecation warning for `package.json#prisma`.
+
+**Remaining before completion:** provide the required test-only environment variables and verify the exact disposable database identity before applying migrations; then run `phase5-workspaces-db.test.ts`, `phase5-join-requests-db.test.ts`, and `phase5-task-reassignment-db.test.ts` (including concurrency/archive regressions). Phase 5 remains **IN PROGRESS** until database-backed acceptance tests pass.
+
 ---
 
 #### Phase 7 — Teams and organizational structure `[/]`
@@ -1260,16 +1282,16 @@ Implement Nexus subscription and payment management.
 
 ### Approved commercial and membership rules
 
-These approved prices and rules are recorded in 2026-11-03 product decisions. The preparatory helper code in `src/modules/billing/` implements server-owned price/seat calculations and lifecycle policy calculations only. It does not start or complete Phase 17 because billing persistence, routes, a provider, verified payments, and entitlement enforcement are absent.
+These approved prices and rules are recorded in the Phase 3 product decision log. `src/modules/billing/` now contains server-owned pricing, billing routes/service, persistence models, Paystack adapter, transaction verification, signed webhook handling, encrypted provider tokens, and lifecycle calculations. This work is in progress; merchant test credentials and test-mode payment verification are not configured.
 
 | Plan | Monthly | Annual | Included members | Extra active member |
 |---|---:|---:|---:|---:|
-| Pro | $10/month | $50/year | 15 | $0.50/member/month |
-| Business | $15/month | $70/year | 25 | $1/member/month |
+| Pro | $10/month | $50/year | 15 | $0.50/member per selected billing period |
+| Business | $15/month | $70/year | 25 | $1/member per selected billing period |
 
 - The workspace owner counts once and consumes an included seat.
 - Only active memberships with active accounts count. Pending invitations, suspended, removed, and deactivated memberships do not count. Admin roles do not have a separate billing exclusion.
-- Additional members are billed monthly, including on annual base subscriptions.
+- Additional members use the base subscription cadence, including annual billing on annual plans.
 - Upgrades and seat increases apply immediately only after server-verified successful payment and are prorated. Downgrades, seat reductions, and cancellation take effect at renewal/period end; paid access remains through the already-paid period. Seat conflicts never cause automatic member or data deletion.
 - No automatic refunds. Refund requests are handled manually under the business's approved policy and applicable law.
 - Failed-payment policy is deferred; retry behavior, grace periods, notifications, access timing, and additional-seat treatment remain undecided. Do not invent failure timelines or grant paid access without verified payment.
@@ -1285,12 +1307,13 @@ These approved prices and rules are recorded in 2026-11-03 product decisions. Th
 - Over-limit features should be restricted gracefully.
 - Never store raw card details or CVV.
 
-### Current implementation status — policy preparation only
+### Current implementation status — in progress
 
-- `src/modules/billing/pricing.ts`, `membership-billing.ts`, and `lifecycle-policy.ts` contain the approved integer-cent catalog, authoritative workspace-scoped active-member query/count calculation, prorated charge calculations, schedule policy, owner guard, and deferred failed-payment policy.
-- Unit tests cover the pure rules and database-scoped query helper. They do not establish provider payment verification or durable idempotency.
-- No subscription tables/migrations, routes, provider adapter/configuration, payment webhooks, invoice/history functionality, or subscription entitlement integration exist. Do not enable checkout or call Phase 17 complete.
-- Provider selection and legal review remain external dependencies. The exact implementation requirements are in the frontend repository's `docs/SUBSCRIPTION_BILLING_BACKEND_REQUIREMENTS.md`.
+- `src/modules/billing/` includes routes, service, Paystack HTTP client, webhook signature verification, provider token encryption, subscription/checkout/payment/event persistence, active-seat lookup, proration, and lifecycle policy.
+- Migration `prisma/migrations/20261103160000_phase3_paystack_billing/` is authored but has not been applied to a verified disposable database.
+- Automated policy and Paystack adapter tests are being added. They do not establish live merchant USD support or actual Paystack test-mode behavior.
+- Membership activation is not yet transactionally gated by committed paid seats; this remains a release blocker. Provider/database reconciliation on partial failures also requires validation.
+- USD merchant enablement, legal review, and Paystack Dashboard/test-mode setup remain external dependencies. Requirements and setup are in the frontend repository's `docs/SUBSCRIPTION_BILLING_BACKEND_REQUIREMENTS.md`.
 
 ### Completion Criteria
 - Payment flows are verified.

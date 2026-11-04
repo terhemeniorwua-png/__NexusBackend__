@@ -23,6 +23,8 @@ import { createTeamRouter } from '../modules/teams/team.routes';
 import { createTeamService, type TeamService } from '../modules/teams/team.service';
 import type { ReadinessProbe } from '../services/health';
 import { createHealthRouter } from './health';
+import { createBillingRouter } from '../modules/billing/billing.routes';
+import { createBillingService, type BillingService } from '../modules/billing/billing.service';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -33,6 +35,7 @@ interface ApiRouterOptions {
   invitationService?: InvitationService;
   joinRequestService?: JoinRequestService;
   teamService?: TeamService;
+  billingService?: BillingService;
 }
 
 export function createApiRouter({
@@ -44,10 +47,12 @@ export function createApiRouter({
   invitationService = createInvitationService(config),
   joinRequestService = createJoinRequestService(config),
   teamService = createTeamService(),
+  billingService = createBillingService(config),
 }: ApiRouterOptions): Router {
   const router = Router();
 
   router.use('/health', createHealthRouter({ config, readinessProbe }));
+  router.use('/billing', createBillingRouter({ config, service: billingService }));
   router.use('/auth', createAuthRouter({ config, service: authService }));
   router.use('/users', createUsersRouter({ config, service: usersService }));
   // Discovery and join routes must be registered before the workspace router

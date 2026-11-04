@@ -183,16 +183,28 @@ test('CORS allows configured origins and rejects unknown origins', async () => {
 
     assert.equal(allowed.status, 200);
     assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://app.example.com');
+    assert.match(allowed.headers.get('vary') ?? '', /Origin/i);
+    assert.equal(allowed.headers.get('access-control-allow-credentials'), null);
 
     const preflight = await fetch(`${baseUrl}/api/v1/health`, {
       method: 'OPTIONS',
       headers: {
         origin: 'https://app.example.com',
         'access-control-request-method': 'GET',
+        'access-control-request-headers': 'authorization,content-type',
       },
     });
 
     assert.equal(preflight.status, 204);
+    assert.equal(
+      preflight.headers.get('access-control-allow-methods'),
+      'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+    );
+    assert.equal(
+      preflight.headers.get('access-control-allow-headers'),
+      'Content-Type,Authorization,X-Request-Id',
+    );
+    assert.equal(preflight.headers.get('access-control-max-age'), '600');
 
     const denied = await fetch(`${baseUrl}/api/v1/health`, {
       headers: { origin: 'https://attacker.example.com' },
@@ -201,6 +213,8 @@ test('CORS allows configured origins and rejects unknown origins', async () => {
 
     assert.equal(denied.status, 403);
     assert.equal(body.error.code, 'CORS_ORIGIN_DENIED');
+    assert.equal(denied.headers.get('access-control-allow-origin'), null);
+    assert.match(denied.headers.get('vary') ?? '', /Origin/i);
   });
 });
 

@@ -1,19 +1,51 @@
+import cors, { type CorsOptions } from 'cors';
 import type { RequestHandler } from 'express';
 import type { AppConfig } from '../config/env';
 import { AppError } from '../utils/errors';
 
-const allowedMethods = 'GET,POST,PUT,PATCH,DELETE,OPTIONS';
-const allowedHeaders = 'Content-Type, Authorization, X-Request-Id';
+const allowedMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+const allowedHeaders = ['Content-Type', 'Authorization', 'X-Request-Id'];
 
 export function createCorsMiddleware(
   config: Pick<AppConfig, 'corsOrigins' | 'corsCredentials'>,
 ): RequestHandler {
   const allowedOrigins = new Set(config.corsOrigins);
+  const options: CorsOptions = {
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, false);
+        return;
+      }
+
+      let normalizedOrigin: string;
+
+      try {
+        normalizedOrigin = new URL(origin).origin;
+      } catch {
+        callback(new AppError(403, 'CORS_ORIGIN_DENIED', 'The request origin is not allowed'));
+        return;
+      }
+
+      if (!allowedOrigins.has(normalizedOrigin)) {
+        callback(new AppError(403, 'CORS_ORIGIN_DENIED', 'The request origin is not allowed'));
+        return;
+      }
+
+      callback(null, normalizedOrigin);
+    },
+    methods: allowedMethods,
+    allowedHeaders,
+    exposedHeaders: ['X-Request-Id'],
+    maxAge: 600,
+    credentials: config.corsCredentials,
+    optionsSuccessStatus: 204,
+  };
+  const corsHandler = cors(options);
 
   return (req, res, next) => {
-    const origin = req.headers.origin;
-
-    if (!origin) {
+    // Requests without an Origin header are not browser CORS requests. Keep
+    // preflight handling explicit without granting them wildcard access.
+    if (!req.headers.origin) {
       if (req.method === 'OPTIONS') {
         res.status(204).end();
         return;
@@ -23,37 +55,9 @@ export function createCorsMiddleware(
       return;
     }
 
+    // Vary denied responses too, so a cache cannot reuse an origin-specific
+    // CORS response for another caller.
     res.vary('Origin');
-
-    let normalizedOrigin: string;
-
-    try {
-      normalizedOrigin = new URL(origin).origin;
-    } catch {
-      next(new AppError(403, 'CORS_ORIGIN_DENIED', 'The request origin is not allowed'));
-      return;
-    }
-
-    if (!allowedOrigins.has(normalizedOrigin)) {
-      next(new AppError(403, 'CORS_ORIGIN_DENIED', 'The request origin is not allowed'));
-      return;
-    }
-
-    res.setHeader('Access-Control-Allow-Origin', normalizedOrigin);
-    res.setHeader('Access-Control-Allow-Methods', allowedMethods);
-    res.setHeader('Access-Control-Allow-Headers', allowedHeaders);
-    res.setHeader('Access-Control-Expose-Headers', 'X-Request-Id');
-    res.setHeader('Access-Control-Max-Age', '600');
-
-    if (config.corsCredentials) {
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
-
-    next();
+    corsHandler(req, res, next);
   };
 }

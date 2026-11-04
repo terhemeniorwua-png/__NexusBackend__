@@ -2,11 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 
 /**
- * Test database helper for the Phase 3 authentication suite.
+ * Test database helper for database-backed suites.
  *
  * The suite creates and deletes real accounts, so it only runs against a
  * database that is explicitly marked as a test database. The guard below
- * refuses to touch a database whose name does not contain "test".
+ * requires an explicit TEST_DATABASE_URL, a loopback host, and a database
+ * name containing "test". It never falls back to DATABASE_URL or dotenv.
  */
 
 export interface TestDatabase {
@@ -19,15 +20,19 @@ export function resolveTestDatabaseUrl(flag = 'RUN_PHASE3_DB_TESTS'): string | n
     return null;
   }
 
-  const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+  const url = process.env.TEST_DATABASE_URL;
 
   if (!url) {
     return null;
   }
 
-  if (!/test/i.test(new URL(url).pathname)) {
+  const parsed = new URL(url);
+  if (
+    !['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname) ||
+    !/test/i.test(parsed.pathname)
+  ) {
     throw new Error(
-      'Refusing to run the Phase 3 database tests: the database name must contain "test".',
+      'Refusing database tests: TEST_DATABASE_URL must target a loopback host and a database name containing "test".',
     );
   }
 
@@ -39,10 +44,14 @@ async function schemaIsPresent(prisma: PrismaClient): Promise<boolean> {
     SELECT table_name
     FROM information_schema.tables
     WHERE table_schema = 'public'
-      AND table_name IN ('User', 'Session', 'AuthToken', 'AuditLog', 'EmailDelivery')
+      AND table_name IN (
+        'User', 'Session', 'AuthToken', 'AuditLog', 'EmailDelivery',
+        'Subscription', 'BillingCheckout', 'BillingPayment',
+        'BillingWebhookEvent', 'BillingSeatSync'
+      )
   `;
 
-  return rows.length === 5;
+  return rows.length === 10;
 }
 
 export async function connectTestDatabase(url: string): Promise<TestDatabase> {
