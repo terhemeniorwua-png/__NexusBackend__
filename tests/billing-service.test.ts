@@ -92,6 +92,7 @@ test('provider reconciliation verifies a paid checkout missed by its webhook', a
       subscription: { upsert: async ({ create }: { create: Record<string, unknown> }) => { subscriptionState = { ...create, id: 'subscription-1' }; return subscriptionState; } },
       billingCheckout: { update: async ({ data }: { data: Record<string, unknown> }) => Object.assign(checkout, data) },
     }),
+    
   } as unknown as PrismaClient;
   const paystack = mockPaystack({
     verify: async (reference) => ({
