@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { PrismaClient, SubscriptionInterval, SubscriptionPlanId } from '@prisma/client';
+import type {
+  Prisma,
+  PrismaClient,
+  SubscriptionInterval,
+  SubscriptionPlanId,
+} from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
@@ -378,7 +383,7 @@ export function createBillingService(
     const encryptedManageToken = providerSubscription
       ? encryptProviderToken(providerSubscription.email_token, config.paystackEncryptionKey)
       : null;
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.billingPayment.upsert({
         where: { providerReference: reference },
         create: {
@@ -615,15 +620,15 @@ export function createBillingService(
             'BILLING_CHANGE_ALREADY_SCHEDULED',
             'A different subscription change is already scheduled',
           );
-        if (current.providerSubscriptionCode !== sync.previousSubscriptionCode) {
-          await paystack.disableSubscription({
-            code: current.providerSubscriptionCode,
-            token: decryptProviderToken(
-              current.providerManageTokenCiphertext,
-              config.paystackEncryptionKey,
-            ),
-          });
-        }
+        // The same change is already scheduled. Make sure the old recurring
+        // subscription is disabled, in case an earlier attempt stopped part-way.
+        await paystack.disableSubscription({
+          code: current.providerSubscriptionCode,
+          token: decryptProviderToken(
+            current.providerManageTokenCiphertext,
+            config.paystackEncryptionKey,
+          ),
+        });
         return {
           pendingChange: {
             plan: current.pendingPlan,
@@ -1019,7 +1024,7 @@ export function createBillingService(
                   : subscription.interval,
               ),
             );
-            await prisma.$transaction(async (tx) => {
+            await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
               await tx.billingPayment.upsert({
                 where: { providerReference: reference },
                 create: {
