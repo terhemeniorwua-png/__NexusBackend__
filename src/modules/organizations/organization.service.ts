@@ -1,4 +1,10 @@
-import { Prisma, type PrismaClient, type WorkspaceType } from '@prisma/client';
+import {
+  NotificationType,
+  Prisma,
+  type NotificationType as NotificationTypeValue,
+  type PrismaClient,
+  type WorkspaceType,
+} from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
@@ -9,6 +15,7 @@ import type {
   UpdateCompanyProfileInput,
   UpdateInstitutionGroupInput,
   UpdateInstitutionProfileInput,
+  UpdateNotificationPreferencesInput,
 } from './organization.schemas';
 
 type Context = { ip?: string; userAgent?: string };
@@ -153,6 +160,65 @@ export function createOrganizationService(prisma?: PrismaClient) {
       },
       include: { _count: { select: { members: true } } },
       orderBy: { name: 'asc' },
+    });
+  }
+
+  async function getNotificationPreferences(input: { userId: string; workspaceId: string }) {
+    await access(input.userId, input.workspaceId);
+    const saved = await db.notificationPreference.findMany({
+      where: { userId: input.userId, workspaceId: input.workspaceId },
+    });
+    const byType = new Map(saved.map((preference) => [preference.type, preference.inAppEnabled]));
+    return Object.values(NotificationType).map((type) => ({
+      type,
+      inAppEnabled: byType.get(type as NotificationTypeValue) ?? true,
+    }));
+  }
+
+  async function updateNotificationPreferences(
+    input: { userId: string; workspaceId: string } & UpdateNotificationPreferencesInput,
+    context: Context,
+  ) {
+    await access(input.userId, input.workspaceId);
+    return db.$transaction(async (tx) => {
+      for (const preference of input.preferences) {
+        await tx.notificationPreference.upsert({
+          where: {
+            workspaceId_userId_type: {
+              workspaceId: input.workspaceId,
+              userId: input.userId,
+              type: preference.type,
+            },
+          },
+          create: {
+            workspaceId: input.workspaceId,
+            userId: input.userId,
+            type: preference.type,
+            inAppEnabled: preference.inAppEnabled,
+          },
+          update: { inAppEnabled: preference.inAppEnabled },
+        });
+      }
+      await recordAuditEvent(tx, {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        action: 'notification.preferences_updated',
+        targetType: 'WorkspaceMembership',
+        targetId: `${input.workspaceId}:${input.userId}`,
+        metadata: {
+          changedTypes: input.preferences.map(({ type }) => type),
+          channel: 'in_app',
+        },
+        ...context,
+      });
+      const saved = await tx.notificationPreference.findMany({
+        where: { userId: input.userId, workspaceId: input.workspaceId },
+      });
+      const byType = new Map(saved.map((preference) => [preference.type, preference.inAppEnabled]));
+      return Object.values(NotificationType).map((type) => ({
+        type,
+        inAppEnabled: byType.get(type as NotificationTypeValue) ?? true,
+      }));
     });
   }
 
@@ -469,6 +535,8 @@ export function createOrganizationService(prisma?: PrismaClient) {
     getInstitutionProfile,
     updateInstitutionProfile,
     listInstitutionGroups,
+    getNotificationPreferences,
+    updateNotificationPreferences,
     createInstitutionGroup,
     updateInstitutionGroup,
     deleteInstitutionGroup,

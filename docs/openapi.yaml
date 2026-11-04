@@ -2008,6 +2008,39 @@ paths:
                 $ref: '#/components/schemas/InstitutionProfileResponse'
         '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
         '404': { description: Not an institution workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /workspaces/{workspaceId}/notification-preferences:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: getNotificationPreferences
+      summary: Read the caller's workspace notification preferences
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The caller's preferences, with enabled defaults for unset notification types.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferencesResponse' }
+        '403': { description: Active workspace membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    patch:
+      tags: [Workspaces]
+      operationId: updateNotificationPreferences
+      summary: Update the caller's in-app notification preferences
+      description: Updates only selected notification types for the caller in this workspace. Email and message unread state are unaffected.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateNotificationPreferencesRequest' }
+      responses:
+        '200':
+          description: The caller's complete preference set after the update.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferencesResponse' }
+        '403': { description: Active workspace membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
   /workspaces/{workspaceId}/institution-groups:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -4869,9 +4902,39 @@ components:
             - type: 'null'
         country: { type: [string, 'null'], maxLength: 100 }
         location: { type: [string, 'null'], maxLength: 250 }
+    NotificationPreference:
+      type: object
+      required: [type, inAppEnabled]
+      properties:
+        type: { $ref: '#/components/schemas/NotificationType' }
+        inAppEnabled: { type: boolean }
+    NotificationPreferencesResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationPreference' }
+    UpdateNotificationPreferencesRequest:
+      type: object
+      required: [preferences]
+      additionalProperties: false
+      properties:
+        preferences:
+          type: array
+          minItems: 1
+          maxItems: 18
+          description: Each notification type may appear at most once in this update.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/NotificationPreference'
+    NotificationType:
+      type: string
+      enum: [MENTION, TASK_ASSIGNED, TASK_REASSIGNED, TASK_SUBMITTED, TASK_APPROVED, CHANGES_REQUESTED, COMMENT_REPLY, MEMBERSHIP_CHANGED, MEMBERSHIP_SUSPENDED, MEMBERSHIP_RESTORED, INVITATION_ACCEPTED, JOIN_REQUEST_RECEIVED, JOIN_REQUEST_APPROVED, JOIN_REQUEST_REJECTED, MEETING_INVITE, MEETING_RESCHEDULED, MEETING_CANCELLED, PROJECT_UPDATE]
     InstitutionGroup:
       type: object
-      required: [id, workspaceId, name, description, leadId, createdAt, updatedAt]
+      required: [id, workspaceId, name, description, leadId, createdAt, updatedAt, deletedAt]
       properties:
         id: { type: string, format: uuid }
         workspaceId: { type: string, format: uuid }
@@ -4880,6 +4943,7 @@ components:
         leadId: { type: [string, 'null'], format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        deletedAt: { type: [string, 'null'], format: date-time }
         _count:
           type: object
           properties:

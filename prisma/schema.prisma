@@ -503,14 +503,30 @@ model WorkspaceMembership {
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user                    User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notificationPreferences NotificationPreference[]
 
   @@unique([workspaceId, userId])
   @@index([userId])
   @@index([workspaceId, role])
   @@index([workspaceId, organizationRole])
   @@index([workspaceId, status])
+}
+
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  workspaceId  String
+  userId       String
+  type         NotificationType
+  inAppEnabled Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  membership WorkspaceMembership @relation(fields: [workspaceId, userId], references: [workspaceId, userId], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, type])
+  @@index([userId, workspaceId])
 }
 
 model Department {
@@ -588,6 +604,7 @@ model InstitutionGroup {
   leadId      String?
   createdAt   DateTime                     @default(now())
   updatedAt   DateTime                     @updatedAt
+  deletedAt   DateTime?
   workspace   Workspace                    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   lead        User?                        @relation("InstitutionGroupLead", fields: [leadId], references: [id], onDelete: SetNull)
   members     InstitutionGroupMembership[]
@@ -1029,8 +1046,6 @@ model EmailWebhookEvent {
 //   Phase 12/13 — Realtime & messaging
 //     Conversation, ConversationMembership, Message, MessageReaction,
 //     MessageAttachment, MessageReadReceipt, PresenceRecord
-//   Phase 7 — Organization notification preferences
-//     NotificationPreference (behavior and fields still require definition)
 //   Phase 16 — Calendar & scheduling
 //     CalendarEvent, Reminder, RecurrenceRule
 //   Phase 17 — Meetings

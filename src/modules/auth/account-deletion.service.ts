@@ -23,12 +23,7 @@ export async function isLastActiveOrganizationOwnerOrAdministrator(
       OR: [
         {
           organizationRole: {
-            in: [
-              'COMPANY_OWNER',
-              'COMPANY_ADMIN',
-              'INSTITUTION_OWNER',
-              'INSTITUTION_ADMIN',
-            ],
+            in: ['COMPANY_OWNER', 'COMPANY_ADMIN', 'INSTITUTION_OWNER', 'INSTITUTION_ADMIN'],
           },
         },
         { role: { in: ['OWNER', 'PROJECT_MANAGER'] }, organizationRole: null },

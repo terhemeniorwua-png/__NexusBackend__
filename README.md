@@ -317,10 +317,10 @@ Provides organisational collaboration for businesses.
 Provides collaboration for institutions, including departments, groups, staff, and students.
 
 Foundational Company and Institution profile fields are tracked in Phase 4.
-Company-specific and Institution-specific profile APIs, branding uploads,
-notification preferences, and full organization settings are deferred to the
-later organization-management work in the roadmap; no subscription or pricing
-rules are defined here.
+Company-specific and Institution-specific profile APIs, notification
+preferences, and full organization settings are implemented in Phase 7.
+Branding uploads depend on the private file-storage work; no subscription or
+pricing rules are defined here.
 
 ### Workspace functionality
 

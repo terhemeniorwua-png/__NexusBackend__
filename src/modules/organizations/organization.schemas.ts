@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NotificationType } from '@prisma/client';
 
 const name = z.string().trim().min(2).max(120);
 const description = z.string().trim().max(2000).nullable();
@@ -82,7 +83,29 @@ export const updateInstitutionGroupMemberSchema = z
   })
   .strict();
 
+export const updateNotificationPreferencesSchema = z
+  .object({
+    preferences: z
+      .array(
+        z
+          .object({
+            type: z.enum(NotificationType),
+            inAppEnabled: z.boolean(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(Object.keys(NotificationType).length)
+      .refine(
+        (preferences) => new Set(preferences.map(({ type }) => type)).size === preferences.length,
+      ),
+  })
+  .strict();
+
 export type UpdateCompanyProfileInput = z.infer<typeof updateCompanyProfileSchema>;
 export type UpdateInstitutionProfileInput = z.infer<typeof updateInstitutionProfileSchema>;
 export type CreateInstitutionGroupInput = z.infer<typeof createInstitutionGroupSchema>;
 export type UpdateInstitutionGroupInput = z.infer<typeof updateInstitutionGroupSchema>;
+export type UpdateNotificationPreferencesInput = z.infer<
+  typeof updateNotificationPreferencesSchema
+>;

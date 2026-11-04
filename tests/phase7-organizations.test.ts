@@ -3,6 +3,7 @@ import test, { describe } from 'node:test';
 import {
   addInstitutionGroupMemberSchema,
   createInstitutionGroupSchema,
+  updateNotificationPreferencesSchema,
   updateCompanyProfileSchema,
   updateInstitutionProfileSchema,
 } from '../src/modules/organizations/organization.schemas';
@@ -48,6 +49,30 @@ describe('Phase 7 organization profiles and institution groups', () => {
       addInstitutionGroupMemberSchema.parse({ userId: '00000000-0000-4000-8000-000000000001' })
         .role,
       'MEMBER',
+    );
+  });
+
+  test('notification preferences accept unique in-app notification types only', () => {
+    assert.equal(
+      updateNotificationPreferencesSchema.safeParse({
+        preferences: [{ type: 'MEMBERSHIP_CHANGED', inAppEnabled: false }],
+      }).success,
+      true,
+    );
+    assert.equal(
+      updateNotificationPreferencesSchema.safeParse({
+        preferences: [
+          { type: 'MEMBERSHIP_CHANGED', inAppEnabled: false },
+          { type: 'MEMBERSHIP_CHANGED', inAppEnabled: true },
+        ],
+      }).success,
+      false,
+    );
+    assert.equal(
+      updateNotificationPreferencesSchema.safeParse({
+        preferences: [{ type: 'MESSAGE_RECEIVED', inAppEnabled: false }],
+      }).success,
+      false,
     );
   });
 });

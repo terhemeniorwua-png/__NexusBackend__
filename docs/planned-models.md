@@ -24,7 +24,7 @@ The current schema contains the following models:
 - Teams: `Team`, `TeamMembership`
 - Projects: `Project`, `ProjectMembership`
 - Tasks and collaboration: `Task`, `TaskAssignee`, `TaskDependency`, `Comment`, `FileAttachment`
-- Notifications and audit: `Notification`, `AuditLog`
+- Notifications and audit: `Notification`, `NotificationPreference`, `AuditLog`
 - Email delivery: `EmailDelivery`, `EmailSuppression`, `EmailWebhookEvent`
 
 ## Deferred models
@@ -48,7 +48,7 @@ The current schema contains the following models:
 ## Phase 7 notification preferences
 
 `NotificationPreference` is assigned to Phase 7 by the product decision made
-on 2026-11-04. It is no longer deferred to Phase 14. The preference fields and
-whether they govern persisted in-app notifications, email, or both remain to
-be defined before implementation; the current notification service only
-persists in-app notification records and has no real-time delivery adapter.
+on 2026-11-04. It is no longer deferred to Phase 14. The Phase 7 model stores
+per-workspace, per-member settings for each existing `NotificationType`.
+Preferences control creation of durable in-app notification records; all types
+are enabled by default. Email delivery and message unread state are unaffected.

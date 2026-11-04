@@ -10,6 +10,7 @@ import type {
   UpdateCompanyProfileInput,
   UpdateInstitutionProfileInput,
   UpdateInstitutionGroupInput,
+  UpdateNotificationPreferencesInput,
 } from './organization.schemas';
 import {
   addInstitutionGroupMemberSchema,
@@ -21,6 +22,7 @@ import {
   updateInstitutionGroupSchema,
   updateInstitutionGroupMemberSchema,
   updateInstitutionProfileSchema,
+  updateNotificationPreferencesSchema,
 } from './organization.schemas';
 
 export interface OrganizationRouterOptions {
@@ -118,6 +120,41 @@ export function createOrganizationRouter({
       sendSuccess(res, await service.listInstitutionGroups({ userId: userId(req), workspaceId }));
     },
   );
+
+  router.get(
+    '/notification-preferences',
+    requireAuth,
+    requireActive,
+    validate({ params: organizationParamsSchema }),
+    async (req, res) => {
+      const { workspaceId } = req.validated!.params as { workspaceId: string };
+      sendSuccess(
+        res,
+        await service.getNotificationPreferences({ userId: userId(req), workspaceId }),
+      );
+    },
+  );
+  router.patch(
+    '/notification-preferences',
+    requireAuth,
+    requireActive,
+    validate({ params: organizationParamsSchema, body: updateNotificationPreferencesSchema }),
+    async (req, res) => {
+      const { workspaceId } = req.validated!.params as { workspaceId: string };
+      sendSuccess(
+        res,
+        await service.updateNotificationPreferences(
+          {
+            userId: userId(req),
+            workspaceId,
+            ...(req.validated!.body as UpdateNotificationPreferencesInput),
+          },
+          context(req),
+        ),
+      );
+    },
+  );
+
   router.post(
     '/institution-groups',
     requireAuth,

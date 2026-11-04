@@ -132,6 +132,15 @@ until private object storage is implemented.
 Institution groups are independent from departments. They do not grant access
 to departments, teams, projects, or channels by themselves.
 
+Notification preferences are scoped to the authenticated member and workspace.
+All in-app notification types are enabled by default; a member can update
+selected types. These preferences do not affect email or message unread state.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Read the caller's in-app notification preferences, including defaults. |
+| PATCH | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Update selected in-app notification type preferences. |
+
 ## Invitations
 
 | Method | Path | Access | Purpose |

@@ -756,6 +756,60 @@ function runTests(rawDbUrl: string): void {
       assert.equal(created.status, 201);
       const groupId = (created.body.data as { id: string }).id;
 
+      const unauthenticated = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/notification-preferences`,
+      );
+      assert.equal(unauthenticated.status, 401);
+
+      const defaults = await jsonRequest<Array<{ type: string; inAppEnabled: boolean }>>(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/notification-preferences`,
+        { headers: auth(member) },
+      );
+      assert.equal(defaults.status, 200);
+      assert.ok(
+        (defaults.body.data as Array<{ type: string; inAppEnabled: boolean }>).every(
+          (preference) => preference.inAppEnabled,
+        ),
+      );
+
+      const savedPreferences = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/notification-preferences`,
+        {
+          method: 'PATCH',
+          headers: auth(member),
+          body: JSON.stringify({
+            preferences: [{ type: 'MEMBERSHIP_CHANGED', inAppEnabled: false }],
+          }),
+          jar: member.jar,
+        },
+      );
+      assert.equal(savedPreferences.status, 200);
+
+      const otherWorkspacePreferences = await jsonRequest<
+        Array<{ type: string; inAppEnabled: boolean }>
+      >(`${baseUrl}/api/v1/workspaces/${workspaceId}/notification-preferences`, {
+        headers: auth(member),
+      });
+      assert.equal(otherWorkspacePreferences.status, 200);
+      assert.equal(
+        (
+          otherWorkspacePreferences.body.data as Array<{ type: string; inAppEnabled: boolean }>
+        ).find((preference) => preference.type === 'MEMBERSHIP_CHANGED')?.inAppEnabled,
+        true,
+      );
+
+      const outsiderPreferences = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/notification-preferences`,
+        { headers: auth(outsider) },
+      );
+      assert.equal(outsiderPreferences.status, 403);
+
+      const db = await connectTestDatabase(rawDbUrl);
+      const notificationsBefore = await db.prisma.notification.count({
+        where: { userId: member.id, type: 'MEMBERSHIP_CHANGED' },
+      });
+      await db.prisma.$disconnect();
+
       const added = await jsonRequest(
         `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups/${groupId}/members`,
         {
@@ -766,6 +820,13 @@ function runTests(rawDbUrl: string): void {
         },
       );
       assert.equal(added.status, 201);
+
+      const afterAddDb = await connectTestDatabase(rawDbUrl);
+      const notificationsAfter = await afterAddDb.prisma.notification.count({
+        where: { userId: member.id, type: 'MEMBERSHIP_CHANGED' },
+      });
+      await afterAddDb.prisma.$disconnect();
+      assert.equal(notificationsAfter, notificationsBefore);
 
       const visible = await jsonRequest<Array<{ id: string }>>(
         `${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/institution-groups`,

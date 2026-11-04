@@ -268,11 +268,33 @@ there successfully. The database tests require `NODE_ENV=test`, `DATABASE_URL`
 and `TEST_DATABASE_URL` to point to the same explicit loopback test database;
 the test application's configuration must not fall through to `.env`.
 
-Phase 7 is still **PARTIALLY COMPLETE**. Organization preferences and
-notification preferences, logo upload/storage, department and team settings,
-and end-to-end team project/channel access are outstanding. The current
+Phase 7 is still **PARTIALLY COMPLETE**. General organization preferences,
+logo upload/storage, department and team settings, and end-to-end team
+project/channel access are outstanding. The current
 repository has no channel module or registered project workflow. The roadmap
 also has an unresolved phase count/sequence conflict (the dashboard says 24
 phases while the document numbers phases through 32, and email subphases
 overlap the product phase numbers); this follow-up did not renumber or rewrite
 the roadmap.
+
+### Phase 7 notification preference follow-up — 2026-11-04
+
+Per the product clarification, notification preferences are a Phase 7
+requirement, not a Phase 14 extension. Workspace members can independently
+enable or mute each existing in-app notification type for themselves in that
+workspace. Unset types default to enabled. Preferences suppress creation of
+muted in-app notification records in the shared notification writer; they do
+not affect email or message unread state. Preferences reference the composite
+workspace membership and cascade when the membership is deleted. GET/PATCH
+routes are mounted under `/workspaces/{workspaceId}/notification-preferences`.
+
+Verification: Prisma schema validation and generation pass; the focused
+organization schema tests pass 4/4; the Phase 7 PostgreSQL HTTP suite passes
+40/40, including notification suppression and cross-workspace preference
+isolation. The migration applies with the full migration set to disposable
+PostgreSQL 16, and `prisma migrate diff` reports no schema drift. This also
+verified that the Prisma model includes the `deletedAt` column already present
+in the preceding institution-group migration. The human API index and OpenAPI
+contract now include both operations. Phase 7 remains partially complete
+because general organization preferences, logo storage, team/department
+settings, and project/channel integrations are still outstanding.
