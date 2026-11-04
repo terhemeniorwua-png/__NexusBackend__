@@ -1029,8 +1029,8 @@ model EmailWebhookEvent {
 //   Phase 12/13 — Realtime & messaging
 //     Conversation, ConversationMembership, Message, MessageReaction,
 //     MessageAttachment, MessageReadReceipt, PresenceRecord
-//   Phase 14 — Notifications (extension)
-//     NotificationPreference
+//   Phase 7 — Organization notification preferences
+//     NotificationPreference (behavior and fields still require definition)
 //   Phase 16 — Calendar & scheduling
 //     CalendarEvent, Reminder, RecurrenceRule
 //   Phase 17 — Meetings

@@ -32,7 +32,6 @@ The current schema contains the following models:
 | Roadmap phase | Models | Dependency / reason for deferral |
 |---|---|---|
 | Phase 12/13 — Real-time and messaging | `Conversation`, `ConversationMembership`, `Message`, `MessageReaction`, `MessageAttachment`, `MessageReadReceipt`, `PresenceRecord` | Requires conversation membership rules, message permissions, attachment storage and real-time delivery contracts. |
-| Phase 14 — Notifications (extensions) | `NotificationPreference` | Requires user-facing notification preference rules. |
 | Phase 16 — Calendar and scheduling | `CalendarEvent`, `Reminder`, `RecurrenceRule` | Requires scheduling, reminder delivery and recurrence semantics. |
 | Phase 17 — Meetings | `Meeting`, `MeetingParticipant`, `MeetingInvitation`, `CallRecord` | Requires the calling provider, participant authorization, meeting lifecycle and call-history rules. |
 | Phase 18 — AI | `AiConversation`, `AiMessage`, `AiUsageRecord`, `AiArtifact` | Requires the AI service layer, authorization-aware context retrieval, usage tracking and artifact retention rules. |
@@ -45,3 +44,11 @@ The current schema contains the following models:
 - Add the corresponding Prisma migration, indexes, constraints and tests in that phase.
 - Do not add placeholder tables merely to make this document appear complete.
 - Update this document when a deferred model is implemented or its roadmap phase changes.
+
+## Phase 7 notification preferences
+
+`NotificationPreference` is assigned to Phase 7 by the product decision made
+on 2026-11-04. It is no longer deferred to Phase 14. The preference fields and
+whether they govern persisted in-app notifications, email, or both remain to
+be defined before implementation; the current notification service only
+persists in-app notification records and has no real-time delivery adapter.
