@@ -201,7 +201,7 @@ is a documentation issue and must be resolved before future phase advancement.
 | 14 — Calendar and scheduling | NOT IMPLEMENTED | No calendar/scheduling module or routes found. |
 | 15 — Meetings and calling | NOT IMPLEMENTED | No meeting provider integration or meeting routes found. |
 | 16 — Forms and surveys | NOT IMPLEMENTED | No forms/surveys module or routes found. |
-| 17 — Subscription and billing | PARTIALLY COMPLETE | Pricing and lifecycle policy helpers exist; billing persistence, routes and payment-provider integration do not. |
+| 17 — Subscription and billing | IN PROGRESS | Current uncommitted work adds Paystack checkout/verification, signed webhooks, subscription persistence and billing routes. Merchant USD capability, DB migration validation, test-mode integration, and transactional member seat enforcement remain. |
 | 18 — Search | NOT IMPLEMENTED | No search service or API routes found. |
 | 19 — Integrations | NOT IMPLEMENTED | No OAuth integration framework or provider connection routes found. |
 | 20 — Automation | NOT IMPLEMENTED | No workflow/automation engine found. |

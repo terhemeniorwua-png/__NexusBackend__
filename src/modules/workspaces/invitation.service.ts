@@ -21,6 +21,7 @@ import {
 } from '../authorization/organization-role';
 import type { CreateInvitationInput } from './workspace.schemas';
 import type { InvitationPreview, InvitationResult, InvitationSummary } from './workspace.types';
+import { assertWorkspaceSeatCapacity } from '../billing/membership-billing';
 
 /**
  * Workspace invitations.
@@ -734,6 +735,10 @@ export function createInvitationService(
 
         // An account that already belongs to the workspace keeps its role.
         if (!existing) {
+          await assertWorkspaceSeatCapacity(tx, {
+            workspaceId: invitation.workspaceId,
+            userId: user.id,
+          });
           await tx.workspaceMembership.create({
             data: {
               workspaceId: invitation.workspaceId,

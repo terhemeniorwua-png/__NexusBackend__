@@ -185,8 +185,11 @@ const envSchema = z
     //
     // The transport is provider agnostic. Resend, Brevo and Amazon SES all
     // expose an SMTP endpoint, so a single adapter covers all three and only
-    // the connection details change.
-    EMAIL_PROVIDER: z.enum(['smtp', 'console', 'disabled']).default('console'),
+    // the connection details change. The `brevo-api` provider sends over HTTPS
+    // instead, which works on hosts that block outbound SMTP ports.
+    EMAIL_PROVIDER: z.enum(['smtp', 'brevo-api', 'console', 'disabled']).default('console'),
+    EMAIL_API_KEY: z.string().trim().default(''),
+    EMAIL_API_URL: z.string().trim().url().default('https://api.brevo.com'),
     EMAIL_SMTP_HOST: z.string().trim().default(''),
     EMAIL_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
     EMAIL_SMTP_SECURE: booleanString,
@@ -251,6 +254,22 @@ const envSchema = z
     EMAIL_WORKER_ENABLED: booleanString.default(true),
     EMAIL_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),
     EMAIL_WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+
+    // Paystack hosted checkout uses only the server secret. USD remains
+    // disabled until the merchant account has been approved for USD.
+    PAYSTACK_SECRET_KEY: z.string().trim().default(''),
+    PAYSTACK_ENCRYPTION_KEY: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || /^[A-Za-z0-9_-]{43,44}$/.test(value),
+        'PAYSTACK_ENCRYPTION_KEY must be a base64url-encoded 32-byte key',
+      ),
+    PAYSTACK_USD_ENABLED: booleanString.default(false),
+    PAYSTACK_CALLBACK_URL: z.string().trim().default(''),
+    PAYSTACK_API_URL: z.string().trim().url().default('https://api.paystack.co'),
+    PAYSTACK_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(15_000),
   })
   .superRefine((values, ctx) => {
     if (values.AUTH_COOKIE_SAME_SITE === 'none' && !values.AUTH_COOKIE_SECURE) {
@@ -307,12 +326,77 @@ const envSchema = z
       }
     }
 
-    if (values.NODE_ENV === 'production' && values.EMAIL_PROVIDER !== 'smtp') {
+    if (values.EMAIL_PROVIDER === 'brevo-api' && !values.EMAIL_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_API_KEY'],
+        message: 'EMAIL_API_KEY is required when EMAIL_PROVIDER is "brevo-api"',
+      });
+    }
+
+    if (
+      values.NODE_ENV === 'production' &&
+      !['smtp', 'brevo-api'].includes(values.EMAIL_PROVIDER)
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['EMAIL_PROVIDER'],
-        message: 'EMAIL_PROVIDER must be "smtp" in production',
+        message: 'EMAIL_PROVIDER must be "smtp" or "brevo-api" in production',
       });
+    }
+
+    if (
+      values.PAYSTACK_SECRET_KEY &&
+      !/^(sk_test_|sk_live_)[A-Za-z0-9]+$/.test(values.PAYSTACK_SECRET_KEY)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_SECRET_KEY'],
+        message: 'PAYSTACK_SECRET_KEY must be a Paystack secret key',
+      });
+    }
+
+    if (values.PAYSTACK_USD_ENABLED && !values.PAYSTACK_SECRET_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_SECRET_KEY'],
+        message: 'PAYSTACK_SECRET_KEY is required when USD billing is enabled',
+      });
+    }
+
+    if (values.PAYSTACK_USD_ENABLED && !values.PAYSTACK_CALLBACK_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_CALLBACK_URL'],
+        message: 'PAYSTACK_CALLBACK_URL is required when USD billing is enabled',
+      });
+    }
+
+    if (values.PAYSTACK_USD_ENABLED && !values.PAYSTACK_ENCRYPTION_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_ENCRYPTION_KEY'],
+        message: 'PAYSTACK_ENCRYPTION_KEY is required when USD billing is enabled',
+      });
+    }
+
+    if (values.PAYSTACK_CALLBACK_URL) {
+      try {
+        const callback = new URL(values.PAYSTACK_CALLBACK_URL);
+        if (values.NODE_ENV === 'production' && callback.protocol !== 'https:') {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['PAYSTACK_CALLBACK_URL'],
+            message: 'PAYSTACK_CALLBACK_URL must use https in production',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PAYSTACK_CALLBACK_URL'],
+          message: 'PAYSTACK_CALLBACK_URL must be an absolute URL',
+        });
+      }
     }
   });
 
@@ -365,7 +449,9 @@ export interface AppConfig {
   meetingInvitationLinkPath: string;
   teamInvitationLinkPath: string;
   projectInvitationLinkPath: string;
-  emailProvider: 'smtp' | 'console' | 'disabled';
+  emailProvider: 'smtp' | 'brevo-api' | 'console' | 'disabled';
+  emailApiKey: string;
+  emailApiUrl: string;
   emailSmtpHost: string;
   emailSmtpPort: number;
   emailSmtpSecure: boolean;
@@ -388,6 +474,12 @@ export interface AppConfig {
   emailWorkerEnabled: boolean;
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
+  paystackSecretKey: string;
+  paystackEncryptionKey: string;
+  paystackUsdEnabled: boolean;
+  paystackCallbackUrl: string;
+  paystackApiUrl: string;
+  paystackRequestTimeoutMs: number;
 }
 
 export class ConfigurationError extends Error {
@@ -484,6 +576,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     teamInvitationLinkPath: values.TEAM_INVITATION_LINK_PATH,
     projectInvitationLinkPath: values.PROJECT_INVITATION_LINK_PATH,
     emailProvider: values.EMAIL_PROVIDER,
+    emailApiKey: values.EMAIL_API_KEY,
+    emailApiUrl: values.EMAIL_API_URL.replace(/\/+$/, ''),
     emailSmtpHost: values.EMAIL_SMTP_HOST,
     emailSmtpPort: values.EMAIL_SMTP_PORT,
     emailSmtpSecure: values.EMAIL_SMTP_SECURE || values.EMAIL_SMTP_PORT === 465,
@@ -506,6 +600,12 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailWorkerEnabled: values.EMAIL_WORKER_ENABLED,
     emailWorkerPollIntervalMs: values.EMAIL_WORKER_POLL_INTERVAL_MS,
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
+    paystackSecretKey: values.PAYSTACK_SECRET_KEY,
+    paystackEncryptionKey: values.PAYSTACK_ENCRYPTION_KEY,
+    paystackUsdEnabled: values.PAYSTACK_USD_ENABLED,
+    paystackCallbackUrl: values.PAYSTACK_CALLBACK_URL,
+    paystackApiUrl: values.PAYSTACK_API_URL,
+    paystackRequestTimeoutMs: values.PAYSTACK_REQUEST_TIMEOUT_MS,
   };
 }
 

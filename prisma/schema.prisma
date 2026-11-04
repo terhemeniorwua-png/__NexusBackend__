@@ -180,6 +180,31 @@ enum EmailSuppressionReason {
   MANUAL
 }
 
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  NON_RENEWING
+  CANCELLED
+  ATTENTION
+}
+
+enum SubscriptionPlanId {
+  PRO
+  BUSINESS
+}
+
+enum SubscriptionInterval {
+  MONTHLY
+  ANNUAL
+}
+
+enum BillingCheckoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
@@ -300,20 +325,153 @@ model Workspace {
   updatedAt    DateTime            @updatedAt
   deletedAt    DateTime?
 
-  owner        User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members      WorkspaceMembership[]
-  teams        Team[]
-  projects     Project[]
-  departments  Department[]
-  invitations  Invitation[]
-  joinRequests JoinRequest[]
-  files        FileAttachment[]
-  auditLogs    AuditLog[]
+  owner            User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members          WorkspaceMembership[]
+  teams            Team[]
+  projects         Project[]
+  departments      Department[]
+  invitations      Invitation[]
+  joinRequests     JoinRequest[]
+  files            FileAttachment[]
+  auditLogs        AuditLog[]
+  subscription     Subscription?
+  billingPayments  BillingPayment[]
+  billingCheckouts BillingCheckout[]
+  billingSeatSync  BillingSeatSync?
 
   @@index([ownerId])
   @@index([status])
   @@index([type])
   @@index([visibility])
+}
+
+model Subscription {
+  id                            String                @id @default(uuid())
+  workspaceId                   String                @unique
+  plan                          SubscriptionPlanId
+  interval                      SubscriptionInterval
+  currency                      String                @default("USD")
+  status                        SubscriptionStatus    @default(PENDING)
+  billableSeats                 Int
+  providerCustomerCode          String?
+  providerSubscriptionCode      String?               @unique
+  providerManageTokenCiphertext String?
+  pendingSubscriptionCode       String?               @unique
+  pendingManageTokenCiphertext  String?
+  pendingPlan                   SubscriptionPlanId?
+  pendingInterval               SubscriptionInterval?
+  pendingBillableSeats          Int?
+  pendingEffectiveAt            DateTime?
+  currentPeriodStart            DateTime?
+  currentPeriodEnd              DateTime?
+  cancelAtPeriodEnd             Boolean               @default(false)
+  cancelledAt                   DateTime?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  payments  BillingPayment[]
+  checkouts BillingCheckout[]
+
+  @@index([status, currentPeriodEnd])
+}
+
+model PaystackPlan {
+  id               String               @id @default(uuid())
+  plan             SubscriptionPlanId
+  interval         SubscriptionInterval
+  billableSeats    Int
+  amountSubunit    Int
+  currency         String               @default("USD")
+  providerPlanCode String               @unique
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@unique([plan, interval, billableSeats])
+}
+
+model BillingCheckout {
+  id                            String                @id @default(uuid())
+  workspaceId                   String
+  subscriptionId                String?
+  createdByUserId               String
+  reference                     String                @unique
+  plan                          SubscriptionPlanId
+  interval                      SubscriptionInterval
+  billableSeats                 Int
+  amountSubunit                 Int
+  currency                      String                @default("USD")
+  status                        BillingCheckoutStatus @default(PENDING)
+  checkoutUrl                   String
+  providerCustomerCode          String?
+  providerPlanCode              String?
+  providerSubscriptionCode      String?
+  providerManageTokenCiphertext String?
+  providerAuthorizationReusable Boolean?
+  verifiedAt                    DateTime?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  subscription Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  payments     BillingPayment[]
+
+  @@index([workspaceId, createdAt])
+  @@index([status, createdAt])
+}
+
+model BillingPayment {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  subscriptionId    String?
+  checkoutId        String?
+  providerReference String    @unique
+  providerEventKey  String?   @unique
+  amountSubunit     Int
+  currency          String
+  status            String
+  paidAt            DateTime?
+  periodStart       DateTime?
+  periodEnd         DateTime?
+  createdAt         DateTime  @default(now())
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  subscription Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  checkout     BillingCheckout? @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([subscriptionId, createdAt])
+}
+
+model BillingWebhookEvent {
+  id          String   @id @default(uuid())
+  eventKey    String   @unique
+  eventType   String
+  processedAt DateTime @default(now())
+}
+
+/// Durable request to align a recurring subscription quantity with active seats.
+/// Provider operations are performed by the billing worker after membership
+/// changes commit, so a transient provider outage cannot roll back removal.
+model BillingSeatSync {
+  id                            String   @id @default(uuid())
+  workspaceId                   String   @unique
+  requestedSeats                Int
+  generation                    Int      @default(1)
+  status                        String   @default("PENDING")
+  attempts                      Int      @default(0)
+  nextAttemptAt                 DateTime @default(now())
+  lastError                     String?
+  providerSubscriptionCode      String?
+  providerManageTokenCiphertext String?
+  previousSubscriptionCode      String?
+  previousManageTokenCiphertext String?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
 }
 
 model WorkspaceMembership {

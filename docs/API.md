@@ -145,14 +145,35 @@ events using the configured signature or webhook token, not a user session.
 | POST | `/webhooks/email` | Provider verification required | Receive an email delivery event. |
 | POST | `/webhooks/email/{token}` | Configured webhook token required | Receive an email event from providers without signed payloads. |
 
-## Not exposed as HTTP APIs
+## Billing
 
-The current application router does not expose billing, projects, tasks,
-messaging, general notifications, files, documents, calendar, meetings, forms,
-search, integrations, automation, or AI endpoints. Billing policy helpers and
-authorization policies present in the source do not constitute those APIs.
-Do not add endpoints to this reference or `openapi.yaml` until matching routes,
-validation, authorization, service behavior, and response contracts exist.
+Billing routes are mounted below `/api/v1/billing`. Read routes require an
+authenticated active account and workspace membership. Mutations require the
+workspace owner. USD checkout is available only when the merchant has enabled
+USD in Paystack and the server is configured. Prices, seat counts, transaction
+references, and payment outcomes are server-owned.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/billing/plans` | Public | Read the approved USD plan and seat catalog. |
+| GET | `/billing/workspaces/{workspaceId}` | Workspace member | Read subscription, active seats, pending changes, and renewal date. |
+| GET | `/billing/workspaces/{workspaceId}/payments` | Workspace member | Read recent billing history. |
+| POST | `/billing/workspaces/{workspaceId}/checkout` | Workspace owner | Initialize hosted Paystack checkout for plan and cadence. |
+| POST | `/billing/workspaces/{workspaceId}/verify` | Workspace owner | Verify a transaction reference server-side and fulfill its checkout. |
+| POST | `/billing/workspaces/{workspaceId}/change` | Workspace owner | Schedule a plan downgrade or seat reduction at renewal. |
+| POST | `/billing/workspaces/{workspaceId}/cancel` | Workspace owner | Cancel renewal at the end of the paid period. |
+
+The signed payment webhook is `POST /api/v1/webhooks/paystack`. It uses the
+raw request body and `x-paystack-signature` HMAC-SHA512 verification. It
+deduplicates events and returns `{ "success": true, "data": { "received": true } }`
+for accepted events. See the OpenAPI contract for request and error details.
+
+## Other APIs not exposed
+
+The current application router does not expose projects, tasks, messaging,
+general notifications, files, documents, calendar, meetings, forms, search,
+integrations, automation, or AI endpoints. Do not document planned behavior as
+live API functionality.
 
 ## Updating this API reference
 

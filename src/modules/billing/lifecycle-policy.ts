@@ -84,14 +84,15 @@ export function scheduleDowngrade(input: {
   };
 }
 
-/** Extra-seat charges always use a monthly period, regardless of base cadence. */
+/** Extra seats use the base subscription cadence and its approved seat price. */
 export function prepareAdditionalSeatIncrease(input: {
   plan: PaidPlanId;
+  interval: BaseBillingInterval;
   addedSeatCount: number;
-  monthlySeatPeriod: BillingPeriod;
+  seatPeriod: BillingPeriod;
   now: Date;
 }): ProratedCharge & {
-  billingInterval: 'MONTHLY';
+  billingInterval: BaseBillingInterval;
   effectiveWhen: 'verified-payment';
   addedSeatCount: number;
 } {
@@ -99,15 +100,14 @@ export function prepareAdditionalSeatIncrease(input: {
     throw new RangeError('The added seat count must be a positive integer');
   }
 
-  const monthlyRate = subscriptionCatalog[input.plan].additionalMemberMonthlyCents;
-  const charge = prorateCents(
-    monthlyRate * input.addedSeatCount,
-    input.monthlySeatPeriod,
-    input.now,
-  );
+  const rate =
+    input.interval === 'MONTHLY'
+      ? subscriptionCatalog[input.plan].additionalMemberMonthlyCents
+      : subscriptionCatalog[input.plan].additionalMemberAnnualCents;
+  const charge = prorateCents(rate * input.addedSeatCount, input.seatPeriod, input.now);
   return {
     ...charge,
-    billingInterval: 'MONTHLY',
+    billingInterval: input.interval,
     effectiveWhen: 'verified-payment',
     addedSeatCount: input.addedSeatCount,
   };
