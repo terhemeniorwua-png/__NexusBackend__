@@ -45,15 +45,20 @@ try {
     skipReason = '';
   }
 } catch (error) {
+  if (process.env.RUN_PHASE4_DB_TESTS === 'true') throw error;
   skipReason = error instanceof Error ? error.message : 'The test database could not be resolved';
 }
 
 let uniqueCounter = 0;
+const fixtureEmails = new Set<string>();
+const fixtureUserIds = new Set<string>();
+const fixtureWebhookEventIds = new Set<string>();
 
 function uniqueEmail(prefix = 'mail'): string {
   uniqueCounter += 1;
-
-  return `${prefix}.${process.pid}.${uniqueCounter}.${Date.now()}@example.com`;
+  const email = `${prefix}.${process.pid}.${uniqueCounter}.${Date.now()}@example.com`;
+  fixtureEmails.add(email);
+  return email;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -183,6 +188,10 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     // The delivery rows of this suite are disposable.
     await clearTestDeliveries();
+    if (fixtureUserIds.size) {
+      await prisma?.auditLog.deleteMany({ where: { actorId: { in: [...fixtureUserIds] } } });
+      await prisma?.user.deleteMany({ where: { id: { in: [...fixtureUserIds] } } });
+    }
     await disconnectRedis();
     await prisma?.$disconnect();
   });
@@ -192,11 +201,16 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
       return;
     }
 
-    await prisma.emailDelivery.deleteMany({
-      where: { toAddress: { endsWith: '@example.com' } },
-    });
-    await prisma.emailWebhookEvent.deleteMany({});
-    await prisma.emailSuppression.deleteMany({});
+    if (fixtureEmails.size) {
+      const emails = [...fixtureEmails];
+      await prisma.emailDelivery.deleteMany({ where: { toAddress: { in: emails } } });
+      await prisma.emailSuppression.deleteMany({ where: { emailAddress: { in: emails } } });
+    }
+    if (fixtureWebhookEventIds.size) {
+      await prisma.emailWebhookEvent.deleteMany({
+        where: { providerEventId: { in: [...fixtureWebhookEventIds] } },
+      });
+    }
   }
 
   function deliveryService() {
@@ -210,6 +224,8 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     });
 
     assert.equal(response.status, 201, JSON.stringify(response.body));
+    const user = await prisma.user.findUniqueOrThrow({ where: { email }, select: { id: true } });
+    fixtureUserIds.add(user.id);
   }
 
   test('a registration email is queued, delivered and recorded', async () => {
@@ -613,6 +629,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
         reason: 'The recipient does not exist',
       },
     });
+    fixtureWebhookEventIds.add(`evt_${email}`);
 
     const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
 
@@ -687,6 +704,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
       type: 'email.delivered',
       data: { email_id: delivered?.providerMessageId, to: [email] },
     });
+    fixtureWebhookEventIds.add(`evt_duplicate_${email}`);
 
     const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
 

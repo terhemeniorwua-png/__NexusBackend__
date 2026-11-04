@@ -62,9 +62,18 @@ function runTests(dbUrl: string): void {
   let pm: TestUser;
   let member: TestUser;
   let outsider: TestUser;
+  const testRun = `${process.pid}-${Date.now()}`;
+  const fixtureEmails = [
+    `phase6-owner-${testRun}@test.example`,
+    `phase6-pm-${testRun}@test.example`,
+    `phase6-member-${testRun}@test.example`,
+    `phase6-outsider-${testRun}@test.example`,
+  ];
+  const createdUserIds: string[] = [];
 
   // Workspace created in beforeAll
   let workspaceId: string;
+  const createdWorkspaceIds: string[] = [];
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -119,6 +128,7 @@ function runTests(dbUrl: string): void {
       jar,
     });
     const id = (meRes.body.data as { user: { id: string } }).user.id;
+    createdUserIds.push(id);
 
     return { id, email, accessToken, jar };
   }
@@ -142,7 +152,9 @@ function runTests(dbUrl: string): void {
       jar: user.jar,
     });
     assert.equal(res.status, 201, `create workspace failed: ${JSON.stringify(res.body)}`);
-    return (res.body.data as { id: string }).id;
+    const id = (res.body.data as { id: string }).id;
+    createdWorkspaceIds.push(id);
+    return id;
   }
 
   async function addMember(
@@ -175,33 +187,13 @@ function runTests(dbUrl: string): void {
     server = await startServer(app);
     baseUrl = server.baseUrl;
 
-    // Clean up any leftover test data from previous runs.
-    const testEmails = [
-      'phase6-owner@test.example',
-      'phase6-pm@test.example',
-      'phase6-member@test.example',
-      'phase6-outsider@test.example',
-    ];
-    const staleUsers = await db.prisma.user.findMany({
-      where: { email: { in: testEmails } },
-      select: { id: true },
-    });
-    await db.prisma.workspace.deleteMany({
-      where: { ownerId: { in: staleUsers.map(({ id }) => id) } },
-    });
-    await db.prisma.user.deleteMany({ where: { id: { in: staleUsers.map(({ id }) => id) } } });
     await db.prisma.$disconnect();
 
     // Register all four test users.
-    owner = await register(baseUrl, 'P6 Owner', 'phase6-owner@test.example', 'TestPass123!');
-    pm = await register(baseUrl, 'P6 PM', 'phase6-pm@test.example', 'TestPass123!');
-    member = await register(baseUrl, 'P6 Member', 'phase6-member@test.example', 'TestPass123!');
-    outsider = await register(
-      baseUrl,
-      'P6 Outsider',
-      'phase6-outsider@test.example',
-      'TestPass123!',
-    );
+    owner = await register(baseUrl, 'P6 Owner', fixtureEmails[0]!, 'TestPass123!');
+    pm = await register(baseUrl, 'P6 PM', fixtureEmails[1]!, 'TestPass123!');
+    member = await register(baseUrl, 'P6 Member', fixtureEmails[2]!, 'TestPass123!');
+    outsider = await register(baseUrl, 'P6 Outsider', fixtureEmails[3]!, 'TestPass123!');
 
     // Create the shared workspace as the owner.
     workspaceId = await createWorkspace(owner, 'Phase6 Test Workspace');
@@ -215,25 +207,11 @@ function runTests(dbUrl: string): void {
     await server.close();
     await disconnectRedis();
     const db = await connectTestDatabase(dbUrl);
-    const testUsers = await db.prisma.user.findMany({
-      where: {
-        email: {
-          in: [
-            'phase6-owner@test.example',
-            'phase6-pm@test.example',
-            'phase6-member@test.example',
-            'phase6-outsider@test.example',
-          ],
-        },
-      },
-      select: { id: true },
-    });
     await db.prisma.workspace.deleteMany({
-      where: { OR: [{ id: workspaceId }, { ownerId: { in: testUsers.map(({ id }) => id) } }] },
+      where: { id: { in: createdWorkspaceIds } },
     });
-    await db.prisma.user.deleteMany({
-      where: { id: { in: testUsers.map(({ id }) => id) } },
-    });
+    await db.prisma.auditLog.deleteMany({ where: { actorId: { in: createdUserIds } } });
+    await db.prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
     await db.prisma.$disconnect();
   });
 
@@ -605,17 +583,10 @@ function runTests(dbUrl: string): void {
       let secondMember: TestUser;
 
       before(async () => {
-        // Register a temporary user for the second workspace.
-        const db = await connectTestDatabase(dbUrl);
-        await db.prisma.user.deleteMany({
-          where: { email: 'phase6-transfer-member@test.example' },
-        });
-        await db.prisma.$disconnect();
-
         secondMember = await register(
           baseUrl,
           'P6 Transfer Target',
-          'phase6-transfer-member@test.example',
+          `phase6-transfer-member-${testRun}@test.example`,
           'TestPass123!',
         );
         transferWsId = await createWorkspace(owner, 'Phase6 Transfer Workspace');
@@ -625,9 +596,7 @@ function runTests(dbUrl: string): void {
       after(async () => {
         const db = await connectTestDatabase(dbUrl);
         await db.prisma.workspace.deleteMany({ where: { id: transferWsId } });
-        await db.prisma.user.deleteMany({
-          where: { email: 'phase6-transfer-member@test.example' },
-        });
+        await db.prisma.user.deleteMany({ where: { id: secondMember.id } });
         await db.prisma.$disconnect();
       });
 

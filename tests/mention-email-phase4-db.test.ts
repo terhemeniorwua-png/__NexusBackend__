@@ -30,6 +30,7 @@ try {
     skipReason = '';
   }
 } catch (error) {
+  if (process.env.RUN_PHASE4_DB_TESTS === 'true') throw error;
   skipReason = error instanceof Error ? error.message : 'The test database could not be resolved';
 }
 

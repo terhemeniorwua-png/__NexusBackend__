@@ -10,6 +10,7 @@ try {
   databaseUrl = resolveTestDatabaseUrl('RUN_BILLING_DB_TESTS');
   if (databaseUrl) skipReason = '';
 } catch (error) {
+  if (process.env.RUN_BILLING_DB_TESTS === 'true') throw error;
   skipReason = error instanceof Error ? error.message : 'The test database identity was rejected';
 }
 

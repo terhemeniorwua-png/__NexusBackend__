@@ -55,9 +55,17 @@ function runTests(rawDbUrl: string): void {
   let pm: TestUser;
   let member: TestUser;
   let outsider: TestUser;
+  const testRun = `${process.pid}-${Date.now()}`;
+  const fixtureEmails = [
+    `p7-owner-${testRun}@test.example`,
+    `p7-pm-${testRun}@test.example`,
+    `p7-member-${testRun}@test.example`,
+    `p7-outsider-${testRun}@test.example`,
+  ];
 
   let workspaceId: string;
   let institutionWorkspaceId: string;
+  const createdWorkspaceIds: string[] = [];
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -158,27 +166,12 @@ function runTests(rawDbUrl: string): void {
     server = await startServer(app);
     baseUrl = server.baseUrl;
 
-    // Clean up stale data from previous interrupted runs.
-    const testEmails = [
-      'p7-owner@test.example',
-      'p7-pm@test.example',
-      'p7-member@test.example',
-      'p7-outsider@test.example',
-    ];
-    const staleUsers = await db.prisma.user.findMany({
-      where: { email: { in: testEmails } },
-      select: { id: true },
-    });
-    await db.prisma.workspace.deleteMany({
-      where: { OR: [{ id: workspaceId }, { ownerId: { in: staleUsers.map(({ id }) => id) } }] },
-    });
-    await db.prisma.user.deleteMany({ where: { id: { in: staleUsers.map(({ id }) => id) } } });
     await db.prisma.$disconnect();
 
-    owner = await register('P7 Owner', 'p7-owner@test.example', 'TestPass123!');
-    pm = await register('P7 PM', 'p7-pm@test.example', 'TestPass123!');
-    member = await register('P7 Member', 'p7-member@test.example', 'TestPass123!');
-    outsider = await register('P7 Outsider', 'p7-outsider@test.example', 'TestPass123!');
+    owner = await register('P7 Owner', fixtureEmails[0]!, 'TestPass123!');
+    pm = await register('P7 PM', fixtureEmails[1]!, 'TestPass123!');
+    member = await register('P7 Member', fixtureEmails[2]!, 'TestPass123!');
+    outsider = await register('P7 Outsider', fixtureEmails[3]!, 'TestPass123!');
 
     // Create the workspace and populate membership.
     const ws = await jsonRequest<{ id: string }>(`${baseUrl}/api/v1/workspaces`, {
@@ -189,6 +182,7 @@ function runTests(rawDbUrl: string): void {
     });
     assert.equal(ws.status, 201);
     workspaceId = (ws.body.data as { id: string }).id;
+    createdWorkspaceIds.push(workspaceId);
 
     await addWorkspaceMember(owner, workspaceId, pm.email, 'PROJECT_MANAGER');
     await addWorkspaceMember(owner, workspaceId, member.email, 'MEMBER');
@@ -204,6 +198,7 @@ function runTests(rawDbUrl: string): void {
       `institution workspace creation failed: ${JSON.stringify(institution.body)}`,
     );
     institutionWorkspaceId = (institution.body.data as { id: string }).id;
+    createdWorkspaceIds.push(institutionWorkspaceId);
     await addWorkspaceMember(owner, institutionWorkspaceId, member.email, 'MEMBER');
     await addWorkspaceMember(owner, institutionWorkspaceId, pm.email, 'MEMBER');
     // outsider is NOT added to the workspace.
@@ -213,25 +208,10 @@ function runTests(rawDbUrl: string): void {
     await server?.close();
     await disconnectRedis();
     const db = await connectTestDatabase(rawDbUrl);
-    const testUsers = await db.prisma.user.findMany({
-      where: {
-        email: {
-          in: [
-            'p7-owner@test.example',
-            'p7-pm@test.example',
-            'p7-member@test.example',
-            'p7-outsider@test.example',
-          ],
-        },
-      },
-      select: { id: true },
-    });
-    await db.prisma.workspace.deleteMany({
-      where: { OR: [{ id: workspaceId }, { ownerId: { in: testUsers.map(({ id }) => id) } }] },
-    });
-    await db.prisma.user.deleteMany({
-      where: { id: { in: testUsers.map(({ id }) => id) } },
-    });
+    const createdUserIds = [owner.id, pm.id, member.id, outsider.id];
+    await db.prisma.workspace.deleteMany({ where: { id: { in: createdWorkspaceIds } } });
+    await db.prisma.auditLog.deleteMany({ where: { actorId: { in: createdUserIds } } });
+    await db.prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
     await db.prisma.$disconnect();
   });
 
