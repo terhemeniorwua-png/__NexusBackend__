@@ -172,8 +172,11 @@ for accepted events. See the OpenAPI contract for request and error details.
 
 The current application router does not expose projects, tasks, messaging,
 general notifications, files, documents, calendar, meetings, forms, search,
-integrations, automation, or AI endpoints. Do not document planned behavior as
-live API functionality.
+integrations, automation, or AI endpoints. Phase 7 organization profile and
+settings operations and institution-group operations are also not exposed.
+Department routes currently cover listing, creation, and member assignment or
+removal; there are no department update/delete or department-settings routes.
+Do not document planned behavior as live API functionality.
 
 ## Updating this API reference
 
