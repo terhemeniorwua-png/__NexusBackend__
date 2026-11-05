@@ -13,7 +13,7 @@ import {
   type JoinRequestService,
 } from '../modules/workspaces/join-request.service';
 import { createUsersRouter } from '../modules/users/users.routes';
-import { createUsersService, type UsersService } from '../modules/users/users.service';
+import type { UsersService } from '../modules/users/users.service';
 import { createWorkspaceRouter } from '../modules/workspaces/workspace.routes';
 import {
   createWorkspaceService,
@@ -27,6 +27,7 @@ import { createBillingRouter } from '../modules/billing/billing.routes';
 import { createBillingService, type BillingService } from '../modules/billing/billing.service';
 import { createOrganizationRouter } from '../modules/organizations/organization.routes';
 import { createProjectOrganizationRouter } from '../modules/projects/organization-access.routes';
+import { createProjectRouter } from '../modules/projects/project.routes';
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 import { createChannelRouter } from '../modules/channels/channel.routes';
 
@@ -46,7 +47,7 @@ export function createApiRouter({
   config,
   readinessProbe,
   authService = createAuthService(config),
-  usersService = createUsersService(),
+  usersService,
   workspaceService = createWorkspaceService(config),
   invitationService = createInvitationService(config),
   joinRequestService = createJoinRequestService(config),
@@ -59,7 +60,10 @@ export function createApiRouter({
   router.use('/billing', createBillingRouter({ config, service: billingService }));
   router.use('/privacy-requests', createPrivacyRouter({ config }));
   router.use('/auth', createAuthRouter({ config, service: authService }));
-  router.use('/users', createUsersRouter({ config, service: usersService }));
+  router.use(
+    '/users',
+    createUsersRouter({ config, ...(usersService ? { service: usersService } : {}) }),
+  );
   // Discovery and join routes must be registered before the workspace router
   // so `/workspaces/discover` is not read as a workspace id.
   router.use('/workspaces', createJoinRequestRouter({ config, service: joinRequestService }));
@@ -69,6 +73,7 @@ export function createApiRouter({
   );
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
   router.use('/workspaces/:workspaceId/projects', createProjectOrganizationRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects', createProjectRouter({ config }));
   router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…

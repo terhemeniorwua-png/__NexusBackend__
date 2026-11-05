@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
+import { createServer, type Server } from 'node:http';
+import { once } from 'node:events';
+import jwt from 'jsonwebtoken';
+import sharp from 'sharp';
 import type { Express } from 'express';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { getPrismaClient } from '../src/db/prisma';
 import { hashSecret } from '../src/utils/crypto';
 import { processPendingAccountDeletions } from '../src/modules/auth/account-deletion.service';
+import { totpAt } from '../src/modules/auth/totp';
 import { connectRedis, disconnectRedis } from '../src/db/redis';
 import {
   resetEmailSender,
@@ -78,6 +83,11 @@ try {
 const namespace = `nexus-test-${process.pid}-${Date.now()}`;
 const createdTestUserIds = new Set<string>();
 const createdTestEmails = new Set<string>();
+const storedAvatarObjects = new Map<string, { body: Buffer; contentType: string }>();
+const deletedAvatarKeys: string[] = [];
+let failAvatarDelete = false;
+let objectStorageServer: Server | undefined;
+let objectStorageEndpoint = '';
 
 function buildConfig(overrides: Record<string, string> = {}): AppConfig {
   return parseEnv({
@@ -89,12 +99,21 @@ function buildConfig(overrides: Record<string, string> = {}): AppConfig {
     CORS_ORIGINS: 'http://localhost:3000',
     LOG_LEVEL: 'silent',
     JWT_ACCESS_SECRET: 'phase3-integration-test-access-secret-value',
+    TOTP_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString('base64url'),
     BCRYPT_SALT_ROUNDS: '4',
     RATE_LIMIT_MAX: '100000',
     AUTH_LOGIN_RATE_LIMIT_MAX: '1000',
     AUTH_REGISTER_RATE_LIMIT_MAX: '1000',
     AUTH_PASSWORD_RATE_LIMIT_MAX: '1000',
     AUTH_VERIFICATION_RATE_LIMIT_MAX: '1000',
+    AVATAR_MAX_FILE_SIZE_BYTES: '2048',
+    AVATAR_MAX_DIMENSION: '256',
+    AVATAR_MAX_PIXELS: '65536',
+    AVATAR_RATE_LIMIT_MAX: '10',
+    OBJECT_STORAGE_ENDPOINT: objectStorageEndpoint,
+    OBJECT_STORAGE_BUCKET: 'nexus-test-private',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'test-access-key',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'test-secret-key',
     RATE_LIMIT_NAMESPACE: namespace,
     ...overrides,
   });
@@ -138,6 +157,49 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     setEmailSender(sender);
 
+    objectStorageServer = createServer(async (req, res) => {
+      const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+      const objectKey = pathname.replace(/^\/[^/]+\//, '');
+      if (req.method === 'PUT') {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        storedAvatarObjects.set(objectKey, {
+          body: Buffer.concat(chunks),
+          contentType: req.headers['content-type'] ?? 'application/octet-stream',
+        });
+        res.statusCode = 200;
+        res.end();
+        return;
+      }
+      if (req.method === 'DELETE') {
+        deletedAvatarKeys.push(objectKey);
+        if (failAvatarDelete) {
+          res.statusCode = 500;
+          res.end();
+          return;
+        }
+        storedAvatarObjects.delete(objectKey);
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+      const object = storedAvatarObjects.get(objectKey);
+      if (!object) {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
+      res.setHeader('content-type', object.contentType);
+      res.setHeader('content-length', object.body.length);
+      res.statusCode = 200;
+      res.end(req.method === 'HEAD' ? undefined : object.body);
+    });
+    objectStorageServer.listen(0, '127.0.0.1');
+    await once(objectStorageServer, 'listening');
+    const storageAddress = objectStorageServer.address();
+    assert.ok(storageAddress && typeof storageAddress !== 'string');
+    objectStorageEndpoint = `http://127.0.0.1:${storageAddress.port}`;
+
     app = createApp({ config: buildConfig() });
 
     server = await startServer(app);
@@ -147,6 +209,11 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
   after(async () => {
     resetEmailSender();
     await server?.close();
+    if (objectStorageServer?.listening) {
+      await new Promise<void>((resolve, reject) =>
+        objectStorageServer?.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
     await disconnectRedis();
     const userIds = [...createdTestUserIds];
     if (prisma && userIds.length > 0) {
@@ -1063,6 +1130,375 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(profile.profile.timeZone, 'Europe/London');
   });
 
+  test('profile avatars enforce private, bounded, signature-checked image uploads', async () => {
+    const session = await activate();
+    const other = await activate();
+    const authorization = { authorization: `Bearer ${session.accessToken}` };
+    const path = `${baseUrl}/api/v1/users/me/avatar`;
+    const upload = async (body: Buffer, type: string, filename = 'image.bin') => {
+      const form = new FormData();
+      form.append('avatar', new Blob([body], { type }), filename);
+      return fetch(path, { method: 'POST', headers: authorization, body: form });
+    };
+
+    const unauthenticated = await fetch(path, { method: 'POST' });
+    assert.equal(unauthenticated.status, 401);
+    const invalidPatch = await jsonRequest(`${baseUrl}/api/v1/users/me`, {
+      method: 'PATCH',
+      headers: authorization,
+      body: JSON.stringify({ avatarUrl: 'https://attacker.example/avatar.png' }),
+    });
+    assert.equal(invalidPatch.status, 400);
+
+    assert.equal((await upload(Buffer.from('<html>no</html>'), 'image/png')).status, 415);
+    assert.equal(
+      (await upload(Buffer.from('<html>spoof</html>'), 'image/jpeg', 'avatar.jpg')).status,
+      415,
+    );
+    assert.equal((await upload(Buffer.alloc(2049, 1), 'image/png')).status, 413);
+    const tooWide = await sharp({
+      create: { width: 257, height: 257, channels: 3, background: '#224466' },
+    })
+      .png()
+      .toBuffer();
+    assert.equal((await upload(tooWide, 'image/png')).status, 413);
+    assert.equal((await upload(Buffer.from([0xff, 0xd8, 0xff, 0, 1]), 'image/jpeg')).status, 415);
+
+    const imageOne = await sharp({
+      create: { width: 16, height: 16, channels: 3, background: '#123456' },
+    })
+      .png()
+      .toBuffer();
+    const created = await upload(imageOne, 'text/plain', 'client-name.txt');
+    assert.equal(created.status, 200);
+    const firstProfile = await prisma.userProfile.findUniqueOrThrow({
+      where: { userId: session.userId },
+    });
+    assert.match(
+      firstProfile.avatarStorageKey ?? '',
+      new RegExp(`^avatars/${session.userId}/[0-9a-f-]+\\.png$`),
+    );
+    assert.equal(firstProfile.avatarUrl, null);
+
+    const imageTwo = await sharp({
+      create: { width: 12, height: 12, channels: 3, background: '#654321' },
+    })
+      .jpeg()
+      .toBuffer();
+    assert.equal((await upload(imageTwo, 'image/jpeg')).status, 200);
+    assert.ok(deletedAvatarKeys.includes(firstProfile.avatarStorageKey!));
+    const retrieved = await fetch(path, { headers: authorization });
+    assert.equal(retrieved.status, 200);
+    assert.equal(retrieved.headers.get('cache-control'), 'private, no-store');
+    const otherRead = await fetch(path, {
+      headers: { authorization: `Bearer ${other.accessToken}` },
+    });
+    assert.equal(otherRead.status, 404);
+
+    failAvatarDelete = true;
+    const deleted = await jsonRequest(path, { method: 'DELETE', headers: authorization });
+    failAvatarDelete = false;
+    assert.equal(deleted.status, 200);
+    const finalProfile = await prisma.userProfile.findUniqueOrThrow({
+      where: { userId: session.userId },
+    });
+    assert.equal(finalProfile.avatarStorageKey, null);
+    const rateOne = await jsonRequest(path, { method: 'DELETE', headers: authorization });
+    const rateTwo = await jsonRequest(path, { method: 'DELETE', headers: authorization });
+    const limited = await jsonRequest(path, { method: 'DELETE', headers: authorization });
+    assert.equal(rateOne.status, 200);
+    assert.equal(rateTwo.status, 200);
+    assert.equal(limited.status, 429);
+  });
+
+  test('TOTP enrollment, login challenge, replay, recovery codes, disable and lockout work end to end', async () => {
+    const session = await activate();
+    const authHeaders = { authorization: `Bearer ${session.accessToken}` };
+    const setup = await jsonRequest<{ otpauthUrl: string }>(`${baseUrl}/api/v1/auth/2fa/setup`, {
+      method: 'POST',
+      headers: authHeaders,
+    });
+    assert.equal(setup.status, 200, JSON.stringify(setup.body));
+    const secret = new URL((setup.body.data as { otpauthUrl: string }).otpauthUrl).searchParams.get(
+      'secret',
+    );
+    assert.ok(secret);
+    const currentCode = totpAt(secret);
+    const wrongCode = currentCode === '000000' ? '000001' : '000000';
+    const wrongConfirm = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/confirm`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ code: wrongCode }),
+    });
+    assert.equal(wrongConfirm.status, 401);
+
+    const confirmed = await jsonRequest<{ recoveryCodes: string[] }>(
+      `${baseUrl}/api/v1/auth/2fa/confirm`,
+      {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ code: currentCode }),
+      },
+    );
+    assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+    const recoveryCodes = (confirmed.body.data as { recoveryCodes: string[] }).recoveryCodes;
+    assert.equal(recoveryCodes.length, 10);
+    assert.equal(new Set(recoveryCodes).size, 10);
+    const enabledUser = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    assert.equal(enabledUser.twoFactorEnabled, true);
+    assert.notEqual(enabledUser.twoFactorSecretEncrypted, secret);
+    const savedCodes = await prisma.twoFactorRecoveryCode.findMany({
+      where: { userId: session.userId },
+    });
+    assert.equal(savedCodes.length, 10);
+    assert.equal(
+      savedCodes.some(({ codeHash }) => recoveryCodes.includes(codeHash)),
+      false,
+    );
+    assert.ok(sender.lastFor(session.email, 'security_notification'));
+    const restartWhileEnabled = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/setup`, {
+      method: 'POST',
+      headers: authHeaders,
+    });
+    assert.equal(restartWhileEnabled.status, 409);
+
+    const login = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    assert.equal(login.status, 200);
+    const challenge = login.body.data as {
+      twoFactorRequired: boolean;
+      challengeToken: string;
+      expiresIn: number;
+    };
+    assert.equal(challenge.twoFactorRequired, true);
+    assert.equal(challenge.expiresIn, 300);
+    assert.equal('accessToken' in (login.body.data as object), false);
+    assert.equal(
+      login.response.headers.getSetCookie().some((cookie) => cookie.startsWith('nexus_rt=')),
+      false,
+    );
+    const protectedWithChallenge = await jsonRequest(`${baseUrl}/api/v1/auth/me`, {
+      headers: { authorization: `Bearer ${challenge.challengeToken}` },
+    });
+    assert.equal(protectedWithChallenge.status, 401);
+
+    const expired = jwt.sign(
+      { sub: session.userId, typ: 'mfa_challenge', jti: 'expired-test' },
+      'phase3-integration-test-access-secret-value',
+      {
+        algorithm: 'HS256',
+        issuer: 'nexus-backend',
+        audience: 'nexus-mfa',
+        expiresIn: -1,
+      },
+    );
+    const expiredResult = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken: expired, code: currentCode }),
+    });
+    assert.equal(expiredResult.status, 401);
+
+    const complete = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken: challenge.challengeToken, code: currentCode }),
+    });
+    assert.equal(complete.status, 200, JSON.stringify(complete.body));
+    const replayLogin = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    const replayChallenge = (replayLogin.body.data as { challengeToken: string }).challengeToken;
+    const replay = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken: replayChallenge, code: currentCode }),
+    });
+    assert.equal(replay.status, 401);
+
+    const recoveryLogin = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    const recoveryChallenge = (recoveryLogin.body.data as { challengeToken: string })
+      .challengeToken;
+    const recoverySuccess = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken: recoveryChallenge, recoveryCode: recoveryCodes[0] }),
+    });
+    assert.equal(recoverySuccess.status, 200, JSON.stringify(recoverySuccess.body));
+    const recoveryAgainLogin = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    const recoveryAgainChallenge = (recoveryAgainLogin.body.data as { challengeToken: string })
+      .challengeToken;
+    const recoveryAgain = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+      method: 'POST',
+      body: JSON.stringify({
+        challengeToken: recoveryAgainChallenge,
+        recoveryCode: recoveryCodes[0],
+      }),
+    });
+    assert.equal(recoveryAgain.status, 401);
+
+    const regenerated = await jsonRequest<{ recoveryCodes: string[] }>(
+      `${baseUrl}/api/v1/auth/2fa/recovery-codes`,
+      {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ currentPassword: session.password }),
+      },
+    );
+    assert.equal(regenerated.status, 200);
+    assert.equal((regenerated.body.data as { recoveryCodes: string[] }).recoveryCodes.length, 10);
+    assert.equal(
+      await prisma.twoFactorRecoveryCode.count({ where: { userId: session.userId, usedAt: null } }),
+      10,
+    );
+    assert.equal(
+      await prisma.twoFactorRecoveryCode.count({
+        where: { userId: session.userId, codeHash: hashSecret(recoveryCodes[1]!) },
+      }),
+      0,
+    );
+
+    const disableCode = totpAt(secret, (Math.floor(Date.now() / 30_000) + 1) * 30_000);
+    const disable = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/disable`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ currentPassword: session.password, code: disableCode }),
+    });
+    assert.equal(disable.status, 200, JSON.stringify(disable.body));
+    const disabledUser = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    assert.equal(disabledUser.twoFactorEnabled, false);
+    assert.equal(disabledUser.twoFactorSecretEncrypted, null);
+    assert.equal(
+      await prisma.twoFactorRecoveryCode.count({ where: { userId: session.userId } }),
+      0,
+    );
+    assert.ok(sender.lastFor(session.email, 'security_notification'));
+    const ordinaryLogin = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    assert.equal('accessToken' in (ordinaryLogin.body.data as object), true);
+  });
+
+  test('password reset revokes sessions but does not bypass enabled two-factor authentication', async () => {
+    const session = await activate();
+    const headers = { authorization: `Bearer ${session.accessToken}` };
+    const setup = await jsonRequest<{ otpauthUrl: string }>(`${baseUrl}/api/v1/auth/2fa/setup`, {
+      method: 'POST',
+      headers,
+    });
+    const secret = new URL((setup.body.data as { otpauthUrl: string }).otpauthUrl).searchParams.get(
+      'secret',
+    )!;
+    const enabled = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/confirm`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ code: totpAt(secret) }),
+    });
+    assert.equal(enabled.status, 200);
+
+    const pendingBeforeReset = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    const pendingChallenge = (pendingBeforeReset.body.data as { challengeToken: string })
+      .challengeToken;
+
+    await jsonRequest(`${baseUrl}/api/v1/auth/password/forgot`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email }),
+    });
+    const token = sender.tokenFrom(sender.lastFor(session.email, 'password_reset'));
+    const reset = await jsonRequest(`${baseUrl}/api/v1/auth/password/reset`, {
+      method: 'POST',
+      body: JSON.stringify({ token, password: 'New-Password-9' }),
+    });
+    assert.equal(reset.status, 200);
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    assert.equal(user.twoFactorEnabled, true);
+    assert.ok(user.twoFactorSecretEncrypted);
+    assert.ok(
+      (await prisma.session.findMany({ where: { userId: session.userId, revokedAt: null } }))
+        .length === 0,
+    );
+    const revokedChallenge = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken: pendingChallenge, code: totpAt(secret) }),
+    });
+    assert.equal(revokedChallenge.status, 401);
+
+    const login = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: 'New-Password-9' }),
+    });
+    assert.equal(login.status, 200);
+    assert.equal((login.body.data as { twoFactorRequired?: boolean }).twoFactorRequired, true);
+    assert.equal(
+      login.response.headers.getSetCookie().some((cookie) => cookie.startsWith('nexus_rt=')),
+      false,
+    );
+  });
+
+  test('repeated invalid MFA codes lock out both the account and source IP', async () => {
+    const session = await activate();
+    const headers = { authorization: `Bearer ${session.accessToken}` };
+    const setup = await jsonRequest<{ otpauthUrl: string }>(`${baseUrl}/api/v1/auth/2fa/setup`, {
+      method: 'POST',
+      headers,
+    });
+    const secret = new URL((setup.body.data as { otpauthUrl: string }).otpauthUrl).searchParams.get(
+      'secret',
+    )!;
+    assert.equal(
+      (
+        await jsonRequest(`${baseUrl}/api/v1/auth/2fa/confirm`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ code: totpAt(secret) }),
+        })
+      ).status,
+      200,
+    );
+    const counter = Math.floor(Date.now() / 30_000);
+    const validCodes = new Set(
+      [-1, 0, 1].map((offset) => totpAt(secret, (counter + offset) * 30_000)),
+    );
+    let invalidCode = '000000';
+    while (validCodes.has(invalidCode))
+      invalidCode = String(Number(invalidCode) + 1).padStart(6, '0');
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const challenged = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+        method: 'POST',
+        body: JSON.stringify({ email: session.email, password: session.password }),
+      });
+      const challengeToken = (challenged.body.data as { challengeToken: string }).challengeToken;
+      const failed = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+        method: 'POST',
+        body: JSON.stringify({ challengeToken, code: invalidCode }),
+      });
+      assert.equal(failed.status, 401);
+    }
+    const challenged = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: session.email, password: session.password }),
+    });
+    const locked = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/challenge`, {
+      method: 'POST',
+      body: JSON.stringify({
+        challengeToken: (challenged.body.data as { challengeToken: string }).challengeToken,
+        code: invalidCode,
+      }),
+    });
+    assert.equal(locked.status, 429);
+    assert.equal(locked.body.error?.code, 'MFA_LOCKED');
+  });
+
   test('deactivating the account blocks sign-in and revokes the sessions', async () => {
     const session = await activate();
 
@@ -1729,10 +2165,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(transferRecord.status, 'PENDING');
     const scheduledDeletionAt = (deletion.body.data as { scheduledDeletionAt: string })
       .scheduledDeletionAt;
-    assert.equal(
-      transferRecord.expiresAt?.getTime(),
-      new Date(scheduledDeletionAt).getTime(),
-    );
+    assert.equal(transferRecord.expiresAt?.getTime(), new Date(scheduledDeletionAt).getTime());
   });
 
   test('a deletion transaction failure does not partially revoke the account session', async () => {
@@ -2389,18 +2822,30 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const deletedKeys: string[] = [];
     const retry = await processPendingAccountDeletions(prisma, new Date(), 4, {
       async put() {},
-      async get() { throw new Error('get should not be used during account deletion'); },
-      async delete(key) { deletedKeys.push(key); },
-      async exists() { throw new Error('HEAD should not be used for account deletion'); },
+      async get() {
+        throw new Error('get should not be used during account deletion');
+      },
+      async delete(key) {
+        deletedKeys.push(key);
+      },
+      async exists() {
+        throw new Error('HEAD should not be used for account deletion');
+      },
     });
     assert.equal(retry.deleted, 1);
     assert.deepEqual(deletedKeys, [attachment.storageKey]);
     assert.equal(await prisma.fileAttachment.findUnique({ where: { id: attachment.id } }), null);
     const repeated = await processPendingAccountDeletions(prisma, new Date(), 4, {
       async put() {},
-      async get() { throw new Error('get should not be used during account deletion'); },
-      async delete() { throw new Error('a finalized account must not be processed again'); },
-      async exists() { throw new Error('HEAD should not be used for account deletion'); },
+      async get() {
+        throw new Error('get should not be used during account deletion');
+      },
+      async delete() {
+        throw new Error('a finalized account must not be processed again');
+      },
+      async exists() {
+        throw new Error('HEAD should not be used for account deletion');
+      },
     });
     assert.equal(repeated.deleted, 0);
     await prisma.user.update({
@@ -2419,10 +2864,20 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       data: { workspaceId: workspace.id, userId: collaborator.userId, role: 'MEMBER' },
     });
     const project = await prisma.project.create({
-      data: { workspaceId: workspace.id, name: 'Shared personal project', key: `SP${uniqueCounter + 1}`, ownerId: owner.userId },
+      data: {
+        workspaceId: workspace.id,
+        name: 'Shared personal project',
+        key: `SP${uniqueCounter + 1}`,
+        ownerId: owner.userId,
+      },
     });
     const task = await prisma.task.create({
-      data: { projectId: project.id, key: 'SP-1', title: 'Discussed task', creatorId: owner.userId },
+      data: {
+        projectId: project.id,
+        key: 'SP-1',
+        title: 'Discussed task',
+        creatorId: owner.userId,
+      },
     });
     const comment = await prisma.comment.create({
       data: { taskId: task.id, authorId: collaborator.userId, body: 'Shared discussion to retain' },
@@ -2445,20 +2900,33 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       where: { status: 'PENDING_DELETION', id: { not: owner.userId } },
       data: { scheduledDeletionAt: new Date(Date.now() + 60_000) },
     });
-    await prisma.user.update({ where: { id: owner.userId }, data: { scheduledDeletionAt: new Date(Date.now() - 1) } });
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { scheduledDeletionAt: new Date(Date.now() - 1) },
+    });
     let deleteCalls = 0;
     const result = await processPendingAccountDeletions(prisma, new Date(), 4, {
       async put() {},
-      async get() { throw new Error('get should not be used during account deletion'); },
-      async delete() { deleteCalls += 1; },
-      async exists() { throw new Error('HEAD should not be used during account deletion'); },
+      async get() {
+        throw new Error('get should not be used during account deletion');
+      },
+      async delete() {
+        deleteCalls += 1;
+      },
+      async exists() {
+        throw new Error('HEAD should not be used during account deletion');
+      },
     });
     assert.equal(result.deleted, 1);
     assert.equal(deleteCalls, 0);
     assert.ok(await prisma.fileAttachment.findUnique({ where: { id: attachment.id } }));
     assert.equal(
       await prisma.auditLog.count({
-        where: { action: 'auth.account_deletion_file_retained', targetId: attachment.id, metadata: { path: ['outcome'], equals: 'RETAINED_SHARED' } },
+        where: {
+          action: 'auth.account_deletion_file_retained',
+          targetId: attachment.id,
+          metadata: { path: ['outcome'], equals: 'RETAINED_SHARED' },
+        },
       }),
       1,
     );
@@ -2466,7 +2934,9 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
   test('concurrent finalization workers delete a personal object once', async () => {
     const session = await activate();
-    const workspace = await prisma.workspace.findFirstOrThrow({ where: { ownerId: session.userId, isPersonal: true } });
+    const workspace = await prisma.workspace.findFirstOrThrow({
+      where: { ownerId: session.userId, isPersonal: true },
+    });
     const attachment = await prisma.fileAttachment.create({
       data: {
         workspaceId: workspace.id,
@@ -2482,24 +2952,42 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       where: { status: 'PENDING_DELETION', id: { not: session.userId } },
       data: { scheduledDeletionAt: new Date(Date.now() + 60_000) },
     });
-    await prisma.user.update({ where: { id: session.userId }, data: { scheduledDeletionAt: new Date(Date.now() - 1) } });
+    await prisma.user.update({
+      where: { id: session.userId },
+      data: { scheduledDeletionAt: new Date(Date.now() - 1) },
+    });
     let signalStarted!: () => void;
     let releaseDelete!: () => void;
-    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
-    const held = new Promise<void>((resolve) => { releaseDelete = resolve; });
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
     let deleteCalls = 0;
     const storage = {
       async put() {},
-      async get() { throw new Error('get should not be used during account deletion'); },
-      async delete() { deleteCalls += 1; signalStarted(); await held; },
-      async exists() { throw new Error('HEAD should not be used during account deletion'); },
+      async get() {
+        throw new Error('get should not be used during account deletion');
+      },
+      async delete() {
+        deleteCalls += 1;
+        signalStarted();
+        await held;
+      },
+      async exists() {
+        throw new Error('HEAD should not be used during account deletion');
+      },
     };
     const first = processPendingAccountDeletions(prisma, new Date(), 4, storage);
     await started;
     const second = processPendingAccountDeletions(prisma, new Date(), 4, storage);
     releaseDelete();
     const results = await Promise.all([first, second]);
-    assert.equal(results.reduce((sum, result) => sum + result.deleted, 0), 1);
+    assert.equal(
+      results.reduce((sum, result) => sum + result.deleted, 0),
+      1,
+    );
     assert.equal(deleteCalls, 1);
     assert.equal(await prisma.fileAttachment.findUnique({ where: { id: attachment.id } }), null);
   });
@@ -2569,12 +3057,17 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     });
     assert.equal(incoming.status, 200, JSON.stringify(incoming.body));
     assert.deepEqual(
-      (incoming.body.data as { items: Array<{ id: string; workspaceId: string }> }).items.map((item) => item.id),
+      (incoming.body.data as { items: Array<{ id: string; workspaceId: string }> }).items.map(
+        (item) => item.id,
+      ),
       [transferId],
     );
-    const outsiderInbox = await jsonRequest(`${baseUrl}/api/v1/workspaces/owner-transfers/incoming`, {
-      headers: { authorization: `Bearer ${outsider.accessToken}` },
-    });
+    const outsiderInbox = await jsonRequest(
+      `${baseUrl}/api/v1/workspaces/owner-transfers/incoming`,
+      {
+        headers: { authorization: `Bearer ${outsider.accessToken}` },
+      },
+    );
     assert.deepEqual((outsiderInbox.body.data as { items: unknown[] }).items, []);
 
     const wrongWorkspace = await jsonRequest(
@@ -2589,11 +3082,14 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(rejected.status, 200, JSON.stringify(rejected.body));
     assert.equal((rejected.body.data as { status: string }).status, 'REJECTED');
     assert.equal(
-      (await prisma.workspaceOwnershipTransfer.findUniqueOrThrow({ where: { id: transferId } })).status,
+      (await prisma.workspaceOwnershipTransfer.findUniqueOrThrow({ where: { id: transferId } }))
+        .status,
       'REJECTED',
     );
     assert.equal(
-      await prisma.auditLog.count({ where: { action: 'workspace.ownership_transfer_rejected', targetId: transferId } }),
+      await prisma.auditLog.count({
+        where: { action: 'workspace.ownership_transfer_rejected', targetId: transferId },
+      }),
       1,
     );
   });
@@ -2625,7 +3121,8 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(rejection.status, 409);
     assert.equal(rejection.body.error?.code, 'OWNERSHIP_TRANSFER_EXPIRED');
     assert.equal(
-      (await prisma.workspaceOwnershipTransfer.findUniqueOrThrow({ where: { id: transferId } })).status,
+      (await prisma.workspaceOwnershipTransfer.findUniqueOrThrow({ where: { id: transferId } }))
+        .status,
       'EXPIRED',
     );
   });
@@ -2639,13 +3136,27 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       where: { ownerId: requester.userId, isPersonal: true },
     });
     const project = await prisma.project.create({
-      data: { workspaceId: workspace.id, name: 'Privacy target', key: `PR${uniqueCounter + 1}`, ownerId: requester.userId },
+      data: {
+        workspaceId: workspace.id,
+        name: 'Privacy target',
+        key: `PR${uniqueCounter + 1}`,
+        ownerId: requester.userId,
+      },
     });
     const task = await prisma.task.create({
-      data: { projectId: project.id, key: 'PR-1', title: 'Retained collaboration', creatorId: requester.userId },
+      data: {
+        projectId: project.id,
+        key: 'PR-1',
+        title: 'Retained collaboration',
+        creatorId: requester.userId,
+      },
     });
     const comment = await prisma.comment.create({
-      data: { taskId: task.id, authorId: requester.userId, body: 'Contact alice@example.com about the project; keep this sentence.' },
+      data: {
+        taskId: task.id,
+        authorId: requester.userId,
+        body: 'Contact alice@example.com about the project; keep this sentence.',
+      },
     });
     const submitted = await jsonRequest(`${baseUrl}/api/v1/privacy-requests`, {
       method: 'POST',
@@ -2701,11 +3212,15 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const conflicted = redactions.find((response) => response.status === 409);
     assert.ok(redacted, JSON.stringify(redactions.map((response) => response.body)));
     assert.ok(conflicted, JSON.stringify(redactions.map((response) => response.body)));
-    assert.equal((await prisma.comment.findUniqueOrThrow({ where: { id: comment.id } })).body,
-      'Contact [redacted] about the project; keep this sentence.');
+    assert.equal(
+      (await prisma.comment.findUniqueOrThrow({ where: { id: comment.id } })).body,
+      'Contact [redacted] about the project; keep this sentence.',
+    );
     assert.equal((redacted.body.data as { status: string }).status, 'COMPLETED');
     assert.equal(
-      await prisma.auditLog.count({ where: { action: 'privacy.comment_redacted', targetId: comment.id } }),
+      await prisma.auditLog.count({
+        where: { action: 'privacy.comment_redacted', targetId: comment.id },
+      }),
       1,
     );
   });
@@ -2727,7 +3242,10 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       processPendingAccountDeletions(prisma, new Date(), 4),
     ]);
 
-    assert.equal(results.reduce((count, result) => count + result.deleted, 0), 1);
+    assert.equal(
+      results.reduce((count, result) => count + result.deleted, 0),
+      1,
+    );
     assert.equal(
       (await prisma.user.findUniqueOrThrow({ where: { id: session.userId } })).status,
       'DEACTIVATED',

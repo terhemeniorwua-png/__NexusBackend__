@@ -21,6 +21,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   APP_NAME: 'Nexus',
   APP_VERSION: '0.1.0',
   JWT_ACCESS_SECRET: 'test-only-access-secret-do-not-use-in-production',
+  TOTP_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64url'),
 };
 
 test('parseEnv returns normalized configuration', () => {
@@ -69,6 +70,19 @@ test('parseEnv rejects a missing or weak JWT access secret', () => {
   );
 
   assert.throws(() => parseEnv({ ...baseEnv, JWT_ACCESS_SECRET: 'too-short' }), ConfigurationError);
+});
+
+test('parseEnv requires a valid TOTP encryption key outside tests', () => {
+  assert.throws(
+    () => parseEnv({ ...baseEnv, TOTP_ENCRYPTION_KEY: '' }),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'TOTP_ENCRYPTION_KEY'),
+  );
+  assert.throws(
+    () => parseEnv({ ...baseEnv, TOTP_ENCRYPTION_KEY: 'A'.repeat(42) }),
+    ConfigurationError,
+  );
 });
 
 test('parseEnv exposes the authentication settings with their defaults', () => {

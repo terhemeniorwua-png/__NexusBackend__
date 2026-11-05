@@ -17,22 +17,11 @@ const nameSchema = z
 const nullableText = (max: number, label: string) =>
   z.string().trim().max(max, `${label} must be at most ${max} characters`).nullable();
 
-const avatarUrlSchema = z
-  .string()
-  .trim()
-  .max(2048, 'Avatar URL is too long')
-  .url('Enter a valid avatar URL')
-  .refine((value) => value.startsWith('https://') || value.startsWith('http://'), {
-    message: 'Avatar URL must use http or https',
-  })
-  .nullable();
-
 export const updateProfileSchema = z
   .object({
     name: nameSchema.optional(),
     bio: nullableText(500, 'Bio').optional(),
     jobTitle: nullableText(100, 'Job title').optional(),
-    avatarUrl: avatarUrlSchema.optional(),
     timeZone: z.string().trim().min(1, 'Time zone is required').max(64).optional(),
     locale: z.string().trim().min(2, 'Locale is required').max(10).optional(),
   })
