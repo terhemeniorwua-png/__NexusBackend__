@@ -5276,7 +5276,7 @@ components:
               type: array
               items:
                 type: object
-                required: [id, workspaceId, status, createdAt, expiresAt, acceptedAt, billingAcceptedAt, workspace]
+                required: [id, workspaceId, status, createdAt, expiresAt, acceptedAt, billingAcceptedAt, workspace, initiatedBy]
                 properties:
                   id: { type: string, format: uuid }
                   workspaceId: { type: string, format: uuid }
@@ -5293,6 +5293,13 @@ components:
                       name: { type: string }
                       type: { $ref: '#/components/schemas/WorkspaceType' }
                       status: { $ref: '#/components/schemas/WorkspaceStatus' }
+                  initiatedBy:
+                    type: object
+                    description: Sender identity — the current owner who initiated the transfer.
+                    required: [id, name]
+                    properties:
+                      id: { type: string, format: uuid }
+                      name: { type: string }
             limit: { type: integer }
             offset: { type: integer }
     PrivacyRequestType:

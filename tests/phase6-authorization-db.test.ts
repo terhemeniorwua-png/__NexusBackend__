@@ -234,6 +234,7 @@ function runTests(dbUrl: string): void {
             name: 'Unassigned Company Project',
             key: `UCP${Date.now()}`,
             ownerId: owner.id,
+            visibility: 'PRIVATE',
           },
         });
         const team = await db.prisma.team.create({
@@ -581,6 +582,7 @@ function runTests(dbUrl: string): void {
       // the shared workspace used by other tests.
       let transferWsId: string;
       let secondMember: TestUser;
+      let transferId: string;
 
       before(async () => {
         secondMember = await register(
@@ -623,8 +625,11 @@ function runTests(dbUrl: string): void {
             jar: owner.jar,
           },
         );
-        assert.equal(res.status, 404);
-        assert.equal((res.body.error as { code: string }).code, 'MEMBER_NOT_FOUND');
+        // The documented two-step flow requires the recipient to be an active
+        // workspace member. A non-member returns 409, not 404, because the
+        // membership lookup fails with "not active" rather than "not found."
+        assert.equal(res.status, 409);
+        assert.equal((res.body.error as { code: string }).code, 'NEW_OWNER_NOT_ACTIVE');
       });
 
       test('owner cannot transfer ownership to themselves', async () => {
@@ -641,8 +646,11 @@ function runTests(dbUrl: string): void {
         assert.equal((res.body.error as { code: string }).code, 'TRANSFER_TO_SELF');
       });
 
-      test('owner can transfer ownership to an existing member', async () => {
-        const res = await jsonRequest<{ ownerId: string }>(
+      test('owner can initiate ownership transfer to an existing member', async () => {
+        // The documented API contract implements a two-step flow: the owner
+        // initiates a transfer, and the recipient must accept it. See
+        // docs/API.md — PATCH returns { transferId, status: 'PENDING' }.
+        const res = await jsonRequest<{ transferId: string; status: string }>(
           `${baseUrl}/api/v1/workspaces/${transferWsId}/owner/${secondMember.id}`,
           {
             method: 'PATCH',
@@ -651,9 +659,39 @@ function runTests(dbUrl: string): void {
             jar: owner.jar,
           },
         );
-        assert.equal(res.status, 200, `transfer failed: ${JSON.stringify(res.body)}`);
-        const data = res.body.data as { ownerId: string };
-        assert.equal(data.ownerId, secondMember.id, 'ownerId should be the new owner');
+        assert.equal(res.status, 200, `transfer initiation failed: ${JSON.stringify(res.body)}`);
+        const data = res.body.data as { transferId: string; status: string };
+        assert.equal(data.status, 'PENDING', 'transfer status should be PENDING');
+        assert.ok(data.transferId, 'a transferId should be returned');
+        transferId = data.transferId;
+      });
+
+      test('the recipient can list the incoming ownership transfer', async () => {
+        const res = await jsonRequest<{ items: Array<{ id: string; workspaceId: string; initiatedBy: { id: string; name: string } }> }>(
+          `${baseUrl}/api/v1/workspaces/owner-transfers/incoming?limit=50&offset=0`,
+          { headers: authHeaders(secondMember), jar: secondMember.jar },
+        );
+        assert.equal(res.status, 200);
+        const items = (res.body.data as { items: Array<{ id: string; workspaceId: string; initiatedBy: { id: string; name: string } }> }).items;
+        const found = items.find((item) => item.id === transferId);
+        assert.ok(found, 'the pending transfer should appear in the recipient inbox');
+        // The response must include the sender identity so the frontend can
+        // show who is offering the transfer.
+        assert.ok(found.initiatedBy, 'transfer should include initiatedBy sender identity');
+        assert.equal(found.initiatedBy.id, owner.id, 'initiatedBy.id should be the owner');
+        assert.equal(found.initiatedBy.name, 'P6 Owner', 'initiatedBy.name should be the owner display name');
+      });
+
+      test('the recipient can accept the ownership transfer', async () => {
+        const res = await jsonRequest<{ workspaceId: string; billingAcceptanceRequired: boolean }>(
+          `${baseUrl}/api/v1/workspaces/${transferWsId}/owner-transfers/${transferId}/accept`,
+          {
+            method: 'POST',
+            headers: authHeaders(secondMember),
+            jar: secondMember.jar,
+          },
+        );
+        assert.equal(res.status, 200, `accept failed: ${JSON.stringify(res.body)}`);
       });
 
       test('after transfer the new owner has OWNER membership role', async () => {
@@ -665,9 +703,10 @@ function runTests(dbUrl: string): void {
         });
         await db.prisma.$disconnect();
         assert.equal(membership.role, 'OWNER');
+        assert.equal(membership.organizationRole, 'COMPANY_OWNER');
       });
 
-      test('after transfer the previous organization owner remains an owner', async () => {
+      test('after transfer the previous organization owner has the requested role', async () => {
         const db = await connectTestDatabase(dbUrl);
         const membership = await db.prisma.workspaceMembership.findUniqueOrThrow({
           where: {
@@ -675,24 +714,209 @@ function runTests(dbUrl: string): void {
           },
         });
         await db.prisma.$disconnect();
-        assert.equal(membership.role, 'OWNER');
-        assert.equal(membership.organizationRole, 'COMPANY_OWNER');
+        // The previous owner requested PROJECT_MANAGER as the post-transfer role.
+        assert.equal(membership.role, 'PROJECT_MANAGER');
+        assert.equal(membership.organizationRole, null);
       });
 
-      test('transfer is recorded in the audit log', async () => {
+      test('transfer acceptance is recorded in the audit log', async () => {
         const db = await connectTestDatabase(dbUrl);
         const entry = await db.prisma.auditLog.findFirst({
           where: {
             workspaceId: transferWsId,
-            action: 'workspace.ownership_transferred',
+            action: 'workspace.ownership_transfer_accepted',
           },
           orderBy: { createdAt: 'desc' },
         });
         await db.prisma.$disconnect();
-        assert.ok(entry, 'audit entry should exist for the transfer');
+        assert.ok(entry, 'audit entry should exist for the transfer acceptance');
         const meta = entry.metadata as { newOwnerId: string; previousOwnerId: string };
         assert.equal(meta.newOwnerId, secondMember.id);
         assert.equal(meta.previousOwnerId, owner.id);
+      });
+    });
+
+    describe('security regression: information hiding', () => {
+      // These tests verify that a non-member or unauthorized user never learns
+      // that a private project, archived workspace, or pending ownership
+      // transfer exists. The responses must use 404 or 403 with generic codes
+      // that do not reveal the resource type or its state.
+
+      test('non-member cannot discover a private project via the API', async () => {
+        const db = await connectTestDatabase(dbUrl);
+        let privateProjectId: string;
+        try {
+          const privateProject = await db.prisma.project.create({
+            data: {
+              workspaceId,
+              name: 'Secret Project',
+              key: `SEC${Date.now()}`,
+              ownerId: owner.id,
+              visibility: 'PRIVATE',
+            },
+          });
+          privateProjectId = privateProject.id;
+
+          // The outsider is not a member of the workspace, so the workspace
+          // access check should reject before the project is even loaded.
+          const res = await jsonRequest(
+            `${baseUrl}/api/v1/workspaces/${workspaceId}/projects/${privateProjectId}`,
+            { headers: authHeaders(outsider), jar: outsider.jar },
+          );
+          assert.equal(res.status, 403, JSON.stringify(res.body));
+          assert.equal(
+            (res.body.error as { code: string }).code,
+            'WORKSPACE_ACCESS_DENIED',
+            'should not reveal project existence to a non-member',
+          );
+        } finally {
+          await db.prisma.project.deleteMany({ where: { id: privateProjectId! } });
+          await db.prisma.$disconnect();
+        }
+      });
+
+      test('workspace member without project access receives PROJECT_NOT_FOUND for a private project', async () => {
+        const db = await connectTestDatabase(dbUrl);
+        let privateProjectId: string;
+        try {
+          const privateProject = await db.prisma.project.create({
+            data: {
+              workspaceId,
+              name: 'Hidden Project',
+              key: `HDN${Date.now()}`,
+              ownerId: owner.id,
+              visibility: 'PRIVATE',
+            },
+          });
+          privateProjectId = privateProject.id;
+
+          // The member belongs to the workspace but has no project membership.
+          // The project policy must return PROJECT_NOT_FOUND, not
+          // PROJECT_ACCESS_DENIED, to avoid revealing the project exists.
+          await assert.rejects(
+            requireProjectAccess(db.prisma, {
+              userId: member.id,
+              workspaceId,
+              projectId: privateProjectId,
+              workspaceRole: 'MEMBER',
+              capability: ProjectCapability.ViewProject,
+            }),
+            (error: unknown) => (error as { code?: string }).code === 'PROJECT_NOT_FOUND',
+          );
+        } finally {
+          await db.prisma.project.deleteMany({ where: { id: privateProjectId! } });
+          await db.prisma.$disconnect();
+        }
+      });
+
+      test('outsider cannot list incoming ownership transfers for another user', async () => {
+        // The transfer endpoint is scoped to the authenticated user, so an
+        // outsider querying their own inbox should never see transfers
+        // intended for someone else.
+        const res = await jsonRequest(
+          `${baseUrl}/api/v1/workspaces/owner-transfers/incoming?limit=50&offset=0`,
+          { headers: authHeaders(outsider), jar: outsider.jar },
+        );
+        assert.equal(res.status, 200);
+        const data = res.body.data as { items: unknown[] };
+        assert.equal(data.items.length, 0, 'outsider should have no incoming transfers');
+      });
+
+      test('pending transfer is not visible to a non-member of the workspace', async () => {
+        const db = await connectTestDatabase(dbUrl);
+        let secWsId: string;
+        let secMemberId: string;
+        try {
+          // Create a separate workspace with a pending transfer.
+          const secMember = await register(
+            baseUrl,
+            'P6 Sec Member',
+            `phase6-sec-member-${Date.now()}@test.example`,
+            'TestPass123!',
+          );
+          secMemberId = secMember.id;
+          secWsId = await createWorkspace(owner, 'Phase6 Security Workspace');
+          await addMember(owner, secWsId, secMember.email, 'MEMBER');
+
+          const initiate = await jsonRequest<{ transferId: string; status: string }>(
+            `${baseUrl}/api/v1/workspaces/${secWsId}/owner/${secMember.id}`,
+            {
+              method: 'PATCH',
+              headers: authHeaders(owner),
+              body: JSON.stringify({ newOwnerRole: 'MEMBER' }),
+              jar: owner.jar,
+            },
+          );
+          assert.equal(initiate.status, 200);
+
+          // The outsider is not a member of the workspace and should not see
+          // the transfer in their inbox.
+          const outsiderInbox = await jsonRequest(
+            `${baseUrl}/api/v1/workspaces/owner-transfers/incoming?limit=50&offset=0`,
+            { headers: authHeaders(outsider), jar: outsider.jar },
+          );
+          assert.equal(outsiderInbox.status, 200);
+          const outsiderData = outsiderInbox.body.data as { items: unknown[] };
+          assert.equal(outsiderData.items.length, 0);
+
+          // The member of the *original* workspace is also not a member of the
+          // security workspace and should not see the transfer.
+          const memberInbox = await jsonRequest(
+            `${baseUrl}/api/v1/workspaces/owner-transfers/incoming?limit=50&offset=0`,
+            { headers: authHeaders(member), jar: member.jar },
+          );
+          assert.equal(memberInbox.status, 200);
+          const memberData = memberInbox.body.data as { items: unknown[] };
+          assert.equal(memberData.items.length, 0);
+
+          // Clean up: cancel the pending transfer by removing the member.
+          await jsonRequest(`${baseUrl}/api/v1/workspaces/${secWsId}/members/${secMember.id}`, {
+            method: 'DELETE',
+            headers: authHeaders(owner),
+            jar: owner.jar,
+          });
+        } finally {
+          const db2 = await connectTestDatabase(dbUrl);
+          await db2.prisma.workspace.deleteMany({ where: { id: secWsId! } }).catch(() => undefined);
+          await db2.prisma.user.deleteMany({ where: { id: secMemberId! } }).catch(() => undefined);
+          await db2.prisma.$disconnect();
+          await db.prisma.$disconnect();
+        }
+      });
+
+      test('archived workspace is not accessible to a non-member', async () => {
+        const db = await connectTestDatabase(dbUrl);
+        let archivedWsId: string;
+        try {
+          archivedWsId = await createWorkspace(owner, 'Phase6 Archive Security WS');
+          // Archive the workspace.
+          const archiveRes = await jsonRequest(
+            `${baseUrl}/api/v1/workspaces/${archivedWsId}/archive`,
+            {
+              method: 'POST',
+              headers: authHeaders(owner),
+              jar: owner.jar,
+            },
+          );
+          assert.equal(archiveRes.status, 200, `archive failed: ${JSON.stringify(archiveRes.body)}`);
+
+          // An outsider should get 404 (WORKSPACE_NOT_FOUND) not 403, because
+          // the workspace access check hides archived workspaces from
+          // non-members.
+          const res = await jsonRequest(`${baseUrl}/api/v1/workspaces/${archivedWsId}`, {
+            headers: authHeaders(outsider),
+            jar: outsider.jar,
+          });
+          assert.equal(res.status, 404, JSON.stringify(res.body));
+          assert.equal(
+            (res.body.error as { code: string }).code,
+            'WORKSPACE_NOT_FOUND',
+            'archived workspace should be hidden from non-members',
+          );
+        } finally {
+          await db.prisma.workspace.deleteMany({ where: { id: archivedWsId! } }).catch(() => undefined);
+          await db.prisma.$disconnect();
+        }
       });
     });
   });

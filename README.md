@@ -862,6 +862,8 @@ rows before replacing the deployed key. Keep the old key available for rollback
 until validation completes. Never log decrypted secrets, enrollment URIs, or
 recovery codes. Password resets revoke sessions but preserve enabled 2FA; the
 user must still complete TOTP verification at the next login.
+Security notification emails and audit events are recorded when 2FA is enabled
+or disabled, recovery codes are regenerated, or a verification attempt fails.
 
 Profile images use the existing private S3-compatible object-storage settings
 below. Uploads are detected by file signature, bounded by the size and pixel

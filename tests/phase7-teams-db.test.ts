@@ -938,7 +938,7 @@ function runTests(rawDbUrl: string): void {
             name: 'Team scoped project',
             key: `TSP${Date.now()}`,
             ownerId: owner.id,
-            visibility: 'PRIVATE',
+            visibility: 'DEPARTMENT_TEAM',
           },
         });
         const association = await jsonRequest(
@@ -959,7 +959,7 @@ function runTests(rawDbUrl: string): void {
             name: 'Unrelated team project',
             key: `UTP${Date.now()}`,
             ownerId: owner.id,
-            visibility: 'PRIVATE',
+            visibility: 'DEPARTMENT_TEAM',
           },
         });
 
