@@ -363,7 +363,7 @@ of this file was made on a Phase 5 branch and is historical.
 | 2 — Database architecture | COMPLETED | VERIFIED COMPLETE | Prisma client generation succeeded in the build; migration deployment and recovery were historically verified on disposable PostgreSQL and documented. No database was migrated in this run. |
 | 2.1 — Database model audit | COMPLETED | VERIFIED COMPLETE | Deferred model inventory and migration/schema review are documented in `docs/planned-models.md` and `PHASES.md`. |
 | 2.2 — Migration recovery | COMPLETED | VERIFIED COMPLETE | Recovery script and disposable database evidence are recorded in `docs/migration-recovery.md` and `PHASES.md`; not rerun in this audit. |
-| 3 — Authentication and account lifecycle | COMPLETED | PARTIALLY COMPLETE | Core authentication/lifecycle code and tests pass, but required profile-image upload and 2FA enrollment/verification are absent. Corrected the tracker to IN PROGRESS; implementation or product-approved deferral is outstanding. |
+| 3 — Authentication and account lifecycle | COMPLETED | PARTIALLY COMPLETE | Implemented private self-only avatar upload/read/removal and TOTP enrollment, login verification, recovery codes, lockouts, audit and email events. Unit tests and static checks pass. The opt-in PostgreSQL/Redis API suite and migrations remain unverified because the local database has no available disposable credentials; tracker remains IN PROGRESS. |
 | 3.1–3.5 — Account lifecycle hardening | COMPLETED | VERIFIED COMPLETE | Changes and PostgreSQL race/rollback evidence are recorded in `PHASES.md`; current standard tests pass, while the Phase 3 DB suite was not enabled here. |
 | 4 — Workspace lifecycle (legacy detailed section) | COMPLETED | VERIFIED COMPLETE | Workspace type, ownership, membership, deletion/recovery and storage behavior have services, migrations and historical disposable PostgreSQL evidence. |
 | 4.1–4.2 — Email delivery foundation | COMPLETED | VERIFIED COMPLETE | Bounded retry and log privacy implementations/tests are present and current unit coverage passes. |
@@ -407,6 +407,35 @@ implementation files are committed locally in the WIP commit and merge shown
 in Git history; only the audit/tracker documentation changes from this pass
 remain unstaged.
 
-The active phase is now Phase 3 pending implementation or explicit product
-deferral of the missing requirements. Phase 8 is not marked complete and no
-Phase 9 work began.
+The active phase is now Phase 3. Its missing avatar and TOTP workflows are
+implemented, but database-backed API and migration verification is still
+required before completion. Phase 8 is not marked complete and no Phase 9 work
+began.
+
+### Phase 3 avatar and TOTP implementation — 2026-11-05
+
+The avatar flow now stores only server-generated private object keys, returns
+an authenticated self-only image route, signature-checks and re-encodes JPEG,
+PNG and WebP uploads, applies configurable file/dimension/pixel limits, and
+removes old objects best-effort with logging. Profile updates reject
+client-provided `avatarUrl` values while preserving legacy stored URLs until
+replacement/removal. TOTP secrets use AES-256-GCM with the required
+`TOTP_ENCRYPTION_KEY`; setup expires after ten minutes. Login returns a
+five-minute audience- and type-restricted MFA challenge when enabled. TOTP
+checks accept ±1 time step, Redis prevents code replay and tracks five-failure
+account/IP lockouts for 15 minutes, and recovery codes are hashed and consumed
+once. Password reset preserves enabled 2FA and revokes outstanding MFA
+challenges. Security-sensitive changes are audited; enable/disable notices use
+the existing transactional email service. Account-deletion finalization now
+removes a stored avatar before profile metadata and clears TOTP secrets from
+the user tombstone.
+
+Additive migrations are `20261105120000_phase3_avatar_storage` and
+`20261105121000_phase3_totp`. The opt-in `tests/auth-phase3.test.ts` suite now
+covers the HTTP workflows and uses local fake S3-compatible storage. It is not
+run in this session: PostgreSQL accepts loopback connections, but the available
+application database URL points to a remote managed host and no local test
+database credentials are configured. The test helper correctly refuses that
+remote database. Phase 3 remains IN PROGRESS until the suite and migrations run
+against an explicitly configured disposable loopback PostgreSQL database and
+Redis database 15.

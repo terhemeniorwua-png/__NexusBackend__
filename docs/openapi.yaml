@@ -7,7 +7,8 @@ info:
 
     Phase 1 provides the foundation (health, configuration, error contract).
     Phase 3 adds the account lifecycle: registration, email verification,
-    sessions, password recovery and profile management.
+    sessions, password recovery, server-managed profile images and optional
+    TOTP two-factor authentication.
     The backend provides a signed transactional email provider webhook.
     Workspace routes support workspace types, memberships, invitations,
     public discovery, join codes, join requests and membership
@@ -920,16 +921,16 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: The session was created.
+          description: A session was created when 2FA is disabled; otherwise a five-minute 2FA challenge is returned without session cookies.
           headers:
             Set-Cookie:
-              description: The `nexus_rt` and `nexus_csrf` cookies.
+              description: Set only when a normal session is issued.
               schema:
                 type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AuthenticationResponse'
+                $ref: '#/components/schemas/LoginResponse'
         '401':
           description: The email address or password is incorrect.
           content:
@@ -948,6 +949,105 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /auth/2fa/challenge:
+    post:
+      tags: [Authentication]
+      operationId: completeTwoFactorLogin
+      summary: Complete a two-factor login challenge
+      security: []
+      description: The challenge expires in five minutes, is single-use, and is not a bearer access token. Supply exactly one TOTP or recovery code.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TwoFactorChallengeRequest'
+      responses:
+        '200':
+          description: A normal session was issued.
+          headers:
+            Set-Cookie:
+              description: The `nexus_rt` and `nexus_csrf` cookies.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticationResponse'
+        '401': { description: Invalid, expired, reused challenge or verification code. }
+        '429': { description: IP/account MFA lockout or request rate limit. }
+  /auth/2fa/setup:
+    post:
+      tags: [Authentication]
+      operationId: beginTwoFactorSetup
+      summary: Begin TOTP enrollment
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Enrollment URI; valid for ten minutes and should be shown only to the account owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFactorSetupResponse'
+        '401': { description: Authentication is required. }
+        '409': { description: Two-factor authentication is already enabled. }
+  /auth/2fa/confirm:
+    post:
+      tags: [Authentication]
+      operationId: confirmTwoFactorSetup
+      summary: Confirm TOTP enrollment
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TwoFactorCodeRequest'
+      responses:
+        '200':
+          description: Two-factor authentication enabled. Recovery codes are returned once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodesResponse'
+        '401': { description: Invalid code or enrollment expired. }
+        '409': { description: Setup has not begun or two-factor authentication is already enabled. }
+  /auth/2fa/disable:
+    post:
+      tags: [Authentication]
+      operationId: disableTwoFactor
+      summary: Disable TOTP two-factor authentication
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TwoFactorDisableRequest'
+      responses:
+        '200': { description: Two-factor authentication disabled; recovery codes and secret removed. }
+        '401': { description: Password or verification code is invalid. }
+        '409': { description: Two-factor authentication is not enabled. }
+  /auth/2fa/recovery-codes:
+    post:
+      tags: [Authentication]
+      operationId: regenerateTwoFactorRecoveryCodes
+      summary: Replace recovery codes
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecoveryCodeRegenerateRequest'
+      responses:
+        '200':
+          description: New recovery codes, returned once; previous codes are invalidated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodesResponse'
+        '401': { description: Password or verification code is invalid. }
+        '409': { description: Two-factor authentication is not enabled. }
   /auth/reactivate:
     post:
       tags: [Authentication]
@@ -1386,7 +1486,7 @@ paths:
       tags: [Users]
       operationId: updateProfile
       summary: Update the profile of the signed-in account
-      description: The email address and the account status cannot be changed here.
+      description: The email address, account status and avatar URL cannot be changed here. Use the server-managed avatar routes.
       security:
         - bearerAuth: []
       requestBody:
@@ -1420,6 +1520,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /users/me/avatar:
+    get:
+      tags: [Users]
+      operationId: getMyAvatar
+      summary: Read the signed-in account's private profile image
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The re-encoded JPEG, PNG, or WebP image.
+          headers:
+            Cache-Control: { schema: { type: string, const: 'private, no-store' } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        '401': { description: Authentication is required. }
+        '404': { description: The signed-in account has no uploaded avatar. }
+    post:
+      tags: [Users]
+      operationId: uploadMyAvatar
+      summary: Upload a private profile image
+      description: Upload one multipart `avatar` file. Type is detected from file bytes; MIME headers and filename are ignored. Defaults are 5 MiB, 4096 pixels per side, and 16 million pixels total. The image is re-encoded and metadata is stripped. Five upload/delete requests are allowed per user and IP per configured authentication rate-limit window.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [avatar]
+              properties:
+                avatar: { type: string, format: binary }
+      responses:
+        '200':
+          description: The updated profile; `avatarUrl` points to the authenticated avatar route.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileResponse' }
+        '400': { description: Missing file or invalid multipart request. }
+        '401': { description: Authentication is required. }
+        '413': { description: Upload exceeds the byte, dimension, or pixel limit. }
+        '415': { description: Unsupported or corrupt image. }
+        '429': { description: Avatar upload rate limit reached. }
+        '503': { description: Private object storage is not configured. }
+    delete:
+      tags: [Users]
+      operationId: deleteMyAvatar
+      summary: Remove the signed-in account's profile image
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Updated profile with no avatar.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileResponse' }
+        '401': { description: Authentication is required. }
+        '429': { description: Avatar upload/delete rate limit reached. }
   /webhooks/email:
     post:
       tags: [Webhooks]
@@ -4719,9 +4877,6 @@ components:
         jobTitle:
           type: [string, 'null']
           maxLength: 100
-        avatarUrl:
-          type: [string, 'null']
-          format: uri
         timeZone:
           type: string
           maxLength: 64
@@ -4841,6 +4996,86 @@ components:
                 expiresAt:
                   type: string
                   format: date-time
+    LoginResponse:
+      oneOf:
+        - $ref: '#/components/schemas/AuthenticationResponse'
+        - $ref: '#/components/schemas/MfaChallengeResponse'
+    MfaChallengeResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [twoFactorRequired, challengeToken, expiresIn]
+          properties:
+            twoFactorRequired: { type: boolean, const: true }
+            challengeToken: { type: string, description: Short-lived token accepted only by `/auth/2fa/challenge`. }
+            expiresIn: { type: integer, const: 300 }
+    TwoFactorChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeToken]
+      properties:
+        challengeToken: { type: string }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+        recoveryCode: { type: string, minLength: 8, maxLength: 32 }
+      oneOf:
+        - required: [code]
+        - required: [recoveryCode]
+    TwoFactorCodeRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    TwoFactorDisableRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword]
+      properties:
+        currentPassword: { type: string }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+        recoveryCode: { type: string, minLength: 8, maxLength: 32 }
+      oneOf:
+        - required: [code]
+        - required: [recoveryCode]
+    RecoveryCodeRegenerateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        currentPassword: { type: string }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+        recoveryCode: { type: string, minLength: 8, maxLength: 32 }
+      oneOf:
+        - required: [currentPassword]
+        - required: [code]
+        - required: [recoveryCode]
+    TwoFactorSetupResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [otpauthUrl, expiresIn]
+          properties:
+            otpauthUrl: { type: string, format: uri, description: Secret-bearing URI; show only to the signed-in account owner. }
+            expiresIn: { type: integer, const: 600 }
+    RecoveryCodesResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [recoveryCodes]
+          properties:
+            recoveryCodes:
+              type: array
+              minItems: 10
+              maxItems: 10
+              items: { type: string, pattern: '^[A-F0-9]{32}$' }
     MessageResponse:
       type: object
       required: [success, data]

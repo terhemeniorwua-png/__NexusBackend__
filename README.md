@@ -824,7 +824,7 @@ Use strong secrets in development and production. Never expose backend secrets t
 
 ### Authentication settings
 
-The variables below are read by `src/config/env.ts`. All of them have defaults except `JWT_ACCESS_SECRET`, which must be at least 32 characters and must not be a placeholder.
+The variables below are read by `src/config/env.ts`. `JWT_ACCESS_SECRET` and `TOTP_ENCRYPTION_KEY` must be configured; the latter must decode from base64url to exactly 32 bytes. Test configuration may omit the TOTP key because tests use an explicit test environment and do not run production MFA configuration.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -843,12 +843,32 @@ The variables below are read by `src/config/env.ts`. All of them have defaults e
 | `AUTH_REGISTER_RATE_LIMIT_MAX` | `5` | Registrations per window per IP address and per account |
 | `AUTH_PASSWORD_RATE_LIMIT_MAX` | `5` | Password requests per window per IP address and per account |
 | `AUTH_VERIFICATION_RATE_LIMIT_MAX` | `5` | Verification requests per window per IP address and per account |
+| `TOTP_ENCRYPTION_KEY` | required outside tests | Base64url-encoded 32-byte AES-256-GCM key used to encrypt TOTP secrets |
+| `AVATAR_MAX_FILE_SIZE_BYTES` | `5242880` | Maximum upload size (5 MiB) |
+| `AVATAR_MAX_DIMENSION` | `4096` | Maximum image width or height |
+| `AVATAR_MAX_PIXELS` | `16000000` | Maximum decoded pixel count |
+| `AVATAR_RATE_LIMIT_MAX` | `5` | Avatar upload/delete requests per user and IP per auth rate window |
 | `AUTH_VERIFICATION_LINK_PATH` | `/verify-email` | Frontend path that receives the verification link |
 | `AUTH_PASSWORD_RESET_LINK_PATH` | `/reset-password` | Frontend path that receives the reset link |
 | `AUTH_EMAIL_CHANGE_LINK_PATH` | `/settings/email` | Frontend path that receives the email change link |
 | `RATE_LIMIT_NAMESPACE` | `nexus` | Prefix for the Redis rate limit keys. Use a different value per environment when they share a Redis instance |
 
 The verification, reset and email change links are built from `FRONTEND_URL` and the configured path, so the frontend contract can change without a backend deployment.
+
+TOTP uses the encrypted secret stored in PostgreSQL. To rotate
+`TOTP_ENCRYPTION_KEY`, run a controlled re-encryption migration/job that reads
+each `v1` secret with the old key and writes it with the new key; verify all
+rows before replacing the deployed key. Keep the old key available for rollback
+until validation completes. Never log decrypted secrets, enrollment URIs, or
+recovery codes. Password resets revoke sessions but preserve enabled 2FA; the
+user must still complete TOTP verification at the next login.
+
+Profile images use the existing private S3-compatible object-storage settings
+below. Uploads are detected by file signature, bounded by the size and pixel
+limits above, decoded and re-encoded to remove metadata. Avatar downloads are
+authenticated and only available to the signed-in account. Existing stored
+`avatarUrl` values remain readable for backward compatibility, but profile
+updates cannot set that field; new uploads replace legacy values.
 
 ### Workspace settings
 

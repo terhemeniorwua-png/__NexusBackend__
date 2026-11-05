@@ -32,6 +32,11 @@ listed here is not evidence that a roadmap phase is complete.
 | POST   | `/auth/verify-email`         | Public, rate limited                | Verify an email address.                                                                                                               |
 | POST   | `/auth/resend-verification`  | Public, rate limited                | Resend email verification.                                                                                                             |
 | POST   | `/auth/login`                | Public, rate limited                | Start an authenticated session.                                                                                                        |
+| POST   | `/auth/2fa/challenge`         | Public, rate limited                | Exchange a short-lived MFA challenge and TOTP/recovery code for a normal session.                                                       |
+| POST   | `/auth/2fa/setup`             | Authenticated, active account       | Start or restart unverified TOTP enrollment; returns an `otpauth://` URI valid for ten minutes.                                        |
+| POST   | `/auth/2fa/confirm`           | Authenticated, active account       | Confirm the first TOTP code and return ten single-use recovery codes once.                                                              |
+| POST   | `/auth/2fa/disable`           | Authenticated, active account       | Disable 2FA after current password and TOTP/recovery-code verification.                                                                 |
+| POST   | `/auth/2fa/recovery-codes`    | Authenticated, active account       | Replace all recovery codes after current password or TOTP/recovery-code verification.                                                   |
 | POST   | `/auth/reactivate`           | Public, rate limited                | Reactivate a deactivated account or cancel a pending deletion during its 30-day recovery period.                                                      |
 | POST   | `/auth/refresh`              | Public, refresh credential required | Rotate/refresh the session token.                                                                                                      |
 | POST   | `/auth/logout`               | Public, refresh credential required | Revoke the submitted session token.                                                                                                    |
@@ -59,12 +64,43 @@ The backend does not provide frontend screens, notifications or workflow orchest
 | Method | Path        | Access                        | Purpose                      |
 | ------ | ----------- | ----------------------------- | ---------------------------- |
 | GET    | `/users/me` | Authenticated, active account | Read the caller's profile.   |
-| PATCH  | `/users/me` | Authenticated, active account | Update the caller's profile. |
+| PATCH  | `/users/me` | Authenticated, active account | Update the caller's profile. `avatarUrl` is rejected; use the server-managed upload route. |
+| GET    | `/users/me/avatar` | Authenticated, active account | Read the caller's private profile image. |
+| POST   | `/users/me/avatar` | Authenticated, active account, per-user rate limited | Upload a JPEG, PNG, or WebP avatar as multipart field `avatar`. |
+| DELETE | `/users/me/avatar` | Authenticated, active account, per-user rate limited | Remove the caller's profile image. |
 
-Profile updates accept an `avatarUrl` value as a URL. The backend does not
-currently expose a profile-image upload endpoint or two-factor authentication
-enrollment/verification endpoints; these Phase 3 requirements remain
-incomplete.
+Avatar uploads are limited by `AVATAR_MAX_FILE_SIZE_BYTES` (5 MiB by default),
+`AVATAR_MAX_DIMENSION` (4096 pixels per side), and `AVATAR_MAX_PIXELS` (16
+million pixels). File type is detected from its signature and the image is
+decoded, orientation-corrected, re-encoded, and stripped of metadata. Client
+filenames and declared MIME types are ignored. The private object key is
+server-generated; reads are authenticated and scoped to the signed-in user.
+Replacing/removing an avatar updates profile metadata first; storage deletion
+failures are logged and are non-fatal. Legacy stored `avatarUrl` values remain
+readable for compatibility, but clients can no longer set them; uploading a new
+image replaces the legacy URL.
+
+TOTP uses 6-digit SHA-1 codes with a 30-second period and ±1 period drift. Setup
+URIs and recovery codes are returned only during setup/rotation. Recovery codes
+are 32-character random hexadecimal values, stored only as hashes, and usable
+once. MFA challenges expire after five minutes, are single-use, and are not
+access tokens. Five failed MFA proofs lock the account/IP buckets for 15
+minutes. Password reset revokes all sessions while preserving enabled 2FA, so
+resetting a password never bypasses the second factor. Encryption uses
+`TOTP_ENCRYPTION_KEY`; rotate by deploying a controlled re-encryption job that
+decrypts each stored `v1` secret with the old key and re-encrypts it with the
+new key before replacing the environment value. Never log either key or a
+decrypted secret. Setup, confirmation, disable, and recovery-code rotation
+require an active authenticated account; disabling also requires the current
+password and a valid TOTP/recovery code.
+
+MFA failures use `MFA_CHALLENGE_INVALID` (expired, malformed or consumed
+challenge), `MFA_CODE_INVALID` (incorrect/replayed/used proof), `MFA_LOCKED`
+(five failed proofs within 15 minutes), `MFA_RATE_LIMITED` (challenge route IP
+limit), `TWO_FACTOR_SETUP_REQUIRED`, `TWO_FACTOR_ALREADY_ENABLED`, and
+`TWO_FACTOR_NOT_ENABLED`. Avatar errors include `AVATAR_REQUIRED`,
+`AVATAR_TOO_LARGE`, `AVATAR_DIMENSIONS_TOO_LARGE`, `AVATAR_TYPE_UNSUPPORTED`,
+`AVATAR_IMAGE_INVALID`, `AVATAR_RATE_LIMITED`, and `OBJECT_STORAGE_UNAVAILABLE`.
 
 ## Workspaces
 
