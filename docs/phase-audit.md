@@ -466,3 +466,95 @@ workspace deletion/archive handling also failed on the first run; its existing
 expectations were restored with narrowly scoped authorization/status handling,
 and the isolated Phase 5 workspace suite then passed 25/25. Phase 6/7 defects
 remain open and were not changed as part of closing Phase 3.
+
+
+### Phase 6 ownership-transfer and authorization defect resolution — 2026-11-05
+
+This session resolved all 6 database-backed test failures reported at Phase 3
+close: 5 Phase 6 failures and 1 Phase 7 failure.
+
+#### Root cause analysis
+
+**Phase 6 failure 1 — "organization roles remain scoped…" (policy test)**
+The test created a project with the default `WORKSPACE` visibility and
+expected `requireProjectAccess` to reject for a `COMPANY_ADMIN` member who had
+no explicit project membership. The documentation states "WORKSPACE projects
+are readable by active workspace members without project membership." A
+`COMPANY_ADMIN` is an active workspace member; the bypass is correct per spec.
+The test was stale: it used default visibility instead of `PRIVATE`.
+**Fix: test updated** — project visibility changed to `PRIVATE`; no application
+code was changed.
+
+**Phase 6 failures 2–5 — ownership transfer assertions**
+The four transfer subtests expected an immediate (synchronous) transfer from
+`PATCH /workspaces/{id}/owner/{userId}`. The code correctly implements the
+two-step flow documented in `docs/API.md`: the `PATCH` returns
+`{ transferId, status: "PENDING" }` and the recipient must accept separately.
+Stale expectations: expected 404 for a non-member (code returns 409
+`NEW_OWNER_NOT_ACTIVE`), expected `data.ownerId` on immediate success, expected
+`OWNER` membership before acceptance, and expected the
+`workspace.ownership_transferred` audit action (which does not exist — the code
+logs `workspace.ownership_transfer_initiated` and
+`workspace.ownership_transfer_accepted`).
+**Fix: tests updated** — replaced the four stale tests with nine tests that
+exercise the complete documented flow: initiate (PENDING), inbox listing
+(including `initiatedBy` sender identity), accept, post-acceptance role checks,
+and acceptance audit log.
+
+**Phase 7 failure 6 — "team membership grants scoped access to its linked project only"**
+The test created a `PRIVATE` project with a team association and expected team
+members to access it. The `project-team-access.test.ts` unit test explicitly
+verifies that team membership does NOT grant access to `PRIVATE` projects; team
+membership only grants access to `DEPARTMENT_TEAM`-visibility projects.
+**Fix: test updated** — project visibility changed from `PRIVATE` to
+`DEPARTMENT_TEAM`; no application code was changed.
+
+#### Sender identity field added
+
+The `GET /workspaces/owner-transfers/incoming` response did not include the
+initiator's identity. The frontend cannot show "who is offering you this
+workspace" without it. Added `initiatedBy: { id, name }` to the
+`listIncomingOwnershipTransfers` Prisma select in `workspace.service.ts`.
+Updated `docs/openapi.yaml` to include `initiatedBy` in the
+`IncomingOwnershipTransfersResponse` schema as a required field, and updated
+`docs/API.md` to document the field.
+
+#### Security regression tests added (5 new tests in `tests/phase6-authorization-db.test.ts`)
+
+1. Non-member cannot discover a private project via API — workspace access check returns `WORKSPACE_ACCESS_DENIED` (403).
+2. Workspace member without project access receives `PROJECT_NOT_FOUND` for a private project — existence is not revealed.
+3. Outsider cannot see incoming ownership transfers for another user — inbox returns empty.
+4. Pending transfer is not visible to non-members of the workspace — inbox returns empty for outsider and unrelated workspace member.
+5. Archived workspace is not accessible to a non-member — returns `WORKSPACE_NOT_FOUND` (404).
+
+#### Verification
+
+| Check | Result |
+|---|---|
+| Phase 6 DB suite (`RUN_PHASE6_DB_TESTS=true`) | 27 pass, 0 fail (includes 5 new security regression tests) |
+| Phase 7 DB suite (`RUN_PHASE7_DB_TESTS=true`) | 47 pass, 0 fail |
+| Phase 8 DB suite (`RUN_PHASE8_DB_TESTS=true`) | 12 pass, 0 fail |
+| `project-team-access.test.ts` (unit) | 11 pass, 0 fail |
+| Full database-enabled suite (all phase flags) | 533 tests: 531 pass, 0 fail, 2 skip (pre-existing: phase-2 migration constraint, Redis rate-limit counter) |
+| `npm run typecheck` (src + test tsconfigs) | Pass |
+| `npm run lint` | Pass |
+| `npm run build` (prisma generate + tsc) | Pass |
+| OpenAPI YAML parse | Pass — 109 paths, 138 schemas, `initiatedBy` verified in schema |
+| `git diff --check` | Pass — no whitespace errors |
+
+#### Files changed
+
+| File | Change |
+|---|---|
+| `src/modules/workspaces/workspace.service.ts` | Added `initiatedBy: { select: { id, name } }` to inbox query |
+| `tests/phase6-authorization-db.test.ts` | Fixed 5 stale tests; added 9 transfer-flow tests + 5 security regression tests |
+| `tests/phase7-teams-db.test.ts` | Changed project visibility from `PRIVATE` to `DEPARTMENT_TEAM` in team-access test |
+| `docs/openapi.yaml` | Added `initiatedBy` to `IncomingOwnershipTransfersResponse` schema |
+| `docs/API.md` | Documented `initiatedBy` (id, name) in incoming transfer inbox description |
+
+#### Revised audit table row
+
+| Phase | Previous status | Verified status | Action taken |
+|---|---|---|---|
+| 6 — Roles and authorization | COMPLETED | VERIFIED COMPLETE | Fixed 5 stale DB tests; added 5 security regression tests; `initiatedBy` sender field added to inbox response; full DB suite 531/533 passed |
+| 7 — Teams, departments and groups | COMPLETED | VERIFIED COMPLETE | Fixed 1 stale DB test (PRIVATE→DEPARTMENT_TEAM); full DB suite confirmed 0 failures |

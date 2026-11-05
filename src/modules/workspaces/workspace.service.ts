@@ -1831,6 +1831,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           acceptedAt: true,
           billingAcceptedAt: true,
           workspace: { select: { id: true, name: true, type: true, status: true } },
+          initiatedBy: { select: { id: true, name: true } },
         },
           })
         : [];
