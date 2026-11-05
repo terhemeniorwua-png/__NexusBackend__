@@ -4025,6 +4025,135 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/channels:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Channels]
+      operationId: listChannels
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        '200': { description: Access-filtered channel page. }
+        '401': { description: Authentication required. }
+    post:
+      tags: [Channels]
+      operationId: createChannel
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [type, name]
+              properties:
+                type: { type: string, enum: [WORKSPACE, TEAM, DEPARTMENT, PROJECT, PRIVATE] }
+                name: { type: string, minLength: 1, maxLength: 100 }
+                description: { type: string, nullable: true, maxLength: 500 }
+                teamId: { type: string, format: uuid }
+                departmentId: { type: string, format: uuid }
+                projectId: { type: string, format: uuid }
+      responses:
+        '201': { description: Channel created; private creator is ADMIN. }
+        '400': { description: Invalid channel type/parent combination. }
+        '409': { description: Case-insensitive channel name conflict. }
+  /workspaces/{workspaceId}/channels/{channelId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: channelId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Channels]
+      operationId: getChannel
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Accessible channel summary. }
+        '404': { description: Channel is missing or inaccessible. }
+    patch:
+      tags: [Channels]
+      operationId: updateChannel
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                description: { type: string, nullable: true, maxLength: 500 }
+      responses:
+        '200': { description: Updated channel summary. }
+        '409': { description: Case-insensitive channel name conflict. }
+    delete:
+      tags: [Channels]
+      operationId: deleteChannel
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Channel soft-deleted. }
+        '403': { description: Workspace owner or project manager required. }
+  /workspaces/{workspaceId}/channels/{channelId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: channelId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Channels]
+      operationId: archiveChannel
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Archived channel summary. }
+  /workspaces/{workspaceId}/channels/{channelId}/members:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: channelId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Channels]
+      operationId: addPrivateChannelMember
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [userId]
+              properties: { userId: { type: string, format: uuid } }
+      responses:
+        '201': { description: Membership created with server-assigned MEMBER role. }
+        '400': { description: Membership is available only for private channels. }
+  /workspaces/{workspaceId}/channels/{channelId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: channelId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [Channels]
+      operationId: removePrivateChannelMember
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Membership removed. }
+
 components:
   securitySchemes:
     bearerAuth:

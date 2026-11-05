@@ -11,6 +11,19 @@ datasource db {
 // Enums
 // ---------------------------------------------------------------------------
 
+enum ChannelRole {
+  ADMIN
+  MEMBER
+}
+
+enum ChannelType {
+  WORKSPACE
+  TEAM
+  DEPARTMENT
+  PROJECT
+  PRIVATE
+}
+
 enum UserStatus {
   PENDING_VERIFICATION
   ACTIVE
@@ -280,9 +293,11 @@ model User {
   initiatedOwnershipTransfers WorkspaceOwnershipTransfer[] @relation("OwnershipTransferInitiator")
   receivedOwnershipTransfers  WorkspaceOwnershipTransfer[] @relation("OwnershipTransferRecipient")
   acceptedBillingTransfers    WorkspaceOwnershipTransfer[] @relation("BillingResponsibilityAcceptor")
-  billingOwnedSubscriptions    Subscription[]                @relation("SubscriptionBillingOwner")
-  privacyRequests             PrivacyRequest[]               @relation("PrivacyRequestOwner")
-  reviewedPrivacyRequests     PrivacyRequest[]               @relation("PrivacyRequestReviewer")
+  billingOwnedSubscriptions   Subscription[]               @relation("SubscriptionBillingOwner")
+  privacyRequests             PrivacyRequest[]             @relation("PrivacyRequestOwner")
+  reviewedPrivacyRequests     PrivacyRequest[]             @relation("PrivacyRequestReviewer")
+  channelsCreated             Channel[]                    @relation("ChannelCreatedBy")
+  channelMemberships          ChannelMembership[]          @relation("ChannelMemberships")
 
   @@index([status])
   @@index([createdAt])
@@ -347,41 +362,42 @@ model AuthToken {
 // ---------------------------------------------------------------------------
 
 model Workspace {
-  id           String              @id @default(uuid())
-  name         String
-  slug         String              @unique
-  description  String?
-  type         WorkspaceType       @default(COMPANY)
-  isPersonal   Boolean             @default(false)
-  visibility   WorkspaceVisibility @default(PRIVATE)
-  status       WorkspaceStatus     @default(ACTIVE)
+  id                  String              @id @default(uuid())
+  name                String
+  slug                String              @unique
+  description         String?
+  type                WorkspaceType       @default(COMPANY)
+  isPersonal          Boolean             @default(false)
+  visibility          WorkspaceVisibility @default(PRIVATE)
+  status              WorkspaceStatus     @default(ACTIVE)
   deletionSuspendedAt DateTime?
-  ownerId      String
+  ownerId             String
   /// SHA-256 digest of the join code. The plaintext code is only returned
   /// when an administrator generates or rotates it.
-  joinCodeHash String?             @unique
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
-  deletedAt    DateTime?
+  joinCodeHash        String?             @unique
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  deletedAt           DateTime?
 
-  owner              User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members            WorkspaceMembership[]
-  teams              Team[]
-  projects           Project[]
-  departments        Department[]
-  companyProfile     CompanyProfile?
-  institutionProfile InstitutionProfile?
-  institutionGroups  InstitutionGroup[]
-  invitations        Invitation[]
-  joinRequests       JoinRequest[]
-  files              FileAttachment[]
-  auditLogs          AuditLog[]
-  subscription       Subscription?
-  billingPayments    BillingPayment[]
-  billingCheckouts   BillingCheckout[]
-  billingSeatSync    BillingSeatSync?
+  owner               User                         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members             WorkspaceMembership[]
+  teams               Team[]
+  projects            Project[]
+  departments         Department[]
+  channels            Channel[]
+  companyProfile      CompanyProfile?
+  institutionProfile  InstitutionProfile?
+  institutionGroups   InstitutionGroup[]
+  invitations         Invitation[]
+  joinRequests        JoinRequest[]
+  files               FileAttachment[]
+  auditLogs           AuditLog[]
+  subscription        Subscription?
+  billingPayments     BillingPayment[]
+  billingCheckouts    BillingCheckout[]
+  billingSeatSync     BillingSeatSync?
   billingCancellation BillingCancellation?
-  ownershipTransfers WorkspaceOwnershipTransfer[]
+  ownershipTransfers  WorkspaceOwnershipTransfer[]
 
   @@index([ownerId])
   @@index([status])
@@ -390,23 +406,23 @@ model Workspace {
 }
 
 model WorkspaceOwnershipTransfer {
-  id                  String    @id @default(uuid())
+  id                  String        @id @default(uuid())
   workspaceId         String
   initiatedById       String
   recipientUserId     String
   previousOwnerRole   WorkspaceRole @default(MEMBER)
-  status              String    @default("PENDING")
+  status              String        @default("PENDING")
   expiresAt           DateTime?
   acceptedAt          DateTime?
   billingAcceptedAt   DateTime?
   billingAcceptedById String?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  initiatedBy User      @relation("OwnershipTransferInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
-  recipient   User      @relation("OwnershipTransferRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
-  billingAcceptedBy User? @relation("BillingResponsibilityAcceptor", fields: [billingAcceptedById], references: [id], onDelete: SetNull)
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  initiatedBy       User      @relation("OwnershipTransferInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  recipient         User      @relation("OwnershipTransferRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
+  billingAcceptedBy User?     @relation("BillingResponsibilityAcceptor", fields: [billingAcceptedById], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, status])
   @@index([recipientUserId, status])
@@ -438,10 +454,10 @@ model Subscription {
   createdAt                     DateTime              @default(now())
   updatedAt                     DateTime              @updatedAt
 
-  workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  billingOwner User?           @relation("SubscriptionBillingOwner", fields: [billingOwnerId], references: [id], onDelete: SetNull)
-  payments  BillingPayment[]
-  checkouts BillingCheckout[]
+  workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  billingOwner User?             @relation("SubscriptionBillingOwner", fields: [billingOwnerId], references: [id], onDelete: SetNull)
+  payments     BillingPayment[]
+  checkouts    BillingCheckout[]
 
   @@index([status, currentPeriodEnd])
 }
@@ -608,6 +624,7 @@ model Department {
   members   DepartmentMembership[]
   teams     Team[]
   projects  Project[]
+  channels  Channel[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
@@ -714,6 +731,7 @@ model Team {
   lead         User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
   members      TeamMembership[]
   projects     Project[]
+  channels     Channel[]
   joinRequests JoinRequest[]
 
   @@index([workspaceId])
@@ -764,6 +782,7 @@ model Project {
   owner       User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   members     ProjectMembership[]
   tasks       Task[]
+  channels    Channel[]
   attachments FileAttachment[]
 
   @@unique([workspaceId, key])
@@ -877,6 +896,58 @@ model Comment {
   @@index([taskId, createdAt])
   @@index([authorId])
   @@index([parentId])
+}
+
+// ---------------------------------------------------------------------------
+// Channels (Phase 7 access integration only; no messages yet)
+// ---------------------------------------------------------------------------
+
+model Channel {
+  id           String      @id @default(uuid())
+  workspaceId  String
+  type         ChannelType
+  name         String
+  description  String?
+  teamId       String?
+  departmentId String?
+  projectId    String?
+  createdById  String
+  archivedAt   DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team        Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  department  Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  project     Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy   User                @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  memberships ChannelMembership[]
+
+  // A unique channel name per workspace among non-deleted channels cannot be
+  // expressed in Prisma. It is added as a partial unique index in the
+  // migration SQL (see the Phase 7 channel migration).
+  @@index([workspaceId, type])
+  @@index([workspaceId, archivedAt])
+  @@index([teamId])
+  @@index([departmentId])
+  @@index([projectId])
+  @@index([createdById])
+}
+
+model ChannelMembership {
+  id        String      @id @default(uuid())
+  channelId String
+  userId    String
+  role      ChannelRole @default(MEMBER)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation("ChannelMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,20 +1099,20 @@ model AuditLog {
 }
 
 model PrivacyRequest {
-  id             String               @id @default(uuid())
-  userId         String
-  type           PrivacyRequestType
-  status         PrivacyRequestStatus @default(SUBMITTED)
-  description    String?
-  targetType     String?
-  targetId       String?
-  reviewedById   String?
-  decisionNote   String?
-  outcome        String?
-  decidedAt      DateTime?
-  completedAt    DateTime?
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  id           String               @id @default(uuid())
+  userId       String
+  type         PrivacyRequestType
+  status       PrivacyRequestStatus @default(SUBMITTED)
+  description  String?
+  targetType   String?
+  targetId     String?
+  reviewedById String?
+  decisionNote String?
+  outcome      String?
+  decidedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
 
   user     User  @relation("PrivacyRequestOwner", fields: [userId], references: [id], onDelete: Restrict)
   reviewer User? @relation("PrivacyRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)

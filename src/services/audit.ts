@@ -60,6 +60,11 @@ export const TeamAuditAction = {
 
 export type TeamAuditActionValue = (typeof TeamAuditAction)[keyof typeof TeamAuditAction];
 
+export const ChannelAuditAction = {
+  Created: 'channel.created', Updated: 'channel.updated', Archived: 'channel.archived',
+  Deleted: 'channel.deleted', MemberAdded: 'channel.member_added', MemberRemoved: 'channel.member_removed',
+} as const;
+
 export interface AuditEventInput {
   workspaceId?: string | null;
   actorId?: string | null;

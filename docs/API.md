@@ -285,6 +285,33 @@ creation, renaming, and member assignment or removal; department deletion and
 department-settings routes are not registered.
 Do not document planned behavior as live API functionality.
 
+## Channel access (Phase 7)
+
+Channels expose access metadata only; message storage and delivery are not part
+of this API. All routes require an authenticated active account and an active
+workspace membership. `WORKSPACE` channels are visible to active members except
+collaborators; `TEAM`, `DEPARTMENT`, and `PROJECT` channels inherit current
+parent membership dynamically. `PRIVATE` channels require explicit
+`ChannelMembership`; workspace managers do not implicitly read them.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| POST | `/workspaces/{workspaceId}/channels` | Create `{type,name,description?,teamId?,departmentId?,projectId?}`; returns channel summary. Private creator receives `ADMIN`. |
+| GET | `/workspaces/{workspaceId}/channels?cursor=&limit=` | Stable cursor page `{items,nextCursor}` filtered by channel access. `memberCount` is an integer for private channels and `null` otherwise. |
+| GET | `/workspaces/{workspaceId}/channels/{channelId}` | Read an accessible channel summary; inaccessible channels return 404. |
+| PATCH | `/workspaces/{workspaceId}/channels/{channelId}` | Update `{name?,description?}`. |
+| POST | `/workspaces/{workspaceId}/channels/{channelId}/archive` | Archive channel. |
+| DELETE | `/workspaces/{workspaceId}/channels/{channelId}` | Soft-delete channel; workspace owner/project manager only. Deleted names are reusable. |
+| POST | `/workspaces/{workspaceId}/channels/{channelId}/members` | Private channel only; request `{userId}`; server assigns `MEMBER`. |
+| DELETE | `/workspaces/{workspaceId}/channels/{channelId}/members/{userId}` | Remove private-channel membership. |
+
+Workspace owners and project managers manage channel lifecycle. Team leads may
+create/update/archive channels attached to their own active team; department
+heads have the corresponding rights for their own department. A private-channel
+`ADMIN` may update metadata, archive, and manage its own membership. No one
+other than workspace owners/project managers may delete a channel. Parent team,
+department, or project archival/deletion revokes ordinary channel access.
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible

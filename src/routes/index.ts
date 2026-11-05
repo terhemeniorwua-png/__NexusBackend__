@@ -28,6 +28,7 @@ import { createBillingService, type BillingService } from '../modules/billing/bi
 import { createOrganizationRouter } from '../modules/organizations/organization.routes';
 import { createProjectOrganizationRouter } from '../modules/projects/organization-access.routes';
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
+import { createChannelRouter } from '../modules/channels/channel.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -68,6 +69,7 @@ export function createApiRouter({
   );
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
   router.use('/workspaces/:workspaceId/projects', createProjectOrganizationRouter({ config }));
+  router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
