@@ -218,7 +218,12 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageInvitations,
+        allowArchived: true,
       });
+
+      if (access.workspace.status !== 'ACTIVE') {
+        throw new AppError(409, 'WORKSPACE_NOT_ACTIVE', 'This workspace is not active');
+      }
 
       if (input.organizationRole) {
         assertCanAssignOrganizationRole({

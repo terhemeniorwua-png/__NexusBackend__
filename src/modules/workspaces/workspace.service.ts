@@ -665,6 +665,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.DeleteWorkspace,
+        allowArchived: true,
       });
 
       if (access.workspace.isPersonal) {
@@ -711,6 +712,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        allowArchived: true,
       });
 
       if (access.workspace.status !== 'ACTIVE') {
