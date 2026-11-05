@@ -77,6 +77,19 @@ enum DepartmentMembershipRole {
   MEMBER
 }
 
+enum InstitutionType {
+  UNIVERSITY
+  COLLEGE
+  SCHOOL
+  RESEARCH_INSTITUTION
+  OTHER
+}
+
+enum InstitutionGroupRole {
+  LEAD
+  MEMBER
+}
+
 enum TeamStatus {
   ACTIVE
   ARCHIVED
@@ -223,28 +236,30 @@ model User {
   deletionRequestedAt DateTime?
   scheduledDeletionAt DateTime?
 
-  profile               UserProfile?
-  sessions              Session[]
-  authTokens            AuthToken[]
-  workspaceMemberships  WorkspaceMembership[]
-  teamMemberships       TeamMembership[]
-  departmentMemberships DepartmentMembership[]
-  projectMemberships    ProjectMembership[]
-  createdTasks          Task[]                 @relation("TaskCreator")
-  assignedTasks         TaskAssignee[]
-  authoredComments      Comment[]
-  notifications         Notification[]
-  uploadedFiles         FileAttachment[]
-  auditLogs             AuditLog[]
-  invitedWorkspaces     Invitation[]           @relation("InvitedBy")
-  pendingInvitations    Invitation[]           @relation("InvitedUser")
-  acceptedInvitations   Invitation[]           @relation("AcceptedBy")
-  ownedWorkspaces       Workspace[]            @relation("WorkspaceOwner")
-  ownedProjects         Project[]              @relation("ProjectOwner")
-  ledTeams              Team[]                 @relation("TeamLead")
-  taskAssignments       TaskAssignee[]         @relation("TaskAssigner")
-  joinRequests          JoinRequest[]          @relation("JoinRequestApplicant")
-  reviewedJoinRequests  JoinRequest[]          @relation("JoinRequestReviewer")
+  profile                     UserProfile?
+  sessions                    Session[]
+  authTokens                  AuthToken[]
+  workspaceMemberships        WorkspaceMembership[]
+  teamMemberships             TeamMembership[]
+  departmentMemberships       DepartmentMembership[]
+  institutionGroupMemberships InstitutionGroupMembership[]
+  projectMemberships          ProjectMembership[]
+  createdTasks                Task[]                       @relation("TaskCreator")
+  assignedTasks               TaskAssignee[]
+  authoredComments            Comment[]
+  notifications               Notification[]
+  uploadedFiles               FileAttachment[]
+  auditLogs                   AuditLog[]
+  invitedWorkspaces           Invitation[]                 @relation("InvitedBy")
+  pendingInvitations          Invitation[]                 @relation("InvitedUser")
+  acceptedInvitations         Invitation[]                 @relation("AcceptedBy")
+  ownedWorkspaces             Workspace[]                  @relation("WorkspaceOwner")
+  ownedProjects               Project[]                    @relation("ProjectOwner")
+  ledTeams                    Team[]                       @relation("TeamLead")
+  taskAssignments             TaskAssignee[]               @relation("TaskAssigner")
+  joinRequests                JoinRequest[]                @relation("JoinRequestApplicant")
+  reviewedJoinRequests        JoinRequest[]                @relation("JoinRequestReviewer")
+  ledInstitutionGroups        InstitutionGroup[]           @relation("InstitutionGroupLead")
 
   @@index([status])
   @@index([createdAt])
@@ -325,19 +340,22 @@ model Workspace {
   updatedAt    DateTime            @updatedAt
   deletedAt    DateTime?
 
-  owner            User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members          WorkspaceMembership[]
-  teams            Team[]
-  projects         Project[]
-  departments      Department[]
-  invitations      Invitation[]
-  joinRequests     JoinRequest[]
-  files            FileAttachment[]
-  auditLogs        AuditLog[]
-  subscription     Subscription?
-  billingPayments  BillingPayment[]
-  billingCheckouts BillingCheckout[]
-  billingSeatSync  BillingSeatSync?
+  owner              User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members            WorkspaceMembership[]
+  teams              Team[]
+  projects           Project[]
+  departments        Department[]
+  companyProfile     CompanyProfile?
+  institutionProfile InstitutionProfile?
+  institutionGroups  InstitutionGroup[]
+  invitations        Invitation[]
+  joinRequests       JoinRequest[]
+  files              FileAttachment[]
+  auditLogs          AuditLog[]
+  subscription       Subscription?
+  billingPayments    BillingPayment[]
+  billingCheckouts   BillingCheckout[]
+  billingSeatSync    BillingSeatSync?
 
   @@index([ownerId])
   @@index([status])
@@ -485,14 +503,30 @@ model WorkspaceMembership {
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user                    User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notificationPreferences NotificationPreference[]
 
   @@unique([workspaceId, userId])
   @@index([userId])
   @@index([workspaceId, role])
   @@index([workspaceId, organizationRole])
   @@index([workspaceId, status])
+}
+
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  workspaceId  String
+  userId       String
+  type         NotificationType
+  inAppEnabled Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  membership WorkspaceMembership @relation(fields: [workspaceId, userId], references: [workspaceId, userId], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, type])
+  @@index([userId, workspaceId])
 }
 
 model Department {
@@ -523,6 +557,75 @@ model DepartmentMembership {
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([departmentId, userId])
+  @@index([userId])
+}
+
+model CompanyProfile {
+  id                 String   @id @default(uuid())
+  workspaceId        String   @unique
+  name               String
+  logoReference      String?
+  description        String?
+  industryCategory   String?
+  officialWebsite    String?
+  businessEmail      String?
+  contactInformation Json?
+  country            String?
+  location           String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model InstitutionProfile {
+  id                 String           @id @default(uuid())
+  workspaceId        String           @unique
+  name               String
+  logoReference      String?
+  description        String?
+  institutionType    InstitutionType?
+  officialWebsite    String?
+  institutionalEmail String?
+  contactInformation Json?
+  country            String?
+  location           String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model InstitutionGroup {
+  id          String                       @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  leadId      String?
+  createdAt   DateTime                     @default(now())
+  updatedAt   DateTime                     @updatedAt
+  deletedAt   DateTime?
+  workspace   Workspace                    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead        User?                        @relation("InstitutionGroupLead", fields: [leadId], references: [id], onDelete: SetNull)
+  members     InstitutionGroupMembership[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([leadId])
+}
+
+model InstitutionGroupMembership {
+  id        String               @id @default(uuid())
+  groupId   String
+  userId    String
+  role      InstitutionGroupRole @default(MEMBER)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  group InstitutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
   @@index([userId])
 }
 
@@ -943,8 +1046,6 @@ model EmailWebhookEvent {
 //   Phase 12/13 — Realtime & messaging
 //     Conversation, ConversationMembership, Message, MessageReaction,
 //     MessageAttachment, MessageReadReceipt, PresenceRecord
-//   Phase 14 — Notifications (extension)
-//     NotificationPreference
 //   Phase 16 — Calendar & scheduling
 //     CalendarEvent, Reminder, RecurrenceRule
 //   Phase 17 — Meetings

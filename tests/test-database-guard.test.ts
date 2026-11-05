@@ -20,29 +20,91 @@ function withEnvironment<T>(values: Record<string, string | undefined>, run: () 
 }
 
 test('database tests never fall back to DATABASE_URL', () => {
-  const result = withEnvironment({
-    RUN_PHASE3_DB_TESTS: 'true',
-    TEST_DATABASE_URL: undefined,
-    DATABASE_URL: 'postgresql://localhost/nexus_test',
-  }, () => resolveTestDatabaseUrl());
-  assert.equal(result, null);
+  assert.throws(() =>
+    withEnvironment(
+      {
+        NODE_ENV: 'test',
+        RUN_PHASE3_DB_TESTS: 'true',
+        TEST_DATABASE_URL: undefined,
+        DATABASE_URL: 'postgresql://localhost/nexus_test',
+      },
+      () => resolveTestDatabaseUrl(),
+    ),
+  );
 });
 
 test('database tests accept only an explicit loopback test database', () => {
-  const result = withEnvironment({
-    RUN_PHASE3_DB_TESTS: 'true',
-    TEST_DATABASE_URL: 'postgresql://localhost:5432/nexus_phase3_test',
-  }, () => resolveTestDatabaseUrl());
+  const result = withEnvironment(
+    {
+      NODE_ENV: 'test',
+      RUN_PHASE3_DB_TESTS: 'true',
+      TEST_DATABASE_URL: 'postgresql://localhost:5432/nexus_phase3_test',
+      DATABASE_URL: 'postgresql://localhost:5432/nexus_phase3_test',
+    },
+    () => resolveTestDatabaseUrl(),
+  );
   assert.equal(result, 'postgresql://localhost:5432/nexus_phase3_test');
 });
 
 test('database tests refuse remote or non-test database identities', () => {
-  assert.throws(() => withEnvironment({
-    RUN_PHASE3_DB_TESTS: 'true',
-    TEST_DATABASE_URL: 'postgresql://db.example.com:5432/nexus_test',
-  }, () => resolveTestDatabaseUrl()));
-  assert.throws(() => withEnvironment({
-    RUN_PHASE3_DB_TESTS: 'true',
-    TEST_DATABASE_URL: 'postgresql://localhost:5432/nexus',
-  }, () => resolveTestDatabaseUrl()));
+  assert.throws(() =>
+    withEnvironment(
+      {
+        NODE_ENV: 'test',
+        RUN_PHASE3_DB_TESTS: 'true',
+        TEST_DATABASE_URL: 'postgresql://db.example.com:5432/nexus_test',
+        DATABASE_URL: 'postgresql://db.example.com:5432/nexus_test',
+      },
+      () => resolveTestDatabaseUrl(),
+    ),
+  );
+  assert.throws(() =>
+    withEnvironment(
+      {
+        NODE_ENV: 'test',
+        RUN_PHASE3_DB_TESTS: 'true',
+        TEST_DATABASE_URL: 'postgresql://localhost:5432/nexus',
+        DATABASE_URL: 'postgresql://localhost:5432/nexus',
+      },
+      () => resolveTestDatabaseUrl(),
+    ),
+  );
+});
+
+test('database tests require NODE_ENV=test and matching explicit URLs', () => {
+  assert.throws(() =>
+    withEnvironment(
+      {
+        NODE_ENV: 'development',
+        RUN_PHASE3_DB_TESTS: 'true',
+        TEST_DATABASE_URL: 'postgresql://localhost:5432/nexus_phase3_test',
+        DATABASE_URL: 'postgresql://localhost:5432/nexus_phase3_test',
+      },
+      () => resolveTestDatabaseUrl(),
+    ),
+  );
+  assert.throws(() =>
+    withEnvironment(
+      {
+        NODE_ENV: 'test',
+        RUN_PHASE3_DB_TESTS: 'true',
+        TEST_DATABASE_URL: 'postgresql://localhost:5432/nexus_phase3_test',
+        DATABASE_URL: 'postgresql://localhost:5432/nexus_prod',
+      },
+      () => resolveTestDatabaseUrl(),
+    ),
+  );
+});
+
+test('database suites remain optional when their run flag is not enabled', () => {
+  const result = withEnvironment(
+    {
+      NODE_ENV: 'test',
+      RUN_PHASE3_DB_TESTS: undefined,
+      DATABASE_URL: undefined,
+      TEST_DATABASE_URL: undefined,
+    },
+    () => resolveTestDatabaseUrl(),
+  );
+  assert.equal(result, null);
 });

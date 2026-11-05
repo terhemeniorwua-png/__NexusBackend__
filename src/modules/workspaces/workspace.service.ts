@@ -29,6 +29,7 @@ import type {
   AddMemberInput,
   CreateDepartmentInput,
   DepartmentMemberInput,
+  UpdateDepartmentInput,
   TransferOwnershipInput,
   UpdateMemberRoleInput,
   UpdateWorkspaceInput,
@@ -93,6 +94,14 @@ export interface WorkspaceService {
   listDepartments(input: { userId: string; workspaceId: string }): Promise<DepartmentSummary[]>;
   createDepartment(
     input: { userId: string; workspaceId: string } & CreateDepartmentInput,
+    ctx: RequestContext,
+  ): Promise<DepartmentSummary>;
+  updateDepartment(
+    input: {
+      userId: string;
+      workspaceId: string;
+      departmentId: string;
+    } & UpdateDepartmentInput,
     ctx: RequestContext,
   ): Promise<DepartmentSummary>;
   assignDepartmentMember(
@@ -272,6 +281,18 @@ function toMember(
   };
 }
 
+function isDepartmentNameConflict(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'P2002') {
+    return false;
+  }
+  const target =
+    'meta' in error ? (error.meta as { target?: unknown } | undefined)?.target : undefined;
+  return (
+    (Array.isArray(target) && target.includes('workspaceId') && target.includes('name')) ||
+    (typeof target === 'string' && target.includes('Department_workspaceId_name_key'))
+  );
+}
+
 export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient): WorkspaceService {
   const client = prisma ?? getPrismaClient();
   const taskAssignmentNotifier = createTaskAssignmentNotifier(config, { prisma: client });
@@ -389,6 +410,14 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             organizationRole: ownerOrganizationRole(created.type),
           },
         });
+
+        if (created.type === 'COMPANY') {
+          await tx.companyProfile.create({ data: { workspaceId: created.id, name: created.name } });
+        } else if (created.type === 'INSTITUTION') {
+          await tx.institutionProfile.create({
+            data: { workspaceId: created.id, name: created.name },
+          });
+        }
 
         await recordAuditEvent(tx, {
           workspaceId: created.id,
@@ -792,6 +821,66 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         createdAt: department.createdAt,
         updatedAt: department.updatedAt,
       };
+    },
+
+    async updateDepartment(input, ctx): Promise<DepartmentSummary> {
+      const access = await requireDepartmentAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        departmentId: input.departmentId,
+        capability: DepartmentCapability.Update,
+      });
+      if (access.department.name !== input.name) {
+        const duplicate = await client.department.findUnique({
+          where: { workspaceId_name: { workspaceId: input.workspaceId, name: input.name } },
+          select: { id: true },
+        });
+        if (duplicate && duplicate.id !== access.department.id) {
+          throw new AppError(
+            409,
+            'DEPARTMENT_NAME_EXISTS',
+            'A department with that name already exists in this institution',
+          );
+        }
+      }
+
+      try {
+        const updated = await client.$transaction(async (tx) => {
+          const department = await tx.department.update({
+            where: { id: access.department.id },
+            data: { name: input.name },
+            include: { _count: { select: { members: true } } },
+          });
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: WorkspaceAuditAction.DepartmentUpdated,
+            targetType: 'Department',
+            targetId: department.id,
+            metadata: { previousName: access.department.name, name: department.name },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+          return department;
+        });
+        return {
+          id: updated.id,
+          workspaceId: updated.workspaceId,
+          name: updated.name,
+          memberCount: updated._count.members,
+          createdAt: updated.createdAt,
+          updatedAt: updated.updatedAt,
+        };
+      } catch (error) {
+        if (isDepartmentNameConflict(error)) {
+          throw new AppError(
+            409,
+            'DEPARTMENT_NAME_EXISTS',
+            'A department with that name already exists in this institution',
+          );
+        }
+        throw error;
+      }
     },
 
     async assignDepartmentMember(input, ctx): Promise<void> {
@@ -1410,6 +1499,16 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             userId: input.targetUserId,
             department: { workspaceId: access.workspace.id },
           },
+        });
+        await tx.institutionGroupMembership.deleteMany({
+          where: {
+            userId: input.targetUserId,
+            group: { workspaceId: access.workspace.id },
+          },
+        });
+        await tx.institutionGroup.updateMany({
+          where: { workspaceId: access.workspace.id, leadId: input.targetUserId },
+          data: { leadId: null },
         });
 
         await recordAuditEvent(tx, {

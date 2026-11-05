@@ -23,12 +23,7 @@ export async function isLastActiveOrganizationOwnerOrAdministrator(
       OR: [
         {
           organizationRole: {
-            in: [
-              'COMPANY_OWNER',
-              'COMPANY_ADMIN',
-              'INSTITUTION_OWNER',
-              'INSTITUTION_ADMIN',
-            ],
+            in: ['COMPANY_OWNER', 'COMPANY_ADMIN', 'INSTITUTION_OWNER', 'INSTITUTION_ADMIN'],
           },
         },
         { role: { in: ['OWNER', 'PROJECT_MANAGER'] }, organizationRole: null },
@@ -214,6 +209,11 @@ export async function processPendingAccountDeletions(
       await tx.teamMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.projectMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.departmentMembership.deleteMany({ where: { userId: candidate.id } });
+      await tx.institutionGroupMembership.deleteMany({ where: { userId: candidate.id } });
+      await tx.institutionGroup.updateMany({
+        where: { leadId: candidate.id },
+        data: { leadId: null },
+      });
       await tx.taskAssignee.deleteMany({ where: { userId: candidate.id } });
       await tx.team.updateMany({ where: { leadId: candidate.id }, data: { leadId: null } });
       await tx.notification.deleteMany({ where: { userId: candidate.id } });

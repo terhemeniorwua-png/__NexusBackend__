@@ -1934,6 +1934,292 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/company-profile:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: getCompanyProfile
+      summary: Read the workspace company profile
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Company profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyProfileResponse'
+        '403': { description: Workspace access denied, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Not a company workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    patch:
+      tags: [Workspaces]
+      operationId: updateCompanyProfile
+      summary: Update the workspace company profile
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCompanyProfileRequest'
+      responses:
+        '200':
+          description: Updated company profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyProfileResponse'
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Not a company workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /workspaces/{workspaceId}/institution-profile:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: getInstitutionProfile
+      summary: Read the workspace institution profile
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Institution profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstitutionProfileResponse'
+        '403': { description: Workspace access denied, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Not an institution workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    patch:
+      tags: [Workspaces]
+      operationId: updateInstitutionProfile
+      summary: Update the workspace institution profile
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInstitutionProfileRequest'
+      responses:
+        '200':
+          description: Updated institution profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstitutionProfileResponse'
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Not an institution workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /workspaces/{workspaceId}/notification-preferences:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: getNotificationPreferences
+      summary: Read the caller's workspace notification preferences
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The caller's preferences, with enabled defaults for unset notification types.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferencesResponse' }
+        '403': { description: Active workspace membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    patch:
+      tags: [Workspaces]
+      operationId: updateNotificationPreferences
+      summary: Update the caller's in-app notification preferences
+      description: Updates only selected notification types for the caller in this workspace. Email and message unread state are unaffected.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateNotificationPreferencesRequest' }
+      responses:
+        '200':
+          description: The caller's complete preference set after the update.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPreferencesResponse' }
+        '403': { description: Active workspace membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /workspaces/{workspaceId}/institution-groups:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      operationId: listInstitutionGroups
+      summary: List groups visible to the institution member
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Institution groups visible to the caller.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/InstitutionGroup' }
+    post:
+      tags: [Workspaces]
+      operationId: createInstitutionGroup
+      summary: Create an institution group
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInstitutionGroupRequest' }
+      responses:
+        '201':
+          description: Created institution group.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstitutionGroupResponse' }
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /workspaces/{workspaceId}/institution-groups/{groupId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: groupId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Workspaces]
+      operationId: updateInstitutionGroup
+      summary: Update an institution group
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateInstitutionGroupRequest' }
+      responses:
+        '200':
+          description: Updated group.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstitutionGroupResponse' }
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Group not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    delete:
+      tags: [Workspaces]
+      operationId: deleteInstitutionGroup
+      summary: Delete an institution group and its memberships
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Group deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [id, deleted]
+                    properties:
+                      id: { type: string, format: uuid }
+                      deleted: { type: boolean, const: true }
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '404': { description: Group not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /workspaces/{workspaceId}/institution-groups/{groupId}/members:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: groupId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Workspaces]
+      operationId: listInstitutionGroupMembers
+      summary: List group members
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Group member list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/InstitutionGroupMember' }
+        '403': { description: Group membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    post:
+      tags: [Workspaces]
+      operationId: addInstitutionGroupMember
+      summary: Add a workspace member to a group
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddInstitutionGroupMemberRequest' }
+      responses:
+        '201':
+          description: Member added.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstitutionGroupMemberResponse' }
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+  /workspaces/{workspaceId}/institution-groups/{groupId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: groupId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Workspaces]
+      operationId: updateInstitutionGroupMember
+      summary: Change an institution group member role
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateInstitutionGroupMemberRequest' }
+      responses:
+        '200':
+          description: Updated group membership.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstitutionGroupMemberResponse' }
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+    delete:
+      tags: [Workspaces]
+      operationId: removeInstitutionGroupMember
+      summary: Remove a member from a group
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Member removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [userId, removed]
+                    properties:
+                      userId: { type: string, format: uuid }
+                      removed: { type: boolean, const: true }
+        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
   /workspaces/{workspaceId}/departments:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -1997,6 +2283,52 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /workspaces/{workspaceId}/departments/{departmentId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: departmentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [Workspaces]
+      operationId: updateInstitutionDepartment
+      summary: Rename an institution department
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateDepartmentRequest' }
+      responses:
+        '200':
+          description: The renamed department.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data: { $ref: '#/components/schemas/Department' }
+        '403':
+          description: A department head or institution administrator is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: The department is not in the requested institution workspace.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: Another department already has this name.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /workspaces/{workspaceId}/departments/{departmentId}/members:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -4020,6 +4352,15 @@ components:
           type: string
           minLength: 2
           maxLength: 80
+    UpdateDepartmentRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
     DepartmentMemberRequest:
       type: object
       required: [targetUserId]
@@ -4525,6 +4866,201 @@ components:
         leadId:
           type: [string, 'null']
           format: uuid
+    ProfileContactInformation:
+      type: object
+      maxProperties: 20
+      additionalProperties:
+        type: string
+    CompanyProfile:
+      type: object
+      required: [id, workspaceId, name, logoReference, description, industryCategory, officialWebsite, businessEmail, contactInformation, country, location, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        name: { type: string }
+        logoReference: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        industryCategory: { type: [string, 'null'] }
+        officialWebsite: { type: [string, 'null'], format: uri }
+        businessEmail: { type: [string, 'null'], format: email }
+        contactInformation:
+          oneOf:
+            - $ref: '#/components/schemas/ProfileContactInformation'
+            - type: 'null'
+        country: { type: [string, 'null'] }
+        location: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    InstitutionProfile:
+      type: object
+      required: [id, workspaceId, name, logoReference, description, institutionType, officialWebsite, institutionalEmail, contactInformation, country, location, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        name: { type: string }
+        logoReference: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        institutionType:
+          type: [string, 'null']
+          enum: [UNIVERSITY, COLLEGE, SCHOOL, RESEARCH_INSTITUTION, OTHER, null]
+        officialWebsite: { type: [string, 'null'], format: uri }
+        institutionalEmail: { type: [string, 'null'], format: email }
+        contactInformation:
+          oneOf:
+            - $ref: '#/components/schemas/ProfileContactInformation'
+            - type: 'null'
+        country: { type: [string, 'null'] }
+        location: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CompanyProfileResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/CompanyProfile' }
+    InstitutionProfileResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/InstitutionProfile' }
+    UpdateCompanyProfileRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        industryCategory: { type: [string, 'null'], maxLength: 120 }
+        officialWebsite: { type: [string, 'null'], format: uri }
+        businessEmail: { type: [string, 'null'], format: email }
+        contactInformation:
+          oneOf:
+            - $ref: '#/components/schemas/ProfileContactInformation'
+            - type: 'null'
+        country: { type: [string, 'null'], maxLength: 100 }
+        location: { type: [string, 'null'], maxLength: 250 }
+    UpdateInstitutionProfileRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        institutionType: { type: [string, 'null'], enum: [UNIVERSITY, COLLEGE, SCHOOL, RESEARCH_INSTITUTION, OTHER, null] }
+        officialWebsite: { type: [string, 'null'], format: uri }
+        institutionalEmail: { type: [string, 'null'], format: email }
+        contactInformation:
+          oneOf:
+            - $ref: '#/components/schemas/ProfileContactInformation'
+            - type: 'null'
+        country: { type: [string, 'null'], maxLength: 100 }
+        location: { type: [string, 'null'], maxLength: 250 }
+    NotificationPreference:
+      type: object
+      required: [type, inAppEnabled]
+      properties:
+        type: { $ref: '#/components/schemas/NotificationType' }
+        inAppEnabled: { type: boolean }
+    NotificationPreferencesResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationPreference' }
+    UpdateNotificationPreferencesRequest:
+      type: object
+      required: [preferences]
+      additionalProperties: false
+      properties:
+        preferences:
+          type: array
+          minItems: 1
+          maxItems: 18
+          description: Each notification type may appear at most once in this update.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/NotificationPreference'
+    NotificationType:
+      type: string
+      enum: [MENTION, TASK_ASSIGNED, TASK_REASSIGNED, TASK_SUBMITTED, TASK_APPROVED, CHANGES_REQUESTED, COMMENT_REPLY, MEMBERSHIP_CHANGED, MEMBERSHIP_SUSPENDED, MEMBERSHIP_RESTORED, INVITATION_ACCEPTED, JOIN_REQUEST_RECEIVED, JOIN_REQUEST_APPROVED, JOIN_REQUEST_REJECTED, MEETING_INVITE, MEETING_RESCHEDULED, MEETING_CANCELLED, PROJECT_UPDATE]
+    InstitutionGroup:
+      type: object
+      required: [id, workspaceId, name, description, leadId, createdAt, updatedAt, deletedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        leadId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: [string, 'null'], format: date-time }
+        _count:
+          type: object
+          properties:
+            members: { type: integer, minimum: 0 }
+    InstitutionGroupResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/InstitutionGroup' }
+    CreateInstitutionGroupRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        description: { type: [string, 'null'], maxLength: 500 }
+        leadId: { type: [string, 'null'], format: uuid }
+    UpdateInstitutionGroupRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        description: { type: [string, 'null'], maxLength: 500 }
+        leadId: { type: [string, 'null'], format: uuid }
+    AddInstitutionGroupMemberRequest:
+      type: object
+      required: [userId]
+      additionalProperties: false
+      properties:
+        userId: { type: string, format: uuid }
+        role: { type: string, enum: [LEAD, MEMBER], default: MEMBER }
+    UpdateInstitutionGroupMemberRequest:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role: { type: string, enum: [LEAD, MEMBER] }
+    InstitutionGroupMember:
+      type: object
+      required: [id, groupId, userId, role, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        groupId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        role: { type: string, enum: [LEAD, MEMBER] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        user:
+          type: object
+          required: [id, name, email]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            email: { type: string, format: email }
+    InstitutionGroupMemberResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/InstitutionGroupMember' }
     EmailWebhookResponse:
       type: object
       required: [success, data]

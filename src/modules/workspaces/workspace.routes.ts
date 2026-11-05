@@ -21,6 +21,7 @@ import {
   memberParamsSchema,
   removeWorkspaceMemberSchema,
   transferOwnershipSchema,
+  updateDepartmentSchema,
   updateMemberRoleSchema,
   updateWorkspaceSchema,
   workspaceIdParamsSchema,
@@ -32,6 +33,7 @@ import {
   type ListInvitationsQuery,
   type RemoveWorkspaceMemberInput,
   type TransferOwnershipInput,
+  type UpdateDepartmentInput,
   type UpdateMemberRoleInput,
   type UpdateWorkspaceInput,
 } from './workspace.schemas';
@@ -255,6 +257,25 @@ export function createWorkspaceRouter({
         context(req),
       );
       sendSuccess(res, department, 201);
+    },
+  );
+
+  router.patch(
+    '/:workspaceId/departments/:departmentId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: departmentParamsSchema, body: updateDepartmentSchema }),
+    async (req, res) => {
+      const { workspaceId, departmentId } = req.validated?.params as {
+        workspaceId: string;
+        departmentId: string;
+      };
+      const input = req.validated?.body as UpdateDepartmentInput;
+      const department = await service.updateDepartment(
+        { userId: requireUser(req), workspaceId, departmentId, ...input },
+        context(req),
+      );
+      sendSuccess(res, department);
     },
   );
 

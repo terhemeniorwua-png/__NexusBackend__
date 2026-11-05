@@ -92,6 +92,7 @@ export const departmentMemberParamsSchema = departmentParamsSchema.extend({
 });
 
 export const createDepartmentSchema = z.object({ name: nameSchema }).strict();
+export const updateDepartmentSchema = z.object({ name: nameSchema }).strict();
 
 export const departmentMemberSchema = z
   .object({
@@ -101,6 +102,7 @@ export const departmentMemberSchema = z
   .strict();
 
 export type CreateDepartmentInput = z.infer<typeof createDepartmentSchema>;
+export type UpdateDepartmentInput = z.infer<typeof updateDepartmentSchema>;
 export type DepartmentMemberInput = z.infer<typeof departmentMemberSchema>;
 
 export const invitationTokenParamsSchema = z.object({
