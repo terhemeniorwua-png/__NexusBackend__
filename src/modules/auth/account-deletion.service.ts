@@ -203,6 +203,7 @@ export async function processPendingAccountDeletions(
         where: { leadId: candidate.id },
         data: { leadId: null },
       });
+      await tx.channelMembership.deleteMany({ where: { userId: candidate.id } });
       // Keep membership, assignment, comments, shared files, projects and workspaces:
       // their retained records become attributable to the Deleted user tombstone.
       await tx.team.updateMany({ where: { leadId: candidate.id }, data: { leadId: null } });

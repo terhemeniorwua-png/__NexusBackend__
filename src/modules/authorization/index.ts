@@ -44,6 +44,10 @@ export {
 } from './project.policy';
 export type { ProjectCapabilityValue, ProjectAccess } from './project.policy';
 
+// Channel
+export { ChannelCapability, requireChannelAccess } from './channel.policy';
+export type { ChannelCapabilityValue, ChannelAccess } from './channel.policy';
+
 // Team
 export {
   TeamCapability,

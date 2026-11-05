@@ -1512,6 +1512,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             group: { workspaceId: access.workspace.id },
           },
         });
+        await tx.channelMembership.deleteMany({
+          where: { userId: input.targetUserId, channel: { workspaceId: access.workspace.id } },
+        });
         await tx.institutionGroup.updateMany({
           where: { workspaceId: access.workspace.id, leadId: input.targetUserId },
           data: { leadId: null },
