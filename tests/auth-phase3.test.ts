@@ -11,7 +11,7 @@ import { getPrismaClient } from '../src/db/prisma';
 import { hashSecret } from '../src/utils/crypto';
 import { processPendingAccountDeletions } from '../src/modules/auth/account-deletion.service';
 import { totpAt } from '../src/modules/auth/totp';
-import { connectRedis, disconnectRedis } from '../src/db/redis';
+import { connectRedis, disconnectRedis, getRedisClient } from '../src/db/redis';
 import {
   resetEmailSender,
   setEmailSender,
@@ -1194,6 +1194,14 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       headers: { authorization: `Bearer ${other.accessToken}` },
     });
     assert.equal(otherRead.status, 404);
+    const otherCannotUseProfileIdentity = await jsonRequest(`${baseUrl}/api/v1/users/me`, {
+      headers: { authorization: `Bearer ${other.accessToken}` },
+    });
+    assert.equal(otherCannotUseProfileIdentity.status, 200);
+    assert.notEqual(
+      (otherCannotUseProfileIdentity.body.data as { user: { id: string } }).user.id,
+      session.userId,
+    );
 
     failAvatarDelete = true;
     const deleted = await jsonRequest(path, { method: 'DELETE', headers: authorization });
@@ -1213,6 +1221,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
   test('TOTP enrollment, login challenge, replay, recovery codes, disable and lockout work end to end', async () => {
     const session = await activate();
+    const other = await activate();
     const authHeaders = { authorization: `Bearer ${session.accessToken}` };
     const setup = await jsonRequest<{ otpauthUrl: string }>(`${baseUrl}/api/v1/auth/2fa/setup`, {
       method: 'POST',
@@ -1223,6 +1232,9 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       'secret',
     );
     assert.ok(secret);
+    const victimSecretBeforeForgedSetup = (
+      await prisma.user.findUniqueOrThrow({ where: { id: session.userId } })
+    ).twoFactorSecretEncrypted;
     const currentCode = totpAt(secret);
     const wrongCode = currentCode === '000000' ? '000001' : '000000';
     const wrongConfirm = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/confirm`, {
@@ -1231,6 +1243,27 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       body: JSON.stringify({ code: wrongCode }),
     });
     assert.equal(wrongConfirm.status, 401);
+    assert.equal(
+      await prisma.auditLog.count({
+        where: { action: 'auth.two_factor_failed', targetId: session.userId },
+      }),
+      1,
+    );
+    const failedNotice = sender.lastFor(session.email, 'security_notification');
+    assert.ok(failedNotice?.subject.includes('verification failed'));
+    assert.equal(failedNotice?.text.includes(wrongCode), false);
+
+    const forgedSetup = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/setup`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      body: JSON.stringify({ userId: session.userId }),
+    });
+    assert.equal(forgedSetup.status, 200);
+    const victimUnchanged = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+    const untouchedOther = await prisma.user.findUniqueOrThrow({ where: { id: other.userId } });
+    assert.equal(victimUnchanged.twoFactorSecretEncrypted, victimSecretBeforeForgedSetup);
+    assert.equal(victimUnchanged.twoFactorEnabled, false);
+    assert.ok(untouchedOther.twoFactorSecretEncrypted);
 
     const confirmed = await jsonRequest<{ recoveryCodes: string[] }>(
       `${baseUrl}/api/v1/auth/2fa/confirm`,
@@ -1256,6 +1289,12 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       false,
     );
     assert.ok(sender.lastFor(session.email, 'security_notification'));
+    assert.equal(
+      await prisma.auditLog.count({
+        where: { action: 'auth.two_factor_enabled', targetId: session.userId },
+      }),
+      1,
+    );
     const restartWhileEnabled = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/setup`, {
       method: 'POST',
       headers: authHeaders,
@@ -1283,6 +1322,17 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       headers: { authorization: `Bearer ${challenge.challengeToken}` },
     });
     assert.equal(protectedWithChallenge.status, 401);
+    for (const protectedPath of ['/api/v1/users/me', '/api/v1/workspaces']) {
+      const rejected = await jsonRequest(`${baseUrl}${protectedPath}`, {
+        headers: { authorization: `Bearer ${challenge.challengeToken}` },
+      });
+      assert.equal(rejected.status, 401, `${protectedPath} must reject an MFA challenge`);
+    }
+    const managementWithChallenge = await jsonRequest(`${baseUrl}/api/v1/auth/2fa/setup`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${challenge.challengeToken}` },
+    });
+    assert.equal(managementWithChallenge.status, 401);
 
     const expired = jwt.sign(
       { sub: session.userId, typ: 'mfa_challenge', jti: 'expired-test' },
@@ -1356,6 +1406,15 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       await prisma.twoFactorRecoveryCode.count({ where: { userId: session.userId, usedAt: null } }),
       10,
     );
+    assert.ok(
+      sender.lastFor(session.email, 'security_notification')?.subject.includes('regenerated'),
+    );
+    assert.equal(
+      await prisma.auditLog.count({
+        where: { action: 'auth.two_factor_recovery_codes_regenerated', targetId: session.userId },
+      }),
+      1,
+    );
     assert.equal(
       await prisma.twoFactorRecoveryCode.count({
         where: { userId: session.userId, codeHash: hashSecret(recoveryCodes[1]!) },
@@ -1377,7 +1436,13 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       await prisma.twoFactorRecoveryCode.count({ where: { userId: session.userId } }),
       0,
     );
-    assert.ok(sender.lastFor(session.email, 'security_notification'));
+    assert.ok(sender.lastFor(session.email, 'security_notification')?.subject.includes('disabled'));
+    assert.equal(
+      await prisma.auditLog.count({
+        where: { action: 'auth.two_factor_disabled', targetId: session.userId },
+      }),
+      1,
+    );
     const ordinaryLogin = await jsonRequest(`${baseUrl}/api/v1/auth/login`, {
       method: 'POST',
       body: JSON.stringify({ email: session.email, password: session.password }),
@@ -1497,6 +1562,19 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     });
     assert.equal(locked.status, 429);
     assert.equal(locked.body.error?.code, 'MFA_LOCKED');
+    const redis = getRedisClient('redis://localhost:6379/15');
+    assert.equal(await redis.get(`${namespace}:mfa:fail:user:${session.userId}`), '5');
+    assert.equal(
+      await redis.get(`${namespace}:mfa:fail:ip:${hashSecret('127.0.0.1')}`),
+      '5',
+    );
+    assert.ok(sender.lastFor(session.email, 'security_notification')?.subject.includes('verification failed'));
+    assert.equal(
+      await prisma.auditLog.count({
+        where: { action: 'auth.two_factor_failed', targetId: session.userId },
+      }),
+      5,
+    );
   });
 
   test('deactivating the account blocks sign-in and revokes the sessions', async () => {

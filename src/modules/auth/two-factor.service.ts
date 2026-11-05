@@ -85,20 +85,21 @@ export function createTwoFactorService(
     }
   }
 
-  async function recordFailure(userId: string, ctx: RequestContext): Promise<void> {
+  async function recordFailure(user: User, ctx: RequestContext): Promise<void> {
     const client = redis();
-    for (const key of failureKeys(userId, ctx)) {
+    for (const key of failureKeys(user.id, ctx)) {
       const value = await client.incr(key);
       if (value === 1) await client.expire(key, FAILURE_TTL_SECONDS);
     }
     await recordSecurityEvent(prisma, {
       action: SecurityAction.TwoFactorFailed,
       targetType: 'User',
-      targetId: userId,
-      actorId: userId,
+      targetId: user.id,
+      actorId: user.id,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
+    await notify(user, 'verification_failed');
   }
 
   async function clearFailures(userId: string, ctx: RequestContext): Promise<void> {
@@ -153,7 +154,7 @@ export function createTwoFactorService(
     }
 
     if (!valid) {
-      await recordFailure(user.id, ctx);
+      await recordFailure(user, ctx);
       throw new AppError(
         401,
         'MFA_CODE_INVALID',
@@ -172,17 +173,26 @@ export function createTwoFactorService(
     return codes;
   }
 
-  async function notify(user: User, enabled: boolean): Promise<void> {
+  async function notify(
+    user: User,
+    event: 'enabled' | 'disabled' | 'recovery_codes_regenerated' | 'verification_failed',
+  ): Promise<void> {
+    const detail = {
+      enabled: 'Two-factor authentication was enabled for your',
+      disabled: 'Two-factor authentication was disabled for your',
+      recovery_codes_regenerated: 'Your two-factor recovery codes were regenerated for your',
+      verification_failed: 'A two-factor verification attempt failed for your',
+    }[event];
     await sendEmail(
       buildSecurityNotificationEmail({
         to: user.email,
         name: user.name,
         brand,
-        subject: `Two-factor authentication ${enabled ? 'enabled' : 'disabled'}`,
-        detail: `Two-factor authentication was ${enabled ? 'enabled' : 'disabled'} for your ${brand.appName} account. If this was not you, reset your password and contact support.`,
+        subject: `Two-factor security event: ${event.replaceAll('_', ' ')}`,
+        detail: `${detail} ${brand.appName} account. If this was not you, review your account security and contact support.`,
         actionUrl: `${config.frontendUrl.replace(/\/+$/, '')}/settings/security`,
         actionLabel: 'Review security settings',
-        idempotencyKey: `auth:two_factor:${enabled ? 'enabled' : 'disabled'}:${user.id}:${Date.now()}`,
+        idempotencyKey: `auth:two_factor:${event}:${user.id}:${randomUUID()}`,
       }),
     );
   }
@@ -284,7 +294,7 @@ export function createTwoFactorService(
       await assertNotLocked(userId, ctx);
       const secret = decryptTotpSecret(user.twoFactorSecretEncrypted, config.totpEncryptionKey);
       if (verifyTotp(secret, code) === null) {
-        await recordFailure(userId, ctx);
+        await recordFailure(user, ctx);
         throw new AppError(401, 'MFA_CODE_INVALID', 'The verification code is invalid');
       }
       const verifiedAt = new Date();
@@ -318,7 +328,7 @@ export function createTwoFactorService(
         userAgent: ctx.userAgent,
       });
       await clearFailures(userId, ctx);
-      await notify(user, true);
+      await notify(user, 'enabled');
       return { recoveryCodes: codes };
     },
 
@@ -405,7 +415,7 @@ export function createTwoFactorService(
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
-      await notify(user, false);
+      await notify(user, 'disabled');
     },
 
     async regenerateRecoveryCodes(input, ctx) {
@@ -433,6 +443,7 @@ export function createTwoFactorService(
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
+      await notify(user, 'recovery_codes_regenerated');
       return { recoveryCodes: codes };
     },
   };
