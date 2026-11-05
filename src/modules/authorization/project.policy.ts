@@ -18,11 +18,11 @@ import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organi
  *
  * - The workspace OWNER and PROJECT_MANAGER can read and manage every project
  *   in the workspace regardless of whether they hold a project membership row.
- * - A project MEMBER or VIEWER must have an explicit `ProjectMembership` row
- *   or membership in the project-associated team to access the project.
- * - Private projects (`visibility = PRIVATE`) are only visible to explicitly
- *   invited project members or members of their associated team; workspace-
- *   wide roles do not grant access unless they are OWNER or PROJECT_MANAGER.
+ * - WORKSPACE projects are readable by active workspace members.
+ * - DEPARTMENT_TEAM projects require explicit project membership or current
+ *   membership in their associated team/department.
+ * - PRIVATE projects require explicit project membership or project ownership;
+ *   organization administrators do not receive implicit access.
  * - Project-level management actions (update, archive, delete, manage members)
  *   require either the workspace OWNER / PROJECT_MANAGER role, or the project-
  *   level PROJECT_MANAGER role.
@@ -318,10 +318,16 @@ export async function requireProjectAccess(
   });
 
   const isProjectOwner = project.ownerId === input.userId;
+  if (
+    project.visibility === 'WORKSPACE' &&
+    input.capability === ProjectCapability.ViewProject
+  ) {
+    return { project, projectMembership, workspaceRole: effectiveRole };
+  }
   if (!projectMembership && !teamMember && !departmentMember && !isProjectOwner) {
-    // Private projects are hidden completely; WORKSPACE-visible projects
-    // report the correct error.
-    if (project.visibility === 'PRIVATE') {
+    // Restricted projects are hidden completely from users outside their
+    // explicit membership or current parent membership.
+    if (project.visibility !== 'WORKSPACE') {
       throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
     }
 
