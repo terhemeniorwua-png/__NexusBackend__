@@ -21,6 +21,12 @@ export async function requireChannelAccess(client: PrismaClient, input: {
   if (wm.organizationRole && !isOrganizationRoleForWorkspace(wm.workspace.type, wm.organizationRole)) throw new AppError(403, 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH', 'The organization role is invalid');
   const workspaceRole = effectiveWorkspaceRole(wm.workspace.type, wm.role, wm.organizationRole);
   const manager = workspaceRole === 'OWNER' || workspaceRole === 'PROJECT_MANAGER';
+  if (channel.archivedAt) {
+    const managerCapabilities: ChannelCapabilityValue[] = [ChannelCapability.View, ChannelCapability.Archive, ChannelCapability.Delete];
+    if (!manager || !managerCapabilities.includes(input.capability)) {
+      throw new AppError(404, 'CHANNEL_NOT_FOUND', 'That channel does not exist');
+    }
+  }
   const implicitLegacyManager = manager && !wm.organizationRole;
   const manageCaps = [ChannelCapability.Update, ChannelCapability.Archive, ChannelCapability.Delete, ChannelCapability.AddMember, ChannelCapability.RemoveMember] as string[];
   const parent = await parentState(client, channel, input.userId);
@@ -33,7 +39,7 @@ export async function requireChannelAccess(client: PrismaClient, input: {
     if ([ChannelCapability.AddMember, ChannelCapability.RemoveMember].includes(input.capability as never) && membership?.role !== 'ADMIN' && !manager) throw new AppError(403, 'CHANNEL_ACCESS_DENIED', 'Channel administration is required');
     if (input.capability === ChannelCapability.Update && membership?.role !== 'ADMIN' && !manager) throw new AppError(403, 'CHANNEL_ACCESS_DENIED', 'Channel administration is required');
     if (input.capability === ChannelCapability.Archive && membership?.role !== 'ADMIN' && !manager) throw new AppError(403, 'CHANNEL_ACCESS_DENIED', 'Channel administration is required');
-  } else if (input.capability === ChannelCapability.View) {
+  } else if (input.capability === ChannelCapability.View && !manager) {
     if (channel.type === 'WORKSPACE') {
       if (workspaceRole === 'COLLABORATOR') throw new AppError(403, 'CHANNEL_ACCESS_DENIED', 'Collaborators cannot view workspace channels');
     } else if (channel.type === 'TEAM') {
