@@ -17,8 +17,11 @@ import {
   departmentParamsSchema,
   createWorkspaceSchema,
   invitationParamsSchema,
+  incomingOwnershipTransfersQuerySchema,
   listInvitationsQuerySchema,
   memberParamsSchema,
+  ownershipTransferParamsSchema,
+  adminOwnerAssignmentParamsSchema,
   removeWorkspaceMemberSchema,
   transferOwnershipSchema,
   updateDepartmentSchema,
@@ -91,6 +94,11 @@ export function createWorkspaceRouter({
     keyGenerator: (req) => req.auth?.userId ?? `ip:${ipKeyGenerator(req.ip ?? 'unknown')}`,
   });
 
+  router.get('/owner-transfers/incoming', requireAuth, requireActiveAccount, validate({ query: incomingOwnershipTransfersQuerySchema }), async (req, res) => {
+    const query = req.validated?.query as { limit: number; offset: number };
+    sendSuccess(res, await service.listIncomingOwnershipTransfers({ userId: requireUser(req), ...query }));
+  });
+
   router.post(
     '/',
     requireAuth,
@@ -139,6 +147,30 @@ export function createWorkspaceRouter({
       sendSuccess(res, workspace);
     },
   );
+
+  router.post('/:workspaceId/owner-transfers/:transferId/accept', requireAuth, requireActiveAccount, validate({ params: ownershipTransferParamsSchema }), async (req, res) => {
+    const { workspaceId, transferId } = req.validated?.params as { workspaceId: string; transferId: string };
+    const result = await service.acceptOwnershipTransfer({ userId: requireUser(req), workspaceId, transferId }, context(req));
+    sendSuccess(res, result);
+  });
+
+  router.post('/:workspaceId/owner-transfers/:transferId/reject', requireAuth, requireActiveAccount, validate({ params: ownershipTransferParamsSchema }), async (req, res) => {
+    const { workspaceId, transferId } = req.validated?.params as { workspaceId: string; transferId: string };
+    const result = await service.rejectOwnershipTransfer({ userId: requireUser(req), workspaceId, transferId }, context(req));
+    sendSuccess(res, result);
+  });
+
+  router.post('/:workspaceId/owner-transfers/:transferId/billing-acceptance', requireAuth, requireActiveAccount, validate({ params: ownershipTransferParamsSchema }), async (req, res) => {
+    const { workspaceId, transferId } = req.validated?.params as { workspaceId: string; transferId: string };
+    const result = await service.acceptOwnershipBilling({ userId: requireUser(req), workspaceId, transferId }, context(req));
+    sendSuccess(res, result);
+  });
+
+  router.post('/:workspaceId/admin-owner/:userId', requireAuth, requireActiveAccount, validate({ params: adminOwnerAssignmentParamsSchema }), async (req, res) => {
+    const { workspaceId, userId: newOwnerId } = req.validated?.params as { workspaceId: string; userId: string };
+    const result = await service.resolveDeletedOwner({ actorId: requireUser(req), workspaceId, newOwnerId }, context(req));
+    sendSuccess(res, result);
+  });
 
   router.post(
     '/:workspaceId/archive',

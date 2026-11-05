@@ -33,7 +33,10 @@ export function createBillingSeatSyncWorker(input: {
       where: {
         OR: [
           { status: 'PENDING', nextAttemptAt: { lte: currentTime } },
-          { status: 'PROCESSING', updatedAt: { lte: new Date(currentTime.getTime() - STALE_PROCESSING_MS) } },
+          {
+            status: 'PROCESSING',
+            updatedAt: { lte: new Date(currentTime.getTime() - STALE_PROCESSING_MS) },
+          },
         ],
       },
       orderBy: { createdAt: 'asc' },
@@ -46,15 +49,19 @@ export function createBillingSeatSyncWorker(input: {
 
     for (const row of rows) {
       const claim = await input.prisma.billingSeatSync.updateMany({
-        where: row.status === 'PENDING'
-          ? { id: row.id, status: 'PENDING', nextAttemptAt: { lte: currentTime } }
-          : { id: row.id, status: 'PROCESSING', updatedAt: row.updatedAt },
+        where:
+          row.status === 'PENDING'
+            ? { id: row.id, status: 'PENDING', nextAttemptAt: { lte: currentTime } }
+            : { id: row.id, status: 'PROCESSING', updatedAt: row.updatedAt },
         data: { status: 'PROCESSING', attempts: { increment: 1 } },
       });
       if (claim.count !== 1) continue;
       claimed += 1;
       try {
-        await input.service.synchronizeSeatReduction({ workspaceId: row.workspaceId, syncId: row.id });
+        await input.service.synchronizeSeatReduction({
+          workspaceId: row.workspaceId,
+          syncId: row.id,
+        });
         await input.prisma.billingSeatSync.updateMany({
           where: { id: row.id, status: 'PROCESSING' },
           data: { status: 'COMPLETED', lastError: null },
@@ -63,17 +70,75 @@ export function createBillingSeatSyncWorker(input: {
       } catch (error) {
         const attempts = row.attempts + 1;
         const requiresReconciliation = attempts >= MAX_ATTEMPTS;
-        const safeMessage = error instanceof Error ? error.message.slice(0, 300) : 'Billing seat sync failed';
+        const safeMessage =
+          error instanceof Error ? error.message.slice(0, 300) : 'Billing seat sync failed';
         await input.prisma.billingSeatSync.updateMany({
           where: { id: row.id, status: 'PROCESSING' },
           data: {
             status: requiresReconciliation ? 'RECONCILIATION_REQUIRED' : 'PENDING',
-            nextAttemptAt: new Date(currentTime.getTime() + Math.min(attempts * 60_000, 15 * 60_000)),
+            nextAttemptAt: new Date(
+              currentTime.getTime() + Math.min(attempts * 60_000, 15 * 60_000),
+            ),
             lastError: safeMessage,
           },
         });
         retried += 1;
         log.error('billing_seat_sync_failed', {
+          workspaceId: row.workspaceId,
+          attempts,
+          requiresReconciliation,
+          error: safeMessage,
+        });
+      }
+    }
+    const cancellationRows = await input.prisma.billingCancellation.findMany({
+      where: {
+        OR: [
+          { status: 'PENDING', nextAttemptAt: { lte: currentTime } },
+          {
+            status: 'PROCESSING',
+            updatedAt: { lte: new Date(currentTime.getTime() - STALE_PROCESSING_MS) },
+          },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+      take: BATCH_SIZE,
+      select: { id: true, workspaceId: true, status: true, updatedAt: true, attempts: true },
+    });
+    for (const row of cancellationRows) {
+      const claim = await input.prisma.billingCancellation.updateMany({
+        where:
+          row.status === 'PENDING'
+            ? { id: row.id, status: 'PENDING', nextAttemptAt: { lte: currentTime } }
+            : { id: row.id, status: 'PROCESSING', updatedAt: row.updatedAt },
+        data: { status: 'PROCESSING', attempts: { increment: 1 } },
+      });
+      if (claim.count !== 1) continue;
+      claimed += 1;
+      try {
+        await input.service.synchronizeDeletionCancellation({ workspaceId: row.workspaceId });
+        await input.prisma.billingCancellation.updateMany({
+          where: { id: row.id, status: 'PROCESSING' },
+          data: { status: 'COMPLETED', lastError: null },
+        });
+        completed += 1;
+      } catch (error) {
+        const attempts = row.attempts + 1;
+        const requiresReconciliation = attempts >= MAX_ATTEMPTS;
+        const safeMessage =
+          error instanceof Error ? error.message.slice(0, 300) : 'Billing cancellation failed';
+        await input.prisma.billingCancellation.updateMany({
+          where: { id: row.id, status: 'PROCESSING' },
+          data: {
+            status: requiresReconciliation ? 'RECONCILIATION_REQUIRED' : 'PENDING',
+            nextAttemptAt: new Date(
+              currentTime.getTime() + Math.min(attempts * 60_000, 15 * 60_000),
+            ),
+            lastError: safeMessage,
+          },
+        });
+        retried += 1;
+        log.error('billing_deletion_cancellation_failed', {
           workspaceId: row.workspaceId,
           attempts,
           requiresReconciliation,

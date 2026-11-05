@@ -15,6 +15,8 @@ export interface TestDatabase {
   prisma: PrismaClient;
 }
 
+const migrationsByDatabase = new Map<string, Promise<void>>();
+
 export function resolveTestDatabaseUrl(flag = 'RUN_PHASE3_DB_TESTS'): string | null {
   if (process.env[flag] !== 'true') {
     return null;
@@ -91,22 +93,28 @@ export async function connectTestDatabase(url: string): Promise<TestDatabase> {
   const prisma = new PrismaClient({ datasources: { db: { url } } });
   try {
     await prisma.$connect();
+    let migrations = migrationsByDatabase.get(validatedUrl);
+    if (!migrations) {
+      migrations = Promise.resolve().then(() => {
+        // Always migrate the explicitly configured disposable database. Never
+        // load dotenv or use a development URL as a fallback.
+        execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+          env: {
+            ...process.env,
+            NODE_ENV: 'test',
+            DATABASE_URL: validatedUrl,
+            TEST_DATABASE_URL: validatedUrl,
+          },
+          stdio: 'ignore',
+        });
+      });
+      migrationsByDatabase.set(validatedUrl, migrations);
+      migrations.catch(() => migrationsByDatabase.delete(validatedUrl));
+    }
+    await migrations;
 
     if (!(await schemaIsPresent(prisma))) {
-      // Bring the schema up to date so the suite can run from a clean database.
-      execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
-        env: {
-          ...process.env,
-          NODE_ENV: 'test',
-          DATABASE_URL: validatedUrl,
-          TEST_DATABASE_URL: validatedUrl,
-        },
-        stdio: 'ignore',
-      });
-
-      if (!(await schemaIsPresent(prisma))) {
-        throw new Error('The test database does not have the Nexus schema applied.');
-      }
+      throw new Error('The test database does not have the Nexus schema applied.');
     }
 
     return { url, prisma };

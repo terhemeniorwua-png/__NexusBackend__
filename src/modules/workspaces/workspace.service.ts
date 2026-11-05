@@ -144,7 +144,12 @@ export interface WorkspaceService {
       newOwnerId: string;
     } & TransferOwnershipInput,
     ctx: RequestContext,
-  ): Promise<WorkspaceSummary>;
+  ): Promise<{ transferId: string; status: 'PENDING' }>;
+  listIncomingOwnershipTransfers(input: { userId: string; limit: number; offset: number }): Promise<unknown>;
+  acceptOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string }, ctx: RequestContext): Promise<{ workspaceId: string; billingAcceptanceRequired: boolean }>;
+  rejectOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string }, ctx: RequestContext): Promise<{ workspaceId: string; status: 'REJECTED' }>;
+  acceptOwnershipBilling(input: { userId: string; workspaceId: string; transferId: string }, ctx: RequestContext): Promise<{ workspaceId: string }>;
+  resolveDeletedOwner(input: { actorId: string; workspaceId: string; newOwnerId: string }, ctx: RequestContext): Promise<{ workspaceId: string; status: 'SUSPENDED' }>;
 }
 
 interface WorkspaceCounts {
@@ -599,6 +604,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ArchiveWorkspace,
+        allowArchived: true,
       });
 
       const restored = await client.$transaction(async (tx) => {
@@ -1740,146 +1746,210 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       return toMember(updated, access.workspace.ownerId);
     },
 
-    async transferOwnership(input, ctx): Promise<WorkspaceSummary> {
-      // Only the current owner may initiate a transfer.
+    async transferOwnership(input, ctx): Promise<{ transferId: string; status: 'PENDING' }> {
       const access = await requireWorkspaceAccess(client, {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.TransferOwnership,
       });
-
       if (input.newOwnerId === input.userId) {
         throw new AppError(400, 'TRANSFER_TO_SELF', 'You cannot transfer ownership to yourself');
       }
-
-      // The new owner must already be a member of the workspace.
-      const newOwnerMembership = await client.workspaceMembership.findUnique({
-        where: {
-          workspaceId_userId: { workspaceId: access.workspace.id, userId: input.newOwnerId },
-        },
-        include: { user: { select: { id: true, name: true, email: true } } },
-      });
-
-      if (!newOwnerMembership) {
-        throw new AppError(
-          404,
-          'MEMBER_NOT_FOUND',
-          'The new owner must already be a member of the workspace',
-        );
-      }
-
-      const updatedWorkspace = await client.$transaction(async (tx) => {
-        // A transfer and account deletion must agree on whether either user
-        // can own this workspace. Locks are held through the whole transfer.
+      const created = await client.$transaction(async (tx) => {
         await lockActiveWorkspaceAccount(tx, input.userId);
         await lockActiveWorkspaceAccount(tx, input.newOwnerId);
-
-        const lockedWorkspace = await lockWorkspaceForOwnerChange(tx, access.workspace.id);
-        const currentOwnerMembership = await tx.workspaceMembership.findUniqueOrThrow({
-          where: {
-            workspaceId_userId: { workspaceId: access.workspace.id, userId: input.userId },
-          },
-        });
-        if (
-          !isOrganizationOwnerRole(currentOwnerMembership.organizationRole) &&
-          !(currentOwnerMembership.role === 'OWNER' && lockedWorkspace.ownerId === input.userId)
-        ) {
-          throw new AppError(
-            403,
-            'ORGANIZATION_OWNER_REQUIRED',
-            'Only an owner may transfer ownership',
-          );
+        const workspace = await lockWorkspaceForOwnerChange(tx, access.workspace.id);
+        if (workspace.ownerId !== input.userId) {
+          throw new AppError(403, 'ORGANIZATION_OWNER_REQUIRED', 'Only the current owner may initiate a transfer');
         }
-
-        const refreshedTarget = await tx.workspaceMembership.findUniqueOrThrow({
-          where: {
-            workspaceId_userId: { workspaceId: access.workspace.id, userId: input.newOwnerId },
-          },
-        });
-        if (refreshedTarget.status !== 'ACTIVE') {
-          throw new AppError(409, 'NEW_OWNER_NOT_ACTIVE', 'The new owner must be an active member');
+        const [ownerMembership, recipientMembership] = await Promise.all([
+          tx.workspaceMembership.findUnique({ where: { workspaceId_userId: { workspaceId: workspace.id, userId: input.userId } } }),
+          tx.workspaceMembership.findUnique({ where: { workspaceId_userId: { workspaceId: workspace.id, userId: input.newOwnerId } } }),
+        ]);
+        if (!ownerMembership || !isOrganizationOwnerRole(ownerMembership.organizationRole) && ownerMembership.role !== 'OWNER') {
+          throw new AppError(403, 'ORGANIZATION_OWNER_REQUIRED', 'Only the current owner may initiate a transfer');
         }
-
-        const newOrganizationOwnerRole = ownerOrganizationRole(lockedWorkspace.type);
-        if (newOrganizationOwnerRole) {
-          // Organization ownership is multi-owner. A transfer changes the
-          // primary owner while preserving the previous owner's approved role.
-          await tx.workspaceMembership.update({
-            where: { id: refreshedTarget.id },
-            data: { role: 'OWNER', organizationRole: newOrganizationOwnerRole },
-          });
-          if (!currentOwnerMembership.organizationRole) {
-            await tx.workspaceMembership.update({
-              where: { id: currentOwnerMembership.id },
-              data: { role: 'OWNER', organizationRole: newOrganizationOwnerRole },
-            });
-          }
-        } else {
-          await tx.workspaceMembership.update({
-            where: { id: refreshedTarget.id },
-            data: { role: 'OWNER' },
-          });
-          await tx.workspaceMembership.update({
-            where: { id: currentOwnerMembership.id },
-            data: { role: input.newOwnerRole as WorkspaceRole },
-          });
+        if (!recipientMembership || recipientMembership.status !== 'ACTIVE') {
+          throw new AppError(409, 'NEW_OWNER_NOT_ACTIVE', 'The recipient must be an active workspace member');
         }
-
-        // Transfer the authoritative owner column on the workspace itself.
-        const changed = await tx.workspace.updateMany({
-          where: {
-            id: access.workspace.id,
-            deletedAt: null,
+        await tx.workspaceOwnershipTransfer.updateMany({
+          where: { workspaceId: workspace.id, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        return tx.workspaceOwnershipTransfer.create({
+          data: {
+            workspaceId: workspace.id,
+            initiatedById: input.userId,
+            recipientUserId: input.newOwnerId,
+            previousOwnerRole: input.newOwnerRole as WorkspaceRole,
           },
-          data: { ownerId: input.newOwnerId },
+          select: { id: true },
         });
-
-        if (changed.count === 0) {
-          throw new AppError(
-            409,
-            'WORKSPACE_OWNERSHIP_CHANGED',
-            'Workspace ownership changed before the transfer could complete',
-          );
-        }
-
-        const changedWorkspace = await tx.workspace.findUniqueOrThrow({
-          where: { id: access.workspace.id },
-        });
-
-        await recordAuditEvent(tx, {
-          workspaceId: access.workspace.id,
-          actorId: input.userId,
-          action: WorkspaceAuditAction.OwnershipTransferred,
-          targetType: 'Workspace',
-          targetId: access.workspace.id,
-          metadata: {
-            previousOwnerId: input.userId,
-            newOwnerId: input.newOwnerId,
-            previousOwnerNewRole: input.newOwnerRole,
-          },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
-        });
-
-        await createNotification(tx, {
-          userId: input.newOwnerId,
-          type: 'MEMBERSHIP_CHANGED',
-          title: `You are now the owner of ${access.workspace.name}`,
-          body: `Ownership of ${access.workspace.name} was transferred to you.`,
-          link: workspaceLink(access.workspace.id),
-          data: { workspaceId: access.workspace.id, role: 'OWNER' },
-        });
-
-        return changedWorkspace;
       });
-
-      const callerStillOwner = ownerOrganizationRole(updatedWorkspace.type) !== null;
-      return toSummary(
-        updatedWorkspace,
-        callerStillOwner ? 'OWNER' : (input.newOwnerRole as WorkspaceRole),
-        await counts(updatedWorkspace.id),
-        callerStillOwner ? ownerOrganizationRole(updatedWorkspace.type) : null,
-      );
+      await recordAuditEvent(client, {
+        workspaceId: access.workspace.id,
+        actorId: input.userId,
+        action: 'workspace.ownership_transfer_initiated',
+        targetType: 'WorkspaceOwnershipTransfer',
+        targetId: created.id,
+        metadata: { recipientUserId: input.newOwnerId },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      return { transferId: created.id, status: 'PENDING' };
+    },
+    async listIncomingOwnershipTransfers({ userId, limit, offset }) {
+      const now = new Date();
+      const rows = await client.$queryRaw<Array<{ id: string }>>`
+        SELECT t."id"
+        FROM "WorkspaceOwnershipTransfer" t
+        JOIN "Workspace" w ON w."id" = t."workspaceId"
+        JOIN "WorkspaceMembership" m ON m."workspaceId" = t."workspaceId"
+          AND m."userId" = t."recipientUserId" AND m."status" = 'ACTIVE'
+        JOIN "User" u ON u."id" = t."recipientUserId"
+        WHERE t."recipientUserId" = ${userId}
+          AND t."status" = 'PENDING'
+          AND (t."expiresAt" IS NULL OR t."expiresAt" > ${now})
+          AND w."ownerId" = t."initiatedById"
+          AND u."status" = 'ACTIVE' AND u."deletedAt" IS NULL
+        ORDER BY t."createdAt", t."id"
+        LIMIT ${limit} OFFSET ${offset}`;
+      const transfers = rows.length > 0
+        ? await client.workspaceOwnershipTransfer.findMany({
+            where: { id: { in: rows.map((row) => row.id) } },
+        select: {
+          id: true,
+          workspaceId: true,
+          status: true,
+          createdAt: true,
+          expiresAt: true,
+          acceptedAt: true,
+          billingAcceptedAt: true,
+          workspace: { select: { id: true, name: true, type: true, status: true } },
+        },
+          })
+        : [];
+      const byId = new Map(transfers.map((transfer) => [transfer.id, transfer]));
+      const items = rows.flatMap((row) => {
+        const transfer = byId.get(row.id);
+        return transfer ? [transfer] : [];
+      });
+      return { items, limit, offset };
+    },
+    async acceptOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string }, ctx): Promise<{ workspaceId: string; billingAcceptanceRequired: boolean }> {
+      return client.$transaction(async (tx) => {
+        const [locked] = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "WorkspaceOwnershipTransfer"
+          WHERE "id" = ${input.transferId} AND "workspaceId" = ${input.workspaceId}
+          FOR UPDATE`;
+        const transfer = locked
+          ? await tx.workspaceOwnershipTransfer.findUnique({ where: { id: locked.id }, include: { workspace: { include: { subscription: true } } } })
+          : null;
+        if (!transfer || transfer.workspaceId !== input.workspaceId || transfer.recipientUserId !== input.userId || transfer.status !== 'PENDING') {
+          throw new AppError(404, 'OWNERSHIP_TRANSFER_NOT_FOUND', 'The pending ownership transfer was not found');
+        }
+        const now = new Date();
+        if (transfer.expiresAt && transfer.expiresAt <= now) {
+          throw new AppError(409, 'OWNERSHIP_TRANSFER_EXPIRED', 'The ownership transfer has expired');
+        }
+        await lockWorkspaceForOwnerChange(tx, transfer.workspaceId);
+        const [owners] = await tx.$queryRaw<Array<{ status: string; deletedAt: Date | null; scheduledDeletionAt: Date | null }>>`
+          SELECT "status"::text AS "status", "deletedAt", "scheduledDeletionAt" FROM "User" WHERE "id" = ${transfer.initiatedById} FOR UPDATE`;
+        if (!owners || owners.deletedAt || !['ACTIVE', 'PENDING_DELETION'].includes(owners.status) || owners.status === 'PENDING_DELETION' && (!owners.scheduledDeletionAt || owners.scheduledDeletionAt <= now)) {
+          throw new AppError(409, 'OWNERSHIP_TRANSFER_EXPIRED', 'The current owner is no longer eligible to transfer ownership');
+        }
+        const [recipient] = await tx.$queryRaw<Array<{ status: string; deletedAt: Date | null }>>`
+          SELECT "status"::text AS "status", "deletedAt" FROM "User" WHERE "id" = ${input.userId} FOR UPDATE`;
+        if (!recipient || recipient.status !== 'ACTIVE' || recipient.deletedAt) {
+          throw new AppError(403, 'NEW_OWNER_NOT_ACTIVE', 'The recipient must have an active account');
+        }
+        const workspace = await tx.workspace.findUniqueOrThrow({ where: { id: transfer.workspaceId } });
+        if (workspace.ownerId !== transfer.initiatedById) throw new AppError(409, 'WORKSPACE_OWNERSHIP_CHANGED', 'Workspace ownership changed before acceptance');
+        const recipientMembership = await tx.workspaceMembership.findUnique({ where: { workspaceId_userId: { workspaceId: transfer.workspaceId, userId: input.userId } } });
+        if (!recipientMembership || recipientMembership.status !== 'ACTIVE') throw new AppError(409, 'NEW_OWNER_NOT_ACTIVE', 'The recipient must be an active workspace member');
+        const ownerMembership = await tx.workspaceMembership.findUnique({ where: { workspaceId_userId: { workspaceId: transfer.workspaceId, userId: transfer.initiatedById } } });
+        if (!ownerMembership) throw new AppError(409, 'WORKSPACE_OWNER_MEMBERSHIP_MISSING', 'The current owner membership is unavailable');
+        await tx.workspaceMembership.update({ where: { id: recipientMembership.id }, data: { role: 'OWNER', organizationRole: ownerOrganizationRole(workspace.type) } });
+        await tx.workspaceMembership.update({ where: { id: ownerMembership.id }, data: { role: transfer.previousOwnerRole, organizationRole: null } });
+        const billingAcceptanceRequired = Boolean(transfer.workspace.subscription && transfer.workspace.subscription.status !== 'CANCELLED');
+        await tx.workspace.update({ where: { id: workspace.id }, data: { ownerId: input.userId, status: billingAcceptanceRequired ? 'SUSPENDED' : 'ACTIVE', deletionSuspendedAt: null } });
+        await tx.workspaceOwnershipTransfer.update({ where: { id: transfer.id }, data: { status: 'ACCEPTED', acceptedAt: now } });
+        await recordAuditEvent(tx, { workspaceId: workspace.id, actorId: input.userId, action: 'workspace.ownership_transfer_accepted', targetType: 'WorkspaceOwnershipTransfer', targetId: transfer.id, metadata: { previousOwnerId: transfer.initiatedById, newOwnerId: input.userId, billingAcceptanceRequired }, ip: ctx.ip, userAgent: ctx.userAgent });
+        return { workspaceId: workspace.id, billingAcceptanceRequired };
+      });
+    },
+    async rejectOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string }, ctx): Promise<{ workspaceId: string; status: 'REJECTED' }> {
+      const result = await client.$transaction(async (tx) => {
+        const [locked] = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "WorkspaceOwnershipTransfer"
+          WHERE "id" = ${input.transferId} AND "workspaceId" = ${input.workspaceId}
+          FOR UPDATE`;
+        const transfer = locked
+          ? await tx.workspaceOwnershipTransfer.findUnique({ where: { id: locked.id } })
+          : null;
+        if (!transfer || transfer.recipientUserId !== input.userId || transfer.status !== 'PENDING') {
+          throw new AppError(404, 'OWNERSHIP_TRANSFER_NOT_FOUND', 'The pending ownership transfer was not found');
+        }
+        await lockActiveWorkspaceAccount(tx, input.userId);
+        const now = new Date();
+        if (transfer.expiresAt && transfer.expiresAt <= now) {
+          await tx.workspaceOwnershipTransfer.update({ where: { id: transfer.id }, data: { status: 'EXPIRED' } });
+          await recordAuditEvent(tx, { workspaceId: transfer.workspaceId, actorId: input.userId, action: 'workspace.ownership_transfer_expired', targetType: 'WorkspaceOwnershipTransfer', targetId: transfer.id, ip: ctx.ip, userAgent: ctx.userAgent });
+          return null;
+        }
+        const membership = await tx.workspaceMembership.findUnique({
+          where: { workspaceId_userId: { workspaceId: transfer.workspaceId, userId: input.userId } },
+          select: { status: true },
+        });
+        if (!membership || membership.status !== 'ACTIVE') {
+          throw new AppError(403, 'NEW_OWNER_NOT_ACTIVE', 'The recipient must be an active workspace member');
+        }
+        await tx.workspaceOwnershipTransfer.update({ where: { id: transfer.id }, data: { status: 'REJECTED' } });
+        await recordAuditEvent(tx, { workspaceId: transfer.workspaceId, actorId: input.userId, action: 'workspace.ownership_transfer_rejected', targetType: 'WorkspaceOwnershipTransfer', targetId: transfer.id, ip: ctx.ip, userAgent: ctx.userAgent });
+        return { workspaceId: transfer.workspaceId, status: 'REJECTED' as const };
+      });
+      if (!result) throw new AppError(409, 'OWNERSHIP_TRANSFER_EXPIRED', 'The ownership transfer has expired');
+      return result;
+    },
+    async acceptOwnershipBilling(input: { userId: string; workspaceId: string; transferId: string }, ctx): Promise<{ workspaceId: string }> {
+      return client.$transaction(async (tx) => {
+        const [locked] = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "WorkspaceOwnershipTransfer"
+          WHERE "id" = ${input.transferId} AND "workspaceId" = ${input.workspaceId}
+          FOR UPDATE`;
+        const transfer = locked
+          ? await tx.workspaceOwnershipTransfer.findUnique({ where: { id: locked.id }, include: { workspace: { include: { subscription: true } } } })
+          : null;
+        if (!transfer || transfer.workspaceId !== input.workspaceId || transfer.recipientUserId !== input.userId || transfer.status !== 'ACCEPTED' || transfer.acceptedAt === null) throw new AppError(404, 'OWNERSHIP_TRANSFER_NOT_FOUND', 'The accepted ownership transfer was not found');
+        const now = new Date();
+        if (transfer.expiresAt && transfer.expiresAt <= now) throw new AppError(409, 'OWNERSHIP_TRANSFER_EXPIRED', 'The ownership transfer has expired');
+        await lockWorkspaceForOwnerChange(tx, transfer.workspaceId);
+        const workspace = await tx.workspace.findUniqueOrThrow({ where: { id: transfer.workspaceId } });
+        if (workspace.ownerId !== input.userId) throw new AppError(403, 'WORKSPACE_OWNER_REQUIRED', 'Only the new owner may accept billing responsibility');
+        if (!transfer.workspace.subscription || transfer.workspace.subscription.status === 'CANCELLED') throw new AppError(409, 'BILLING_ACCEPTANCE_NOT_REQUIRED', 'This workspace has no active subscription to accept');
+        await tx.workspaceOwnershipTransfer.update({ where: { id: transfer.id }, data: { billingAcceptedAt: now, billingAcceptedById: input.userId } });
+        await tx.subscription.update({ where: { workspaceId: workspace.id }, data: { billingOwnerId: input.userId } });
+        await tx.billingCancellation.updateMany({ where: { workspaceId: workspace.id, status: 'PENDING' }, data: { status: 'CANCELLED', lastError: null } });
+        await tx.workspace.update({ where: { id: workspace.id }, data: { status: 'ACTIVE', deletionSuspendedAt: null } });
+        await recordAuditEvent(tx, { workspaceId: workspace.id, actorId: input.userId, action: 'workspace.billing_responsibility_accepted', targetType: 'WorkspaceOwnershipTransfer', targetId: transfer.id, metadata: { billingOwnerId: input.userId }, ip: ctx.ip, userAgent: ctx.userAgent });
+        return { workspaceId: workspace.id };
+      });
+    },
+    async resolveDeletedOwner(input: { actorId: string; workspaceId: string; newOwnerId: string }, ctx): Promise<{ workspaceId: string; status: 'SUSPENDED' }> {
+      return client.$transaction(async (tx) => {
+        const admin = await tx.user.findUnique({ where: { id: input.actorId }, select: { isPlatformAdmin: true, status: true, deletedAt: true } });
+        if (!admin?.isPlatformAdmin || admin.status !== 'ACTIVE' || admin.deletedAt) throw new AppError(403, 'PLATFORM_ADMIN_REQUIRED', 'A platform administrator is required');
+        const workspace = await lockWorkspaceForOwnerChange(tx, input.workspaceId);
+        const formerOwner = await tx.user.findUnique({ where: { id: workspace.ownerId }, select: { status: true, deletedAt: true, scheduledDeletionAt: true } });
+        if (!formerOwner?.deletedAt || formerOwner.status !== 'DEACTIVATED' || !formerOwner.scheduledDeletionAt || formerOwner.scheduledDeletionAt > new Date()) throw new AppError(409, 'OWNER_RECOVERY_PERIOD_ACTIVE', 'Ownership can be resolved only after final account deletion');
+        const recipient = await tx.user.findUnique({ where: { id: input.newOwnerId }, select: { status: true, deletedAt: true } });
+        const membership = await tx.workspaceMembership.findUnique({ where: { workspaceId_userId: { workspaceId: workspace.id, userId: input.newOwnerId } } });
+        if (!recipient || recipient.status !== 'ACTIVE' || recipient.deletedAt || !membership || membership.status !== 'ACTIVE') throw new AppError(409, 'NEW_OWNER_NOT_ACTIVE', 'The new owner must be an active workspace member');
+        await tx.workspaceMembership.update({ where: { id: membership.id }, data: { role: 'OWNER', organizationRole: ownerOrganizationRole(workspace.type) } });
+        await tx.workspace.update({ where: { id: workspace.id }, data: { ownerId: input.newOwnerId, status: 'SUSPENDED', deletionSuspendedAt: null } });
+        await recordAuditEvent(tx, { workspaceId: workspace.id, actorId: input.actorId, action: 'workspace.administrator_owner_assigned', targetType: 'Workspace', targetId: workspace.id, metadata: { formerOwnerId: workspace.ownerId, newOwnerId: input.newOwnerId }, ip: ctx.ip, userAgent: ctx.userAgent });
+        return { workspaceId: workspace.id, status: 'SUSPENDED' };
+      });
     },
   };
 }

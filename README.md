@@ -270,27 +270,59 @@ Never trust frontend authentication state as proof of access.
 `POST /auth/delete` requires an authenticated session, the current password,
 and an exact email confirmation. It revokes the user's sessions and unused
 authentication tokens, marks the account `PENDING_DELETION`, and schedules
-permanent deletion 30 days later. The account and its personal workspace stay
-intact during this recovery period. The account is signed out immediately and
-cannot use normal authenticated routes.
+permanent deletion 30 days later. The account and its workspaces remain during
+this recovery period. The account is signed out immediately and cannot use
+normal authenticated routes.
 
 Before the scheduled date, the user can cancel deletion through
 `POST /auth/reactivate` using the account email and password. Recovery clears
 the deletion schedule but never restores revoked sessions; the user must sign
-in again. The worker permanently removes the personal workspace and its
-workspace-scoped records, removes shared-workspace memberships and access,
-revokes pending invitations, and replaces the account identity with the
-neutral `Deleted user` identity so shared history retains valid references.
-Company and Institution workspaces are never deleted as part of account
-deletion. Their owners must transfer ownership before requesting deletion;
-the last active organization administrator cannot leave without another
-active owner or administrator.
+in again. At finalization, workspaces and collaboration records are retained,
+untransferred owned workspaces are suspended, and the account identity becomes
+a neutral `Deleted user` tombstone so foreign keys and shared attribution stay
+valid. An owner can initiate a transfer during the recovery period; the
+recipient can list, accept, or reject incoming offers. A paid workspace
+remains suspended until the successor separately accepts billing
+responsibility. A non-owner administrator cannot leave an active organization
+without another active owner or administrator. Financial records remain
+pending legal and accounting retention review.
 
-The backend currently has file metadata but no object-storage deletion
-adapter. A due deletion is therefore held when the personal workspace contains
-file attachments, preserving the metadata rather than orphaning storage
-objects. Storage cleanup must be integrated with the existing provider when
-that provider is implemented.
+The deletion worker classifies attachments by their workspace owner and
+sharing relationships, not uploader ID alone. It deletes only attachments
+uploaded by the deleting account into that account's personal workspace when
+there are no other workspace members, no other project members or owners, no
+other task participants, and no discussion relationship. Shared workspace or
+project files, task discussion attachments, and uploads by other users are
+retained. The worker performs idempotent private object deletion while holding
+the account row lock, then removes the metadata row in the same PostgreSQL
+transaction. Storage failures are audited, keep metadata intact, and leave the
+account pending for retry. The S3-compatible adapter treats `404` on DELETE as
+already complete. See
+[`docs/ACCOUNT_LIFECYCLE.md`](docs/ACCOUNT_LIFECYCLE.md) and
+[`docs/financial-retention-decisions.md`](docs/financial-retention-decisions.md).
+
+### Privacy requests
+
+Verified active accounts can submit ACCESS, CORRECTION, ERASURE, or REDACTION
+requests and read their own statuses and outcomes. Active platform
+administrators review and decide requests. Approved redaction requests can
+replace exact text in a task comment while preserving the rest of the comment;
+the comment update, request completion, and audit records are transactional.
+The current backend has no Message, Conversation, or Channel models, so
+messaging and channel content redaction is not implemented. The reviewer
+workflow records approved access/correction/erasure outcomes after the
+authorized work has been performed. See [`docs/API.md`](docs/API.md) for the
+request/response contracts and role requirements.
+
+### Invoices
+
+The database persists subscription payment and checkout history but has no
+Invoice model or workspace-to-invoice mapping. The backend does not create
+Paystack Payment Request invoices. A workspace invoice list cannot safely be
+implemented until product/billing defines invoice creation and workspace/payer
+ownership; listing all invoices for a Paystack customer could expose another
+workspace's financial records. The existing workspace payment-history API
+remains available.
 
 ---
 
@@ -829,6 +861,21 @@ The verification, reset and email change links are built from `FRONTEND_URL` and
 | `MEETING_INVITATION_LINK_PATH` | `/meetings/:meetingId` | Frontend route for a meeting invitation. `:meetingId` is replaced with an encoded identifier |
 | `TEAM_INVITATION_LINK_PATH` | `/teams/invitations/accept` | Frontend route that accepts a team invitation. The single-use token is appended as the `token` query parameter |
 | `PROJECT_INVITATION_LINK_PATH` | `/projects/invitations/accept` | Frontend route that accepts a project invitation. The single-use token is appended as the `token` query parameter |
+
+### Private organization logo storage
+
+Company and Institution logos use the authenticated private-object storage adapter. Configure an S3-compatible endpoint and a bucket with public access blocked. Logos are limited to 2 MB and are fetched only after workspace membership is verified. The API does not return public object URLs.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OBJECT_STORAGE_ENDPOINT` | empty | HTTPS S3-compatible endpoint; HTTP is allowed only for localhost development/test adapters |
+| `OBJECT_STORAGE_BUCKET` | empty | Private bucket name |
+| `OBJECT_STORAGE_REGION` | `us-east-1` | AWS signing region |
+| `OBJECT_STORAGE_ACCESS_KEY_ID` | empty | Server-side storage access key |
+| `OBJECT_STORAGE_SECRET_ACCESS_KEY` | empty | Server-side storage secret |
+| `OBJECT_STORAGE_REQUEST_TIMEOUT_MS` | `15000` | Per-request timeout, capped at 60 seconds |
+
+Logo APIs return `503 OBJECT_STORAGE_UNAVAILABLE` until storage is configured. Never grant public read access to the bucket or expose these credentials to clients.
 
 ### Email settings
 

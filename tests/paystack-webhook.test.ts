@@ -9,7 +9,12 @@ import type { PrismaClient } from '@prisma/client';
 import { startServer, type RunningServer } from './helpers/test-server';
 
 const secret = 'webhook-test-secret';
-const config = { paystackSecretKey: secret, requestBodyLimit: '1mb' } as AppConfig;
+const config = {
+  paystackSecretKey: secret,
+  paystackWebhookSecret: secret,
+  paystackWebhookPreviousSecret: '',
+  requestBodyLimit: '1mb',
+} as AppConfig;
 let server: RunningServer | null = null;
 
 afterEach(async () => {
@@ -19,17 +24,23 @@ afterEach(async () => {
 
 async function appFor(service: BillingService): Promise<{ app: Express; baseUrl: string }> {
   const app = express();
-  app.use('/api/v1/webhooks', createPaystackWebhookRouter({
-    config,
-    prisma: {} as PrismaClient,
-    service,
-  }));
-  app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    const status = typeof error === 'object' && error !== null && 'statusCode' in error
-      ? Number((error as { statusCode: unknown }).statusCode)
-      : 500;
-    res.status(status).json({ error: 'request failed' });
-  });
+  app.use(
+    '/api/v1/webhooks',
+    createPaystackWebhookRouter({
+      config,
+      prisma: {} as PrismaClient,
+      service,
+    }),
+  );
+  app.use(
+    (error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      const status =
+        typeof error === 'object' && error !== null && 'statusCode' in error
+          ? Number((error as { statusCode: unknown }).statusCode)
+          : 500;
+      res.status(status).json({ error: 'request failed' });
+    },
+  );
   server = await startServer(app);
   return { app, baseUrl: server.baseUrl };
 }
@@ -40,7 +51,11 @@ function signature(body: string): string {
 
 test('Paystack webhook rejects an invalid signature before invoking billing state changes', async () => {
   let processed = 0;
-  const service = { processWebhook: async () => { processed += 1; } } as unknown as BillingService;
+  const service = {
+    processWebhook: async () => {
+      processed += 1;
+    },
+  } as unknown as BillingService;
   const { baseUrl } = await appFor(service);
   const response = await fetch(`${baseUrl}/api/v1/webhooks/paystack`, {
     method: 'POST',
@@ -54,12 +69,19 @@ test('Paystack webhook rejects an invalid signature before invoking billing stat
 test('Paystack webhook validates the exact raw body and passes payment fields to billing service', async () => {
   const received: Array<Record<string, unknown>> = [];
   const service = {
-    processWebhook: async (input: Record<string, unknown>) => { received.push(input); },
+    processWebhook: async (input: Record<string, unknown>) => {
+      received.push(input);
+    },
   } as unknown as BillingService;
   const { baseUrl } = await appFor(service);
   const body = JSON.stringify({
     event: 'charge.success',
-    data: { reference: 'ref-2', amount: 1_000, currency: 'USD', paid_at: '2026-11-04T12:00:00.000Z' },
+    data: {
+      reference: 'ref-2',
+      amount: 1_000,
+      currency: 'USD',
+      paid_at: '2026-11-04T12:00:00.000Z',
+    },
   });
   const response = await fetch(`${baseUrl}/api/v1/webhooks/paystack`, {
     method: 'POST',
@@ -73,4 +95,42 @@ test('Paystack webhook validates the exact raw body and passes payment fields to
   assert.equal(received[0]?.amount, 1_000);
   assert.equal(received[0]?.currency, 'USD');
   assert.equal(typeof received[0]?.eventKey, 'string');
+});
+
+test('Paystack webhook accepts the timestamped provider header and rejects stale timestamps', async () => {
+  let processed = 0;
+  const service = {
+    processWebhook: async () => {
+      processed += 1;
+    },
+  } as unknown as BillingService;
+  const { baseUrl } = await appFor(service);
+  const body = JSON.stringify({ event: 'charge.success', data: { reference: 'ref-new' } });
+  const timestamp = Math.floor(Date.now() / 1_000);
+  const digest = createHmac('sha512', secret).update(`${timestamp}.${body}`).digest('hex');
+  const valid = await fetch(`${baseUrl}/api/v1/webhooks/paystack`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'Paystack-Signature': `t=${timestamp},v1=whk_test_123:${digest}`,
+    },
+    body,
+  });
+  assert.equal(valid.status, 200);
+  assert.equal(processed, 1);
+
+  const staleTimestamp = timestamp - 301;
+  const staleDigest = createHmac('sha512', secret)
+    .update(`${staleTimestamp}.${body}`)
+    .digest('hex');
+  const stale = await fetch(`${baseUrl}/api/v1/webhooks/paystack`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'Paystack-Signature': `t=${staleTimestamp},v1=whk_test_123:${staleDigest}`,
+    },
+    body,
+  });
+  assert.equal(stale.status, 401);
+  assert.equal(processed, 1);
 });

@@ -26,13 +26,16 @@ const project = {
 
 function policyClient(
   options: {
+    project?: Project;
     team?: { id: string } | null;
     teamMembership?: { id: string } | null;
+    department?: { id: string } | null;
+    departmentMembership?: { id: string } | null;
     projectMembership?: { id: string; role: 'PROJECT_MANAGER' | 'MEMBER' | 'VIEWER' } | null;
   } = {},
 ): PrismaClient {
   return {
-    project: { findFirst: async () => project },
+    project: { findFirst: async () => options.project ?? project },
     workspaceMembership: {
       findUnique: async () => ({
         status: 'ACTIVE',
@@ -49,6 +52,15 @@ function policyClient(
     },
     teamMembership: {
       findUnique: async () => options.teamMembership ?? null,
+    },
+    department: {
+      findFirst: async ({ where }: { where: { workspaceId: string } }) => {
+        assert.equal(where.workspaceId, project.workspaceId);
+        return options.department ?? { id: 'department-1' };
+      },
+    },
+    departmentMembership: {
+      findUnique: async () => options.departmentMembership ?? null,
     },
     projectMembership: {
       findUnique: async () => options.projectMembership ?? null,
@@ -108,6 +120,19 @@ test('explicit project membership remains valid for a separately invited workspa
   assert.equal(access.projectMembership?.id, 'project-member-1');
 });
 
+test('the explicit project owner can manage their private project', async () => {
+  const access = await requireProjectAccess(policyClient(), {
+    userId: project.ownerId,
+    workspaceId: project.workspaceId,
+    projectId: project.id,
+    workspaceRole: 'MEMBER',
+    capability: ProjectCapability.UpdateProject,
+  });
+
+  assert.equal(access.project.ownerId, project.ownerId);
+  assert.equal(access.projectMembership, null);
+});
+
 test('team association cannot grant project access across workspace boundaries', async () => {
   await assert.rejects(
     requireProjectAccess(
@@ -115,6 +140,44 @@ test('team association cannot grant project access across workspace boundaries',
       {
         userId: 'member-1',
         workspaceId: 'workspace-1',
+        projectId: project.id,
+        workspaceRole: 'MEMBER',
+        capability: ProjectCapability.ViewProject,
+      },
+    ),
+    (error: unknown) => (error as { code?: string }).code === 'PROJECT_NOT_FOUND',
+  );
+});
+
+test('department-only project access is inherited by same-department members', async () => {
+  const departmentProject = { ...project, teamId: null, departmentId: 'department-1' } as Project;
+  const access = await requireProjectAccess(
+    policyClient({
+      project: departmentProject,
+      departmentMembership: { id: 'department-member-1' },
+    }),
+    {
+      userId: 'department-member-1',
+      workspaceId: project.workspaceId,
+      projectId: project.id,
+      workspaceRole: 'MEMBER',
+      capability: ProjectCapability.ViewProject,
+    },
+  );
+  assert.equal(access.project.id, project.id);
+});
+
+test('team scope takes precedence over department membership', async () => {
+  const departmentProject = { ...project, departmentId: 'department-1' } as Project;
+  await assert.rejects(
+    requireProjectAccess(
+      policyClient({
+        project: departmentProject,
+        departmentMembership: { id: 'department-member-1' },
+      }),
+      {
+        userId: 'department-member-1',
+        workspaceId: project.workspaceId,
         projectId: project.id,
         workspaceRole: 'MEMBER',
         capability: ProjectCapability.ViewProject,

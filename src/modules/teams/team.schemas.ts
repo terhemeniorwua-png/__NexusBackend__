@@ -57,6 +57,7 @@ export const createTeamSchema = z
   .object({
     name: nameSchema,
     description: descriptionSchema.optional(),
+    departmentId: z.string().trim().uuid('The department id is not valid').optional().nullable(),
     leadId: z.string().trim().uuid('The lead user id is not valid').optional().nullable(),
   })
   .strict();
@@ -65,6 +66,7 @@ export const updateTeamSchema = z
   .object({
     name: nameSchema.optional(),
     description: descriptionSchema.optional(),
+    departmentId: z.string().trim().uuid('The department id is not valid').nullable().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {

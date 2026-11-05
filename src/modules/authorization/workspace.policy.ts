@@ -107,7 +107,7 @@ export interface WorkspaceAccess {
  */
 export async function requireWorkspaceAccess(
   client: PrismaClient,
-  input: { userId: string; workspaceId: string; capability: WorkspaceCapabilityValue },
+  input: { userId: string; workspaceId: string; capability: WorkspaceCapabilityValue; allowArchived?: boolean },
 ): Promise<WorkspaceAccess> {
   const workspace = await client.workspace.findFirst({
     where: { id: input.workspaceId, deletedAt: null },
@@ -115,6 +115,14 @@ export async function requireWorkspaceAccess(
 
   if (!workspace) {
     throw new AppError(404, 'WORKSPACE_NOT_FOUND', 'That workspace does not exist');
+  }
+
+  if (workspace.status === 'ARCHIVED' && !input.allowArchived) {
+    throw new AppError(404, 'WORKSPACE_NOT_FOUND', 'That workspace does not exist');
+  }
+
+  if (workspace.status === 'SUSPENDED') {
+    throw new AppError(403, 'WORKSPACE_SUSPENDED', 'This workspace is suspended');
   }
 
   const membership = await client.workspaceMembership.findUnique({

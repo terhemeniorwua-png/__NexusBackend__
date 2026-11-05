@@ -149,6 +149,14 @@ describe('Phase 7 team schema validation', () => {
       assert.equal(result.success, true);
     });
 
+    test('accepts a same-workspace department relationship for later authorization', () => {
+      const result = createTeamSchema.safeParse({
+        name: 'Engineering',
+        departmentId: '550e8400-e29b-41d4-a716-446655440000',
+      });
+      assert.equal(result.success, true);
+    });
+
     test('rejects a name that is too short', () => {
       const result = createTeamSchema.safeParse({ name: 'A' });
       assert.equal(result.success, false);
@@ -198,6 +206,15 @@ describe('Phase 7 team schema validation', () => {
     test('accepts a null description to clear it', () => {
       const result = updateTeamSchema.safeParse({ description: null });
       assert.equal(result.success, true);
+    });
+
+    test('accepts department reassignment and explicit unassignment', () => {
+      assert.equal(
+        updateTeamSchema.safeParse({ departmentId: '550e8400-e29b-41d4-a716-446655440000' })
+          .success,
+        true,
+      );
+      assert.equal(updateTeamSchema.safeParse({ departmentId: null }).success, true);
     });
 
     test('rejects an empty body (at least one field required)', () => {

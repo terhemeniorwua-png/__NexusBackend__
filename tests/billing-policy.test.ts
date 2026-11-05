@@ -35,13 +35,13 @@ test('the approved server catalog contains base and additional-member prices and
     annualBaseCents: 5_000,
     includedMembers: 15,
     additionalMemberMonthlyCents: 50,
-    additionalMemberAnnualCents: 50,
+    additionalMemberAnnualCents: 100,
   });
   assert.deepEqual(subscriptionCatalog.BUSINESS, {
     monthlyBaseCents: 1_500,
     annualBaseCents: 7_000,
     includedMembers: 25,
-    additionalMemberMonthlyCents: 100,
+    additionalMemberMonthlyCents: 50,
     additionalMemberAnnualCents: 100,
   });
 });
@@ -121,19 +121,26 @@ test('membership reductions enqueue the authoritative active seat count in the s
   const tx = {
     subscription: {
       findUnique: async () => ({
-        status: 'ACTIVE', billableSeats: 5, pendingBillableSeats: null,
-        pendingSubscriptionCode: null, cancelAtPeriodEnd: false,
+        status: 'ACTIVE',
+        billableSeats: 5,
+        pendingBillableSeats: null,
+        pendingSubscriptionCode: null,
+        cancelAtPeriodEnd: false,
       }),
     },
     workspace: {
       findUnique: async () => ({
-        ownerId: 'owner', owner: { status: 'ACTIVE' },
+        ownerId: 'owner',
+        owner: { status: 'ACTIVE' },
         members: [{ userId: 'owner' }, { userId: 'member-1' }, { userId: 'member-2' }],
       }),
     },
     billingSeatSync: {
       findUnique: async () => null,
-      upsert: async (args: { create: Record<string, unknown> }) => { queued = args.create; return args.create; },
+      upsert: async (args: { create: Record<string, unknown> }) => {
+        queued = args.create;
+        return args.create;
+      },
     },
   } as unknown as Prisma.TransactionClient;
 
@@ -203,13 +210,13 @@ test('Pro and Business additional members are calculated at their monthly rates'
   assert.equal(pro.additionalMemberCount, 13);
   assert.equal(pro.additionalMemberMonthlyChargeCents, 650);
   assert.equal(business.additionalMemberCount, 3);
-  assert.equal(business.additionalMemberMonthlyChargeCents, 300);
+  assert.equal(business.additionalMemberMonthlyChargeCents, 150);
 });
 
-test('annual seat charges use the annual cadence and approved per-seat amount', () => {
+test('annual seat charges use the annual cadence and approved annual per-seat amount', () => {
   assert.equal(
     getRecurringSubscriptionChargeCents({ plan: 'PRO', interval: 'ANNUAL', billableSeats: 16 }),
-    5_050,
+    5_100,
   );
   assert.equal(
     getRecurringSubscriptionChargeCents({

@@ -174,17 +174,16 @@ export function buildEmailChangeEmail(input: EmailChangeEmailInput): EmailMessag
 export function buildAccountDeletionScheduledEmail(
   input: AccountDeletionScheduledEmailInput,
 ): EmailMessage {
-  const deletionDate = input.scheduledDeletionAt.toUTCString();
   const { html, text } = renderEmailDocument(
     {
-      heading: 'Your account is scheduled for deletion',
-      preheader: `Your account is scheduled for permanent deletion on ${deletionDate}.`,
+      heading: 'Your account deletion is scheduled',
+      preheader: 'Your account is signed out and can be recovered for 30 days.',
       paragraphs: [
         `Hi ${input.name},`,
-        `Your ${input.brand.appName} account is now pending deletion. Your account and personal workspace will remain intact until ${deletionDate}.`,
-        'Permanent deletion is scheduled after a 30-day recovery period.',
-        'To cancel the deletion, use the account recovery option and sign in with your email address and password before that date. Recovery will not restore sessions that were signed out.',
-        'Organization workspaces and shared content are retained. If you did not request this, recover your account immediately.',
+        `Your ${input.brand.appName} account is scheduled for deletion on ${input.scheduledDeletionAt.toISOString()}. Your sessions were signed out immediately. You can recover your account before that deadline by verifying your identity through the account recovery flow.`,
+        'Owned workspaces without an accepted ownership transfer are suspended, while shared files and collaboration history are retained. Subscription cancellation is scheduled for the deletion deadline. Outstanding invoices remain payable.',
+        'After final deletion, personal profile identity is anonymized. Financial records are retained as required; applicable retention periods are subject to legal and accounting review.',
+        'If you did not request this, contact Nexus support.',
       ],
       footerNote: 'This is an automated message. Please do not reply to it.',
     },
@@ -193,7 +192,7 @@ export function buildAccountDeletionScheduledEmail(
 
   return {
     to: input.to,
-    subject: `Your ${input.brand.appName} account is scheduled for deletion`,
+    subject: `Your ${input.brand.appName} account deletion is scheduled`,
     template: 'account_deletion_scheduled',
     text,
     html,

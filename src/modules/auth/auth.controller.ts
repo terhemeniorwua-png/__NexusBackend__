@@ -369,7 +369,6 @@ export function createAuthController({
         {
           status: 'PENDING_DELETION',
           scheduledDeletionAt: result.scheduledDeletionAt,
-          recoveryMethod: 'Sign in through account recovery with your email address and password',
         },
         202,
       );

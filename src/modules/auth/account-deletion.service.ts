@@ -3,105 +3,36 @@ import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 import type { Logger } from '../../utils/logger';
 import { hashPassword } from '../../services/password';
+import type { PrivateObjectStorage } from '../../services/storage/private-object-storage';
+import { isAppError } from '../../utils/errors';
 
-export const ACCOUNT_DELETION_GRACE_PERIOD_MS = 30 * 24 * 60 * 60 * 1_000;
 const ACCOUNT_DELETION_BATCH_SIZE = 25;
 const ACCOUNT_DELETION_POLL_INTERVAL_MS = 60_000;
+export const ACCOUNT_DELETION_GRACE_PERIOD_MS = 30 * 24 * 60 * 60 * 1_000;
 
 export function scheduledAccountDeletionAt(requestedAt: Date): Date {
   return new Date(requestedAt.getTime() + ACCOUNT_DELETION_GRACE_PERIOD_MS);
-}
-
-export async function isLastActiveOrganizationOwnerOrAdministrator(
-  tx: Prisma.TransactionClient,
-  userId: string,
-): Promise<boolean> {
-  const administratorMemberships = await tx.workspaceMembership.findMany({
-    where: {
-      userId,
-      status: 'ACTIVE',
-      OR: [
-        {
-          organizationRole: {
-            in: ['COMPANY_OWNER', 'COMPANY_ADMIN', 'INSTITUTION_OWNER', 'INSTITUTION_ADMIN'],
-          },
-        },
-        { role: { in: ['OWNER', 'PROJECT_MANAGER'] }, organizationRole: null },
-      ],
-      workspace: { type: { in: ['COMPANY', 'INSTITUTION'] }, deletedAt: null },
-    },
-    select: {
-      workspace: {
-        select: {
-          ownerId: true,
-          owner: { select: { status: true, deletedAt: true } },
-          members: {
-            where: {
-              userId: { not: userId },
-              status: 'ACTIVE',
-              OR: [
-                { organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] } },
-                { organizationRole: { in: ['COMPANY_ADMIN', 'INSTITUTION_ADMIN'] } },
-                { role: { in: ['OWNER', 'PROJECT_MANAGER'] }, organizationRole: null },
-              ],
-            },
-            select: {
-              role: true,
-              organizationRole: true,
-              user: { select: { status: true, deletedAt: true } },
-            },
-          },
-        },
-      },
-    },
-  });
-
-  return administratorMemberships.some(({ workspace }) => {
-    const activeOwner =
-      (workspace.ownerId !== userId &&
-        workspace.owner.status === 'ACTIVE' &&
-        workspace.owner.deletedAt === null) ||
-      workspace.members.some(
-        ({ user, organizationRole }) =>
-          (organizationRole === 'COMPANY_OWNER' || organizationRole === 'INSTITUTION_OWNER') &&
-          user.status === 'ACTIVE' &&
-          user.deletedAt === null,
-      );
-    const activeAdministrator = workspace.members.some(
-      ({ user, organizationRole, role }) =>
-        user.status === 'ACTIVE' &&
-        user.deletedAt === null &&
-        (organizationRole === 'COMPANY_ADMIN' ||
-          organizationRole === 'INSTITUTION_ADMIN' ||
-          (!organizationRole && (role === 'PROJECT_MANAGER' || role === 'OWNER'))),
-    );
-
-    return !activeOwner && !activeAdministrator;
-  });
 }
 
 export interface AccountDeletionBatchResult {
   deleted: number;
   blocked: Array<{
     userId: string;
-    reason:
-      | 'ORGANIZATION_OWNERSHIP'
-      | 'LAST_ORGANIZATION_ADMIN'
-      | 'PERSONAL_WORKSPACE_SHARED'
-      | 'PERSONAL_FILES';
+    reason: 'FINALIZATION_FAILED' | 'STORAGE_UNAVAILABLE' | 'STORAGE_FAILED' | 'OBJECT_MISSING';
   }>;
 }
 
 /**
  * Permanently removes due accounts in an idempotent database transaction.
  * The row lock and state predicate make concurrent server instances safe.
- * Personal workspaces with collaborators or file metadata are held for manual
- * resolution because this repository has no object-storage deletion adapter.
+ * Collaboration records and workspaces are retained. A neutral user tombstone
+ * preserves foreign keys while removing the deleted person's profile identity.
  */
 export async function processPendingAccountDeletions(
   prisma: PrismaClient,
   now = new Date(),
   bcryptSaltRounds = 12,
+  storage?: PrivateObjectStorage,
 ): Promise<AccountDeletionBatchResult> {
   const blocked: AccountDeletionBatchResult['blocked'] = [];
 
@@ -122,6 +53,8 @@ export async function processPendingAccountDeletions(
     bcryptSaltRounds,
   );
 
+  // Storage mutations and classification run after acquiring the account row
+  // lock. Idempotent object DELETE lets a later retry repair a DB rollback.
   const deleted = await prisma.$transaction(async (tx) => {
     const candidates = await tx.$queryRaw<Array<{ id: string; email: string }>>`
       SELECT "id", "email"
@@ -136,62 +69,123 @@ export async function processPendingAccountDeletions(
     let deletedCount = 0;
 
     for (const candidate of candidates) {
-      const organization = await tx.workspace.findFirst({
+      await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "Workspace"
+        WHERE "ownerId" = ${candidate.id} AND "isPersonal" = true
+        FOR UPDATE`;
+      const attachments = await tx.fileAttachment.findMany({
         where: {
-          ownerId: candidate.id,
-          type: { in: ['COMPANY', 'INSTITUTION'] },
+          uploadedById: candidate.id,
+          workspace: { isPersonal: true, ownerId: candidate.id },
         },
-        select: { id: true },
-      });
-
-      if (organization) {
-        blocked.push({ userId: candidate.id, reason: 'ORGANIZATION_OWNERSHIP' });
-        continue;
-      }
-
-      const otherOwnedWorkspace = await tx.workspace.findFirst({
-        where: { ownerId: candidate.id, isPersonal: false },
-        select: { id: true },
-      });
-
-      if (otherOwnedWorkspace) {
-        blocked.push({ userId: candidate.id, reason: 'ORGANIZATION_OWNERSHIP' });
-        continue;
-      }
-
-      if (await isLastActiveOrganizationOwnerOrAdministrator(tx, candidate.id)) {
-        blocked.push({ userId: candidate.id, reason: 'LAST_ORGANIZATION_ADMIN' });
-        continue;
-      }
-
-      const personalWorkspaces = await tx.workspace.findMany({
-        where: { ownerId: candidate.id, isPersonal: true },
-        select: {
-          id: true,
-          _count: { select: { members: true, files: true } },
+        include: {
+          workspace: {
+            select: {
+              ownerId: true,
+              isPersonal: true,
+              members: { select: { userId: true } },
+            },
+          },
+          project: {
+            select: {
+              ownerId: true,
+              workspaceId: true,
+              members: { select: { userId: true } },
+              tasks: { select: { creatorId: true, assignees: { select: { userId: true } }, comments: { select: { id: true } } } },
+            },
+          },
+          task: {
+            select: {
+              creatorId: true,
+              assignees: { select: { userId: true } },
+              comments: { select: { id: true } },
+              project: {
+                select: {
+                  ownerId: true,
+                  workspaceId: true,
+                  members: { select: { userId: true } },
+                  tasks: { select: { creatorId: true, assignees: { select: { userId: true } }, comments: { select: { id: true } } } },
+                },
+              },
+            },
+          },
+          comment: { select: { id: true } },
         },
       });
+      let storageFailed = false;
+      let storageFailureReason: AccountDeletionBatchResult['blocked'][number]['reason'] =
+        'STORAGE_FAILED';
 
-      if (personalWorkspaces.some((workspace) => workspace._count.members > 1)) {
-        blocked.push({ userId: candidate.id, reason: 'PERSONAL_WORKSPACE_SHARED' });
-        continue;
-      }
+      for (const attachment of attachments) {
+        const task = attachment.task;
+        const project = attachment.project ?? task?.project;
+        const shared =
+          attachment.uploadedById !== candidate.id ||
+          !attachment.workspace.isPersonal ||
+          attachment.workspace.ownerId !== candidate.id ||
+          attachment.workspace.members.some((member) => member.userId !== candidate.id) ||
+          Boolean(project && project.workspaceId !== attachment.workspaceId) ||
+          Boolean(attachment.comment) ||
+          Boolean(
+            project &&
+              (project.ownerId !== candidate.id ||
+                project.members.some((member) => member.userId !== candidate.id) ||
+                project.tasks.some((relatedTask) =>
+                  relatedTask.creatorId !== candidate.id ||
+                  relatedTask.assignees.some((assignee) => assignee.userId !== candidate.id) ||
+                  relatedTask.comments.length > 0,
+                )),
+          ) ||
+          Boolean(
+            task &&
+              (task.creatorId !== candidate.id ||
+                task.assignees.some((assignee) => assignee.userId !== candidate.id) ||
+                task.comments.length > 0),
+          );
 
-      if (personalWorkspaces.some((workspace) => workspace._count.files > 0)) {
-        blocked.push({ userId: candidate.id, reason: 'PERSONAL_FILES' });
-        continue;
-      }
+        let outcome: 'DELETED' | 'RETAINED_SHARED' | 'FAILED' | 'UNAVAILABLE';
+        if (shared) {
+          outcome = 'RETAINED_SHARED';
+        } else if (!storage) {
+          outcome = 'UNAVAILABLE';
+          storageFailed = true;
+          storageFailureReason = 'STORAGE_UNAVAILABLE';
+        } else {
+          try {
+            await storage.delete(attachment.storageKey);
+            await tx.fileAttachment.delete({ where: { id: attachment.id } });
+            outcome = 'DELETED';
+          } catch (error: unknown) {
+            outcome = isAppError(error) && error.code === 'OBJECT_STORAGE_UNAVAILABLE'
+              ? 'UNAVAILABLE'
+              : 'FAILED';
+            storageFailed = true;
+            storageFailureReason =
+              outcome === 'UNAVAILABLE' ? 'STORAGE_UNAVAILABLE' : 'STORAGE_FAILED';
+          }
+        }
 
-      const deletedAt = now;
-      const replacementEmail = `deleted+${candidate.id}@nexus.invalid`;
-      // The relational FileAttachment records of a personal workspace cascade
-      // with it. We refuse accounts that have any such records until a storage
-      // adapter can delete the matching private objects safely.
-      if (personalWorkspaces.length > 0) {
-        await tx.workspace.deleteMany({
-          where: { id: { in: personalWorkspaces.map((workspace) => workspace.id) } },
+        await tx.auditLog.create({
+          data: {
+            workspaceId: attachment.workspaceId,
+            action:
+              outcome === 'DELETED'
+                ? 'auth.account_deletion_file_deleted'
+                : outcome === 'RETAINED_SHARED'
+                  ? 'auth.account_deletion_file_retained'
+                  : 'auth.account_deletion_file_deletion_failed',
+            targetType: 'FileAttachment',
+            targetId: attachment.id,
+            metadata: { outcome },
+          },
         });
       }
+      if (storageFailed) {
+        blocked.push({ userId: candidate.id, reason: storageFailureReason });
+        continue;
+      }
+      const deletedAt = now;
+      const replacementEmail = `deleted+${candidate.id}@nexus.invalid`;
 
       await tx.invitation.updateMany({
         where: {
@@ -205,28 +199,28 @@ export async function processPendingAccountDeletions(
         data: { status: 'REVOKED', revokedAt: deletedAt, pendingKey: null },
       });
       await tx.joinRequest.deleteMany({ where: { userId: candidate.id } });
-      await tx.workspaceMembership.deleteMany({ where: { userId: candidate.id } });
-      await tx.teamMembership.deleteMany({ where: { userId: candidate.id } });
-      await tx.projectMembership.deleteMany({ where: { userId: candidate.id } });
-      await tx.departmentMembership.deleteMany({ where: { userId: candidate.id } });
-      await tx.institutionGroupMembership.deleteMany({ where: { userId: candidate.id } });
       await tx.institutionGroup.updateMany({
         where: { leadId: candidate.id },
         data: { leadId: null },
       });
-      await tx.taskAssignee.deleteMany({ where: { userId: candidate.id } });
+      // Keep membership, assignment, comments, shared files, projects and workspaces:
+      // their retained records become attributable to the Deleted user tombstone.
       await tx.team.updateMany({ where: { leadId: candidate.id }, data: { leadId: null } });
       await tx.notification.deleteMany({ where: { userId: candidate.id } });
       await tx.authToken.deleteMany({ where: { userId: candidate.id } });
       await tx.session.deleteMany({ where: { userId: candidate.id } });
       await tx.userProfile.deleteMany({ where: { userId: candidate.id } });
       await tx.emailDelivery.deleteMany({ where: { toAddress: candidate.email } });
+      await tx.workspace.updateMany({
+        where: { ownerId: candidate.id },
+        data: { status: 'SUSPENDED' },
+      });
 
       await tx.auditLog.updateMany({
         where: {
           OR: [{ actorId: candidate.id }, { targetType: 'User', targetId: candidate.id }],
         },
-        data: { metadata: Prisma.DbNull, ip: null, userAgent: null },
+        data: { actorId: null, metadata: Prisma.DbNull, ip: null, userAgent: null },
       });
       await tx.$executeRaw`
         UPDATE "AuditLog"
@@ -282,6 +276,7 @@ export function createAccountDeletionWorker(input: {
   prisma: PrismaClient;
   logger: Logger;
   bcryptSaltRounds?: number;
+  storage?: PrivateObjectStorage;
 }): AccountDeletionWorker {
   let timer: NodeJS.Timeout | null = null;
   let inFlight: Promise<void> | null = null;
@@ -292,7 +287,12 @@ export function createAccountDeletionWorker(input: {
       return inFlight;
     }
 
-    inFlight = processPendingAccountDeletions(input.prisma, new Date(), input.bcryptSaltRounds)
+    inFlight = processPendingAccountDeletions(
+      input.prisma,
+      new Date(),
+      input.bcryptSaltRounds,
+      input.storage,
+    )
       .then((result) => {
         if (result.deleted > 0) {
           input.logger.info('account_deletions_completed', { count: result.deleted });

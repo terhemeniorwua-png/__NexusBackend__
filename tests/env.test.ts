@@ -160,3 +160,25 @@ test('parseEnv rejects SameSite=None without secure cookies', () => {
       error.issues.some((issue) => issue.field === 'AUTH_COOKIE_SAME_SITE'),
   );
 });
+
+test('private object storage requires a complete credential set and safe endpoint', () => {
+  assert.throws(
+    () => parseEnv({ ...baseEnv, OBJECT_STORAGE_ENDPOINT: 'https://objects.example.com' }),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'OBJECT_STORAGE_BUCKET'),
+  );
+  assert.throws(
+    () =>
+      parseEnv({
+        ...baseEnv,
+        OBJECT_STORAGE_ENDPOINT: 'https://user:secret@objects.example.com?token=secret',
+        OBJECT_STORAGE_BUCKET: 'nexus-private',
+        OBJECT_STORAGE_ACCESS_KEY_ID: 'access-key',
+        OBJECT_STORAGE_SECRET_ACCESS_KEY: 'secret-key',
+      }),
+    (error) =>
+      error instanceof ConfigurationError &&
+      error.issues.some((issue) => issue.field === 'OBJECT_STORAGE_ENDPOINT'),
+  );
+});

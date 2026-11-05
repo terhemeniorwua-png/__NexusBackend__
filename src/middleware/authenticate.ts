@@ -79,7 +79,7 @@ export function createRequireAuth(config: AppConfig): RequestHandler {
         throw new AppError(
           403,
           'ACCOUNT_PENDING_DELETION',
-          'This account is pending deletion. Recover it before continuing.',
+          'This account is being deleted and can no longer access Nexus.',
         );
       }
 

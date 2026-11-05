@@ -294,11 +294,31 @@ export async function requireProjectAccess(
     }
   }
 
+  // A department-only project inherits base access from active department
+  // membership. When a project is also assigned to a team, the team is the
+  // narrower scope and department membership alone does not bypass it.
+  let departmentMember = false;
+  if (project.departmentId && !project.teamId) {
+    const department = await client.department.findFirst({
+      where: { id: project.departmentId, workspaceId: project.workspaceId },
+      select: { id: true },
+    });
+    if (department) {
+      departmentMember = Boolean(
+        await client.departmentMembership.findUnique({
+          where: { departmentId_userId: { departmentId: department.id, userId: input.userId } },
+          select: { id: true },
+        }),
+      );
+    }
+  }
+
   const projectMembership = await client.projectMembership.findUnique({
     where: { projectId_userId: { projectId: project.id, userId: input.userId } },
   });
 
-  if (!projectMembership && !teamMember) {
+  const isProjectOwner = project.ownerId === input.userId;
+  if (!projectMembership && !teamMember && !departmentMember && !isProjectOwner) {
     // Private projects are hidden completely; WORKSPACE-visible projects
     // report the correct error.
     if (project.visibility === 'PRIVATE') {
@@ -309,7 +329,7 @@ export async function requireProjectAccess(
   }
 
   const authorizedProjectRole = capProjectRole(
-    projectMembership?.role ?? 'MEMBER',
+    projectMembership?.role ?? (isProjectOwner ? 'PROJECT_MANAGER' : 'MEMBER'),
     maximumProjectRole(workspaceMembership.organizationRole),
   );
   if (!projectRoleCan(authorizedProjectRole, input.capability)) {

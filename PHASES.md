@@ -9,15 +9,13 @@
 | Metric | Count |
 |---|---|
 | **Project** | Nexus Backend |
-| **Total phases** | 24 |
-| **Completed** `[x]` | 6 |
-| **In progress** `[/]` | 1 |
-| **Not started** `[ ]` | 17 |
-| **Overall progress** | 25% |
+| **Numbered phase definitions** | 30 |
+| **Current active phase** | Phase 7 — Teams, departments and groups |
+| **Aggregate progress** | Not calculated: legacy and canonical phase lists contain duplicate and missing phase numbers |
 
-_Update this table whenever a phase status changes._
+_Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
 
-Phases 1.1, 1.2 and 1.3 are remediation subphases of Phase 1. They are tracked below but do not change the 24-phase roadmap count.
+**Roadmap numbering reconciliation (2026-11-05):** The file contains a legacy 24-phase dashboard and milestone summary, duplicate legacy/canonical sections for Phase 7, and canonical phase headers through Phase 32. The canonical numbered definitions total 30 because Phases 6 and 29 have no canonical section. Existing phase scopes and numbering are preserved; Phase 7 remains the active phase. The earlier summary list's use of Phases 5–7 for different scopes is historical and does not supersede the canonical Phase 7 section below.
 
 ---
 
@@ -665,10 +663,10 @@ Support Individual, Company, and Institution workspaces within one Nexus platfor
 
 - `POST /auth/delete` requires the current password and exact email confirmation. It sets `PENDING_DELETION`, records `deletionRequestedAt` and `scheduledDeletionAt`, revokes active sessions and unused authentication tokens, and sends a transactional email with the scheduled date.
 - The recovery period is exactly 30 days. The existing password-verified `/auth/reactivate` flow cancels a pending deletion before the deadline. It clears the schedule but does not restore old sessions; the user must sign in again.
-- Permanent deletion removes the marked personal workspace and its workspace-owned relational data, memberships, access, notifications, and pending invitations. A neutral user tombstone remains to preserve foreign keys and shared historical attribution.
-- Company, Institution, and other non-personal shared workspaces are not deleted. Organization owners must transfer ownership first. A final active organization administrator cannot request deletion until another active owner or administrator is available.
-- Shared projects, tasks, comments, and file records remain. Assignments and memberships for the deleted user are removed; shared content displays the tombstone's `Deleted user` identity.
-- This repository has file metadata but no object-storage deletion adapter. Permanent deletion is held when personal workspace file metadata exists, rather than deleting the metadata and orphaning stored objects. Integrating safe object cleanup is a Phase 12 dependency and Phase 4 remains blocked for such accounts.
+- At finalization, personal-only relational data is removed while a neutral user tombstone remains to preserve foreign keys and shared historical attribution. Authentication sessions and tokens are revoked when deletion is scheduled.
+- Company, Institution, and other shared workspaces remain. A deleting owner may arrange an explicitly accepted ownership transfer during the recovery period; billing responsibility requires separate acceptance. Any owned workspace without an accepted successor is suspended at finalization and remains suspended until an authorized platform administrator assigns a new owner.
+- Shared projects, tasks, comments, and collaboration records remain with deleted-author attribution changed to `Deleted user`; access is revoked through the deactivated tombstone. Shared workspace and collaboration attachments remain. Purely personal attachments are deleted only after the 30-day recovery period; failures leave finalization retryable and preserve metadata until storage deletion succeeds.
+- The private storage adapter is integrated with bounded deletion classification based on personal workspace ownership and sharing/reference relationships. Each result is audited; ambiguous or shared files are retained.
 
 ### Company and Institution profile and settings requirements
 
@@ -711,7 +709,7 @@ These fields and settings are approved product requirements. Phase 4 implements 
 | Personal workspace archive/delete safeguards | COMPLETED | The ordinary workspace archive/delete routes reject personal workspaces; account deletion owns their lifecycle. |
 | Account deletion request, confirmation, and 30-day schedule | COMPLETED | Password and email confirmation, status and timestamps, token/session revocation, rate limiting, response, and transactional email are implemented. |
 | Recovery during the grace period | COMPLETED | Existing password-verified reactivation cancels the schedule without restoring old sessions. |
-| Permanent deletion of personal relational data and shared-data protection | IN PROGRESS | Idempotent locked worker removes personal relational data, memberships, assignments, profile, and pending invitations while anonymizing shared attribution. It holds accounts with personal file metadata because object storage deletion is not implemented. |
+| Permanent deletion of personal relational data and shared-data protection | IN PROGRESS | Idempotent locked worker removes personal-only relational data and personal-only files after storage deletion succeeds, anonymizes retained attribution, and preserves shared workspace/collaboration records and files. Storage failures are audited and retryable. |
 | Last organization owner/administrator protection | COMPLETED | Requests are rejected until organization ownership is transferred and another active owner or administrator remains. |
 | Personal workspace-specific settings | IN PROGRESS | Generic workspace name/description/visibility settings remain available; no distinct personal settings model/API is required by the current foundational scope. |
 | Company profile and organization settings | NOT STARTED | Approved field and permission requirements are documented above and assigned to Phase 7. |
@@ -1794,7 +1792,7 @@ Make the backend easy to understand, integrate, and maintain.
 
 ### Current Phase
 
-**Current phase:** Phase 7 remains in progress. Team lifecycle, separate Company/Institution profiles, institution-group endpoints, per-workspace in-app notification preferences, and department renaming are implemented. Other organization preferences, logo storage, remaining team/department settings, and project/channel integration remain outstanding. Phase 8 must not begin until Phase 7 acceptance criteria are resolved. Phase 4.6 also remains in progress; the roadmap does not define how its email workflow dependencies are sequenced against Phase 7/8, so treat this as a recorded sequencing ambiguity rather than skipping the dependency.
+**Current phase:** Phase 7 remains in progress. Team lifecycle, organization profiles, supported workspace and notification preferences, institution groups, department settings, private logo lifecycle, and project/team/department access integration are implemented in the current working tree. Channel integration is blocked because this backend has no Channel model, route, or messaging module; implementing one here would start the later messaging phase. Phase 8 must not begin until the Channel dependency is implemented and verified. The Phase 3/7 PostgreSQL lifecycle suites have now been verified against a disposable PostgreSQL 16 database. Phase 4.6 also remains in progress; the roadmap does not define how its email workflow dependencies are sequenced against Phase 7/8, so treat this as a recorded sequencing ambiguity rather than skipping the dependency.
 
 ---
 
@@ -1943,3 +1941,24 @@ Potential future backend capabilities include:
 ---
 
 _Last updated: 2026-11-03. Phases 1 to 7 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3, 4.4, 4.5 and 4.6 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging, meeting, team and project workflows. The document also describes the planned state of the later phases._
+
+## Phase 3 account deletion remediation — 2026-11-05
+
+**SUPERSEDED by the Phase 3 account deletion policy correction below:** This historical note described ownership-transfer and collaborator-removal prerequisites and an unintegrated storage adapter. Current policy permits scheduling deletion with untransferred owned workspaces suspended; ownership transfer is optional and accepted by the recipient, billing responsibility requires separate acceptance, and purely personal attachments are deleted after the recovery period while shared attachments remain. The 30-day recovery period and immediate session revocation remain current.
+
+
+**Phase 7 audit update — 2026-11-05:** Organization profile/settings and supported workspace/in-app notification preferences were already present. Added private S3-compatible company/institution logo upload, read and deletion with authorization, content-signature validation, bounded 2 MB size, SigV4 requests, timeout, and audit records. Added team-to-department management, transactional propagation of linked project department relationships, and an API operation to associate existing projects with same-workspace teams/departments. Project access now follows active team membership; department-only projects inherit access from their department members, while a team relationship narrows access to team members. Existing membership changes are checked dynamically, so removing membership revokes inherited access. Channel integration remains blocked because no channel subsystem exists. Account deletion was aligned with the approved 30-day recovery period; scheduling retains ownership and subscription responsibility, suspends owned workspaces, and records optional recipient ownership transfer and separate billing acceptance. Sessions are revoked immediately; the recovery endpoint clears the schedule only before its deadline. Verification is recorded in the session report; database-gated integration remains unverified where the isolated test database is unavailable. Phase 7 remains **IN PROGRESS**, and Phase 8 was not started.
+
+**Phase 7 remaining-blocker remediation — 2026-11-05 (superseded):** This earlier implementation used a read-only `HEAD` existence check and retained personal attachment bytes and metadata. That behavior was replaced by the approved personal-file deletion policy in the completion update below. Its reported database test counts describe the earlier code and are not evidence for the current implementation.
+
+## Phase 3 account deletion policy correction — 2026-11-05
+
+The approved product decision is a 30-day scheduled deletion and recovery period; the earlier immediate-deletion addenda are superseded. The request revokes sessions and authentication tokens immediately, but finalizes only at the exact server-calculated deadline. Recovery is identity-verified and competes transactionally with finalization. Owned workspaces and collaboration records are retained; untransferred owned workspaces are suspended. Recipient ownership acceptance and separate billing acceptance are required. Scheduled subscription cancellation is reversible before the deadline, while outstanding invoices and financial records are retained. The backend worker now anonymizes account identity while preserving user tombstones and shared records. Additive schema migration tracks deletion suspension, transfer acceptance and billing owner. Frontend notices and legal drafts now state the approved product behavior and distinguish pending legal review.
+
+**Phase 3 account deletion verification status — 2026-11-05:** The earlier implementation note below is superseded on personal-file handling by the approved policy correction and current completion update. The cancellation worker rechecks the current workspace owner and deadline before provider cancellation; platform administrator owner assignment is guarded by a database-provisioned `isPlatformAdmin` flag. The disposable PostgreSQL lifecycle suite passes 71/71. Paystack sandbox behavior, live email delivery, and legal/accounting retention periods remain external verification/review dependencies.
+
+**Phase 7 account lifecycle verification update — 2026-11-05 (superseded):** This earlier note predates the disposable PostgreSQL run and the privacy-request implementation recorded below. Its observations about legal review and absent frontend policy drafts remain relevant; its test status is historical.
+
+**Personal attachment policy correction — 2026-11-05:** The current approved decision is to delete purely personal attachments after the 30-day recovery period, retain shared workspace and collaboration attachments, and preserve personal attachments when an account is recovered. This supersedes the earlier read-only retention note above.
+
+**Phase 7 completion and frontend dependency update — 2026-11-05:** Implemented the approved storage classification and idempotent deletion of personal-only attachment objects with per-file audit outcomes; shared workspace and collaboration references are preserved. Added incoming ownership-transfer listing/rejection and privacy-request submission, owner retrieval, platform-admin review/decision, and task-comment redaction APIs. Corrected the ownership-transfer initiation OpenAPI response and malformed flow descriptions. Against a disposable PostgreSQL 16 database, the Phase 3 lifecycle/privacy suite passes 71/71, including concurrent redaction conflict handling, and the Phase 7 team/organization/project suite passes 43/43. The regular `npm test` suite passes 243 tests with 2 database-gated skips; typecheck, ESLint, production build, `git diff --check`, and OpenAPI lint (0 errors, 27 existing style warnings) pass. `npm run format:check` reports 9 files, including pre-existing modified files; the three newly added privacy service files were formatted. Invoice listing remains blocked because no invoice model or safe workspace/payer authorization mapping exists; payment records are not invoices. The backend has no messaging/channel records for message redaction, and the frontend remains a separate repository. Phase 7 remains **IN PROGRESS**; Phase 8 was not started. Legal/accounting must confirm applicable retention periods, and product/billing owners must define invoice issuance, payer access and workspace mapping before that API can be safely implemented.
