@@ -97,6 +97,16 @@ const envSchema = z
     AUTH_REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
     AUTH_PASSWORD_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
     AUTH_VERIFICATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    TOTP_ENCRYPTION_KEY: z.string().trim().default(''),
+    AVATAR_MAX_FILE_SIZE_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(20 * 1024 * 1024)
+      .default(5 * 1024 * 1024),
+    AVATAR_MAX_DIMENSION: z.coerce.number().int().min(256).max(8192).default(4096),
+    AVATAR_MAX_PIXELS: z.coerce.number().int().min(65_536).max(40_000_000).default(16_000_000),
+    AVATAR_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
 
     // Frontend routes that receive the single-use links. They are configurable
     // so the frontend contract can change without a backend deployment.
@@ -287,6 +297,22 @@ const envSchema = z
       .default(15_000),
   })
   .superRefine((values, ctx) => {
+    if (values.NODE_ENV !== 'test' && !/^[A-Za-z0-9_-]{43}$/.test(values.TOTP_ENCRYPTION_KEY)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TOTP_ENCRYPTION_KEY'],
+        message: 'TOTP_ENCRYPTION_KEY must be a base64url-encoded 32-byte key',
+      });
+    } else if (
+      values.TOTP_ENCRYPTION_KEY &&
+      Buffer.from(values.TOTP_ENCRYPTION_KEY, 'base64url').length !== 32
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TOTP_ENCRYPTION_KEY'],
+        message: 'TOTP_ENCRYPTION_KEY must encode exactly 32 bytes',
+      });
+    }
     if (values.AUTH_COOKIE_SAME_SITE === 'none' && !values.AUTH_COOKIE_SECURE) {
       ctx.addIssue({
         code: 'custom',
@@ -507,6 +533,11 @@ export interface AppConfig {
   authRegisterRateLimitMax: number;
   authPasswordRateLimitMax: number;
   authVerificationRateLimitMax: number;
+  totpEncryptionKey: string;
+  avatarMaxFileSizeBytes: number;
+  avatarMaxDimension: number;
+  avatarMaxPixels: number;
+  avatarRateLimitMax: number;
   authVerificationLinkPath: string;
   authPasswordResetLinkPath: string;
   authEmailChangeLinkPath: string;
@@ -641,6 +672,11 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     authRegisterRateLimitMax: values.AUTH_REGISTER_RATE_LIMIT_MAX,
     authPasswordRateLimitMax: values.AUTH_PASSWORD_RATE_LIMIT_MAX,
     authVerificationRateLimitMax: values.AUTH_VERIFICATION_RATE_LIMIT_MAX,
+    totpEncryptionKey: values.TOTP_ENCRYPTION_KEY,
+    avatarMaxFileSizeBytes: values.AVATAR_MAX_FILE_SIZE_BYTES,
+    avatarMaxDimension: values.AVATAR_MAX_DIMENSION,
+    avatarMaxPixels: values.AVATAR_MAX_PIXELS,
+    avatarRateLimitMax: values.AVATAR_RATE_LIMIT_MAX,
     authVerificationLinkPath: values.AUTH_VERIFICATION_LINK_PATH,
     authPasswordResetLinkPath: values.AUTH_PASSWORD_RESET_LINK_PATH,
     authEmailChangeLinkPath: values.AUTH_EMAIL_CHANGE_LINK_PATH,

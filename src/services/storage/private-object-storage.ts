@@ -15,6 +15,7 @@ export interface S3CompatibleStorageConfig {
   accessKeyId: string;
   secretAccessKey: string;
   requestTimeoutMs: number;
+  maxReadBytes?: number;
 }
 
 function sha256(value: Buffer | string): string {
@@ -162,7 +163,8 @@ export function createS3CompatibleObjectStorage(
       const response = await request('GET', key);
       if (!response) throw new Error('Unexpected missing object response');
       const contentLength = Number(response.headers.get('content-length'));
-      if (Number.isFinite(contentLength) && contentLength > 2 * 1024 * 1024) {
+      const maxReadBytes = config.maxReadBytes ?? 2 * 1024 * 1024;
+      if (Number.isFinite(contentLength) && contentLength > maxReadBytes) {
         await response.body?.cancel();
         throw new AppError(
           502,
@@ -178,7 +180,7 @@ export function createS3CompatibleObjectStorage(
           const { done, value } = await reader.read();
           if (done) break;
           totalBytes += value.byteLength;
-          if (totalBytes > 2 * 1024 * 1024) {
+          if (totalBytes > maxReadBytes) {
             await reader.cancel();
             throw new AppError(
               502,

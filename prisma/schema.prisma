@@ -266,10 +266,15 @@ model User {
   deletedAt           DateTime?
   deletionRequestedAt DateTime?
   scheduledDeletionAt DateTime?
+  twoFactorSecretEncrypted String?
+  twoFactorEnabled         Boolean  @default(false)
+  twoFactorVerifiedAt      DateTime?
+  twoFactorSetupExpiresAt  DateTime?
 
   profile                     UserProfile?
   sessions                    Session[]
   authTokens                  AuthToken[]
+  twoFactorRecoveryCodes      TwoFactorRecoveryCode[]
   workspaceMemberships        WorkspaceMembership[]
   teamMemberships             TeamMembership[]
   departmentMemberships       DepartmentMembership[]
@@ -311,12 +316,25 @@ model UserProfile {
   bio       String?
   jobTitle  String?
   avatarUrl String?
+  avatarStorageKey String? @unique
   timeZone  String   @default("UTC")
   locale    String   @default("en")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TwoFactorRecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
 }
 
 model Session {
