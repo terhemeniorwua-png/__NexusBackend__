@@ -67,6 +67,7 @@ function runTests(rawDbUrl: string): void {
   let workspaceId: string;
   let institutionWorkspaceId: string;
   const createdWorkspaceIds: string[] = [];
+  const extraUserIds: string[] = [];
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -219,7 +220,7 @@ function runTests(rawDbUrl: string): void {
     await server?.close();
     await disconnectRedis();
     const db = await connectTestDatabase(rawDbUrl);
-    const createdUserIds = [owner?.id, pm?.id, member?.id, outsider?.id].filter(
+    const createdUserIds = [owner?.id, pm?.id, member?.id, outsider?.id, ...extraUserIds].filter(
       (id): id is string => Boolean(id),
     );
     await db.prisma.workspace.deleteMany({ where: { id: { in: createdWorkspaceIds } } });
@@ -986,6 +987,82 @@ function runTests(rawDbUrl: string): void {
       } finally {
         await db.prisma.$disconnect();
       }
+    });
+  });
+
+  describe('Phase 7 channel access', () => {
+    test('workspace visibility, private membership, name uniqueness, deletion and parent removal', async () => {
+      const channelUrl = (wsId: string, channelId?: string) =>
+        `${baseUrl}/api/v1/workspaces/${wsId}/channels${channelId ? `/${channelId}` : ''}`;
+      const create = async (actor: TestUser, wsId: string, body: Record<string, unknown>) =>
+        jsonRequest(channelUrl(wsId), { method: 'POST', headers: auth(actor), body: JSON.stringify(body), jar: actor.jar });
+      const workspaceChannel = await create(owner, workspaceId, { type: 'WORKSPACE', name: 'Engineering' });
+      assert.equal(workspaceChannel.status, 201, JSON.stringify(workspaceChannel.body));
+      const engineeringId = (workspaceChannel.body.data as { id: string }).id;
+      const duplicate = await create(owner, workspaceId, { type: 'WORKSPACE', name: 'engineering' });
+      assert.equal(duplicate.status, 409);
+      const crossWorkspace = await create(owner, institutionWorkspaceId, { type: 'WORKSPACE', name: 'engineering' });
+      assert.equal(crossWorkspace.status, 201);
+
+      const viewer = await create(owner, workspaceId, { type: 'WORKSPACE', name: 'Viewer-visible' });
+      assert.equal(viewer.status, 201);
+      const viewerUser = await register('P7 Viewer', `p7-viewer-${Date.now()}@test.example`, 'TestPass123!');
+      extraUserIds.push(viewerUser.id);
+      await addWorkspaceMember(owner, workspaceId, viewerUser.email, 'VIEWER');
+      assert.equal((await jsonRequest(channelUrl(workspaceId, engineeringId), { headers: auth(viewerUser) })).status, 200);
+      assert.equal((await jsonRequest(channelUrl(workspaceId, engineeringId), { headers: auth(outsider) })).status, 404);
+
+      const privateRes = await create(owner, workspaceId, { type: 'PRIVATE', name: 'Private room' });
+      assert.equal(privateRes.status, 201);
+      const privateId = (privateRes.body.data as { id: string }).id;
+      const db = await connectTestDatabase(rawDbUrl);
+      try {
+        assert.equal((await db.prisma.channelMembership.findUniqueOrThrow({ where: { channelId_userId: { channelId: privateId, userId: owner.id } } })).role, 'ADMIN');
+        const memberRes = await jsonRequest(`${channelUrl(workspaceId, privateId)}/members`, { method: 'POST', headers: auth(owner), body: JSON.stringify({ userId: member.id }), jar: owner.jar });
+        assert.equal(memberRes.status, 201);
+        assert.equal((memberRes.body.data as { role: string }).role, 'MEMBER');
+        assert.equal((await jsonRequest(channelUrl(workspaceId, privateId), { headers: auth(pm) })).status, 404);
+        const wrongWorkspace = await jsonRequest(channelUrl(institutionWorkspaceId, privateId), { headers: auth(owner) });
+        assert.equal(wrongWorkspace.status, 404);
+        await db.prisma.channel.update({ where: { id: engineeringId }, data: { deletedAt: new Date() } });
+      } finally { await db.prisma.$disconnect(); }
+      assert.equal((await create(owner, workspaceId, { type: 'WORKSPACE', name: 'ENGINEERING' })).status, 201);
+      const teamRes = await jsonRequest(`${baseUrl}/api/v1/workspaces/${workspaceId}/teams`, { method: 'POST', headers: auth(owner), body: JSON.stringify({ name: 'Channel parent team' }), jar: owner.jar });
+      const teamId = (teamRes.body.data as { id: string }).id;
+      const teamChannel = await create(owner, workspaceId, { type: 'TEAM', teamId, name: 'Team channel' });
+      assert.equal(teamChannel.status, 201);
+      const teamChannelId = (teamChannel.body.data as { id: string }).id;
+      const db2 = await connectTestDatabase(rawDbUrl);
+      await db2.prisma.team.update({ where: { id: teamId }, data: { status: 'ARCHIVED' } });
+      await db2.prisma.$disconnect();
+      assert.equal((await jsonRequest(channelUrl(workspaceId, teamChannelId), { headers: auth(member) })).status, 404);
+      const archive = await jsonRequest(`${channelUrl(workspaceId, teamChannelId)}/archive`, { method: 'POST', headers: auth(owner), jar: owner.jar });
+      assert.equal(archive.status, 200);
+    });
+
+    test('team, department and project parent archival, deletion or null reference revoke access', async () => {
+      const channelUrl = (wsId: string, channelId: string) => `${baseUrl}/api/v1/workspaces/${wsId}/channels/${channelId}`;
+      const db = await connectTestDatabase(rawDbUrl);
+      try {
+        const team = await db.prisma.team.create({ data: { workspaceId, name: `Null team ${Date.now()}` } });
+        const teamChannel = await db.prisma.channel.create({ data: { workspaceId, type: 'TEAM', teamId: team.id, name: `Null team channel ${Date.now()}`, createdById: owner.id } });
+        await db.prisma.channel.update({ where: { id: teamChannel.id }, data: { teamId: null } });
+        assert.equal((await jsonRequest(channelUrl(workspaceId, teamChannel.id), { headers: auth(owner) })).status, 404);
+
+        const departmentRes = await jsonRequest(`${baseUrl}/api/v1/workspaces/${institutionWorkspaceId}/departments`, { method: 'POST', headers: auth(owner), body: JSON.stringify({ name: `Channel department ${Date.now()}` }), jar: owner.jar });
+        assert.equal(departmentRes.status, 201, JSON.stringify(departmentRes.body));
+        const departmentId = (departmentRes.body.data as { id: string }).id;
+        const departmentChannel = await db.prisma.channel.create({ data: { workspaceId: institutionWorkspaceId, type: 'DEPARTMENT', departmentId, name: `Department channel ${Date.now()}`, createdById: owner.id } });
+        await db.prisma.department.delete({ where: { id: departmentId } });
+        assert.equal((await jsonRequest(channelUrl(institutionWorkspaceId, departmentChannel.id), { headers: auth(owner) })).status, 404);
+
+        const project = await db.prisma.project.create({ data: { workspaceId, ownerId: owner.id, name: 'Archived channel parent', key: `ACP${Date.now()}` } });
+        const projectChannel = await db.prisma.channel.create({ data: { workspaceId, type: 'PROJECT', projectId: project.id, name: `Project channel ${Date.now()}`, createdById: owner.id } });
+        await db.prisma.project.update({ where: { id: project.id }, data: { status: 'ARCHIVED' } });
+        assert.equal((await jsonRequest(channelUrl(workspaceId, projectChannel.id), { headers: auth(owner) })).status, 404);
+        await db.prisma.channel.update({ where: { id: projectChannel.id }, data: { projectId: null } });
+        assert.equal((await jsonRequest(channelUrl(workspaceId, projectChannel.id), { headers: auth(owner) })).status, 404);
+      } finally { await db.prisma.$disconnect(); }
     });
   });
 }
