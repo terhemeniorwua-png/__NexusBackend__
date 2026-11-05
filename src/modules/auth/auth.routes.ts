@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { ipKeyGenerator } from 'express-rate-limit';
 import type { AppConfig } from '../../config/env';
-import { createRequireAuth } from '../../middleware/authenticate';
+import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { accountKeyGenerator, createRateLimiter } from '../../middleware/rate-limit';
 import { validateBody } from '../../middleware/validation';
 import {
@@ -17,6 +17,10 @@ import {
   refreshSchema,
   registerSchema,
   verifyEmailSchema,
+  twoFactorChallengeSchema,
+  twoFactorConfirmSchema,
+  twoFactorDisableSchema,
+  recoveryCodeRegenerateSchema,
 } from './auth.schemas';
 import { createAuthController, type AuthController } from './auth.controller';
 import type { AuthService } from './auth.service';
@@ -42,6 +46,7 @@ export function createAuthRouter({
 }: AuthRouterOptions): Router {
   const router = Router();
   const requireAuth = createRequireAuth(config);
+  const requireActive = createRequireActiveAccount();
 
   const windowMs = config.authRateLimitWindowMs;
 
@@ -123,6 +128,14 @@ export function createAuthRouter({
     message: 'Too many account deletion requests. Please try again later.',
   });
 
+  const twoFactorChallengeLimit = createRateLimiter({
+    namespace: `${config.rateLimitNamespace}:auth:2fa:challenge:ip`,
+    windowMs,
+    limit: config.authLoginRateLimitMax,
+    code: 'MFA_RATE_LIMITED',
+    message: 'Too many two-factor verification attempts. Please try again later.',
+  });
+
   router.post(
     '/register',
     registerIpLimit,
@@ -150,6 +163,34 @@ export function createAuthRouter({
     loginAccountLimit,
     validateBody(loginSchema),
     controller.login,
+  );
+  router.post(
+    '/2fa/challenge',
+    twoFactorChallengeLimit,
+    validateBody(twoFactorChallengeSchema),
+    controller.twoFactorChallenge,
+  );
+  router.post('/2fa/setup', requireAuth, requireActive, controller.beginTwoFactorSetup);
+  router.post(
+    '/2fa/confirm',
+    requireAuth,
+    requireActive,
+    validateBody(twoFactorConfirmSchema),
+    controller.confirmTwoFactorSetup,
+  );
+  router.post(
+    '/2fa/disable',
+    requireAuth,
+    requireActive,
+    validateBody(twoFactorDisableSchema),
+    controller.disableTwoFactor,
+  );
+  router.post(
+    '/2fa/recovery-codes',
+    requireAuth,
+    requireActive,
+    validateBody(recoveryCodeRegenerateSchema),
+    controller.regenerateRecoveryCodes,
   );
   router.post(
     '/reactivate',

@@ -56,15 +56,18 @@ export async function processPendingAccountDeletions(
   // Storage mutations and classification run after acquiring the account row
   // lock. Idempotent object DELETE lets a later retry repair a DB rollback.
   const deleted = await prisma.$transaction(async (tx) => {
-    const candidates = await tx.$queryRaw<Array<{ id: string; email: string }>>`
-      SELECT "id", "email"
-      FROM "User"
-      WHERE "status" = 'PENDING_DELETION'
-        AND "deletedAt" IS NULL
-        AND "scheduledDeletionAt" <= ${now}
-      ORDER BY "scheduledDeletionAt", "id"
+    const candidates = await tx.$queryRaw<
+      Array<{ id: string; email: string; avatarStorageKey: string | null }>
+    >`
+      SELECT u."id", u."email", p."avatarStorageKey"
+      FROM "User" u
+      LEFT JOIN "UserProfile" p ON p."userId" = u."id"
+      WHERE u."status" = 'PENDING_DELETION'
+        AND u."deletedAt" IS NULL
+        AND u."scheduledDeletionAt" <= ${now}
+      ORDER BY u."scheduledDeletionAt", u."id"
       LIMIT ${ACCOUNT_DELETION_BATCH_SIZE}
-      FOR UPDATE SKIP LOCKED
+      FOR UPDATE OF u SKIP LOCKED
     `;
     let deletedCount = 0;
 
@@ -91,7 +94,13 @@ export async function processPendingAccountDeletions(
               ownerId: true,
               workspaceId: true,
               members: { select: { userId: true } },
-              tasks: { select: { creatorId: true, assignees: { select: { userId: true } }, comments: { select: { id: true } } } },
+              tasks: {
+                select: {
+                  creatorId: true,
+                  assignees: { select: { userId: true } },
+                  comments: { select: { id: true } },
+                },
+              },
             },
           },
           task: {
@@ -104,7 +113,13 @@ export async function processPendingAccountDeletions(
                   ownerId: true,
                   workspaceId: true,
                   members: { select: { userId: true } },
-                  tasks: { select: { creatorId: true, assignees: { select: { userId: true } }, comments: { select: { id: true } } } },
+                  tasks: {
+                    select: {
+                      creatorId: true,
+                      assignees: { select: { userId: true } },
+                      comments: { select: { id: true } },
+                    },
+                  },
                 },
               },
             },
@@ -128,19 +143,20 @@ export async function processPendingAccountDeletions(
           Boolean(attachment.comment) ||
           Boolean(
             project &&
-              (project.ownerId !== candidate.id ||
-                project.members.some((member) => member.userId !== candidate.id) ||
-                project.tasks.some((relatedTask) =>
+            (project.ownerId !== candidate.id ||
+              project.members.some((member) => member.userId !== candidate.id) ||
+              project.tasks.some(
+                (relatedTask) =>
                   relatedTask.creatorId !== candidate.id ||
                   relatedTask.assignees.some((assignee) => assignee.userId !== candidate.id) ||
                   relatedTask.comments.length > 0,
-                )),
+              )),
           ) ||
           Boolean(
             task &&
-              (task.creatorId !== candidate.id ||
-                task.assignees.some((assignee) => assignee.userId !== candidate.id) ||
-                task.comments.length > 0),
+            (task.creatorId !== candidate.id ||
+              task.assignees.some((assignee) => assignee.userId !== candidate.id) ||
+              task.comments.length > 0),
           );
 
         let outcome: 'DELETED' | 'RETAINED_SHARED' | 'FAILED' | 'UNAVAILABLE';
@@ -156,9 +172,10 @@ export async function processPendingAccountDeletions(
             await tx.fileAttachment.delete({ where: { id: attachment.id } });
             outcome = 'DELETED';
           } catch (error: unknown) {
-            outcome = isAppError(error) && error.code === 'OBJECT_STORAGE_UNAVAILABLE'
-              ? 'UNAVAILABLE'
-              : 'FAILED';
+            outcome =
+              isAppError(error) && error.code === 'OBJECT_STORAGE_UNAVAILABLE'
+                ? 'UNAVAILABLE'
+                : 'FAILED';
             storageFailed = true;
             storageFailureReason =
               outcome === 'UNAVAILABLE' ? 'STORAGE_UNAVAILABLE' : 'STORAGE_FAILED';
@@ -177,6 +194,38 @@ export async function processPendingAccountDeletions(
             targetType: 'FileAttachment',
             targetId: attachment.id,
             metadata: { outcome },
+          },
+        });
+      }
+      if (candidate.avatarStorageKey) {
+        let avatarOutcome: 'DELETED' | 'FAILED' | 'UNAVAILABLE';
+        if (!storage) {
+          avatarOutcome = 'UNAVAILABLE';
+        } else {
+          try {
+            await storage.delete(candidate.avatarStorageKey);
+            avatarOutcome = 'DELETED';
+          } catch (error) {
+            avatarOutcome =
+              isAppError(error) && error.code === 'OBJECT_STORAGE_UNAVAILABLE'
+                ? 'UNAVAILABLE'
+                : 'FAILED';
+          }
+        }
+        if (avatarOutcome !== 'DELETED') {
+          storageFailed = true;
+          storageFailureReason =
+            avatarOutcome === 'UNAVAILABLE' ? 'STORAGE_UNAVAILABLE' : 'STORAGE_FAILED';
+        }
+        await tx.auditLog.create({
+          data: {
+            action:
+              avatarOutcome === 'DELETED'
+                ? 'auth.account_deletion_avatar_deleted'
+                : 'auth.account_deletion_avatar_deletion_failed',
+            targetType: 'UserProfile',
+            targetId: candidate.id,
+            metadata: { outcome: avatarOutcome },
           },
         });
       }
@@ -245,6 +294,10 @@ export async function processPendingAccountDeletions(
           deletedAt,
           emailVerifiedAt: null,
           lastLoginAt: null,
+          twoFactorSecretEncrypted: null,
+          twoFactorEnabled: false,
+          twoFactorVerifiedAt: null,
+          twoFactorSetupExpiresAt: null,
         },
       });
 

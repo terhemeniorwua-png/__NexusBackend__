@@ -166,6 +166,11 @@ export function createAuthController({
       const body = req.validated?.body as LoginInput;
       const result = await service.login(body, context(req));
 
+      if ('twoFactorRequired' in result) {
+        sendSuccess(res, result);
+        return;
+      }
+
       setSessionCookies(res, result.refreshToken, result.csrfToken);
 
       sendSuccess(res, {
@@ -176,6 +181,67 @@ export function createAuthController({
         csrfToken: result.csrfToken,
         session: result.session,
       });
+    },
+
+    async twoFactorChallenge(req: Request, res: Response): Promise<void> {
+      const body = req.validated?.body as {
+        challengeToken: string;
+        code?: string;
+        recoveryCode?: string;
+      };
+      const result = await service.twoFactor.completeLogin(body, context(req));
+      setSessionCookies(res, result.refreshToken, result.csrfToken);
+      sendSuccess(res, {
+        user: result.user,
+        accessToken: result.accessToken,
+        tokenType: result.tokenType,
+        expiresIn: result.expiresIn,
+        csrfToken: result.csrfToken,
+        session: result.session,
+      });
+    },
+
+    async beginTwoFactorSetup(req: Request, res: Response): Promise<void> {
+      const userId = req.auth?.userId;
+      if (!userId)
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      sendSuccess(res, await service.twoFactor.beginSetup(userId, context(req)));
+    },
+
+    async confirmTwoFactorSetup(req: Request, res: Response): Promise<void> {
+      const userId = req.auth?.userId;
+      if (!userId)
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      const body = req.validated?.body as { code: string };
+      sendSuccess(res, await service.twoFactor.confirmSetup(userId, body.code, context(req)));
+    },
+
+    async disableTwoFactor(req: Request, res: Response): Promise<void> {
+      const userId = req.auth?.userId;
+      if (!userId)
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      const body = req.validated?.body as {
+        currentPassword: string;
+        code?: string;
+        recoveryCode?: string;
+      };
+      await service.twoFactor.disable({ ...body, userId }, context(req));
+      sendSuccess(res, { twoFactorEnabled: false });
+    },
+
+    async regenerateRecoveryCodes(req: Request, res: Response): Promise<void> {
+      const userId = req.auth?.userId;
+      if (!userId)
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      const body = req.validated?.body as {
+        currentPassword?: string;
+        code?: string;
+        recoveryCode?: string;
+      };
+      sendSuccess(
+        res,
+        await service.twoFactor.regenerateRecoveryCodes({ ...body, userId }, context(req)),
+      );
     },
 
     async refresh(req: Request, res: Response): Promise<void> {

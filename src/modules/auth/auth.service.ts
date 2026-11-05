@@ -33,6 +33,7 @@ import type {
   RequestContext,
   SessionSummary,
 } from './auth.types';
+import { createTwoFactorService, type TwoFactorService } from './two-factor.service';
 import type {
   AccountDeleteInput,
   EmailChangeInput,
@@ -71,7 +72,13 @@ export interface AuthService {
   register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }>;
   verifyEmail(input: { token: string }, ctx: RequestContext): Promise<{ user: PublicUser }>;
   resendVerification(input: { email: string }, ctx: RequestContext): Promise<void>;
-  login(input: LoginInput, ctx: RequestContext): Promise<AuthenticationResult>;
+  login(
+    input: LoginInput,
+    ctx: RequestContext,
+  ): Promise<
+    AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
+  >;
+  twoFactor: TwoFactorService;
   refresh(input: { refreshToken: string }, ctx: RequestContext): Promise<AuthenticationResult>;
   logout(input: { sessionId: string }, ctx: RequestContext): Promise<void>;
   logoutAll(input: { userId: string }, ctx: RequestContext): Promise<number>;
@@ -179,6 +186,31 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     };
   }
 
+  async function finishTwoFactorLogin(
+    user: User,
+    ctx: RequestContext,
+  ): Promise<AuthenticationResult> {
+    const { session, refreshToken } = await createSession(client, {
+      userId: user.id,
+      ttlSeconds: config.refreshTokenTtlSeconds,
+      userAgent: ctx.userAgent,
+      ip: ctx.ip,
+    });
+    await client.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    await recordSecurityEvent(client, {
+      action: SecurityAction.LoginSucceeded,
+      targetType: 'Session',
+      targetId: session.id,
+      actorId: user.id,
+      metadata: { userId: user.id, status: user.status, twoFactor: true },
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+    return authenticateSession(session, user, refreshToken);
+  }
+
+  const twoFactor = createTwoFactorService(config, client, finishTwoFactorLogin);
+
   function assertUsableAccount(user: User): void {
     if (user.deletedAt) {
       throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deleted');
@@ -210,6 +242,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
   }
 
   return {
+    twoFactor,
     async register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
       const existing = await findUserByEmail(input.email);
 
@@ -374,7 +407,12 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       });
     },
 
-    async login(input: LoginInput, ctx: RequestContext): Promise<AuthenticationResult> {
+    async login(
+      input: LoginInput,
+      ctx: RequestContext,
+    ): Promise<
+      AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
+    > {
       const user = await findUserByEmail(input.email);
 
       if (!user) {
@@ -416,6 +454,10 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       assertUsableAccount(user);
+
+      if (user.twoFactorEnabled) {
+        return twoFactor.issueChallenge(user);
+      }
 
       const { session, refreshToken } = await createSession(client, {
         userId: user.id,
@@ -459,6 +501,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           userId: outcome.session.userId,
           reason: 'REFRESH_TOKEN_REUSE',
         });
+        await twoFactor.revokeChallenges(outcome.session.userId);
 
         await recordSecurityEvent(client, {
           action: SecurityAction.SessionReuseDetected,
@@ -512,6 +555,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     },
 
     async logoutAll(input: { userId: string }, ctx: RequestContext): Promise<number> {
+      await twoFactor.revokeChallenges(input.userId);
       const revoked = await revokeAllSessions(client, {
         userId: input.userId,
         reason: 'LOGOUT_ALL',
@@ -616,6 +660,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       assertPasswordLength(input.password);
 
+      await twoFactor.revokeChallenges(record.userId);
+
       const passwordHash = await hashPassword(input.password, config.bcryptSaltRounds);
 
       await client.user.update({
@@ -667,6 +713,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       assertPasswordLength(input.newPassword);
 
+      await twoFactor.revokeChallenges(user.id);
+
       const passwordHash = await hashPassword(input.newPassword, config.bcryptSaltRounds);
 
       await client.user.update({
@@ -716,6 +764,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       await requirePassword(user, input.currentPassword);
+
+      await twoFactor.revokeChallenges(user.id);
 
       if (input.email === user.email) {
         throw new AppError(
@@ -873,6 +923,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       await requirePassword(user, input.currentPassword);
 
+      await twoFactor.revokeChallenges(user.id);
+
       const deactivatedAt = new Date();
 
       await client.$transaction(async (tx) => {
@@ -1027,7 +1079,10 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
               data: { status: 'ACTIVE', deletionSuspendedAt: null },
             });
             await tx.billingCancellation.updateMany({
-              where: { workspace: { ownerId: restored.id }, status: { in: ['PENDING', 'PROCESSING'] } },
+              where: {
+                workspace: { ownerId: restored.id },
+                status: { in: ['PENDING', 'PROCESSING'] },
+              },
               data: { status: 'CANCELLED', lastError: null },
             });
           }
@@ -1098,6 +1153,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       await requirePassword(user, input.currentPassword);
+
+      await twoFactor.revokeChallenges(user.id);
 
       if (input.confirmation.toLowerCase() !== user.email.toLowerCase()) {
         throw new AppError(
@@ -1244,7 +1301,6 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
             },
           });
         }
-
       });
 
       await recordSecurityEvent(client, {
