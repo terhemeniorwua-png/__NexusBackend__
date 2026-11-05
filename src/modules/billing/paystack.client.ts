@@ -132,3 +132,51 @@ export function verifyPaystackSignature(
   }
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
+
+/** Verify Paystack's timestamped signature over the unmodified webhook bytes. */
+export function verifyPaystackWebhookSignature(
+  rawBody: Buffer,
+  header: string | undefined,
+  secrets: readonly string[],
+  nowSeconds = Math.floor(Date.now() / 1_000),
+): boolean {
+  if (!Buffer.isBuffer(rawBody) || !header || secrets.length === 0) return false;
+
+  let timestamp: number | null = null;
+  const signatures: Array<{ keyId: string; digest: string }> = [];
+  for (const part of header.split(',')) {
+    const separator = part.indexOf('=');
+    if (separator < 0) continue;
+    const key = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (key === 't') {
+      if (timestamp !== null || !/^\d+$/.test(value)) return false;
+      timestamp = Number(value);
+      if (!Number.isSafeInteger(timestamp)) return false;
+    } else if (key === 'v1') {
+      const delimiter = value.indexOf(':');
+      if (delimiter > 0) {
+        signatures.push({ keyId: value.slice(0, delimiter), digest: value.slice(delimiter + 1) });
+      }
+    }
+  }
+
+  if (timestamp === null || Math.abs(nowSeconds - timestamp) > 300 || signatures.length === 0) {
+    return false;
+  }
+
+  for (const secret of secrets) {
+    if (!secret) continue;
+    const expected = createHmac('sha512', secret).update(`${timestamp}.`).update(rawBody).digest();
+    for (const signature of signatures) {
+      if (
+        !/^whk_[A-Za-z0-9_-]+$/.test(signature.keyId) ||
+        !/^[0-9a-f]{128}$/.test(signature.digest)
+      )
+        continue;
+      const supplied = Buffer.from(signature.digest, 'hex');
+      if (supplied.length === expected.length && timingSafeEqual(expected, supplied)) return true;
+    }
+  }
+  return false;
+}

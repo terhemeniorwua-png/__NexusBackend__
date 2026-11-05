@@ -5,6 +5,7 @@ import type { AppConfig } from '../src/config/env';
 import {
   createPaystackClient,
   verifyPaystackSignature,
+  verifyPaystackWebhookSignature,
 } from '../src/modules/billing/paystack.client';
 
 const config = {
@@ -69,6 +70,35 @@ test('webhook signature validation uses HMAC SHA-512 over the exact raw bytes', 
   assert.equal(verifyPaystackSignature(body, tamperedSignature, secret), false);
   assert.equal(verifyPaystackSignature(body, undefined, secret), false);
   assert.equal(verifyPaystackSignature(body, signature, ''), false);
+});
+
+test('timestamped Paystack webhook signatures verify with current or previous signing secret', () => {
+  const body = Buffer.from('{"event":"charge.success"}');
+  const timestamp = 1_800_000_000;
+  const secret = 'whsec_test_secret';
+  const digest = createHmac('sha512', secret).update(`${timestamp}.`).update(body).digest('hex');
+  const header = `t=${timestamp},v1=whk_test_123:${digest}`;
+
+  assert.equal(verifyPaystackWebhookSignature(body, header, [secret], timestamp), true);
+  assert.equal(
+    verifyPaystackWebhookSignature(body, header, ['old-secret', secret], timestamp),
+    true,
+  );
+  assert.equal(verifyPaystackWebhookSignature(body, header, ['wrong-secret'], timestamp), false);
+  assert.equal(verifyPaystackWebhookSignature(body, header, [secret], timestamp + 301), false);
+  assert.equal(
+    verifyPaystackWebhookSignature(
+      Buffer.from('{"event":"charge.failed"}'),
+      header,
+      [secret],
+      timestamp,
+    ),
+    false,
+  );
+  assert.equal(
+    verifyPaystackWebhookSignature(body, `t=${timestamp},v1=whk_test_123:bad`, [secret], timestamp),
+    false,
+  );
 });
 
 test('provider failures return safe application errors without exposing request credentials', async () => {

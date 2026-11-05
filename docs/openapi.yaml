@@ -52,6 +52,7 @@ paths:
       operationId: listBillingPlans
       summary: List the available billing plans
       description: Returns the server-owned USD plan prices and included/additional seat pricing.
+      security: []
       responses:
         '200':
           description: Available billing plans.
@@ -765,6 +766,7 @@ paths:
       operationId: getLiveness
       summary: Application liveness
       description: Returns 200 when the HTTP process is running.
+      security: []
       responses:
         '200':
           description: The application process is alive.
@@ -780,6 +782,7 @@ paths:
       tags: [Health]
       operationId: getLivenessAlias
       summary: Application liveness
+      security: []
       responses:
         '200':
           description: The application process is alive.
@@ -796,6 +799,7 @@ paths:
       operationId: getReadiness
       summary: Dependency readiness
       description: Checks PostgreSQL and Redis with configured timeouts.
+      security: []
       responses:
         '200':
           description: All required dependencies are available.
@@ -820,6 +824,7 @@ paths:
       tags: [Authentication]
       operationId: register
       summary: Create an account
+      security: []
       description: |
         Creates a `PENDING_VERIFICATION` account and sends a verification link.
         The password is never echoed back and is never included in an email.
@@ -859,6 +864,7 @@ paths:
       tags: [Authentication]
       operationId: verifyEmail
       summary: Activate an account with an emailed token
+      security: []
       requestBody:
         required: true
         content:
@@ -883,6 +889,7 @@ paths:
       tags: [Authentication]
       operationId: resendVerification
       summary: Request a new verification link
+      security: []
       description: The response is identical whether or not the address is registered.
       requestBody:
         required: true
@@ -902,6 +909,7 @@ paths:
       tags: [Authentication]
       operationId: login
       summary: Start a session
+      security: []
       requestBody:
         required: true
         content:
@@ -942,16 +950,19 @@ paths:
     post:
       tags: [Authentication]
       operationId: reactivateAccount
-      summary: Reactivate a deactivated account or cancel pending deletion
+      summary: Reactivate an account or cancel scheduled deletion
+      security: []
       description: |
-        Self-service recovery for a `DEACTIVATED` account or cancellation of a
-        `PENDING_DELETION` request before its scheduled deletion date.
-        The email address and password are required, and the route is rate
-        limited like sign-in. Reactivation never creates a session: the account
+        Self-service reactivation is available for a `DEACTIVATED` account or
+        to cancel a `PENDING_DELETION` account before its 30-day recovery period
+        ends. Once the scheduled deadline has passed, recovery is rejected. The
+        email address and password are required, and the route is rate limited
+        like sign-in. Reactivation never creates a session: the account
         must sign in again. An account that had not verified its email address
         returns to `PENDING_VERIFICATION` and a new verification email is sent.
-        Recovery clears the deletion schedule but never restores revoked
-        sessions. Permanently deleted and suspended accounts cannot be recovered.
+        Reactivation never creates a session and never restores revoked
+        sessions. The user must sign in again. Permanently deleted and suspended
+        accounts cannot be recovered.
       requestBody:
         required: true
         content:
@@ -989,7 +1000,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The account is already active, not recoverable, or its 30-day recovery period has ended.
+          description: The account is active, the recovery period has expired, or the account cannot be reactivated.
           content:
             application/json:
               schema:
@@ -1005,6 +1016,7 @@ paths:
       tags: [Authentication]
       operationId: refreshSession
       summary: Rotate the session
+      security: []
       description: |
         The refresh token is read from the `nexus_rt` cookie or from the
         request body. A cookie authenticated request must also send the
@@ -1041,6 +1053,7 @@ paths:
       tags: [Authentication]
       operationId: logout
       summary: End the current session
+      security: []
       parameters:
         - $ref: '#/components/parameters/CsrfHeader'
       requestBody:
@@ -1126,6 +1139,7 @@ paths:
       tags: [Authentication]
       operationId: requestPasswordReset
       summary: Request a password reset link
+      security: []
       description: The response is identical whether or not the address is registered.
       requestBody:
         required: true
@@ -1151,6 +1165,7 @@ paths:
       tags: [Authentication]
       operationId: resetPassword
       summary: Set a new password with a reset token
+      security: []
       description: Every existing session of the account is revoked.
       requestBody:
         required: true
@@ -1236,6 +1251,7 @@ paths:
       tags: [Authentication]
       operationId: confirmEmailChange
       summary: Confirm an email address change
+      security: []
       requestBody:
         required: true
         content:
@@ -1285,12 +1301,14 @@ paths:
       description: |
         Requires the current password and exact account email confirmation.
         The account enters `PENDING_DELETION`, sessions and authentication
-        tokens are revoked, and the account plus personal workspace remain
-        intact for 30 days. The account can be recovered with email and
-        password through `/auth/reactivate` before the scheduled date. The
-        response includes the scheduled date. Company/Institution ownership
-        must be transferred, and a final organization administrator must be
-        replaced, before deletion can be requested.
+        tokens are revoked immediately, and final deletion is scheduled exactly
+        30 days later. The user can recover through `/auth/reactivate` before
+        the deadline and then establish a new session. Owned workspaces and
+        shared content are retained; workspaces without an accepted transfer
+        are suspended. Subscription cancellation is scheduled for the deadline.
+        Billing responsibility requires separate explicit acceptance, and
+        outstanding invoices remain payable. Financial retention periods need
+        legal/accounting review.
       security:
         - bearerAuth: []
       requestBody:
@@ -1301,7 +1319,7 @@ paths:
               $ref: '#/components/schemas/AccountDeleteRequest'
       responses:
         '202':
-          description: Deletion was scheduled and the current session was signed out.
+          description: Deletion began and the current session was signed out. Cleanup runs asynchronously; the timestamp is the processing eligibility time.
           content:
             application/json:
               schema:
@@ -1325,7 +1343,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The user still owns a shared workspace, their personal workspace has collaborators, or they are the final active organization administrator.
+          description: The account could not be scheduled because an account or workspace lifecycle constraint failed.
           content:
             application/json:
               schema:
@@ -1405,6 +1423,7 @@ paths:
       tags: [Webhooks]
       operationId: receiveEmailWebhook
       summary: Provider delivery, bounce and complaint events
+      security: []
       description: |
         Public endpoint called by the email provider. The request is
         authenticated by an HMAC signature over the raw request body, not by a
@@ -1489,6 +1508,7 @@ paths:
       tags: [Webhooks]
       operationId: receiveEmailWebhookWithToken
       summary: Provider events authenticated with the token of the URL
+      security: []
       description: |
         The same endpoint for providers that do not sign their events, Brevo
         among them. The token is the shared secret of the URL and is compared
@@ -1546,15 +1566,24 @@ paths:
       tags: [Webhooks, Billing]
       operationId: receivePaystackWebhook
       summary: Receive a signed Paystack event
+      security: []
       description: |
-        The endpoint verifies `x-paystack-signature` as an HMAC-SHA512 digest
-        of the exact raw request body. It is mounted before the JSON body
-        parser. Repeated payloads are deduplicated by their SHA-256 event key.
+        The endpoint verifies Paystack's timestamped `Paystack-Signature` as
+        HMAC-SHA512 over the timestamp and exact raw request body using a
+        server-only webhook signing secret. During header migration it also
+        accepts the legacy `x-paystack-signature` when the new header is absent.
+        Repeated payloads are deduplicated by their SHA-256 event key.
       parameters:
-        - name: x-paystack-signature
+        - name: Paystack-Signature
           in: header
           required: true
-          description: HMAC-SHA512 signature of the raw request body.
+          description: Timestamped Paystack webhook signature.
+          schema:
+            type: string
+        - name: x-paystack-signature
+          in: header
+          required: false
+          description: Legacy migration fallback; do not configure for new integrations.
           schema:
             type: string
       requestBody:
@@ -1949,8 +1978,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CompanyProfileResponse'
-        '403': { description: Workspace access denied, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '404': { description: Not a company workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Workspace access denied,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+        '404':
+          {
+            description: Not a company workspace,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
     patch:
       tags: [Workspaces]
       operationId: updateCompanyProfile
@@ -1969,8 +2008,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CompanyProfileResponse'
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '404': { description: Not a company workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+        '404':
+          {
+            description: Not a company workspace,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
   /workspaces/{workspaceId}/institution-profile:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -1986,8 +2035,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InstitutionProfileResponse'
-        '403': { description: Workspace access denied, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '404': { description: Not an institution workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Workspace access denied,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+        '404':
+          {
+            description: Not an institution workspace,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
     patch:
       tags: [Workspaces]
       operationId: updateInstitutionProfile
@@ -2006,8 +2065,120 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InstitutionProfileResponse'
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '404': { description: Not an institution workspace, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+        '404':
+          {
+            description: Not an institution workspace,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+  /workspaces/{workspaceId}/company-profile/logo:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Organizations]
+      operationId: getCompanyLogo
+      summary: Read the private company logo
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Private image bytes. The media type matches the stored PNG, JPEG, or WebP image.
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        '403': { description: Active company membership required. }
+        '404': { description: Company logo not found. }
+        '503': { description: Private object storage is not configured. }
+    post:
+      tags: [Organizations]
+      operationId: uploadCompanyLogo
+      summary: Upload or replace the private company logo
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          image/png: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        '200':
+          description: Logo stored; the response contains its private storage reference.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationLogoResponse' }
+        '400': { description: 'Invalid, mismatched, empty, or oversized logo.' }
+        '403': { description: Company owner or administrator access required. }
+        '503': { description: Private object storage is not configured. }
+    delete:
+      tags: [Organizations]
+      operationId: deleteCompanyLogo
+      summary: Remove the private company logo
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Logo reference cleared and private object cleanup completed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationLogoResponse' }
+        '403': { description: Company owner or administrator access required. }
+        '502': { description: Logo reference cleared but private object cleanup failed. }
+  /workspaces/{workspaceId}/institution-profile/logo:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Organizations]
+      operationId: getInstitutionLogo
+      summary: Read the private institution logo
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Private image bytes. The media type matches the stored PNG, JPEG, or WebP image.
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        '403': { description: Active institution membership required. }
+        '404': { description: Institution logo not found. }
+        '503': { description: Private object storage is not configured. }
+    post:
+      tags: [Organizations]
+      operationId: uploadInstitutionLogo
+      summary: Upload or replace the private institution logo
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          image/png: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        '200':
+          description: Logo stored; the response contains its private storage reference.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationLogoResponse' }
+        '400': { description: 'Invalid, mismatched, empty, or oversized logo.' }
+        '403': { description: Institution owner or administrator access required. }
+        '503': { description: Private object storage is not configured. }
+    delete:
+      tags: [Organizations]
+      operationId: deleteInstitutionLogo
+      summary: Remove the private institution logo
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Logo reference cleared and private object cleanup completed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationLogoResponse' }
+        '403': { description: Institution owner or administrator access required. }
+        '502': { description: Logo reference cleared but private object cleanup failed. }
   /workspaces/{workspaceId}/notification-preferences:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2022,7 +2193,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/NotificationPreferencesResponse' }
-        '403': { description: Active workspace membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Active workspace membership required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
     patch:
       tags: [Workspaces]
       operationId: updateNotificationPreferences
@@ -2040,7 +2216,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/NotificationPreferencesResponse' }
-        '403': { description: Active workspace membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Active workspace membership required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
   /workspaces/{workspaceId}/institution-groups:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2078,7 +2259,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InstitutionGroupResponse' }
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
   /workspaces/{workspaceId}/institution-groups/{groupId}:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2102,8 +2288,18 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InstitutionGroupResponse' }
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '404': { description: Group not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+        '404':
+          {
+            description: Group not found,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
     delete:
       tags: [Workspaces]
       operationId: deleteInstitutionGroup
@@ -2125,8 +2321,18 @@ paths:
                     properties:
                       id: { type: string, format: uuid }
                       deleted: { type: boolean, const: true }
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
-        '404': { description: Group not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+        '404':
+          {
+            description: Group not found,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
   /workspaces/{workspaceId}/institution-groups/{groupId}/members:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2152,7 +2358,12 @@ paths:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/InstitutionGroupMember' }
-        '403': { description: Group membership required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Group membership required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
     post:
       tags: [Workspaces]
       operationId: addInstitutionGroupMember
@@ -2169,7 +2380,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InstitutionGroupMemberResponse' }
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
   /workspaces/{workspaceId}/institution-groups/{groupId}/members/{userId}:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2197,7 +2413,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InstitutionGroupMemberResponse' }
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
     delete:
       tags: [Workspaces]
       operationId: removeInstitutionGroupMember
@@ -2219,7 +2440,12 @@ paths:
                     properties:
                       userId: { type: string, format: uuid }
                       removed: { type: boolean, const: true }
-        '403': { description: Owner or administrator access required, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '403':
+          {
+            description: Owner or administrator access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
   /workspaces/{workspaceId}/departments:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -2517,13 +2743,15 @@ paths:
       operationId: transferWorkspaceOwnership
       summary: Transfer workspace ownership
       description: |
-        Transfers ownership of the workspace to an existing member.
+        Starts a pending ownership transfer to an existing member. The current
+        owner must initiate; the recipient must explicitly accept. Subscription
+        billing responsibility is accepted separately.
 
         Only the current owner may call this endpoint. The new owner must
-        already be a member of the workspace. The previous owner is
-        automatically assigned the role specified in `newOwnerRole`
-        (default `PROJECT_MANAGER`). Exactly one owner is maintained at all
-        times; the transfer is applied atomically.
+        already be an active member. The workspace owner does not change until
+        recipient acceptance. If an active subscription exists, the workspace
+        remains suspended until the new owner separately accepts billing
+        responsibility.
 
         Error codes:
         - `TRANSFER_TO_SELF` — the caller is already the owner.
@@ -2548,11 +2776,11 @@ paths:
               additionalProperties: false
       responses:
         '200':
-          description: Ownership was transferred. Returns the workspace with the updated ownerId.
+          description: Transfer request created; ownership is unchanged until recipient acceptance.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WorkspaceResponse'
+                $ref: '#/components/schemas/OwnershipTransferInitiationResponse'
         '400':
           description: Invalid request body or the caller tried to transfer to themselves.
           content:
@@ -2567,6 +2795,441 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: The workspace does not exist or the target user is not a member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /privacy-requests:
+    post:
+      tags: [Users]
+      operationId: submitPrivacyRequest
+      summary: Submit a privacy request
+      description: Requires an active, email-verified account. Redaction requests currently target task comments; the backend has no message or channel model yet.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePrivacyRequest'
+      responses:
+        '201':
+          description: Request submitted for review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivacyRequestResponse'
+        '400':
+          description: Request fields or redaction target are invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: A verified active account is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /privacy-requests/mine:
+    get:
+      tags: [Users]
+      operationId: listMyPrivacyRequests
+      summary: List the caller's privacy requests
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/PrivacyRequestStatus' }
+      responses:
+        '200':
+          description: Caller-owned requests only.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivacyRequestListResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: An active account is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /privacy-requests/mine/{requestId}:
+    get:
+      tags: [Users]
+      operationId: getMyPrivacyRequest
+      summary: Read the caller's privacy request and outcome
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Request owned by the authenticated caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestResponse' }
+        '404':
+          description: Request does not exist or belongs to another user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /privacy-requests/review:
+    get:
+      tags: [Users]
+      operationId: listPrivacyRequestsForReview
+      summary: List privacy requests for authorized platform reviewers
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/PrivacyRequestStatus' }
+      responses:
+        '200':
+          description: Platform-admin review queue.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestListResponse' }
+        '403':
+          description: An active platform privacy reviewer is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /privacy-requests/{requestId}/decision:
+    post:
+      tags: [Users]
+      operationId: decidePrivacyRequest
+      summary: Approve or reject a privacy request
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              additionalProperties: false
+              properties:
+                decision: { type: string, enum: [APPROVE, REJECT] }
+                note: { type: string, maxLength: 2000 }
+      responses:
+        '200':
+          description: Decision recorded and audited.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestResponse' }
+        '403':
+          description: An active platform privacy reviewer is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: Request has already been decided.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /privacy-requests/{requestId}/review:
+    post:
+      tags: [Users]
+      operationId: beginPrivacyRequestReview
+      summary: Claim a submitted privacy request for review
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Request moved to IN_REVIEW and assigned to the reviewer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestResponse' }
+        '403':
+          description: An active platform privacy reviewer is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: Request is no longer submitted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /privacy-requests/{requestId}/complete:
+    post:
+      tags: [Users]
+      operationId: completePrivacyRequest
+      summary: Record completion of an approved non-redaction privacy request
+      description: The authorized reviewer records the verified outcome after carrying out the approved access, correction, or erasure work.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              additionalProperties: false
+              properties:
+                outcome: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '200':
+          description: Completion outcome recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestResponse' }
+        '403':
+          description: An active platform privacy reviewer is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: Request is not an approved non-redaction request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /privacy-requests/{requestId}/redactions:
+    post:
+      tags: [Users]
+      operationId: redactApprovedCommentText
+      summary: Replace approved personal text in a comment
+      description: Only an approved redaction request targeting a task comment can be applied. Unmatched text remains unchanged; the transaction completes the request and records a restricted audit event.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [matchText, replacementText]
+              additionalProperties: false
+              properties:
+                matchText: { type: string, minLength: 1, maxLength: 4000 }
+                replacementText: { type: string, maxLength: 4000 }
+      responses:
+        '200':
+          description: Approved target text replaced and request completed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacyRequestResponse' }
+        '403':
+          description: An active platform privacy reviewer is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          description: Request is not approved or the selected text is no longer present.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /workspaces/owner-transfers/incoming:
+    get:
+      tags: [Workspaces]
+      operationId: listIncomingOwnershipTransfers
+      summary: List pending ownership transfers addressed to the caller
+      description: Returns only unexpired transfers whose caller remains an active workspace member and whose initiator still owns the workspace.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Incoming transfer page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncomingOwnershipTransfersResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/owner-transfers/{transferId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: transferId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Workspaces]
+      operationId: acceptWorkspaceOwnershipTransfer
+      summary: Accept a pending workspace ownership transfer
+      description: The intended active workspace member accepts. An active subscription leaves the workspace suspended until billing responsibility is separately accepted.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Ownership accepted; billing acceptance may still be required.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: object
+                    required: [workspaceId, billingAcceptanceRequired]
+                    properties:
+                      workspaceId: { type: string, format: uuid }
+                      billingAcceptanceRequired: { type: boolean }
+        '403':
+          description: The caller is not the intended active recipient.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No pending transfer was found for the recipient.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The transfer expired or the owner, recipient, or workspace state changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/owner-transfers/{transferId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: transferId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Workspaces]
+      operationId: rejectWorkspaceOwnershipTransfer
+      summary: Reject a pending ownership transfer
+      description: Only the intended active recipient can reject a matching unexpired transfer. Rejection never accepts billing responsibility.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Transfer rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnershipTransferDecisionResponse'
+        '404':
+          description: No matching pending transfer was found for the caller and workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The transfer expired and was recorded as expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/owner-transfers/{transferId}/billing-acceptance:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - name: transferId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Workspaces]
+      operationId: acceptWorkspaceBillingResponsibility
+      summary: Explicitly accept workspace subscription billing responsibility
+      description: Only the new owner of an accepted transfer can accept billing responsibility. This action is separate from ownership acceptance.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Billing responsibility was recorded and the workspace restored when applicable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: object
+                    required: [workspaceId]
+                    properties:
+                      workspaceId: { type: string, format: uuid }
+        '403':
+          description: The caller is not the new workspace owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No accepted transfer was found for the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Billing acceptance is not required or the transfer expired.
           content:
             application/json:
               schema:
@@ -2645,6 +3308,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{workspaceId}/projects/{projectId}/organizational-access:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    patch:
+      tags: [Projects]
+      operationId: updateProjectOrganizationalAccess
+      summary: Associate a project with a same-workspace team and department
+      description: This Phase 7 relationship operation does not expose project CRUD. Department-bound teams require the project to use the same department. Team and department memberships are checked dynamically by the authorization policy.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectOrganizationAccessRequest'
+      responses:
+        '200':
+          description: Project organizational relationships updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectOrganizationAccessResponse'
+        '403':
+          {
+            description: Project or organizational manager access required,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
+        '404':
+          description: 'Project, team, or department is not available in this workspace.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          {
+            description: Team and project department relationships are inconsistent,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } },
+          }
 
   /workspaces/{workspaceId}/teams/{teamId}:
     parameters:
@@ -3180,6 +3885,7 @@ paths:
       tags: [Invitations]
       operationId: getInvitation
       summary: The invitation behind the link
+      security: []
       description: |
         The token in the URL is the secret of the invitation, so the preview
         needs no session. The address is masked, because a forwarded mail
@@ -3347,6 +4053,14 @@ components:
       in: path
       required: true
       description: The workspace team.
+      schema:
+        type: string
+        format: uuid
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      description: The workspace project.
       schema:
         type: string
         format: uuid
@@ -3582,7 +4296,7 @@ components:
           const: true
         data:
           type: object
-          required: [status, scheduledDeletionAt, recoveryMethod]
+          required: [status, scheduledDeletionAt]
           properties:
             status:
               type: string
@@ -3590,8 +4304,6 @@ components:
             scheduledDeletionAt:
               type: string
               format: date-time
-            recoveryMethod:
-              type: string
     UpdateProfileRequest:
       type: object
       additionalProperties: false
@@ -3815,6 +4527,9 @@ components:
     WorkspaceType:
       type: string
       enum: [INDIVIDUAL, COMPANY, INSTITUTION]
+    WorkspaceStatus:
+      type: string
+      enum: [ACTIVE, ARCHIVED, SUSPENDED]
     WorkspaceVisibility:
       type: string
       enum: [PRIVATE, PUBLIC]
@@ -3857,8 +4572,7 @@ components:
         visibility:
           $ref: '#/components/schemas/WorkspaceVisibility'
         status:
-          type: string
-          enum: [ACTIVE, ARCHIVED]
+          $ref: '#/components/schemas/WorkspaceStatus'
         ownerId:
           type: string
           format: uuid
@@ -3892,6 +4606,107 @@ components:
           const: true
         data:
           $ref: '#/components/schemas/Workspace'
+    OwnershipTransferInitiationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [transferId, status]
+          properties:
+            transferId: { type: string, format: uuid }
+            status: { type: string, const: PENDING }
+    OwnershipTransferDecisionResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [workspaceId, status]
+          properties:
+            workspaceId: { type: string, format: uuid }
+            status: { type: string, const: REJECTED }
+    IncomingOwnershipTransfersResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [items, limit, offset]
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                required: [id, workspaceId, status, createdAt, expiresAt, acceptedAt, billingAcceptedAt, workspace]
+                properties:
+                  id: { type: string, format: uuid }
+                  workspaceId: { type: string, format: uuid }
+                  status: { type: string, const: PENDING }
+                  createdAt: { type: string, format: date-time }
+                  expiresAt: { type: [string, 'null'], format: date-time }
+                  acceptedAt: { type: [string, 'null'], format: date-time }
+                  billingAcceptedAt: { type: [string, 'null'], format: date-time }
+                  workspace:
+                    type: object
+                    required: [id, name, type, status]
+                    properties:
+                      id: { type: string, format: uuid }
+                      name: { type: string }
+                      type: { $ref: '#/components/schemas/WorkspaceType' }
+                      status: { $ref: '#/components/schemas/WorkspaceStatus' }
+            limit: { type: integer }
+            offset: { type: integer }
+    PrivacyRequestType:
+      type: string
+      enum: [ACCESS, CORRECTION, ERASURE, REDACTION]
+    PrivacyRequestStatus:
+      type: string
+      enum: [SUBMITTED, IN_REVIEW, APPROVED, REJECTED, COMPLETED]
+    CreatePrivacyRequest:
+      type: object
+      required: [type]
+      additionalProperties: false
+      properties:
+        type: { $ref: '#/components/schemas/PrivacyRequestType' }
+        description: { type: string, minLength: 1, maxLength: 2000 }
+        targetType: { type: string, const: COMMENT }
+        targetId: { type: string, format: uuid }
+    PrivacyRequest:
+      type: object
+      required: [id, userId, type, status, description, targetType, targetId, reviewedById, decisionNote, outcome, decidedAt, completedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/PrivacyRequestType' }
+        status: { $ref: '#/components/schemas/PrivacyRequestStatus' }
+        description: { type: [string, 'null'] }
+        targetType: { type: [string, 'null'] }
+        targetId: { type: [string, 'null'], format: uuid }
+        reviewedById: { type: [string, 'null'], format: uuid }
+        decisionNote: { type: [string, 'null'] }
+        outcome: { type: [string, 'null'] }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PrivacyRequestResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/PrivacyRequest' }
+    PrivacyRequestListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/PrivacyRequest' }
     WorkspaceDeletedResponse:
       type: object
       required: [success, data]
@@ -3910,7 +4725,8 @@ components:
               type: boolean
     WorkspaceMember:
       type: object
-      required: [id, userId, name, email, status, role, organizationRole, membershipStatus, joinedAt, owner]
+      required:
+        [id, userId, name, email, status, role, organizationRole, membershipStatus, joinedAt, owner]
       properties:
         id:
           type: string
@@ -4141,7 +4957,25 @@ components:
             $ref: '#/components/schemas/DiscoveredWorkspace'
     JoinRequest:
       type: object
-      required: [id, workspaceId, workspaceName, userId, userName, userEmail, status, role, organizationRole, teamId, message, reviewedBy, reviewedAt, decisionNote, expiresAt, createdAt]
+      required:
+        [
+          id,
+          workspaceId,
+          workspaceName,
+          userId,
+          userName,
+          userEmail,
+          status,
+          role,
+          organizationRole,
+          teamId,
+          message,
+          reviewedBy,
+          reviewedAt,
+          decisionNote,
+          expiresAt,
+          createdAt,
+        ]
       properties:
         id:
           type: string
@@ -4400,13 +5234,29 @@ components:
       enum: [TEAM_LEAD, MEMBER]
     Team:
       type: object
-      required: [id, workspaceId, name, description, status, leadId, lead, memberCount, createdAt, updatedAt]
+      required:
+        [
+          id,
+          workspaceId,
+          departmentId,
+          name,
+          description,
+          status,
+          leadId,
+          lead,
+          memberCount,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id:
           type: string
           format: uuid
         workspaceId:
           type: string
+          format: uuid
+        departmentId:
+          type: [string, 'null']
           format: uuid
         name:
           type: string
@@ -4646,7 +5496,19 @@ components:
           format: date-time
     BillingSubscription:
       type: object
-      required: [id, plan, interval, currency, status, billableSeats, currentPeriodStart, currentPeriodEnd, cancelAtPeriodEnd, pendingChange]
+      required:
+        [
+          id,
+          plan,
+          interval,
+          currency,
+          status,
+          billableSeats,
+          currentPeriodStart,
+          currentPeriodEnd,
+          cancelAtPeriodEnd,
+          pendingChange,
+        ]
       properties:
         id:
           type: string
@@ -4709,7 +5571,17 @@ components:
           $ref: '#/components/schemas/WorkspaceBilling'
     BillingPayment:
       type: object
-      required: [providerReference, amountSubunit, currency, status, paidAt, periodStart, periodEnd, createdAt]
+      required:
+        [
+          providerReference,
+          amountSubunit,
+          currency,
+          status,
+          paidAt,
+          periodStart,
+          periodEnd,
+          createdAt,
+        ]
       properties:
         providerReference:
           type: string
@@ -4824,6 +5696,9 @@ components:
         description:
           type: [string, 'null']
           maxLength: 500
+        departmentId:
+          type: [string, 'null']
+          format: uuid
         leadId:
           type: [string, 'null']
           format: uuid
@@ -4839,6 +5714,33 @@ components:
         description:
           type: [string, 'null']
           maxLength: 500
+        departmentId:
+          type: [string, 'null']
+          format: uuid
+    UpdateProjectOrganizationAccessRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        teamId:
+          type: [string, 'null']
+          format: uuid
+        departmentId:
+          type: [string, 'null']
+          format: uuid
+    ProjectOrganizationAccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [id, workspaceId, teamId, departmentId]
+          properties:
+            id: { type: string, format: uuid }
+            workspaceId: { type: string, format: uuid }
+            teamId: { type: [string, 'null'], format: uuid }
+            departmentId: { type: [string, 'null'], format: uuid }
     AddTeamMemberRequest:
       type: object
       required: [userId]
@@ -4866,6 +5768,17 @@ components:
         leadId:
           type: [string, 'null']
           format: uuid
+    OrganizationLogoResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [logoReference]
+          properties:
+            logoReference: { type: [string, 'null'] }
+            deleted: { type: boolean }
     ProfileContactInformation:
       type: object
       maxProperties: 20
@@ -4873,7 +5786,22 @@ components:
         type: string
     CompanyProfile:
       type: object
-      required: [id, workspaceId, name, logoReference, description, industryCategory, officialWebsite, businessEmail, contactInformation, country, location, createdAt, updatedAt]
+      required:
+        [
+          id,
+          workspaceId,
+          name,
+          logoReference,
+          description,
+          industryCategory,
+          officialWebsite,
+          businessEmail,
+          contactInformation,
+          country,
+          location,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         workspaceId: { type: string, format: uuid }
@@ -4893,7 +5821,22 @@ components:
         updatedAt: { type: string, format: date-time }
     InstitutionProfile:
       type: object
-      required: [id, workspaceId, name, logoReference, description, institutionType, officialWebsite, institutionalEmail, contactInformation, country, location, createdAt, updatedAt]
+      required:
+        [
+          id,
+          workspaceId,
+          name,
+          logoReference,
+          description,
+          institutionType,
+          officialWebsite,
+          institutionalEmail,
+          contactInformation,
+          country,
+          location,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         workspaceId: { type: string, format: uuid }
@@ -4948,7 +5891,11 @@ components:
       properties:
         name: { type: string, minLength: 2, maxLength: 120 }
         description: { type: [string, 'null'], maxLength: 2000 }
-        institutionType: { type: [string, 'null'], enum: [UNIVERSITY, COLLEGE, SCHOOL, RESEARCH_INSTITUTION, OTHER, null] }
+        institutionType:
+          {
+            type: [string, 'null'],
+            enum: [UNIVERSITY, COLLEGE, SCHOOL, RESEARCH_INSTITUTION, OTHER, null],
+          }
         officialWebsite: { type: [string, 'null'], format: uri }
         institutionalEmail: { type: [string, 'null'], format: email }
         contactInformation:
@@ -4986,7 +5933,27 @@ components:
               - $ref: '#/components/schemas/NotificationPreference'
     NotificationType:
       type: string
-      enum: [MENTION, TASK_ASSIGNED, TASK_REASSIGNED, TASK_SUBMITTED, TASK_APPROVED, CHANGES_REQUESTED, COMMENT_REPLY, MEMBERSHIP_CHANGED, MEMBERSHIP_SUSPENDED, MEMBERSHIP_RESTORED, INVITATION_ACCEPTED, JOIN_REQUEST_RECEIVED, JOIN_REQUEST_APPROVED, JOIN_REQUEST_REJECTED, MEETING_INVITE, MEETING_RESCHEDULED, MEETING_CANCELLED, PROJECT_UPDATE]
+      enum:
+        [
+          MENTION,
+          TASK_ASSIGNED,
+          TASK_REASSIGNED,
+          TASK_SUBMITTED,
+          TASK_APPROVED,
+          CHANGES_REQUESTED,
+          COMMENT_REPLY,
+          MEMBERSHIP_CHANGED,
+          MEMBERSHIP_SUSPENDED,
+          MEMBERSHIP_RESTORED,
+          INVITATION_ACCEPTED,
+          JOIN_REQUEST_RECEIVED,
+          JOIN_REQUEST_APPROVED,
+          JOIN_REQUEST_REJECTED,
+          MEETING_INVITE,
+          MEETING_RESCHEDULED,
+          MEETING_CANCELLED,
+          PROJECT_UPDATE,
+        ]
     InstitutionGroup:
       type: object
       required: [id, workspaceId, name, description, leadId, createdAt, updatedAt, deletedAt]

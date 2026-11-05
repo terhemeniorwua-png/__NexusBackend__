@@ -258,6 +258,8 @@ const envSchema = z
     // Paystack hosted checkout uses only the server secret. USD remains
     // disabled until the merchant account has been approved for USD.
     PAYSTACK_SECRET_KEY: z.string().trim().default(''),
+    PAYSTACK_WEBHOOK_SECRET: z.string().trim().default(''),
+    PAYSTACK_WEBHOOK_PREVIOUS_SECRET: z.string().trim().default(''),
     PAYSTACK_ENCRYPTION_KEY: z
       .string()
       .trim()
@@ -270,6 +272,19 @@ const envSchema = z
     PAYSTACK_CALLBACK_URL: z.string().trim().default(''),
     PAYSTACK_API_URL: z.string().trim().url().default('https://api.paystack.co'),
     PAYSTACK_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(15_000),
+
+    // Private S3-compatible object storage used by organization branding.
+    OBJECT_STORAGE_ENDPOINT: z.string().trim().default(''),
+    OBJECT_STORAGE_BUCKET: z.string().trim().default(''),
+    OBJECT_STORAGE_REGION: z.string().trim().default('us-east-1'),
+    OBJECT_STORAGE_ACCESS_KEY_ID: z.string().trim().default(''),
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: z.string().default(''),
+    OBJECT_STORAGE_REQUEST_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(60_000)
+      .default(15_000),
   })
   .superRefine((values, ctx) => {
     if (values.AUTH_COOKIE_SAME_SITE === 'none' && !values.AUTH_COOKIE_SECURE) {
@@ -398,6 +413,62 @@ const envSchema = z
         });
       }
     }
+
+    const storageConfigured = Boolean(
+      values.OBJECT_STORAGE_ENDPOINT ||
+      values.OBJECT_STORAGE_BUCKET ||
+      values.OBJECT_STORAGE_ACCESS_KEY_ID ||
+      values.OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    );
+    if (storageConfigured) {
+      for (const field of [
+        'OBJECT_STORAGE_ENDPOINT',
+        'OBJECT_STORAGE_BUCKET',
+        'OBJECT_STORAGE_ACCESS_KEY_ID',
+        'OBJECT_STORAGE_SECRET_ACCESS_KEY',
+      ] as const) {
+        if (!values[field]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: `${field} is required when private object storage is configured`,
+          });
+        }
+      }
+    }
+
+    if (values.OBJECT_STORAGE_ENDPOINT) {
+      try {
+        const endpoint = new URL(values.OBJECT_STORAGE_ENDPOINT);
+        if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['OBJECT_STORAGE_ENDPOINT'],
+            message:
+              'OBJECT_STORAGE_ENDPOINT must not contain credentials, query parameters, or fragments',
+          });
+        }
+        if (
+          endpoint.protocol !== 'https:' &&
+          !(
+            values.NODE_ENV !== 'production' &&
+            ['localhost', '127.0.0.1'].includes(endpoint.hostname)
+          )
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['OBJECT_STORAGE_ENDPOINT'],
+            message: 'OBJECT_STORAGE_ENDPOINT must use https outside local development',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OBJECT_STORAGE_ENDPOINT'],
+          message: 'OBJECT_STORAGE_ENDPOINT must be an absolute URL',
+        });
+      }
+    }
   });
 
 export interface AppConfig {
@@ -475,11 +546,19 @@ export interface AppConfig {
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
   paystackSecretKey: string;
+  paystackWebhookSecret: string;
+  paystackWebhookPreviousSecret: string;
   paystackEncryptionKey: string;
   paystackUsdEnabled: boolean;
   paystackCallbackUrl: string;
   paystackApiUrl: string;
   paystackRequestTimeoutMs: number;
+  objectStorageEndpoint: string;
+  objectStorageBucket: string;
+  objectStorageRegion: string;
+  objectStorageAccessKeyId: string;
+  objectStorageSecretAccessKey: string;
+  objectStorageRequestTimeoutMs: number;
 }
 
 export class ConfigurationError extends Error {
@@ -601,11 +680,19 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailWorkerPollIntervalMs: values.EMAIL_WORKER_POLL_INTERVAL_MS,
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
     paystackSecretKey: values.PAYSTACK_SECRET_KEY,
+    paystackWebhookSecret: values.PAYSTACK_WEBHOOK_SECRET,
+    paystackWebhookPreviousSecret: values.PAYSTACK_WEBHOOK_PREVIOUS_SECRET,
     paystackEncryptionKey: values.PAYSTACK_ENCRYPTION_KEY,
     paystackUsdEnabled: values.PAYSTACK_USD_ENABLED,
     paystackCallbackUrl: values.PAYSTACK_CALLBACK_URL,
     paystackApiUrl: values.PAYSTACK_API_URL,
     paystackRequestTimeoutMs: values.PAYSTACK_REQUEST_TIMEOUT_MS,
+    objectStorageEndpoint: values.OBJECT_STORAGE_ENDPOINT.replace(/\/$/, ''),
+    objectStorageBucket: values.OBJECT_STORAGE_BUCKET,
+    objectStorageRegion: values.OBJECT_STORAGE_REGION,
+    objectStorageAccessKeyId: values.OBJECT_STORAGE_ACCESS_KEY_ID,
+    objectStorageSecretAccessKey: values.OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    objectStorageRequestTimeoutMs: values.OBJECT_STORAGE_REQUEST_TIMEOUT_MS,
   };
 }
 

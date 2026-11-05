@@ -26,6 +26,8 @@ import { createHealthRouter } from './health';
 import { createBillingRouter } from '../modules/billing/billing.routes';
 import { createBillingService, type BillingService } from '../modules/billing/billing.service';
 import { createOrganizationRouter } from '../modules/organizations/organization.routes';
+import { createProjectOrganizationRouter } from '../modules/projects/organization-access.routes';
+import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -54,6 +56,7 @@ export function createApiRouter({
 
   router.use('/health', createHealthRouter({ config, readinessProbe }));
   router.use('/billing', createBillingRouter({ config, service: billingService }));
+  router.use('/privacy-requests', createPrivacyRouter({ config }));
   router.use('/auth', createAuthRouter({ config, service: authService }));
   router.use('/users', createUsersRouter({ config, service: usersService }));
   // Discovery and join routes must be registered before the workspace router
@@ -64,6 +67,7 @@ export function createApiRouter({
     createWorkspaceRouter({ config, service: workspaceService, invitationService }),
   );
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
+  router.use('/workspaces/:workspaceId/projects', createProjectOrganizationRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   NotificationType,
   Prisma,
@@ -8,7 +9,9 @@ import {
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
+import type { PrivateObjectStorage } from '../../services/storage/private-object-storage';
 import { AppError } from '../../utils/errors';
+import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
 import type {
   CreateInstitutionGroupInput,
@@ -52,8 +55,38 @@ function jsonField(value: Record<string, string> | null | undefined) {
   return value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
 }
 
-export function createOrganizationService(prisma?: PrismaClient) {
+export type OrganizationProfileKind = 'company' | 'institution';
+
+export function createOrganizationService(prisma?: PrismaClient, storage?: PrivateObjectStorage) {
   const db = prisma ?? getPrismaClient();
+
+  function requireStorage(): PrivateObjectStorage {
+    if (!storage) {
+      throw new AppError(
+        503,
+        'OBJECT_STORAGE_UNAVAILABLE',
+        'Private object storage is not configured',
+      );
+    }
+    return storage;
+  }
+
+  async function profileForLogo(kind: OrganizationProfileKind, workspaceId: string) {
+    return kind === 'company'
+      ? db.companyProfile.findUnique({ where: { workspaceId } })
+      : db.institutionProfile.findUnique({ where: { workspaceId } });
+  }
+
+  async function setLogoReference(
+    client: Pick<PrismaClient, 'companyProfile' | 'institutionProfile'>,
+    kind: OrganizationProfileKind,
+    workspaceId: string,
+    logoReference: string | null,
+  ) {
+    return kind === 'company'
+      ? client.companyProfile.update({ where: { workspaceId }, data: { logoReference } })
+      : client.institutionProfile.update({ where: { workspaceId }, data: { logoReference } });
+  }
 
   async function access(userId: string, workspaceId: string, write = false) {
     const result = await requireWorkspaceAccess(db, {
@@ -74,6 +107,118 @@ export function createOrganizationService(prisma?: PrismaClient) {
     if (!profile)
       throw new AppError(404, 'ORGANIZATION_PROFILE_NOT_FOUND', 'Company profile was not found');
     return profile;
+  }
+
+  async function getLogo(input: {
+    userId: string;
+    workspaceId: string;
+    kind: OrganizationProfileKind;
+  }) {
+    const result = await access(input.userId, input.workspaceId);
+    assertType(result.workspace.type, input.kind === 'company' ? 'COMPANY' : 'INSTITUTION');
+    const profile = await profileForLogo(input.kind, input.workspaceId);
+    if (!profile?.logoReference) {
+      throw new AppError(404, 'ORGANIZATION_LOGO_NOT_FOUND', 'This organization has no logo');
+    }
+    return requireStorage().get(profile.logoReference);
+  }
+
+  async function uploadLogo(input: {
+    userId: string;
+    workspaceId: string;
+    kind: OrganizationProfileKind;
+    body: Buffer;
+    contentType: string;
+    extension: 'png' | 'jpg' | 'webp';
+    context: Context;
+  }) {
+    const result = await access(input.userId, input.workspaceId, true);
+    assertType(result.workspace.type, input.kind === 'company' ? 'COMPANY' : 'INSTITUTION');
+    const objectStorage = requireStorage();
+    const oldProfile = await profileForLogo(input.kind, input.workspaceId);
+    if (!oldProfile) {
+      throw new AppError(
+        404,
+        'ORGANIZATION_PROFILE_NOT_FOUND',
+        'The organization profile was not found',
+      );
+    }
+    const key = `organization-logos/${input.workspaceId}/${randomUUID()}.${input.extension}`;
+    await objectStorage.put({ key, body: input.body, contentType: input.contentType });
+    try {
+      await db.$transaction(async (tx) => {
+        const updated = await setLogoReference(tx, input.kind, input.workspaceId, key);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: `${input.kind}.logo_updated`,
+          targetType: input.kind === 'company' ? 'CompanyProfile' : 'InstitutionProfile',
+          targetId: updated.id,
+          metadata: { replaced: Boolean(oldProfile.logoReference) },
+          ...input.context,
+        });
+        return updated;
+      });
+    } catch (error) {
+      await objectStorage.delete(key).catch(() => undefined);
+      throw error;
+    }
+    if (oldProfile.logoReference && oldProfile.logoReference !== key) {
+      try {
+        await objectStorage.delete(oldProfile.logoReference);
+      } catch {
+        logger.error('organization_logo_replacement_cleanup_failed', {
+          workspaceId: input.workspaceId,
+          profileKind: input.kind,
+        });
+      }
+    }
+    return { logoReference: key };
+  }
+
+  async function deleteLogo(input: {
+    userId: string;
+    workspaceId: string;
+    kind: OrganizationProfileKind;
+    context: Context;
+  }) {
+    const result = await access(input.userId, input.workspaceId, true);
+    assertType(result.workspace.type, input.kind === 'company' ? 'COMPANY' : 'INSTITUTION');
+    const profile = await profileForLogo(input.kind, input.workspaceId);
+    if (!profile) {
+      throw new AppError(
+        404,
+        'ORGANIZATION_PROFILE_NOT_FOUND',
+        'The organization profile was not found',
+      );
+    }
+    if (!profile.logoReference) return { logoReference: null, deleted: false };
+    await db.$transaction(async (tx) => {
+      const updated = await setLogoReference(tx, input.kind, input.workspaceId, null);
+      await recordAuditEvent(tx, {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        action: `${input.kind}.logo_deleted`,
+        targetType: input.kind === 'company' ? 'CompanyProfile' : 'InstitutionProfile',
+        targetId: updated.id,
+        metadata: {},
+        ...input.context,
+      });
+    });
+    try {
+      await requireStorage().delete(profile.logoReference);
+    } catch {
+      logger.error('organization_logo_delete_cleanup_failed', {
+        workspaceId: input.workspaceId,
+        profileKind: input.kind,
+      });
+      throw new AppError(
+        502,
+        'OBJECT_STORAGE_DELETE_FAILED',
+        'The logo was detached but storage cleanup failed',
+      );
+    }
+    return { logoReference: null, deleted: true };
   }
 
   async function updateCompanyProfile(
@@ -534,6 +679,9 @@ export function createOrganizationService(prisma?: PrismaClient) {
     updateCompanyProfile,
     getInstitutionProfile,
     updateInstitutionProfile,
+    getLogo,
+    uploadLogo,
+    deleteLogo,
     listInstitutionGroups,
     getNotificationPreferences,
     updateNotificationPreferences,

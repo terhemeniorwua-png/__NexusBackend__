@@ -199,6 +199,21 @@ export const transferOwnershipSchema = z
   })
   .strict();
 
+export const ownershipTransferParamsSchema = z.object({
+  workspaceId: z.string().uuid(),
+  transferId: z.string().uuid(),
+}).strict();
+
+export const incomingOwnershipTransfersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+}).strict();
+
+export const adminOwnerAssignmentParamsSchema = z.object({
+  workspaceId: z.string().uuid(),
+  userId: z.string().uuid(),
+}).strict();
+
 export const discoverWorkspacesQuerySchema = z.object({
   search: z.string().trim().min(1).max(80).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),

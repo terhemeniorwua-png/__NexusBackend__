@@ -131,11 +131,8 @@ export async function enqueueWorkspaceSeatReduction(
     where: { workspaceId },
     select: { id: true },
   });
-  if (
-    activeSeats >= committedSeats &&
-    !existingSync &&
-    !subscription.pendingSubscriptionCode
-  ) return;
+  if (activeSeats === committedSeats && !existingSync && !subscription.pendingSubscriptionCode)
+    return;
 
   await tx.billingSeatSync.upsert({
     where: { workspaceId },

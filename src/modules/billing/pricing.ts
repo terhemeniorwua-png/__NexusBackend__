@@ -16,13 +16,13 @@ export const subscriptionCatalog: Readonly<Record<PaidPlanId, PlanPrice>> = {
     annualBaseCents: 5_000,
     includedMembers: 15,
     additionalMemberMonthlyCents: 50,
-    additionalMemberAnnualCents: 50,
+    additionalMemberAnnualCents: 100,
   },
   BUSINESS: {
     monthlyBaseCents: 1_500,
     annualBaseCents: 7_000,
     includedMembers: 25,
-    additionalMemberMonthlyCents: 100,
+    additionalMemberMonthlyCents: 50,
     additionalMemberAnnualCents: 100,
   },
 };

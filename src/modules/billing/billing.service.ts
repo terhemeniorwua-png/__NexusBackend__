@@ -103,7 +103,12 @@ export interface BillingService {
     paidAt?: string;
   }): Promise<void>;
   synchronizeSeatReduction(input: { workspaceId: string; syncId: string }): Promise<void>;
-  reconcileProviderState(): Promise<{ checked: number; repairedCheckouts: number; mismatches: number }>;
+  synchronizeDeletionCancellation(input: { workspaceId: string }): Promise<void>;
+  reconcileProviderState(): Promise<{
+    checked: number;
+    repairedCheckouts: number;
+    mismatches: number;
+  }>;
 }
 
 export function createBillingService(
@@ -404,6 +409,7 @@ export function createBillingService(
         where: { workspaceId },
         create: {
           workspaceId,
+          billingOwnerId: checkout.createdByUserId,
           plan: target.plan,
           interval: target.interval,
           currency: 'USD',
@@ -416,6 +422,7 @@ export function createBillingService(
           currentPeriodEnd: effectiveAt,
         },
         update: {
+          billingOwnerId: current?.billingOwnerId ?? checkout.createdByUserId,
           plan: target.plan,
           interval: target.interval,
           status,
@@ -697,7 +704,8 @@ export function createBillingService(
         !current.providerCustomerCode ||
         !current.providerSubscriptionCode ||
         !current.providerManageTokenCiphertext
-      ) return;
+      )
+        return;
 
       const targetSeats = activeMemberIds.length;
       const plan = current.pendingPlan ?? asPlan(current.plan);
@@ -735,14 +743,19 @@ export function createBillingService(
           start_date: current.currentPeriodEnd.toISOString(),
         });
         replacementCode = replacement.subscription_code;
-        replacementToken = encryptProviderToken(replacement.email_token, config.paystackEncryptionKey);
+        replacementToken = encryptProviderToken(
+          replacement.email_token,
+          config.paystackEncryptionKey,
+        );
         await prisma.billingSeatSync.update({
           where: { id: syncId },
           data: {
             providerSubscriptionCode: replacementCode,
             providerManageTokenCiphertext: replacementToken,
-            previousSubscriptionCode: current.pendingSubscriptionCode ?? current.providerSubscriptionCode,
-            previousManageTokenCiphertext: current.pendingManageTokenCiphertext ?? current.providerManageTokenCiphertext,
+            previousSubscriptionCode:
+              current.pendingSubscriptionCode ?? current.providerSubscriptionCode,
+            previousManageTokenCiphertext:
+              current.pendingManageTokenCiphertext ?? current.providerManageTokenCiphertext,
           },
         });
       }
@@ -759,9 +772,14 @@ export function createBillingService(
         },
       });
       await paystack.disableSubscription({
-        code: sync.previousSubscriptionCode ?? current.pendingSubscriptionCode ?? current.providerSubscriptionCode,
+        code:
+          sync.previousSubscriptionCode ??
+          current.pendingSubscriptionCode ??
+          current.providerSubscriptionCode,
         token: decryptProviderToken(
-          sync.previousManageTokenCiphertext ?? current.pendingManageTokenCiphertext ?? current.providerManageTokenCiphertext,
+          sync.previousManageTokenCiphertext ??
+            current.pendingManageTokenCiphertext ??
+            current.providerManageTokenCiphertext,
           config.paystackEncryptionKey,
         ),
       });
@@ -779,7 +797,11 @@ export function createBillingService(
       }
     },
     async reconcileProviderState() {
-      if (!config.paystackSecretKey || !config.paystackUsdEnabled || !config.paystackEncryptionKey) {
+      if (
+        !config.paystackSecretKey ||
+        !config.paystackUsdEnabled ||
+        !config.paystackEncryptionKey
+      ) {
         return { checked: 0, repairedCheckouts: 0, mismatches: 0 };
       }
       let checked = 0;
@@ -820,7 +842,9 @@ export function createBillingService(
         take: 50,
       });
       for (const subscription of subscriptions) {
-        const providerCurrent = await paystack.fetchSubscription(subscription.providerSubscriptionCode!);
+        const providerCurrent = await paystack.fetchSubscription(
+          subscription.providerSubscriptionCode!,
+        );
         checked += 1;
         const expectedCurrent = getTargetCycleChargeCents({
           plan: asPlan(subscription.plan),
@@ -828,14 +852,21 @@ export function createBillingService(
           billableSeats: subscription.billableSeats,
         });
         const actualAmount = providerCurrent.plan?.amount ?? providerCurrent.amount;
-        const currentMismatch = actualAmount !== expectedCurrent || providerCurrent.plan?.currency !== 'USD';
+        const currentMismatch =
+          actualAmount !== expectedCurrent || providerCurrent.plan?.currency !== 'USD';
         let pendingMismatch = false;
         if (subscription.pendingSubscriptionCode) {
-          const providerPending = await paystack.fetchSubscription(subscription.pendingSubscriptionCode);
+          const providerPending = await paystack.fetchSubscription(
+            subscription.pendingSubscriptionCode,
+          );
           checked += 1;
           const expectedPending = getTargetCycleChargeCents({
-            plan: subscription.pendingPlan ? asPlan(subscription.pendingPlan) : asPlan(subscription.plan),
-            interval: subscription.pendingInterval ? asInterval(subscription.pendingInterval) : asInterval(subscription.interval),
+            plan: subscription.pendingPlan
+              ? asPlan(subscription.pendingPlan)
+              : asPlan(subscription.plan),
+            interval: subscription.pendingInterval
+              ? asInterval(subscription.pendingInterval)
+              : asInterval(subscription.interval),
             billableSeats: subscription.pendingBillableSeats ?? subscription.billableSeats,
           });
           pendingMismatch =
@@ -883,13 +914,22 @@ export function createBillingService(
             },
           });
         } else if (subscription.status === 'ATTENTION') {
+          const periodEnded = Boolean(
+            subscription.currentPeriodEnd && subscription.currentPeriodEnd <= now(),
+          );
           await prisma.subscription.update({
             where: { id: subscription.id },
             data: {
-              status:
-                subscription.cancelAtPeriodEnd || providerCurrent.status !== 'active'
-                  ? 'NON_RENEWING'
-                  : 'ACTIVE',
+              status: periodEnded
+                ? 'CANCELLED'
+                : providerCurrent.status === 'active'
+                  ? subscription.cancelAtPeriodEnd
+                    ? 'NON_RENEWING'
+                    : 'ACTIVE'
+                  : providerCurrent.status === 'attention'
+                    ? 'ATTENTION'
+                    : 'NON_RENEWING',
+              ...(periodEnded ? { cancelledAt: subscription.currentPeriodEnd } : {}),
             },
           });
         }
@@ -940,6 +980,73 @@ export function createBillingService(
         cancelAtPeriodEnd: updated.cancelAtPeriodEnd,
         effectiveAt: updated.currentPeriodEnd,
       };
+    },
+    async synchronizeDeletionCancellation({ workspaceId }) {
+      // A recovered owner or an accepted ownership/billing transfer may cancel
+      // the durable job while a worker has already claimed it. Revalidate the
+      // deletion deadline and current owner immediately before calling Paystack.
+      const eligibleWorkspace = await prisma.workspace.findFirst({
+        where: {
+          id: workspaceId,
+          owner: {
+            status: 'PENDING_DELETION',
+            deletedAt: null,
+            scheduledDeletionAt: { lte: now() },
+          },
+        },
+        select: { id: true },
+      });
+      if (!eligibleWorkspace) return;
+
+      const subscription = await prisma.subscription.findUnique({ where: { workspaceId } });
+      if (!subscription) return;
+
+      const providerSubscriptions = [
+        {
+          code: subscription.providerSubscriptionCode,
+          ciphertext: subscription.providerManageTokenCiphertext,
+        },
+        {
+          code: subscription.pendingSubscriptionCode,
+          ciphertext: subscription.pendingManageTokenCiphertext,
+        },
+      ];
+      const seenCodes = new Set<string>();
+      for (const providerSubscription of providerSubscriptions) {
+        if (!providerSubscription.code || seenCodes.has(providerSubscription.code)) continue;
+        seenCodes.add(providerSubscription.code);
+        if (!providerSubscription.ciphertext) {
+          throw new AppError(
+            503,
+            'PAYSTACK_CANCELLATION_CREDENTIAL_MISSING',
+            'The provider cancellation credential is unavailable',
+          );
+        }
+        await paystack.disableSubscription({
+          code: providerSubscription.code,
+          token: decryptProviderToken(
+            providerSubscription.ciphertext,
+            config.paystackEncryptionKey,
+          ),
+        });
+      }
+
+      const periodEnd = subscription.currentPeriodEnd;
+      const periodEnded = !periodEnd || periodEnd <= now();
+      await prisma.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: periodEnded ? 'CANCELLED' : 'NON_RENEWING',
+          cancelAtPeriodEnd: !periodEnded,
+          cancelledAt: periodEnded ? now() : periodEnd,
+          pendingSubscriptionCode: null,
+          pendingManageTokenCiphertext: null,
+          pendingPlan: null,
+          pendingInterval: null,
+          pendingBillableSeats: null,
+          pendingEffectiveAt: null,
+        },
+      });
     },
     async listPayments({ actor, workspaceId }) {
       await requireWorkspace(actor, workspaceId, false);
@@ -1046,8 +1153,8 @@ export function createBillingService(
               );
               const pendingNotEffective = Boolean(
                 subscription.pendingSubscriptionCode === subscriptionCode &&
-                  subscription.pendingEffectiveAt &&
-                  paid < subscription.pendingEffectiveAt,
+                subscription.pendingEffectiveAt &&
+                paid < subscription.pendingEffectiveAt,
               );
               if (stalePayment || pendingNotEffective) return;
               if (
@@ -1144,12 +1251,39 @@ export function createBillingService(
           const exists = await prisma.billingWebhookEvent.findUnique({ where: { eventKey } });
           if (!exists) throw error;
         });
-      // Failed-payment policy is deferred: record status only; do not revoke access or retry.
-      if (event === 'invoice.payment_failed' && reference) {
-        await prisma.billingPayment.updateMany({
-          where: { providerReference: reference, status: { not: 'SUCCESS' } },
-          data: { status: 'FAILED' },
+      // Paystack emits this event for a failed renewal attempt. Reflect the
+      // provider's state, but keep paid access through currentPeriodEnd; retry
+      // and post-period entitlement rules remain a product decision.
+      if (event === 'invoice.payment_failed' && subscriptionCode) {
+        const subscription = await prisma.subscription.findFirst({
+          where: {
+            OR: [
+              { providerSubscriptionCode: subscriptionCode },
+              { pendingSubscriptionCode: subscriptionCode },
+            ],
+          },
         });
+        if (subscription && subscription.status !== 'CANCELLED') {
+          await prisma.subscription.update({
+            where: { id: subscription.id },
+            data: { status: 'ATTENTION' },
+          });
+          if (reference && amount !== undefined && currency) {
+            await prisma.billingPayment.upsert({
+              where: { providerReference: reference },
+              create: {
+                workspaceId: subscription.workspaceId,
+                subscriptionId: subscription.id,
+                providerReference: reference,
+                providerEventKey: eventKey,
+                amountSubunit: amount,
+                currency,
+                status: 'FAILED',
+              },
+              update: {},
+            });
+          }
+        }
       }
     },
   };

@@ -21,6 +21,7 @@ enum UserStatus {
 
 enum WorkspaceStatus {
   ACTIVE
+  SUSPENDED
   ARCHIVED
 }
 
@@ -218,6 +219,21 @@ enum BillingCheckoutStatus {
   FAILED
 }
 
+enum PrivacyRequestType {
+  ACCESS
+  CORRECTION
+  ERASURE
+  REDACTION
+}
+
+enum PrivacyRequestStatus {
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
@@ -228,6 +244,7 @@ model User {
   passwordHash        String
   name                String
   status              UserStatus @default(PENDING_VERIFICATION)
+  isPlatformAdmin     Boolean    @default(false)
   emailVerifiedAt     DateTime?
   lastLoginAt         DateTime?
   createdAt           DateTime   @default(now())
@@ -260,6 +277,12 @@ model User {
   joinRequests                JoinRequest[]                @relation("JoinRequestApplicant")
   reviewedJoinRequests        JoinRequest[]                @relation("JoinRequestReviewer")
   ledInstitutionGroups        InstitutionGroup[]           @relation("InstitutionGroupLead")
+  initiatedOwnershipTransfers WorkspaceOwnershipTransfer[] @relation("OwnershipTransferInitiator")
+  receivedOwnershipTransfers  WorkspaceOwnershipTransfer[] @relation("OwnershipTransferRecipient")
+  acceptedBillingTransfers    WorkspaceOwnershipTransfer[] @relation("BillingResponsibilityAcceptor")
+  billingOwnedSubscriptions    Subscription[]                @relation("SubscriptionBillingOwner")
+  privacyRequests             PrivacyRequest[]               @relation("PrivacyRequestOwner")
+  reviewedPrivacyRequests     PrivacyRequest[]               @relation("PrivacyRequestReviewer")
 
   @@index([status])
   @@index([createdAt])
@@ -332,6 +355,7 @@ model Workspace {
   isPersonal   Boolean             @default(false)
   visibility   WorkspaceVisibility @default(PRIVATE)
   status       WorkspaceStatus     @default(ACTIVE)
+  deletionSuspendedAt DateTime?
   ownerId      String
   /// SHA-256 digest of the join code. The plaintext code is only returned
   /// when an administrator generates or rotates it.
@@ -356,6 +380,8 @@ model Workspace {
   billingPayments    BillingPayment[]
   billingCheckouts   BillingCheckout[]
   billingSeatSync    BillingSeatSync?
+  billingCancellation BillingCancellation?
+  ownershipTransfers WorkspaceOwnershipTransfer[]
 
   @@index([ownerId])
   @@index([status])
@@ -363,9 +389,34 @@ model Workspace {
   @@index([visibility])
 }
 
+model WorkspaceOwnershipTransfer {
+  id                  String    @id @default(uuid())
+  workspaceId         String
+  initiatedById       String
+  recipientUserId     String
+  previousOwnerRole   WorkspaceRole @default(MEMBER)
+  status              String    @default("PENDING")
+  expiresAt           DateTime?
+  acceptedAt          DateTime?
+  billingAcceptedAt   DateTime?
+  billingAcceptedById String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  initiatedBy User      @relation("OwnershipTransferInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  recipient   User      @relation("OwnershipTransferRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
+  billingAcceptedBy User? @relation("BillingResponsibilityAcceptor", fields: [billingAcceptedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([recipientUserId, status])
+  @@index([expiresAt])
+}
+
 model Subscription {
   id                            String                @id @default(uuid())
   workspaceId                   String                @unique
+  billingOwnerId                String?
   plan                          SubscriptionPlanId
   interval                      SubscriptionInterval
   currency                      String                @default("USD")
@@ -388,6 +439,7 @@ model Subscription {
   updatedAt                     DateTime              @updatedAt
 
   workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  billingOwner User?           @relation("SubscriptionBillingOwner", fields: [billingOwnerId], references: [id], onDelete: SetNull)
   payments  BillingPayment[]
   checkouts BillingCheckout[]
 
@@ -486,6 +538,22 @@ model BillingSeatSync {
   previousManageTokenCiphertext String?
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+}
+
+/// Durable provider cancellation work created when account deletion stops renewal.
+model BillingCancellation {
+  id            String   @id @default(uuid())
+  workspaceId   String   @unique
+  status        String   @default("PENDING")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastError     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
@@ -957,6 +1025,30 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@index([createdAt])
+}
+
+model PrivacyRequest {
+  id             String               @id @default(uuid())
+  userId         String
+  type           PrivacyRequestType
+  status         PrivacyRequestStatus @default(SUBMITTED)
+  description    String?
+  targetType     String?
+  targetId       String?
+  reviewedById   String?
+  decisionNote   String?
+  outcome        String?
+  decidedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  user     User  @relation("PrivacyRequestOwner", fields: [userId], references: [id], onDelete: Restrict)
+  reviewer User? @relation("PrivacyRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([reviewedById])
 }
 
 // ---------------------------------------------------------------------------

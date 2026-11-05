@@ -7,7 +7,7 @@ import { AppError } from '../../utils/errors';
 import type { Logger } from '../../utils/logger';
 import { logger as defaultLogger } from '../../utils/logger';
 import { createBillingService, type BillingService } from './billing.service';
-import { verifyPaystackSignature } from './paystack.client';
+import { verifyPaystackSignature, verifyPaystackWebhookSignature } from './paystack.client';
 
 export function createPaystackWebhookRouter(options: {
   config: AppConfig;
@@ -27,13 +27,25 @@ export function createPaystackWebhookRouter(options: {
       const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       if (!raw.length)
         throw new AppError(400, 'WEBHOOK_EMPTY_BODY', 'The webhook payload is empty');
-      if (
-        !verifyPaystackSignature(
+      const signingSecrets = [
+        options.config.paystackWebhookSecret,
+        options.config.paystackWebhookPreviousSecret,
+      ].filter(Boolean);
+      const timestampedSignatureValid = verifyPaystackWebhookSignature(
+        raw,
+        req.get('paystack-signature'),
+        signingSecrets,
+      );
+      // Keep the legacy signature only during a provider header migration.
+      // New deployments should use a dedicated webhook signing secret.
+      const legacySignatureValid =
+        !req.get('paystack-signature') &&
+        verifyPaystackSignature(
           raw,
           req.get('x-paystack-signature'),
           options.config.paystackSecretKey,
-        )
-      ) {
+        );
+      if (!timestampedSignatureValid && !legacySignatureValid) {
         throw new AppError(
           401,
           'WEBHOOK_SIGNATURE_INVALID',
@@ -44,6 +56,7 @@ export function createPaystackWebhookRouter(options: {
         event?: unknown;
         data?: {
           reference?: unknown;
+          transaction?: { reference?: unknown; amount?: unknown; currency?: unknown };
           subscription_code?: unknown;
           subscription?: { subscription_code?: unknown };
         };
@@ -66,7 +79,11 @@ export function createPaystackWebhookRouter(options: {
           event: payload.event,
           eventKey,
           reference:
-            typeof payload.data.reference === 'string' ? payload.data.reference : undefined,
+            typeof payload.data.reference === 'string'
+              ? payload.data.reference
+              : typeof payload.data.transaction?.reference === 'string'
+                ? payload.data.transaction.reference
+                : undefined,
           subscriptionCode:
             typeof payload.data.subscription_code === 'string'
               ? payload.data.subscription_code
@@ -76,11 +93,15 @@ export function createPaystackWebhookRouter(options: {
           amount:
             typeof (payload.data as { amount?: unknown }).amount === 'number'
               ? (payload.data as { amount: number }).amount
-              : undefined,
+              : typeof payload.data.transaction?.amount === 'number'
+                ? payload.data.transaction.amount
+                : undefined,
           currency:
             typeof (payload.data as { currency?: unknown }).currency === 'string'
               ? (payload.data as { currency: string }).currency
-              : undefined,
+              : typeof payload.data.transaction?.currency === 'string'
+                ? payload.data.transaction.currency
+                : undefined,
           paidAt:
             typeof (payload.data as { paid_at?: unknown }).paid_at === 'string'
               ? (payload.data as { paid_at: string }).paid_at

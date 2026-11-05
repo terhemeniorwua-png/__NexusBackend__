@@ -24,11 +24,9 @@ import {
   rotateSession,
 } from './session.service';
 import { recordSecurityEvent, SecurityAction } from './security-events';
-import {
-  isLastActiveOrganizationOwnerOrAdministrator,
-  scheduledAccountDeletionAt,
-} from './account-deletion.service';
+import { scheduledAccountDeletionAt } from './account-deletion.service';
 import { ensurePersonalWorkspace } from '../workspaces/personal-workspace.service';
+import { enqueueWorkspaceSeatReduction } from '../billing/membership-billing';
 import type {
   AuthenticationResult,
   PublicUser,
@@ -198,7 +196,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       throw new AppError(
         403,
         'ACCOUNT_PENDING_DELETION',
-        'This account is pending deletion. Recover it before signing in.',
+        'This account is being deleted and can no longer sign in.',
       );
     }
   }
@@ -964,32 +962,29 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
       }
 
-      if (user.status === 'ACTIVE') {
-        await recordReactivationFailure(user.id, 'ACCOUNT_ALREADY_ACTIVE');
-        throw new AppError(409, 'ACCOUNT_ALREADY_ACTIVE', 'This account is already active');
-      }
-
-      const pendingDeletion = user.status === 'PENDING_DELETION';
-
       if (
-        pendingDeletion &&
+        user.status === 'PENDING_DELETION' &&
         (!user.scheduledDeletionAt || user.scheduledDeletionAt <= new Date())
       ) {
         await recordReactivationFailure(user.id, 'DELETION_RECOVERY_PERIOD_EXPIRED');
         throw new AppError(
           409,
           'DELETION_RECOVERY_PERIOD_EXPIRED',
-          'The account recovery period has ended',
+          'The account recovery period has expired',
         );
       }
 
-      if (user.status !== 'DEACTIVATED' && !pendingDeletion) {
+      if (user.status === 'ACTIVE') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_ALREADY_ACTIVE');
+        throw new AppError(409, 'ACCOUNT_ALREADY_ACTIVE', 'This account is already active');
+      }
+
+      if (user.status !== 'DEACTIVATED' && user.status !== 'PENDING_DELETION') {
         await recordReactivationFailure(user.id, 'ACCOUNT_NOT_DEACTIVATED');
         throw new AppError(409, 'ACCOUNT_NOT_DEACTIVATED', 'This account is not deactivated');
       }
 
       const nextStatus = user.emailVerifiedAt ? 'ACTIVE' : 'PENDING_VERIFICATION';
-      const recoveredAt = new Date();
 
       const reactivated = await client.$transaction(async (tx) => {
         const updated = await tx.user.updateMany({
@@ -997,7 +992,9 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
             id: user.id,
             status: user.status,
             deletedAt: null,
-            ...(pendingDeletion ? { scheduledDeletionAt: { gt: recoveredAt } } : {}),
+            ...(user.status === 'PENDING_DELETION'
+              ? { scheduledDeletionAt: { gt: new Date() } }
+              : {}),
           },
           data: {
             status: nextStatus,
@@ -1024,6 +1021,23 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
         if (restored.status === 'ACTIVE') {
           await ensurePersonalWorkspace(tx, restored);
+          if (user.status === 'PENDING_DELETION') {
+            await tx.workspace.updateMany({
+              where: { ownerId: restored.id, deletionSuspendedAt: { not: null }, deletedAt: null },
+              data: { status: 'ACTIVE', deletionSuspendedAt: null },
+            });
+            await tx.billingCancellation.updateMany({
+              where: { workspace: { ownerId: restored.id }, status: { in: ['PENDING', 'PROCESSING'] } },
+              data: { status: 'CANCELLED', lastError: null },
+            });
+          }
+          const memberships = await tx.workspaceMembership.findMany({
+            where: { userId: restored.id, status: 'ACTIVE' },
+            select: { workspaceId: true },
+          });
+          for (const workspaceId of new Set(memberships.map(({ workspaceId }) => workspaceId))) {
+            await enqueueWorkspaceSeatReduction(tx, workspaceId);
+          }
         }
 
         return restored;
@@ -1128,56 +1142,60 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
         }
 
-        const sharedPersonalWorkspace = await tx.workspace.findFirst({
+        const administrativeRoles = [
+          'COMPANY_OWNER',
+          'COMPANY_ADMIN',
+          'INSTITUTION_OWNER',
+          'INSTITUTION_ADMIN',
+        ] as const;
+        const administrativeMemberships = await tx.workspaceMembership.findMany({
           where: {
-            ownerId: user.id,
-            isPersonal: true,
-            deletedAt: null,
-            members: { some: { userId: { not: user.id } } },
+            userId: user.id,
+            status: 'ACTIVE',
+            workspace: {
+              type: { in: ['COMPANY', 'INSTITUTION'] },
+              status: 'ACTIVE',
+            },
           },
-          select: { id: true },
+          select: {
+            workspaceId: true,
+            role: true,
+            organizationRole: true,
+            workspace: { select: { ownerId: true } },
+          },
         });
+        for (const membership of administrativeMemberships) {
+          const isAdministrator =
+            membership.role === 'PROJECT_MANAGER' ||
+            membership.role === 'OWNER' ||
+            administrativeRoles.includes(
+              membership.organizationRole as (typeof administrativeRoles)[number],
+            );
+          // An owner may schedule deletion; the owned workspace is suspended
+          // until a successor accepts the transfer. A non-owner administrator
+          // cannot leave an active organization without another active owner
+          // or administrator who can manage that suspended workspace.
+          if (!isAdministrator || membership.workspace.ownerId === user.id) continue;
 
-        if (sharedPersonalWorkspace) {
-          throw new AppError(
-            409,
-            'PERSONAL_WORKSPACE_SHARED',
-            'Remove or transfer collaborators from your personal workspace before requesting account deletion',
-          );
-        }
-
-        const ownedOrganization = await tx.workspace.findFirst({
-          where: { ownerId: user.id, type: { in: ['COMPANY', 'INSTITUTION'] } },
-          select: { id: true },
-        });
-
-        if (ownedOrganization) {
-          throw new AppError(
-            409,
-            'ORGANIZATION_OWNERSHIP_TRANSFER_REQUIRED',
-            'Transfer ownership of each Company or Institution workspace before requesting account deletion',
-          );
-        }
-
-        const otherOwnedWorkspace = await tx.workspace.findFirst({
-          where: { ownerId: user.id, isPersonal: false },
-          select: { id: true },
-        });
-
-        if (otherOwnedWorkspace) {
-          throw new AppError(
-            409,
-            'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED',
-            'Transfer ownership of other shared workspaces before requesting account deletion',
-          );
-        }
-
-        if (await isLastActiveOrganizationOwnerOrAdministrator(tx, user.id)) {
-          throw new AppError(
-            409,
-            'LAST_ORGANIZATION_ADMIN',
-            'Assign another active owner or administrator before requesting account deletion',
-          );
+          const activeSuccessors = await tx.workspaceMembership.count({
+            where: {
+              workspaceId: membership.workspaceId,
+              userId: { not: user.id },
+              status: 'ACTIVE',
+              user: { status: 'ACTIVE', deletedAt: null },
+              OR: [
+                { role: { in: ['OWNER', 'PROJECT_MANAGER'] } },
+                { organizationRole: { in: [...administrativeRoles] } },
+              ],
+            },
+          });
+          if (activeSuccessors === 0) {
+            throw new AppError(
+              409,
+              'LAST_ORGANIZATION_ADMIN',
+              'Another active owner or administrator must remain in the organization',
+            );
+          }
         }
 
         await tx.session.updateMany({
@@ -1196,6 +1214,37 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
             scheduledDeletionAt,
           },
         });
+
+        const ownedWorkspaces = await tx.workspace.findMany({
+          where: { ownerId: user.id, deletedAt: null, status: 'ACTIVE' },
+          select: { id: true, subscription: { select: { id: true, status: true } } },
+        });
+        await tx.workspace.updateMany({
+          where: { ownerId: user.id, deletedAt: null, status: 'ACTIVE' },
+          data: { status: 'SUSPENDED', deletionSuspendedAt: requestedAt },
+        });
+        await tx.workspaceOwnershipTransfer.updateMany({
+          where: { initiatedById: user.id, status: 'PENDING' },
+          data: { expiresAt: scheduledDeletionAt },
+        });
+        for (const workspace of ownedWorkspaces) {
+          if (!workspace.subscription || workspace.subscription.status === 'CANCELLED') continue;
+          await tx.billingCancellation.upsert({
+            where: { workspaceId: workspace.id },
+            create: {
+              workspaceId: workspace.id,
+              status: 'PENDING',
+              nextAttemptAt: scheduledDeletionAt,
+            },
+            update: {
+              status: 'PENDING',
+              attempts: 0,
+              nextAttemptAt: scheduledDeletionAt,
+              lastError: null,
+            },
+          });
+        }
+
       });
 
       await recordSecurityEvent(client, {

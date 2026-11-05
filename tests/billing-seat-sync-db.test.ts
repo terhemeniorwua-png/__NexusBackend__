@@ -34,18 +34,37 @@ describe('billing seat sync database integration', { skip: skipReason || false }
   test('member reductions persist the current billable seat target transactionally', async () => {
     const db = prisma!;
     const owner = await db.user.create({
-      data: { email: `billing-owner-${process.pid}@example.test`, name: 'Billing Owner', passwordHash: 'test-hash', status: 'ACTIVE' },
+      data: {
+        email: `billing-owner-${process.pid}@example.test`,
+        name: 'Billing Owner',
+        passwordHash: 'test-hash',
+        status: 'ACTIVE',
+      },
     });
     userIds.push(owner.id);
     const first = await db.user.create({
-      data: { email: `billing-member-a-${process.pid}@example.test`, name: 'Billing Member A', passwordHash: 'test-hash', status: 'ACTIVE' },
+      data: {
+        email: `billing-member-a-${process.pid}@example.test`,
+        name: 'Billing Member A',
+        passwordHash: 'test-hash',
+        status: 'ACTIVE',
+      },
     });
     const second = await db.user.create({
-      data: { email: `billing-member-b-${process.pid}@example.test`, name: 'Billing Member B', passwordHash: 'test-hash', status: 'ACTIVE' },
+      data: {
+        email: `billing-member-b-${process.pid}@example.test`,
+        name: 'Billing Member B',
+        passwordHash: 'test-hash',
+        status: 'ACTIVE',
+      },
     });
     userIds.push(first.id, second.id);
     const workspace = await db.workspace.create({
-      data: { name: 'Billing seat sync test', slug: `billing-seat-sync-${process.pid}`, ownerId: owner.id },
+      data: {
+        name: 'Billing seat sync test',
+        slug: `billing-seat-sync-${process.pid}`,
+        ownerId: owner.id,
+      },
     });
     workspaceId = workspace.id;
     await db.workspaceMembership.createMany({
@@ -57,14 +76,20 @@ describe('billing seat sync database integration', { skip: skipReason || false }
     });
     await db.subscription.create({
       data: {
-        workspaceId, plan: 'PRO', interval: 'MONTHLY', status: 'ACTIVE', billableSeats: 4,
+        workspaceId,
+        plan: 'PRO',
+        interval: 'MONTHLY',
+        status: 'ACTIVE',
+        billableSeats: 4,
         currentPeriodStart: new Date('2026-11-01T00:00:00.000Z'),
         currentPeriodEnd: new Date('2026-12-01T00:00:00.000Z'),
       },
     });
 
     await db.$transaction(async (tx) => {
-      await tx.workspaceMembership.delete({ where: { workspaceId_userId: { workspaceId, userId: second.id } } });
+      await tx.workspaceMembership.delete({
+        where: { workspaceId_userId: { workspaceId, userId: second.id } },
+      });
       await enqueueWorkspaceSeatReduction(tx, workspaceId);
     });
 

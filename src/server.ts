@@ -12,6 +12,7 @@ import { logger as baseLogger, type Logger } from './utils/logger';
 import { createAccountDeletionWorker } from './modules/auth/account-deletion.service';
 import { createBillingService } from './modules/billing/billing.service';
 import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
+import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
 
 export interface RunningServer {
   server: Server;
@@ -85,6 +86,14 @@ export async function startServer(): Promise<RunningServer> {
     prisma: getPrismaClient(),
     logger,
     bcryptSaltRounds: config.bcryptSaltRounds,
+    storage: createS3CompatibleObjectStorage({
+      endpoint: config.objectStorageEndpoint,
+      bucket: config.objectStorageBucket,
+      region: config.objectStorageRegion,
+      accessKeyId: config.objectStorageAccessKeyId,
+      secretAccessKey: config.objectStorageSecretAccessKey,
+      requestTimeoutMs: config.objectStorageRequestTimeoutMs,
+    }),
   });
   accountDeletionWorker.start();
 
