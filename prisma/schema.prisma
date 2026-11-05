@@ -768,6 +768,8 @@ model Project {
   name         String
   key          String
   description  String?
+  category     String?
+  labels       String[]          @default([])
   status       ProjectStatus     @default(PLANNING)
   visibility   ProjectVisibility @default(WORKSPACE)
   startDate    DateTime?
@@ -782,6 +784,7 @@ model Project {
   department  Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   owner       User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   members     ProjectMembership[]
+  milestones  ProjectMilestone[]
   tasks       Task[]
   channels    Channel[]
   attachments FileAttachment[]
@@ -793,6 +796,23 @@ model Project {
   @@index([departmentId])
   @@index([ownerId])
   @@index([dueDate])
+}
+
+model ProjectMilestone {
+  id          String   @id @default(uuid())
+  projectId   String
+  name        String
+  description String?
+  dueDate     DateTime?
+  completedAt DateTime?
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, position])
+  @@index([projectId, dueDate])
 }
 
 model ProjectMembership {

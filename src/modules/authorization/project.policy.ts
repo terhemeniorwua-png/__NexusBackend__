@@ -139,7 +139,9 @@ export function projectRoleCan(
   return PROJECT_ROLE_CAPABILITIES[projectRole].includes(capability);
 }
 
-function maximumProjectRole(role: OrganizationRole | null): ProjectRole | null {
+export function maximumProjectRoleForOrganizationRole(
+  role: OrganizationRole | null,
+): ProjectRole | null {
   if (role === 'COMPANY_PROJECT_MANAGER') return 'PROJECT_MANAGER';
   if (
     role === 'COMPANY_OWNER' ||
@@ -151,6 +153,10 @@ function maximumProjectRole(role: OrganizationRole | null): ProjectRole | null {
   if (role === 'COMPANY_VIEWER' || role === 'INSTITUTION_VIEWER') return 'VIEWER';
   if (role) return 'MEMBER';
   return null;
+}
+
+export function organizationRoleCanOwnProjects(role: OrganizationRole | null): boolean {
+  return role === null || maximumProjectRoleForOrganizationRole(role) === 'PROJECT_MANAGER';
 }
 
 function capProjectRole(assigned: ProjectRole, maximum: ProjectRole | null): ProjectRole {
@@ -171,6 +177,17 @@ export interface ProjectAccess {
   workspaceRole: WorkspaceRole;
 }
 
+export type ProjectAuthorizationClient = Pick<
+  PrismaClient,
+  | 'project'
+  | 'workspaceMembership'
+  | 'team'
+  | 'teamMembership'
+  | 'department'
+  | 'departmentMembership'
+  | 'projectMembership'
+>;
+
 // ---------------------------------------------------------------------------
 // Access guard
 // ---------------------------------------------------------------------------
@@ -186,7 +203,7 @@ export interface ProjectAccess {
  * Throws `AppError` with an appropriate status and code on any failure.
  */
 export async function requireProjectAccess(
-  client: PrismaClient,
+  client: ProjectAuthorizationClient,
   input: {
     userId: string;
     workspaceId: string;
@@ -235,7 +252,10 @@ export async function requireProjectAccess(
     workspaceMembership.organizationRole,
   );
 
-  if (workspaceMembership.organizationRole === 'INSTITUTION_DEPARTMENT_HEAD') {
+  if (
+    workspaceMembership.organizationRole === 'INSTITUTION_DEPARTMENT_HEAD' &&
+    project.visibility !== 'PRIVATE'
+  ) {
     if (!project.departmentId) {
       throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
     }
@@ -274,7 +294,7 @@ export async function requireProjectAccess(
   // mismatched or cross-workspace team reference cannot grant access. An
   // explicit project membership remains valid for a separately invited user.
   let teamMember = false;
-  if (project.teamId) {
+  if (project.visibility === 'DEPARTMENT_TEAM' && project.teamId) {
     const team = await client.team.findFirst({
       where: {
         id: project.teamId,
@@ -298,7 +318,7 @@ export async function requireProjectAccess(
   // membership. When a project is also assigned to a team, the team is the
   // narrower scope and department membership alone does not bypass it.
   let departmentMember = false;
-  if (project.departmentId && !project.teamId) {
+  if (project.visibility === 'DEPARTMENT_TEAM' && project.departmentId && !project.teamId) {
     const department = await client.department.findFirst({
       where: { id: project.departmentId, workspaceId: project.workspaceId },
       select: { id: true },
@@ -318,10 +338,7 @@ export async function requireProjectAccess(
   });
 
   const isProjectOwner = project.ownerId === input.userId;
-  if (
-    project.visibility === 'WORKSPACE' &&
-    input.capability === ProjectCapability.ViewProject
-  ) {
+  if (project.visibility === 'WORKSPACE' && input.capability === ProjectCapability.ViewProject) {
     return { project, projectMembership, workspaceRole: effectiveRole };
   }
   if (!projectMembership && !teamMember && !departmentMember && !isProjectOwner) {
@@ -336,8 +353,15 @@ export async function requireProjectAccess(
 
   const authorizedProjectRole = capProjectRole(
     projectMembership?.role ?? (isProjectOwner ? 'PROJECT_MANAGER' : 'MEMBER'),
-    maximumProjectRole(workspaceMembership.organizationRole),
+    maximumProjectRoleForOrganizationRole(workspaceMembership.organizationRole),
   );
+  if (
+    input.capability === ProjectCapability.DeleteProject &&
+    isProjectOwner &&
+    authorizedProjectRole === 'PROJECT_MANAGER'
+  ) {
+    return { project, projectMembership, workspaceRole: effectiveRole };
+  }
   if (!projectRoleCan(authorizedProjectRole, input.capability)) {
     throw new AppError(
       403,

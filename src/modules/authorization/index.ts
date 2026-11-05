@@ -41,6 +41,8 @@ export {
   workspaceRoleCanOnProject,
   projectRoleCan,
   requireProjectAccess,
+  maximumProjectRoleForOrganizationRole,
+  organizationRoleCanOwnProjects,
 } from './project.policy';
 export type { ProjectCapabilityValue, ProjectAccess } from './project.policy';
 
