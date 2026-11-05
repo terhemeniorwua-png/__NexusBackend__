@@ -2805,7 +2805,7 @@ paths:
       tags: [Users]
       operationId: submitPrivacyRequest
       summary: Submit a privacy request
-      description: Requires an active, email-verified account. Redaction requests currently target task comments; the backend has no message or channel model yet.
+      description: Requires an active, email-verified account. Redaction requests currently target task comments; message storage and channel conversation functionality are deferred to the messaging phase.
       security:
         - bearerAuth: []
       requestBody:
@@ -4036,7 +4036,7 @@ paths:
         - { name: cursor, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
       responses:
-        '200': { description: Access-filtered channel page. }
+        '200': { description: Access-filtered channel page. Non-managers receive active channels only; workspace managers may also list archived channels. }
         '401': { description: Authentication required. }
     post:
       tags: [Channels]
@@ -4073,8 +4073,8 @@ paths:
       operationId: getChannel
       security: [{ bearerAuth: [] }]
       responses:
-        '200': { description: Accessible channel summary. }
-        '404': { description: Channel is missing or inaccessible. }
+        '200': { description: Active channel for authorized members, or archived channel for a workspace manager (private channels still require explicit membership). }
+        '404': { description: Channel is missing, archived and caller is not a workspace manager, or otherwise inaccessible. }
     patch:
       tags: [Channels]
       operationId: updateChannel
@@ -4091,14 +4091,15 @@ paths:
                 name: { type: string, minLength: 1, maxLength: 100 }
                 description: { type: string, nullable: true, maxLength: 500 }
       responses:
-        '200': { description: Updated channel summary. }
+        '200': { description: Updated active channel summary. Archived channels cannot be updated. }
+        '404': { description: Channel is missing, archived, or inaccessible. }
         '409': { description: Case-insensitive channel name conflict. }
     delete:
       tags: [Channels]
       operationId: deleteChannel
       security: [{ bearerAuth: [] }]
       responses:
-        '200': { description: Channel soft-deleted. }
+        '200': { description: Active or archived channel soft-deleted. }
         '403': { description: Workspace owner or project manager required. }
   /workspaces/{workspaceId}/channels/{channelId}/archive:
     parameters:
@@ -4112,7 +4113,8 @@ paths:
       operationId: archiveChannel
       security: [{ bearerAuth: [] }]
       responses:
-        '200': { description: Archived channel summary. }
+        '200': { description: Channel archived; workspace managers may repeat this operation on an archived channel. }
+        '404': { description: Channel is missing, inaccessible, or archived for a non-manager. }
   /workspaces/{workspaceId}/channels/{channelId}/members:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -4136,6 +4138,7 @@ paths:
       responses:
         '201': { description: Membership created with server-assigned MEMBER role. }
         '400': { description: Membership is available only for private channels. }
+        '404': { description: Channel is missing, archived, inaccessible, or target is not an active workspace member. }
   /workspaces/{workspaceId}/channels/{channelId}/members/{userId}:
     parameters:
       - $ref: '#/components/parameters/WorkspaceId'
@@ -4153,6 +4156,7 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         '200': { description: Membership removed. }
+        '404': { description: Channel is missing, archived, inaccessible, or membership does not exist. }
 
 components:
   securitySchemes:

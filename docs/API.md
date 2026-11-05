@@ -293,6 +293,11 @@ workspace membership. `WORKSPACE` channels are visible to active members except
 collaborators; `TEAM`, `DEPARTMENT`, and `PROJECT` channels inherit current
 parent membership dynamically. `PRIVATE` channels require explicit
 `ChannelMembership`; workspace managers do not implicitly read them.
+Archived channels are excluded from non-manager lists and are hidden from
+non-managers on every channel operation. Workspace owners and project managers
+may read and archive or delete archived channels; they cannot update metadata
+or change channel membership after archival. Private channels still require
+explicit membership for reads, including for workspace managers.
 
 | Method | Path | Contract |
 | --- | --- | --- |
@@ -310,7 +315,9 @@ create/update/archive channels attached to their own active team; department
 heads have the corresponding rights for their own department. A private-channel
 `ADMIN` may update metadata, archive, and manage its own membership. No one
 other than workspace owners/project managers may delete a channel. Parent team,
-department, or project archival/deletion revokes ordinary channel access.
+department, or project archival/deletion revokes ordinary channel access;
+workspace managers retain archive/delete actions for those parent-inaccessible
+channels.
 
 ## Updating this API reference
 
