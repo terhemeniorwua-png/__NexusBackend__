@@ -19,10 +19,10 @@ import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organi
  * - The workspace OWNER and PROJECT_MANAGER can read and manage every project
  *   in the workspace regardless of whether they hold a project membership row.
  * - A project MEMBER or VIEWER must have an explicit `ProjectMembership` row
- *   to access the project.
- * - Private projects (`visibility = PRIVATE`) are only visible to members
- *   with an explicit membership row; workspace-wide roles do not grant access
- *   to private projects unless they are OWNER or PROJECT_MANAGER.
+ *   or membership in the project-associated team to access the project.
+ * - Private projects (`visibility = PRIVATE`) are only visible to explicitly
+ *   invited project members or members of their associated team; workspace-
+ *   wide roles do not grant access unless they are OWNER or PROJECT_MANAGER.
  * - Project-level management actions (update, archive, delete, manage members)
  *   require either the workspace OWNER / PROJECT_MANAGER role, or the project-
  *   level PROJECT_MANAGER role.
@@ -269,13 +269,36 @@ export async function requireProjectAccess(
     return { project, projectMembership: null, workspaceRole: effectiveRole };
   }
 
-  // For all other workspace roles an explicit project membership row is
-  // required.
+  // Association with a team grants that team's active members the base
+  // project-member permissions. The team lookup is workspace scoped so a
+  // mismatched or cross-workspace team reference cannot grant access. An
+  // explicit project membership remains valid for a separately invited user.
+  let teamMember = false;
+  if (project.teamId) {
+    const team = await client.team.findFirst({
+      where: {
+        id: project.teamId,
+        workspaceId: project.workspaceId,
+        status: 'ACTIVE',
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (team) {
+      teamMember = Boolean(
+        await client.teamMembership.findUnique({
+          where: { teamId_userId: { teamId: team.id, userId: input.userId } },
+          select: { id: true },
+        }),
+      );
+    }
+  }
+
   const projectMembership = await client.projectMembership.findUnique({
     where: { projectId_userId: { projectId: project.id, userId: input.userId } },
   });
 
-  if (!projectMembership) {
+  if (!projectMembership && !teamMember) {
     // Private projects are hidden completely; WORKSPACE-visible projects
     // report the correct error.
     if (project.visibility === 'PRIVATE') {
@@ -286,7 +309,7 @@ export async function requireProjectAccess(
   }
 
   const authorizedProjectRole = capProjectRole(
-    projectMembership.role,
+    projectMembership?.role ?? 'MEMBER',
     maximumProjectRole(workspaceMembership.organizationRole),
   );
   if (!projectRoleCan(authorizedProjectRole, input.capability)) {

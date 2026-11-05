@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { createApp } from '../src/app';
 import { connectRedis, disconnectRedis } from '../src/db/redis';
+import { ProjectCapability, requireProjectAccess } from '../src/modules/authorization';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { CookieJar, jsonRequest, startServer, type RunningServer } from './helpers/test-server';
 
@@ -901,6 +902,66 @@ function runTests(rawDbUrl: string): void {
         (outsiderList.body.data as Array<{ id: string }>).some((group) => group.id === groupId),
         false,
       );
+    });
+  });
+
+  describe('Phase 7 team project access', () => {
+    test('team membership grants scoped access to its linked project only', async () => {
+      const assignedTeamId = await createTeam(owner, workspaceId, 'Project Access Team');
+      const unrelatedTeamId = await createTeam(owner, workspaceId, 'Unrelated Project Team');
+      const addToTeam = await jsonRequest(`${teamUrl(workspaceId, assignedTeamId)}/members`, {
+        method: 'POST',
+        headers: auth(owner),
+        body: JSON.stringify({ userId: member.id, role: 'MEMBER' }),
+        jar: owner.jar,
+      });
+      assert.equal(addToTeam.status, 201);
+
+      const db = await connectTestDatabase(rawDbUrl);
+      try {
+        const project = await db.prisma.project.create({
+          data: {
+            workspaceId,
+            teamId: assignedTeamId,
+            name: 'Team scoped project',
+            key: `TSP${Date.now()}`,
+            ownerId: owner.id,
+            visibility: 'PRIVATE',
+          },
+        });
+        const unrelatedProject = await db.prisma.project.create({
+          data: {
+            workspaceId,
+            teamId: unrelatedTeamId,
+            name: 'Unrelated team project',
+            key: `UTP${Date.now()}`,
+            ownerId: owner.id,
+            visibility: 'PRIVATE',
+          },
+        });
+
+        const access = await requireProjectAccess(db.prisma, {
+          userId: member.id,
+          workspaceId,
+          projectId: project.id,
+          workspaceRole: 'MEMBER',
+          capability: ProjectCapability.ViewProject,
+        });
+        assert.equal(access.projectMembership, null);
+
+        await assert.rejects(
+          requireProjectAccess(db.prisma, {
+            userId: member.id,
+            workspaceId,
+            projectId: unrelatedProject.id,
+            workspaceRole: 'MEMBER',
+            capability: ProjectCapability.ViewProject,
+          }),
+          (error: unknown) => (error as { code?: string }).code === 'PROJECT_NOT_FOUND',
+        );
+      } finally {
+        await db.prisma.$disconnect();
+      }
     });
   });
 }
