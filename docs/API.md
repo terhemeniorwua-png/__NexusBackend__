@@ -93,6 +93,8 @@ new key before replacing the environment value. Never log either key or a
 decrypted secret. Setup, confirmation, disable, and recovery-code rotation
 require an active authenticated account; disabling also requires the current
 password and a valid TOTP/recovery code.
+Enabling/disabling 2FA, regenerating recovery codes, and failed verification
+attempts write security audit events and send a security notification email.
 
 MFA failures use `MFA_CHALLENGE_INVALID` (expired, malformed or consumed
 challenge), `MFA_CODE_INVALID` (incorrect/replayed/used proof), `MFA_LOCKED`

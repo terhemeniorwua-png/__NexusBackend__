@@ -436,6 +436,33 @@ covers the HTTP workflows and uses local fake S3-compatible storage. It is not
 run in this session: PostgreSQL accepts loopback connections, but the available
 application database URL points to a remote managed host and no local test
 database credentials are configured. The test helper correctly refuses that
-remote database. Phase 3 remains IN PROGRESS until the suite and migrations run
-against an explicitly configured disposable loopback PostgreSQL database and
-Redis database 15.
+remote database. This status was superseded by the verification below.
+
+### Phase 3 avatar and TOTP database verification — 2026-11-05
+
+On `feature/phase-8-audit-remediation`, the two Phase 3 migrations were applied
+to a new PostgreSQL 16 container bound to loopback port 55438 and database
+`nexus_phase3_test`. All 22 repository migrations applied. `prisma migrate
+status` reported the schema up to date; `prisma migrate diff` against
+`prisma/schema.prisma` exited 0 with “No difference detected.” Both Phase 3
+migrations are additive: no existing rows are updated by SQL, and no existing
+tables or columns are dropped. Prisma migrations are forward-only under the
+documented recovery convention; reversal requires a reviewed forward
+correction or restoring a verified backup, not an automatic down migration.
+
+`RUN_PHASE3_DB_TESTS=true` ran the complete API/database suite against that
+disposable database and local Redis DB 15: 75 passed, 0 failed, 0 skipped.
+Coverage includes avatar ownership, replacement/removal and limits; TOTP
+enrollment, challenge-token isolation, replay prevention, recovery-code
+single-use, lockout, session/password-reset behavior, cross-user isolation,
+and audit/email security events. Phase 3 is now **COMPLETED** in `PHASES.md`.
+
+The full database-enabled repository run executed 526 tests with 520 passed,
+6 failed and 0 skipped. The remaining failures are outside Phase 3: Phase 6
+authorization tests fail in organization-role project access and ownership
+transfer (including expected status, ownership role, and audit assertions),
+and a Phase 7 team/project access test fails with `PROJECT_NOT_FOUND`. Phase 5
+workspace deletion/archive handling also failed on the first run; its existing
+expectations were restored with narrowly scoped authorization/status handling,
+and the isolated Phase 5 workspace suite then passed 25/25. Phase 6/7 defects
+remain open and were not changed as part of closing Phase 3.
