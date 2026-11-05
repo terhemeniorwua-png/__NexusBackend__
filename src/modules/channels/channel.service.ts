@@ -60,7 +60,7 @@ export function createChannelService(prisma: PrismaClient = getPrismaClient()) {
       const manager = a.effectiveRole === 'OWNER' || a.effectiveRole === 'PROJECT_MANAGER';
       const implicitLegacyManager = manager && !a.membership.organizationRole;
       const roleFilter = a.effectiveRole === 'COLLABORATOR' ? { type: { not: 'WORKSPACE' as const } } : {};
-      const rows = await prisma.channel.findMany({ where: { workspaceId: i.workspaceId, deletedAt: null, archivedAt: null, ...roleFilter, OR: [
+      const rows = await prisma.channel.findMany({ where: { workspaceId: i.workspaceId, deletedAt: null, ...(manager ? {} : { archivedAt: null }), ...roleFilter, OR: [
         { type: 'WORKSPACE' }, { type: 'PRIVATE', memberships: { some: { userId: i.userId } } },
         { type: 'TEAM', team: { is: { status: 'ACTIVE', deletedAt: null, ...(implicitLegacyManager ? {} : { members: { some: { userId: i.userId } } }) } } },
         { type: 'DEPARTMENT', department: { is: { ...(manager ? {} : { members: { some: { userId: i.userId } } }) } } },
