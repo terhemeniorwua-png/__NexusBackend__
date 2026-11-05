@@ -1,6 +1,13 @@
 # Phase 7 team communication access: channel dependency plan
 
-**Status:** Blocked pending the Phase 10 messaging/channel domain contract. No channel subsystem is present in `src/modules`, Prisma schema, or registered routes. Phase 7 explicitly requires team association with channels where permitted and team-level communication access; this criterion is therefore not complete.
+> **Status update — 2026-11-05:** This document records the original dependency
+> assessment and is superseded for channel access by the owner-approved Phase 7
+> implementation. Channel and ChannelMembership access records, policy, metadata
+> routes, audit/notification integration, and lifecycle cleanup are implemented
+> and verified. Message persistence and delivery, threads, reactions, and
+> attachments remain assigned to the messaging phase.
+
+**Original status (superseded):** Blocked pending the Phase 10 messaging/channel domain contract. At the time, no channel subsystem was present in `src/modules`, Prisma schema, or registered routes. Phase 7 explicitly required team association with channels where permitted and team-level communication access; the approved access-only channel integration now satisfies that dependency. Message functionality remains assigned to the messaging phase.
 
 ## Existing boundaries
 
@@ -26,4 +33,4 @@
 5. Add PostgreSQL tests for team-bound access, non-member denial, membership removal, private channels, guests, cross-workspace references, project visibility, and transaction/concurrency behavior.
 6. Update `docs/API.md`, `docs/openapi.yaml`, and Phase 7/10 progress only after the integrated paths are implemented and verified.
 
-No architecture or schema changes should be made for this item until these inputs are accepted and Phase 10 channel work is authorized. Phase 7 remains in progress meanwhile.
+This was the original implementation boundary before channel access was approved as Phase 7 work. The current Phase 7 completion record supersedes this final status; do not interpret it as a blocker to channel metadata access or as authorization to build messaging functionality outside its own phase.

@@ -10,12 +10,12 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Numbered phase definitions** | 30 |
-| **Current active phase** | Phase 7 — Teams, departments and groups |
+| **Current active phase** | Phase 8 — Projects and Project Visibility |
 | **Aggregate progress** | Not calculated: legacy and canonical phase lists contain duplicate and missing phase numbers |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
 
-**Roadmap numbering reconciliation (2026-11-05):** The file contains a legacy 24-phase dashboard and milestone summary, duplicate legacy/canonical sections for Phase 7, and canonical phase headers through Phase 32. The canonical numbered definitions total 30 because Phases 6 and 29 have no canonical section. Existing phase scopes and numbering are preserved; Phase 7 remains the active phase. The earlier summary list's use of Phases 5–7 for different scopes is historical and does not supersede the canonical Phase 7 section below.
+**Roadmap numbering reconciliation (2026-11-05):** The file contains a legacy 24-phase dashboard and milestone summary, duplicate legacy/canonical sections for Phase 7, and canonical phase headers through Phase 32. The canonical numbered definitions total 30 because Phases 6 and 29 have no canonical section. Existing phase scopes and numbering are preserved. The earlier summary list's use of Phases 5–7 for different scopes is historical and does not supersede the canonical phase sections below. Phase 7 completion and Phase 8 activation are recorded in the latest phase updates.
 
 ---
 
@@ -779,7 +779,7 @@ Implement organisation membership and controlled onboarding.
 
 ---
 
-#### Phase 7 — Teams and organizational structure `[/]`
+#### Phase 7 — Teams and organizational structure `[x]`
 
 **Objective:** Support teams within workspaces and make team membership meaningful across the platform.
 
@@ -815,7 +815,7 @@ Implement organisation membership and controlled onboarding.
 
 ---
 
-# PHASE 7 — Teams, Departments and Groups
+# PHASE 7 — Teams, Departments and Groups — COMPLETED
 
 ### Objectives
 Implement collaboration structures within Company and Institution workspaces.
@@ -851,7 +851,7 @@ Implement collaboration structures within Company and Institution workspaces.
 
 ---
 
-# PHASE 8 — Projects and Project Visibility
+# PHASE 8 — Projects and Project Visibility — IN PROGRESS
 
 ### Objectives
 Implement the shared project management foundation.
@@ -1792,7 +1792,7 @@ Make the backend easy to understand, integrate, and maintain.
 
 ### Current Phase
 
-**Current phase:** Phase 7 remains in progress. Team lifecycle, organization profiles, supported workspace and notification preferences, institution groups, department settings, private logo lifecycle, and project/team/department access integration are implemented in the current working tree. Channel integration is blocked because this backend has no Channel model, route, or messaging module; implementing one here would start the later messaging phase. Phase 8 must not begin until the Channel dependency is implemented and verified. The Phase 3/7 PostgreSQL lifecycle suites have now been verified against a disposable PostgreSQL 16 database. Phase 4.6 also remains in progress; the roadmap does not define how its email workflow dependencies are sequenced against Phase 7/8, so treat this as a recorded sequencing ambiguity rather than skipping the dependency.
+**Current phase:** Phase 7 was marked complete by the owner on 2026-11-05 after the channel-access integration passed its Phase 7 PostgreSQL, unit, typecheck, lint, build, and standard-suite verification. Message persistence and delivery, threads, reactions, and attachments remain deferred to the messaging phase. Phase 8 — Projects and Project Visibility — is now active. Phase 4.6 remains in progress; its email-workflow sequencing ambiguity is independent of Phase 8.
 
 ---
 
@@ -1940,7 +1940,7 @@ Potential future backend capabilities include:
 
 ---
 
-_Last updated: 2026-11-03. Phases 1 to 7 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phases 4.3, 4.4, 4.5 and 4.6 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging, meeting, team and project workflows. The document also describes the planned state of the later phases._
+_Last updated: 2026-11-05. Phases 1 to 7 are implemented and verified, together with corrective Phases 3.1–3.5, 4.1 and 4.2. Phase 8 — Projects and Project Visibility — is active. Phases 4.3, 4.4, 4.5 and 4.6 are partially implemented: the email notifier boundaries are ready, but their runtime callers wait for the owning task, messaging, meeting, team and project workflows. The document also describes the planned state of the later phases._
 
 ## Phase 3 account deletion remediation — 2026-11-05
 
@@ -1963,4 +1963,6 @@ The approved product decision is a 30-day scheduled deletion and recovery period
 
 **Phase 7 completion and frontend dependency update — 2026-11-05:** Implemented the approved storage classification and idempotent deletion of personal-only attachment objects with per-file audit outcomes; shared workspace and collaboration references are preserved. Added incoming ownership-transfer listing/rejection and privacy-request submission, owner retrieval, platform-admin review/decision, and task-comment redaction APIs. Corrected the ownership-transfer initiation OpenAPI response and malformed flow descriptions. Against a disposable PostgreSQL 16 database, the Phase 3 lifecycle/privacy suite passes 71/71, including concurrent redaction conflict handling, and the Phase 7 team/organization/project suite passes 43/43. The regular `npm test` suite passes 243 tests with 2 database-gated skips; typecheck, ESLint, production build, `git diff --check`, and OpenAPI lint (0 errors, 27 existing style warnings) pass. `npm run format:check` reports 9 files, including pre-existing modified files; the three newly added privacy service files were formatted. Invoice listing remains blocked because no invoice model or safe workspace/payer authorization mapping exists; payment records are not invoices. The backend has no messaging/channel records for message redaction, and the frontend remains a separate repository. Phase 7 remains **IN PROGRESS**; Phase 8 was not started. Legal/accounting must confirm applicable retention periods, and product/billing owners must define invoice issuance, payer access and workspace mapping before that API can be safely implemented.
 
-**Phase 7 channel access — 2026-11-05:** Applied migration `20261105060720_phase7_channels` only to a fresh disposable loopback PostgreSQL database (`nexus_channel_test`) after verifying its database identity. The migration adds Channel and ChannelMembership access records plus the approved `description` field and a case-insensitive partial unique active-name index. Added access policy and metadata-only CRUD/private membership APIs. Parent team/department/project membership is checked dynamically; inaccessible or archived parents revoke access. Workspace viewers can view workspace channels, collaborators cannot. Private creator is ADMIN; added members receive MEMBER. Membership rows are removed on workspace membership removal and final account deletion. Message persistence/delivery, search and other channel conversations remain deferred to their own phase. Phase 7 remains **IN PROGRESS** pending final test and contract verification; Phase 8 remains not started.
+**Phase 7 channel access — 2026-11-05:** Applied migration `20261105060720_phase7_channels` only to a fresh disposable loopback PostgreSQL database (`nexus_channel_test`) after verifying its database identity. The migration adds Channel and ChannelMembership access records plus the approved `description` field and a case-insensitive partial unique active-name index. Added access policy and metadata-only CRUD/private membership APIs. Parent team/department/project membership is checked dynamically; inaccessible or archived parents revoke access. Workspace viewers can view workspace channels, collaborators cannot. Private creator is ADMIN; added members receive MEMBER. Membership rows are removed on workspace membership removal and final account deletion. Message persistence/delivery, search and other channel conversations remain deferred to their own phase. This historical note is superseded by the completion record below.
+
+**Phase 7 completion — 2026-11-05 (owner-approved):** Channel access integration is complete: Channel and ChannelMembership models, migration `20261105060720_phase7_channels`, shared `requireChannelAccess` policy, channel access routes, audit and notification integration, and membership cleanup on workspace removal and account deletion. Verification: Phase 7 PostgreSQL suite 47/47; channel policy unit tests 18/18; typecheck, lint, build, and standard unit suite passed. Messaging—messages, delivery, threads, reactions, and attachments—remains deferred to the messaging phase. Phase 7 is **COMPLETED**.
