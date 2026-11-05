@@ -278,12 +278,78 @@ events return `{ "success": true, "data": { "received": true } }`.
 
 ## Other APIs not exposed
 
-The current application router does not expose general project CRUD, tasks, messaging,
+The current application router does not expose tasks, messaging,
 general notifications, files, documents, calendar, meetings, forms, search,
 integrations, automation, or AI endpoints. Department routes cover listing,
 creation, renaming, and member assignment or removal; department deletion and
 department-settings routes are not registered.
 Do not document planned behavior as live API functionality.
+
+## Projects and project visibility (Phase 8 — in progress)
+
+Project records are workspace-scoped. `WORKSPACE` projects are visible to
+active workspace members. `DEPARTMENT_TEAM` projects inherit access from their
+active department membership, or from active team membership when assigned to
+a team; a team association narrows access over department membership. `PRIVATE`
+projects require explicit project membership or ownership, even when a team or
+department is associated with them. Organization roles
+do not independently grant private-project access. Project-level `VIEWER`
+members can read but cannot mutate; `MEMBER` can perform project contribution
+actions; `PROJECT_MANAGER` can manage project metadata and members, subject to
+the workspace-role ceiling. Project managers/owners are assigned by the server.
+All project and milestone reads use the same authorization policy. Cross-
+workspace and inaccessible restricted project IDs are returned as 404.
+
+`DEPARTMENT_TEAM` creation/update requires an active same-workspace team or
+department. Projects expose `category`, `labels`, dates, status, visibility,
+owner, member/task counts, and the caller's explicit project role. Listing is
+cursor-paginated (`cursor` is the last project ID, `limit` defaults to 25 and
+is capped at 100) and applies visibility in the database query. Archived
+projects are excluded by default and may be requested with
+`includeArchived=true`. Project deletion is a soft deletion; restore applies
+to archived projects.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| GET | `/workspaces/{workspaceId}/projects` | Active workspace member | Cursor-paginated visible projects; supports `status`, `visibility`, `teamId`, `departmentId`, `search`, and `includeArchived`. |
+| POST | `/workspaces/{workspaceId}/projects` | Workspace role with project creation capability | Create project; body includes `name`, `key`, optional `description`, `category`, `labels`, `visibility`, `teamId`, `departmentId`, `startDate`, `dueDate`. Owner and initial PROJECT_MANAGER membership are server-assigned. |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}` | Project reader | Read an authorized project. |
+| PATCH | `/workspaces/{workspaceId}/projects/{projectId}` | Project manager | Update metadata, scope, visibility, category/labels, lifecycle status (excluding ARCHIVED), and dates. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/transfer-ownership` | Current project owner or workspace OWNER/PROJECT_MANAGER (including organization owner/admin) | Immediately transfer ownership. Body: `{newOwnerId, previousOwnerRole?}` where prior role is `MANAGER` (default), `MEMBER`, or `REMOVE`. No notification is sent. |
+| DELETE | `/workspaces/{workspaceId}/projects/{projectId}` | Authorized project manager/owner | Soft-delete project. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/archive` | Project manager | Archive project. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/restore` | Project manager | Restore archived project to its prior status (or PLANNING if no archive record exists). |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/members` | Project member manager | List project members. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/members` | Project member manager | Add/update member role (`PROJECT_MANAGER`, `MEMBER`, `VIEWER`) for an active workspace member. |
+| PATCH | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | Project member manager | Change project role. |
+| DELETE | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | Project member manager | Remove project membership (owner cannot be removed). |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/activity` | Project reader | Read cursor-paginated project audit activity. |
+| GET/POST | `/workspaces/{workspaceId}/projects/{projectId}/milestones` | Project reader / project manager | List milestones or create one (`name`, optional `description`, `dueDate`, `position`). |
+| PATCH/DELETE | `/workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}` | Project manager | Update or delete a milestone. Completion is represented by `completedAt`; update accepts `completed: boolean`. |
+
+Project mutations and membership/milestone changes write audit records in the
+same database transaction. Membership addition also creates an in-app
+notification. Task, message, file, and meeting APIs are not currently exposed;
+their own phases must use the shared `requireProjectAccess` policy before
+exposing project-associated resources. Phase 8 remains in progress until all
+roadmap settings and related-resource integration criteria are verified.
+
+Ownership transfer is an exception to ordinary project-manager authority:
+project-level managers cannot force-transfer ownership. Workspace owners,
+workspace project managers/admins, and organization owners/admins can force
+transfer, but only if they can already view the project. The recipient must be
+an active workspace member with an eligible organization role. PRIVATE project
+recipients may be added to the project in the transfer transaction. For
+DEPARTMENT_TEAM projects, a team link takes precedence over department scope;
+the recipient must belong to the active linked team, or, for a department-only
+project, to the linked department. This is an OR between the supported parent
+scope alternatives, not an AND when a team belongs to a department. The old
+owner's resulting role is applied atomically, and exactly one transfer activity
+record identifies actor, old/new owner, resulting role, and forced-admin flag.
+Archived projects may transfer; soft-deleted projects return 404. Errors use
+400 for self-transfer, 403 for a visible unauthorized caller, 404 for an
+invisible project, 409 for a concurrent owner change or manager invariant, and
+422 for an ineligible recipient.
 
 ## Channel access (Phase 7)
 

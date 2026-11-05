@@ -43,6 +43,8 @@ tags:
     description: Invitation links, their preview and their acceptance
   - name: Teams
     description: Workspace-scoped teams and team membership
+  - name: Projects
+    description: Workspace-scoped projects, visibility, project membership, activity, and milestones
   - name: Billing
     description: Workspace subscription and payment management
 paths:
@@ -4158,6 +4160,271 @@ paths:
         '200': { description: Membership removed. }
         '404': { description: Channel is missing, archived, inaccessible, or membership does not exist. }
 
+  /workspaces/{workspaceId}/projects:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Projects]
+      operationId: listWorkspaceProjects
+      summary: List projects visible to the caller
+      description: Visibility is applied in the database query. PRIVATE requires project ownership or explicit project membership, even when a parent team or department is linked. DEPARTMENT_TEAM inherits from active parent membership. Supports cursor, limit (1–100), status, visibility, teamId, departmentId, search and includeArchived.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cursor, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: status, in: query, schema: { type: string, enum: [PLANNING, ACTIVE, ON_HOLD, COMPLETED, ARCHIVED] } }
+        - { name: visibility, in: query, schema: { type: string, enum: [PRIVATE, DEPARTMENT_TEAM, WORKSPACE] } }
+        - { name: teamId, in: query, schema: { type: string, format: uuid } }
+        - { name: departmentId, in: query, schema: { type: string, format: uuid } }
+        - { name: search, in: query, schema: { type: string, minLength: 1, maxLength: 100 } }
+        - { name: includeArchived, in: query, schema: { type: boolean } }
+      responses:
+        '200': { description: Cursor page of projects visible to the caller, content: { application/json: { schema: { $ref: '#/components/schemas/ProjectPageResponse' } } } }
+        '401': { description: Authentication required. }
+        '404': { description: Workspace is unavailable. }
+    post:
+      tags: [Projects]
+      operationId: createWorkspaceProject
+      summary: Create a project
+      description: Workspace creation permission is required. Owner and initial project-manager membership are assigned by the server.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectCreateRequest' }
+      responses:
+        '201': { description: Project created, with initial owner membership, audit record and response summary., content: { application/json: { schema: { $ref: '#/components/schemas/ProjectResponse' } } } }
+        '400': { description: Invalid project fields or missing team/department scope for DEPARTMENT_TEAM visibility. }
+        '403': { description: Project creation is not permitted. }
+        '409': { description: Project key already exists in this workspace. }
+  /workspaces/{workspaceId}/projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      operationId: getWorkspaceProject
+      summary: Read an authorized project
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Project summary., content: { application/json: { schema: { $ref: '#/components/schemas/ProjectResponse' } } } }
+        '404': { description: Project is missing, outside the workspace, or not visible to the caller. }
+    patch:
+      tags: [Projects]
+      operationId: updateWorkspaceProject
+      summary: Update project metadata and visibility
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectUpdateRequest' }
+      responses:
+        '200': { description: Updated project summary., content: { application/json: { schema: { $ref: '#/components/schemas/ProjectResponse' } } } }
+        '403': { description: Project mutation is not permitted. }
+        '404': { description: Project is missing, archived, outside the workspace, or inaccessible. }
+        '409': { description: Duplicate project key or inconsistent team/department scope. }
+    delete:
+      tags: [Projects]
+      operationId: deleteWorkspaceProject
+      summary: Soft-delete an authorized project
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Project marked deleted; dependent project data is not hard-deleted. }
+        '403': { description: Project deletion is not permitted. }
+        '404': { description: Project is missing or inaccessible. }
+  /workspaces/{workspaceId}/projects/{projectId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Projects]
+      operationId: archiveWorkspaceProject
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Project status is ARCHIVED. }
+        '403': { description: Project archive permission is required. }
+        '404': { description: Project is missing or inaccessible. }
+  /workspaces/{workspaceId}/projects/{projectId}/transfer-ownership:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Projects]
+      operationId: transferProjectOwnership
+      summary: Immediately transfer project ownership
+      description: The current project owner or a workspace OWNER/PROJECT_MANAGER, including organization owner/admin, may transfer. A project-level manager cannot force-transfer. Archived projects are allowed; soft-deleted or invisible projects return 404. No notification is sent.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferProjectOwnershipRequest' }
+      responses:
+        '200':
+          description: Ownership and the old owner's resulting membership role were changed atomically; one activity entry was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectOwnershipTransferResponse' }
+        '400': { description: The requested new owner is already the current owner. }
+        '403': { description: The caller can view the project but is neither its owner nor a workspace administrator. }
+        '404': { description: The project is invisible, outside the workspace, or soft-deleted. }
+        '409': { description: Concurrent ownership change or the manager/owner invariant would be violated. }
+        '422': { description: The recipient is inactive, outside the workspace, role-ineligible, or outside the project team/department scope. }
+  /workspaces/{workspaceId}/projects/{projectId}/restore:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Projects]
+      operationId: restoreWorkspaceProject
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Project is restored to its prior status, or PLANNING if no previous archive record exists. }
+        '403': { description: Project restore permission is required. }
+        '404': { description: Project is missing or inaccessible. }
+  /workspaces/{workspaceId}/projects/{projectId}/members:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      operationId: listProjectMembers
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Authorized project roster. }
+        '403': { description: Project roster is not available to this role. }
+        '404': { description: Project is missing or inaccessible. }
+    post:
+      tags: [Projects]
+      operationId: addProjectMember
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [userId]
+              properties:
+                userId: { type: string, format: uuid }
+                role: { type: string, enum: [PROJECT_MANAGER, MEMBER, VIEWER], default: MEMBER }
+      responses:
+        '201': { description: Membership created/updated and target notified. }
+        '404': { description: Project or active workspace target member is unavailable. }
+        '409': { description: Project owner cannot be assigned a non-manager role. }
+  /workspaces/{workspaceId}/projects/{projectId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Projects]
+      operationId: updateProjectMember
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties: { role: { type: string, enum: [PROJECT_MANAGER, MEMBER, VIEWER] } }
+      responses:
+        '200': { description: Membership role updated. }
+        '403': { description: Project member management is not permitted. }
+        '404': { description: Project or membership is unavailable. }
+    delete:
+      tags: [Projects]
+      operationId: removeProjectMember
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Membership removed. }
+        '404': { description: Project or membership is unavailable. }
+        '409': { description: Project owner cannot be removed. }
+  /workspaces/{workspaceId}/projects/{projectId}/activity:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      operationId: listProjectActivity
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: cursor, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        '200': { description: Cursor-paginated project audit events. }
+        '404': { description: Project is missing or inaccessible. }
+  /workspaces/{workspaceId}/projects/{projectId}/milestones:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      operationId: listProjectMilestones
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Milestones ordered by position and creation time. }
+        '404': { description: Project is missing or inaccessible. }
+    post:
+      tags: [Projects]
+      operationId: createProjectMilestone
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                description: { type: [string, 'null'], maxLength: 2000 }
+                dueDate: { type: [string, 'null'], format: date-time }
+                position: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '201': { description: Created milestone and project activity record. }
+        '403': { description: Project update permission is required. }
+        '404': { description: Project is missing, archived, or inaccessible. }
+  /workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/ProjectId'
+      - { name: milestoneId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Projects]
+      operationId: updateProjectMilestone
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                description: { type: [string, 'null'], maxLength: 2000 }
+                dueDate: { type: [string, 'null'], format: date-time }
+                completed: { type: boolean }
+                position: { type: integer, minimum: 0 }
+      responses:
+        '200': { description: Updated milestone. }
+        '404': { description: Project or milestone is missing, archived, or inaccessible. }
+    delete:
+      tags: [Projects]
+      operationId: deleteProjectMilestone
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Milestone deleted. }
+        '404': { description: Project or milestone is missing, archived, or inaccessible. }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -6161,6 +6428,102 @@ components:
       properties:
         success: { type: boolean, const: true }
         data: { $ref: '#/components/schemas/InstitutionGroupMember' }
+    ProjectSummary:
+      type: object
+      required: [id, workspaceId, name, key, category, labels, status, visibility, ownerId, memberCount, taskCount, myRole, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        teamId: { type: [string, 'null'], format: uuid }
+        departmentId: { type: [string, 'null'], format: uuid }
+        name: { type: string }
+        key: { type: string }
+        description: { type: [string, 'null'] }
+        category: { type: [string, 'null'] }
+        labels: { type: array, items: { type: string } }
+        status: { type: string, enum: [PLANNING, ACTIVE, ON_HOLD, COMPLETED, ARCHIVED] }
+        visibility: { type: string, enum: [PRIVATE, DEPARTMENT_TEAM, WORKSPACE] }
+        startDate: { type: [string, 'null'], format: date-time }
+        dueDate: { type: [string, 'null'], format: date-time }
+        ownerId: { type: string, format: uuid }
+        owner: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string } } }
+        memberCount: { type: integer, minimum: 0 }
+        taskCount: { type: integer, minimum: 0 }
+        myRole: { type: [string, 'null'], enum: [PROJECT_MANAGER, MEMBER, VIEWER, null] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProjectCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, key]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 100 }
+        key: { type: string, minLength: 2, maxLength: 16, pattern: '^[A-Za-z0-9_-]+$' }
+        description: { type: [string, 'null'], maxLength: 5000 }
+        category: { type: [string, 'null'], maxLength: 80 }
+        labels: { type: array, maxItems: 30, items: { type: string, minLength: 1, maxLength: 40 } }
+        visibility: { type: string, enum: [PRIVATE, DEPARTMENT_TEAM, WORKSPACE], default: WORKSPACE }
+        teamId: { type: [string, 'null'], format: uuid }
+        departmentId: { type: [string, 'null'], format: uuid }
+        startDate: { type: [string, 'null'], format: date-time }
+        dueDate: { type: [string, 'null'], format: date-time }
+    ProjectUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 2, maxLength: 100 }
+        key: { type: string, minLength: 2, maxLength: 16, pattern: '^[A-Za-z0-9_-]+$' }
+        description: { type: [string, 'null'], maxLength: 5000 }
+        category: { type: [string, 'null'], maxLength: 80 }
+        labels: { type: array, maxItems: 30, items: { type: string, minLength: 1, maxLength: 40 } }
+        visibility: { type: string, enum: [PRIVATE, DEPARTMENT_TEAM, WORKSPACE] }
+        status: { type: string, enum: [PLANNING, ACTIVE, ON_HOLD, COMPLETED] }
+        teamId: { type: [string, 'null'], format: uuid }
+        departmentId: { type: [string, 'null'], format: uuid }
+        startDate: { type: [string, 'null'], format: date-time }
+        dueDate: { type: [string, 'null'], format: date-time }
+    TransferProjectOwnershipRequest:
+      type: object
+      additionalProperties: false
+      required: [newOwnerId]
+      properties:
+        newOwnerId: { type: string, format: uuid }
+        previousOwnerRole: { type: string, enum: [MANAGER, MEMBER, REMOVE], default: MANAGER }
+    ProjectOwnershipTransferResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [projectId, previousOwnerId, ownerId, ownerRole, previousOwnerRole, previousOwnerResultingRole, forcedAdminTransfer, updatedAt]
+          properties:
+            projectId: { type: string, format: uuid }
+            previousOwnerId: { type: string, format: uuid }
+            ownerId: { type: string, format: uuid }
+            ownerRole: { type: string, const: PROJECT_MANAGER }
+            previousOwnerRole: { type: string, enum: [MANAGER, MEMBER, REMOVE] }
+            previousOwnerResultingRole: { type: string, enum: [PROJECT_MANAGER, MEMBER, REMOVED] }
+            forcedAdminTransfer: { type: boolean }
+            updatedAt: { type: string, format: date-time }
+    ProjectResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/ProjectSummary' }
+    ProjectPageResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [items, nextCursor]
+          properties:
+            items: { type: array, items: { $ref: '#/components/schemas/ProjectSummary' } }
+            nextCursor: { type: [string, 'null'], format: uuid }
     EmailWebhookResponse:
       type: object
       required: [success, data]
