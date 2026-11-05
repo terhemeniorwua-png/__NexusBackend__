@@ -10,7 +10,7 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Numbered phase definitions** | 30 |
-| **Current active phase** | Phase 8 — Projects and Project Visibility |
+| **Current active phase** | Phase 3 — Authentication and account lifecycle (reopened by audit) |
 | **Aggregate progress** | Not calculated: legacy and canonical phase lists contain duplicate and missing phase numbers |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
@@ -217,7 +217,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 
 ---
 
-#### Phase 3 — Authentication and account lifecycle `[x]`
+#### Phase 3 — Authentication and account lifecycle `[IN PROGRESS]`
 
 **Objective:** Build the complete account system from registration through recovery and deletion.
 
@@ -249,6 +249,8 @@ This tracker must be treated as the authoritative implementation sequence for ba
 - Unverified accounts cannot access protected endpoints
 
 **Blockers / Notes:** Verified on 2026-10-21. Session strategy decided: a short-lived HS256 access token (15 min) returned in the body and sent as `Authorization: Bearer`, plus an opaque 32-byte refresh token delivered in the httpOnly `nexus_rt` cookie whose SHA-256 digest is stored in `Session.refreshTokenHash`. Every authenticated request re-checks the session row, so sign-out, password change and password reset revoke access immediately. The refresh token rotates on every use and keeps `previousRefreshTokenHash`, so a replayed token triggers `SESSION_REUSE_DETECTED` and revokes every session of the account. Cookie-authenticated requests must also send `x-csrf-token` (HMAC of the session id under a key derived from `JWT_ACCESS_SECRET`); body-supplied refresh tokens are exempt. Implemented as `src/modules/auth` (service, controller, routes, session, one-time token, access token, CSRF and security-event modules), `src/modules/users` (profile read/update), `src/middleware/authenticate.ts`, `src/middleware/rate-limit.ts`, `src/services/cache/rate-limit-store.ts` (Redis with in-memory fallback), `src/services/password.ts` (bcrypt, 72-byte limit enforced in the schema and the service) and `src/services/email` (delivery seam with a logging sender; the provider adapter is Phase 4 work). Rate limits cover login, registration, verification and password requests per IP address and per account using `express-rate-limit` v8 with a `RATE_LIMIT_NAMESPACE`-prefixed Redis key. Verification, reset and email-change tokens are single-use, expiring, stored only as digests, and the newest token invalidates older ones of the same purpose. Account events are written to `AuditLog` with a null `workspaceId` and never contain passwords, tokens or links. Schema changes: `AuthToken.targetEmail` made optional, `AuditLog.workspaceId` made nullable with a `createdAt` index, and `Session.previousRefreshTokenHash` added with a unique index — applied through migrations `20261021105314_phase3_auth_lifecycle` and `20261021105500_phase3_session_rotation`. Verification: `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` pass; `npm test` passes 63/63 with `RUN_PHASE2_DB_TESTS=true RUN_PHASE3_DB_TESTS=true DATABASE_URL=postgresql://nexus:nexus@localhost:5433/nexus_test` against an ephemeral PostgreSQL 16 container and local Redis. The suite covers the full register → verify → login → logout flow, expired and reused token rejection, refresh rotation and replay detection, CSRF enforcement, session revocation on sign-out and password reset, rate limiting of brute-force attempts, blocked access for unverified accounts, email change confirmation, deactivation, deletion with anonymisation, profile updates and the audit trail. Phase 4 replaced the logging email sender with the transactional provider adapter, so the one-time links are now delivered through the outbox.
+
+**Full audit correction — 2026-11-05:** Core authentication and account-lifecycle criteria are implemented, but the Phase 3 deliverables also require profile-image upload integration and optional two-factor authentication. The current profile API stores a URL string only; no authenticated image upload/storage path, 2FA enrollment or verification flow, recovery codes, or related tests exist. The prior `[x]` marker overstated completion. Phase 3 is **IN PROGRESS** until these requirements are implemented or explicitly deferred by the product owner. Existing Phase 3.1–3.5 lifecycle hardening remains separately recorded below.
 
 ---
 

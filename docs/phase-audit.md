@@ -315,3 +315,98 @@ database-gated skips; typecheck, build, targeted ESLint/formatting, OpenAPI
 reference validation, and diff checks pass. Repository-wide lint remains
 blocked by the pre-existing unused `data` parameter in
 `tests/billing-service.test.ts:202`; formatting reports 12 unrelated files.
+
+---
+
+## 8. Current branch audit — 2026-11-05
+
+This addendum supersedes earlier phase classifications where the merged
+repository has since changed. The active roadmap is `PHASES.md`; it records
+legacy duplicate phase sections and missing canonical phase numbers. Phase 8
+was active before this full audit. The audit reopened Phase 3 because
+its required profile-image upload and optional two-factor authentication
+deliverables are absent; the tracker now identifies Phase 3 as active. The
+Phase 8 work was preserved, but no later phase should be advanced until the
+Phase 3 requirements are resolved.
+
+### Repository assessment
+
+The inspected application uses Node.js 20+, strict TypeScript 5.9, Express 5,
+PostgreSQL through Prisma 6, and Redis for shared rate limiting and transient
+coordination. It uses `node:test` with `tsx`; HTTP routes are registered in
+`src/routes/index.ts`, validation is route-level, services own business and
+database operations, and authorization is centralized under
+`src/modules/authorization`. Transactional email uses an outbox with bounded
+retries and provider webhooks. A private S3-compatible adapter is used for
+organization logos and account-deletion file cleanup. There is no general
+durable job/event processor, message persistence, or WebSocket delivery
+implementation in the inspected TypeScript backend. Paystack billing routes
+and signed webhook handling are implemented. Python AI service integration is
+not present in this repository.
+
+`AGENTS.md`, `README.md`, `PHASES.md`, `docs/API.md`, `docs/openapi.yaml`,
+`docs/planned-models.md`, `docs/migration-recovery.md`,
+`docs/ACCOUNT_LIFECYCLE.md`, the Phase 8 modules/tests, and the
+`.kiro/skills/nexus-backend`, `nexus-database`, and `nexus-testing` guidance
+were inspected. The requested lowercase `agent.md`, `phases.md`, and root
+`skill.md`, plus `branding.md`, are absent; the repository uses uppercase
+AGENTS/PHASES names and scoped skills instead. The audit table at the start
+of this file was made on a Phase 5 branch and is historical.
+
+### Phase status through the active phase
+
+| Phase | Original status | Verified status | Evidence and action |
+|---|---|---|---|
+| 1 — Foundation and infrastructure | COMPLETED | VERIFIED COMPLETE | Current typecheck, lint, build, full unit suite and HTTP foundation tests pass; historical disposable PostgreSQL/Redis smoke verification is recorded in `PHASES.md`. |
+| 1.2 — Redis rate limiting | COMPLETED | VERIFIED COMPLETE | Shared Redis store and fail-closed behavior have unit coverage; the real-Redis test is opt-in and was not enabled in this run. |
+| 1.3 — Legacy JavaScript cleanup | COMPLETED | VERIFIED COMPLETE | TypeScript implementations are active; the roadmap records no source JavaScript or stale references. |
+| 2 — Database architecture | COMPLETED | VERIFIED COMPLETE | Prisma client generation succeeded in the build; migration deployment and recovery were historically verified on disposable PostgreSQL and documented. No database was migrated in this run. |
+| 2.1 — Database model audit | COMPLETED | VERIFIED COMPLETE | Deferred model inventory and migration/schema review are documented in `docs/planned-models.md` and `PHASES.md`. |
+| 2.2 — Migration recovery | COMPLETED | VERIFIED COMPLETE | Recovery script and disposable database evidence are recorded in `docs/migration-recovery.md` and `PHASES.md`; not rerun in this audit. |
+| 3 — Authentication and account lifecycle | COMPLETED | PARTIALLY COMPLETE | Core authentication/lifecycle code and tests pass, but required profile-image upload and 2FA enrollment/verification are absent. Corrected the tracker to IN PROGRESS; implementation or product-approved deferral is outstanding. |
+| 3.1–3.5 — Account lifecycle hardening | COMPLETED | VERIFIED COMPLETE | Changes and PostgreSQL race/rollback evidence are recorded in `PHASES.md`; current standard tests pass, while the Phase 3 DB suite was not enabled here. |
+| 4 — Workspace lifecycle (legacy detailed section) | COMPLETED | VERIFIED COMPLETE | Workspace type, ownership, membership, deletion/recovery and storage behavior have services, migrations and historical disposable PostgreSQL evidence. |
+| 4.1–4.2 — Email delivery foundation | COMPLETED | VERIFIED COMPLETE | Bounded retry and log privacy implementations/tests are present and current unit coverage passes. |
+| 4.3–4.6 — Email workflow integration | IN PROGRESS | PARTIALLY COMPLETE | Notifier boundaries and provider handling exist, but production callers depend on task, mention, meeting and invitation workflows that are absent or incomplete. Latest roadmap entries keep these phases open. |
+| 5 — Membership, invitations and join requests | COMPLETED | VERIFIED COMPLETE | Services, authorization, lifecycle and isolation tests are present; earlier disposable PostgreSQL evidence is recorded. DB suites were not enabled in this run. |
+| 6 — Roles and authorization (legacy section; no canonical header) | COMPLETED | VERIFIED COMPLETE | Central policy is consumed by workspace, team, channel and project modules. Current project policy tests pass; the Phase 6 DB suite was not enabled here. |
+| 7 — Teams, departments and groups | COMPLETED | VERIFIED COMPLETE | Organization profiles, private logos, groups, notification preferences, team/department APIs and channel access are present. Owner-approved completion and PostgreSQL evidence are recorded in the latest Phase 7 update. |
+| 8 — Projects and project visibility | IN PROGRESS | PARTIALLY COMPLETE; one access-control defect corrected | Project CRUD, lifecycle, membership, ownership transfer, milestones, audit, migrations and API contract are present. A leak allowing parent membership to expose PRIVATE projects was fixed. Focused tests pass 20/20; the standard suite passes 275 with 0 failures and 2 skipped; typecheck, lint and build pass. The new PostgreSQL regression was not run. Project-scoped task/file/meeting/message routes do not exist yet and must use the shared policy when implemented. Project settings are explicitly deferred. |
+
+### Current Phase 8 remediation
+
+The access policy now checks parent team or department membership only for
+`DEPARTMENT_TEAM` visibility. The list predicate follows the same rule, so a
+private project with a linked parent is neither readable nor listed to a
+parent member without explicit project membership. Added focused policy tests
+and an opt-in PostgreSQL read/list regression. Updated `docs/API.md`,
+`docs/openapi.yaml`, and the Phase 8 tracker note. The PostgreSQL regression is
+pending a verified loopback test URL with `RUN_PHASE8_DB_TESTS=true`; the
+helper refuses production or remote databases.
+
+### Verification in this session
+
+| Check | Result |
+|---|---|
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass |
+| `npm run build` | Pass; Prisma client generated from the current schema |
+| Focused project unit/schema tests | Pass, 20/20 |
+| `npm test` | Pass, 275 passed, 0 failed, 2 skipped |
+| Phase 8 PostgreSQL regression | Not run; no explicit database flag/configuration |
+| OpenAPI YAML parse | Pass, 103 paths |
+| Focused Prettier check | Pass |
+| `git diff --check` | Pass |
+
+The local branch `feature/phase-8-projects` contains a Phase 8 implementation
+commit and is two commits ahead of its configured older upstream. A separate
+remote branch with the same local name is based on an older repository tree;
+merging or pushing to that reference would risk replacing newer project work.
+This audit therefore must be pushed under a new feature branch name. The
+implementation files are committed locally in the WIP commit and merge shown
+in Git history; only the audit/tracker documentation changes from this pass
+remain unstaged.
+
+The active phase is now Phase 3 pending implementation or explicit product
+deferral of the missing requirements. Phase 8 is not marked complete and no
+Phase 9 work began.
