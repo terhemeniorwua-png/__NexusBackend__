@@ -61,6 +61,11 @@ The backend does not provide frontend screens, notifications or workflow orchest
 | GET    | `/users/me` | Authenticated, active account | Read the caller's profile.   |
 | PATCH  | `/users/me` | Authenticated, active account | Update the caller's profile. |
 
+Profile updates accept an `avatarUrl` value as a URL. The backend does not
+currently expose a profile-image upload endpoint or two-factor authentication
+enrollment/verification endpoints; these Phase 3 requirements remain
+incomplete.
+
 ## Workspaces
 
 | Method | Path                                                                          | Access                                     | Purpose                                        |
