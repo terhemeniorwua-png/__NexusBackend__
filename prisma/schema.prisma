@@ -124,6 +124,7 @@ enum ProjectStatus {
 
 enum ProjectVisibility {
   PRIVATE
+  DEPARTMENT_TEAM
   WORKSPACE
 }
 
