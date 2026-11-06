@@ -1014,6 +1014,8 @@ Support:
 - Channel permissions are enforced.
 - Message notifications remain separate from general notifications.
 
+**Phase 10 implementation update — 2026-11-06:** Implemented message persistence, channel-scoped messaging, replies (one level), reactions, read receipts, unread counts, message pinning, edit/delete with permission checks, and Socket.IO server with JWT authentication, workspace/channel rooms, typing indicators, and presence. Migration `20261106053637_phase10_messaging_models` adds `Message`, `MessageReaction`, and `MessageReadReceipt` models. 11 message endpoints mounted at `/workspaces/:workspaceId/channels/:channelId/messages`. All message operations enforce channel access via `requireChannelAccess`. Message audit actions recorded. DB integration tests: 11/11 pass. Committed as `2d68f07` on `feature/phase-10-realtime-messaging`, pushed to origin. Deferred: @mention parsing, message attachments (Phase 12), message search, saved messages, conversation creation beyond existing channels, and message-to-task conversion.
+
 ---
 
 # PHASE 11 — Notification and Activity Infrastructure
