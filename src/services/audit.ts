@@ -65,6 +65,25 @@ export const ChannelAuditAction = {
   Deleted: 'channel.deleted', MemberAdded: 'channel.member_added', MemberRemoved: 'channel.member_removed',
 } as const;
 
+export const TaskAuditAction = {
+  TaskCreated: 'task.created',
+  TaskUpdated: 'task.updated',
+  TaskDeleted: 'task.deleted',
+  TaskArchived: 'task.archived',
+  TaskRestored: 'task.restored',
+  TaskCompleted: 'task.completed',
+  TaskReopened: 'task.reopened',
+  AssigneeAdded: 'task.assignee_added',
+  AssigneeRemoved: 'task.assignee_removed',
+  DependencyAdded: 'task.dependency_added',
+  DependencyRemoved: 'task.dependency_removed',
+  CommentCreated: 'task.comment_created',
+  CommentUpdated: 'task.comment_updated',
+  CommentDeleted: 'task.comment_deleted',
+} as const;
+
+export type TaskAuditActionValue = (typeof TaskAuditAction)[keyof typeof TaskAuditAction];
+
 export interface AuditEventInput {
   workspaceId?: string | null;
   actorId?: string | null;

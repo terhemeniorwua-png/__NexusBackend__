@@ -30,6 +30,7 @@ import { createProjectOrganizationRouter } from '../modules/projects/organizatio
 import { createProjectRouter } from '../modules/projects/project.routes';
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 import { createChannelRouter } from '../modules/channels/channel.routes';
+import { createTaskRouter } from '../modules/tasks/task.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -74,6 +75,13 @@ export function createApiRouter({
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
   router.use('/workspaces/:workspaceId/projects', createProjectOrganizationRouter({ config }));
   router.use('/workspaces/:workspaceId/projects', createProjectRouter({ config }));
+  // Tasks are nested under projects:
+  // /workspaces/:workspaceId/projects/:projectId/tasks/…
+  // The task router uses mergeParams to access workspaceId and projectId.
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/tasks',
+    createTaskRouter({ config }),
+  );
   router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
