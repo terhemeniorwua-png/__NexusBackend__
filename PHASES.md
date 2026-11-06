@@ -1143,6 +1143,8 @@ Provide document collaboration capabilities within Nexus.
 - Document history is maintained where supported.
 - Documents can be connected to relevant workspace resources.
 
+**Phase 13 implementation update — 2026-11-06:** Implemented Document (title, content, project/task links), DocumentRevision (auto-saved before each content update), and DocumentComment (soft delete) models. Migration `20261106182450_phase13_documents` applied. 9 endpoints at `/workspaces/:workspaceId/documents` covering CRUD, revision history, and comments. Access enforced via `requireProjectAccess` (ViewFiles/ManageFiles) or document authorship. Audit events recorded for create, update, delete, and comment creation. Also fixed duplicate `BillingSeatSync` migration to be idempotent. Committed on `feature/phase-13-documents`. Verification: tsc PASS, lint PASS, build PASS, 290 pass / 0 fail / 2 skip.
+
 ---
 
 # PHASE 14 — Calendar and Scheduling
