@@ -131,7 +131,8 @@ export const recoveryCodeRegenerateSchema = z
 
 export const verifyEmailSchema = z
   .object({
-    token: z.string().trim().min(20, 'The verification token is invalid').max(512),
+    email: emailSchema,
+    code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit verification code'),
   })
   .strict();
 
@@ -149,8 +150,9 @@ export const passwordResetRequestSchema = z
 
 export const passwordResetSchema = z
   .object({
-    token: z.string().trim().min(20, 'The reset token is invalid').max(512),
-    password: passwordSchema,
+    email: emailSchema,
+    code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit reset code'),
+    newPassword: passwordSchema,
   })
   .strict();
 

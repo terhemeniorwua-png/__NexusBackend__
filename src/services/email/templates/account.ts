@@ -24,12 +24,12 @@ export interface AccountEmailInput {
 }
 
 export interface VerificationEmailInput extends AccountEmailInput {
-  verificationUrl: string;
+  code: string;
   expiresAt: Date;
 }
 
 export interface PasswordResetEmailInput extends AccountEmailInput {
-  resetUrl: string;
+  code: string;
   expiresAt: Date;
 }
 
@@ -67,10 +67,10 @@ export function buildVerificationEmail(input: VerificationEmailInput): EmailMess
       preheader: `Confirm your email address to activate your ${input.brand.appName} account.`,
       paragraphs: [
         `Hi ${input.name},`,
-        `Confirm your email address to activate your ${input.brand.appName} account. This link expires in ${minutes} minutes and can only be used once.`,
+        `Confirm your email address using this 6-digit code. It expires in ${minutes} minutes and can only be used once.`,
+        "If you didn't request this, ignore this email.",
       ],
-      action: { label: 'Verify email address', url: input.verificationUrl },
-      note: 'If you did not create an account, you can safely ignore this email.',
+      code: input.code,
       footerNote: 'This is an automated message. Please do not reply to it.',
     },
     input.brand,
@@ -78,7 +78,7 @@ export function buildVerificationEmail(input: VerificationEmailInput): EmailMess
 
   return {
     to: input.to,
-    subject: `Verify your ${input.brand.appName} email address`,
+    subject: `Your ${input.brand.appName} email verification code`,
     template: 'account_verification',
     text,
     html,
@@ -95,11 +95,11 @@ export function buildPasswordResetEmail(input: PasswordResetEmailInput): EmailMe
       preheader: 'A password reset was requested for your account.',
       paragraphs: [
         `Hi ${input.name},`,
-        'We received a request to reset the password on your account. This link expires in ' +
-          `${minutes} minutes and can only be used once.`,
-        'If you did not request a password reset, no action is needed and your password will stay unchanged.',
+        'We received a request to reset the password on your account.',
+        `Your 6-digit reset code expires in ${minutes} minutes and can only be used once.`,
+        "If you didn't request this, ignore this email.",
       ],
-      action: { label: 'Reset password', url: input.resetUrl },
+      code: input.code,
       footerNote: 'This is an automated message. Please do not reply to it.',
     },
     input.brand,
@@ -107,7 +107,7 @@ export function buildPasswordResetEmail(input: PasswordResetEmailInput): EmailMe
 
   return {
     to: input.to,
-    subject: `Reset your ${input.brand.appName} password`,
+    subject: `Your ${input.brand.appName} password reset code`,
     template: 'password_reset',
     text,
     html,

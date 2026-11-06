@@ -77,17 +77,18 @@ test('the verification template renders both an HTML and a plain text version', 
     to: 'ada@example.com',
     name: 'Ada Lovelace',
     brand,
-    verificationUrl: 'http://localhost:3000/verify-email?token=abc123',
+    code: '012345',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
 
   assert.equal(email.template, 'account_verification');
   assert.ok(email.html);
   assert.match(email.html as string, /^<!doctype html>/);
-  assert.match(email.html as string, /Verify email address/);
-  assert.match(email.text, /token=abc123/);
+  assert.match(email.html as string, /font-size:34px/);
+  assert.match(email.text, /012345/);
   assert.match(email.text, /expires in 60 minutes/);
-  assert.ok(email.text.includes('http://localhost:3000/verify-email?token=abc123'));
+  assert.doesNotMatch(email.text, /token=/);
+  assert.match(email.text, /If you didn't request this, ignore this email/);
 });
 
 test('templates escape user supplied values in the HTML version', () => {
@@ -95,7 +96,7 @@ test('templates escape user supplied values in the HTML version', () => {
     to: 'ada@example.com',
     name: '<script>alert("x")</script>',
     brand,
-    verificationUrl: 'http://localhost:3000/verify-email?token=abc123',
+    code: '012345',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
 
@@ -110,7 +111,7 @@ test('templates never put a single use link in the subject line', () => {
     to: 'ada@example.com',
     name: 'Ada Lovelace',
     brand,
-    verificationUrl: 'http://localhost:3000/verify-email?token=super-secret-token',
+    code: '654321',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
 
@@ -123,12 +124,13 @@ test('the account templates cover the whole account lifecycle', () => {
     to: 'ada@example.com',
     name: 'Ada Lovelace',
     brand,
-    resetUrl: 'http://localhost:3000/reset-password?token=reset123',
+    code: '123456',
     expiresAt: new Date(Date.now() + 30 * 60 * 1000),
   });
 
   assert.equal(reset.template, 'password_reset');
-  assert.match(reset.text, /token=reset123/);
+  assert.match(reset.text, /123456/);
+  assert.doesNotMatch(reset.text, /token=/);
 
   const changed = buildPasswordChangedEmail({
     to: 'ada@example.com',
