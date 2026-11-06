@@ -1115,6 +1115,8 @@ Implement secure file storage and management.
 - Metadata is persisted.
 - Storage operations are tested.
 
+**Phase 12 implementation update — 2026-11-06:** Implemented file upload (multer, 50 MB limit, 24 allowed MIME types validated server-side), authenticated file download (from private object storage), workspace-scoped file listing (cursor pagination, project/task filter), file deletion (soft delete + best-effort storage cleanup), and storage usage tracking (total bytes + file count). 5 endpoints at `/workspaces/:workspaceId/files`. Storage keys are server-generated (`workspaces/{id}/files/{uuid}/{filename}`) — client-supplied paths are never trusted. Project-level access enforced via `requireProjectAccess` (ViewFiles/ManageFiles capabilities). Upload/delete audit events recorded. Returns 503 OBJECT_STORAGE_UNAVAILABLE when storage is not configured. Committed on `feature/phase-12-file-management`. Verification: tsc PASS, lint PASS, build PASS, 290 pass / 0 fail / 2 skip. Deferred: folders, file versioning, file sharing links.
+
 ---
 
 # PHASE 13 — Document Collaboration
