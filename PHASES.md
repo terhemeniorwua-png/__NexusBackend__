@@ -1072,6 +1072,8 @@ Implement a centralised notification and activity system.
 - Retry mechanisms are bounded.
 - Users can configure notification preferences.
 
+**Phase 11 implementation update — 2026-11-06:** Implemented notification REST API (list with cursor pagination/unread filter/type filter, mark read, mark all read, unread count), notification preferences (list per-workspace, update with membership check), and activity feed (workspace-scoped audit log entries with cursor pagination). 7 endpoints under `/notifications`. Reuses existing `Notification`, `NotificationPreference`, and `AuditLog` models — no new migration needed. The existing `createNotification` service already enforces preferences and writes within transactions. Message unread counts remain independent (Phase 10 `MessageReadReceipt`) from general notification counts (Phase 11 `Notification.readAt`). Committed and pushed to `feature/phase-11-notifications`. Verification: tsc PASS, lint PASS, build PASS, 290 pass / 0 fail / 2 skip.
+
 ---
 
 # PHASE 12 — File Management and Nexus Drive
