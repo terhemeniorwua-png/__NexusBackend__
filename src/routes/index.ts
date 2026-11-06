@@ -31,6 +31,11 @@ import { createProjectRouter } from '../modules/projects/project.routes';
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 import { createChannelRouter } from '../modules/channels/channel.routes';
 import { createTaskRouter } from '../modules/tasks/task.routes';
+import { createMessageRouter } from '../modules/messaging/message.routes';
+import { createNotificationRouter } from '../modules/notifications/notification.routes';
+import { createFileRouter } from '../modules/files/file.routes';
+import { createDocumentRouter } from '../modules/documents/document.routes';
+import { createCalendarRouter } from '../modules/calendar/calendar.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -83,6 +88,18 @@ export function createApiRouter({
     createTaskRouter({ config }),
   );
   router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
+  // Messages are nested under channels:
+  // /workspaces/:workspaceId/channels/:channelId/messages/…
+  // The message router uses mergeParams to access workspaceId and channelId.
+  router.use('/workspaces/:workspaceId/channels', createMessageRouter({ config }));
+  // Notifications are user-scoped, not workspace-scoped
+  router.use('/notifications', createNotificationRouter({ config }));
+  // Files are workspace-scoped
+  router.use('/workspaces/:workspaceId/files', createFileRouter({ config }));
+  // Documents are workspace-scoped
+  router.use('/workspaces/:workspaceId/documents', createDocumentRouter({ config }));
+  // Calendar events are workspace-scoped
+  router.use('/workspaces/:workspaceId/events', createCalendarRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.

@@ -32,6 +32,9 @@ listed here is not evidence that a roadmap phase is complete.
 | POST   | `/auth/verify-email`         | Public, rate limited                | Verify an email address.                                                                                                               |
 | POST   | `/auth/resend-verification`  | Public, rate limited                | Resend email verification.                                                                                                             |
 | POST   | `/auth/login`                | Public, rate limited                | Start an authenticated session.                                                                                                        |
+| GET    | `/auth/google`               | Public, rate limited                | Redirect the browser to Google OpenID Connect.                               |
+| GET    | `/auth/google/callback`      | Public, rate limited                | Validate Google's callback and redirect to the frontend with a one-time code. |
+| POST   | `/auth/google/exchange`      | Public, rate limited                | Exchange the one-time code for the normal Nexus session response.             |
 | POST   | `/auth/2fa/challenge`         | Public, rate limited                | Exchange a short-lived MFA challenge and TOTP/recovery code for a normal session.                                                       |
 | POST   | `/auth/2fa/setup`             | Authenticated, active account       | Start or restart unverified TOTP enrollment; returns an `otpauth://` URI valid for ten minutes.                                        |
 | POST   | `/auth/2fa/confirm`           | Authenticated, active account       | Confirm the first TOTP code and return ten single-use recovery codes once.                                                              |
@@ -50,6 +53,58 @@ listed here is not evidence that a roadmap phase is complete.
 | POST   | `/auth/email/change/confirm` | Public, rate limited                | Confirm an email change.                                                                                                               |
 | POST   | `/auth/deactivate`           | Authenticated                       | Deactivate the caller's account.                                                                                                       |
 | POST   | `/auth/delete`               | Authenticated, rate limited         | Schedule deletion 30 days later; access and sessions are revoked immediately, and the account can be recovered before the deadline. |
+
+### Continue with Google contract
+
+The backend uses `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the existing
+case-sensitive `redirect_URL` value as the Google callback URL.
+`GOOGLE_CALLBACK_URL` is only a fallback when `redirect_URL` is absent; its
+current dotenv value points to the frontend and is not the backend callback.
+The initiation endpoint is a browser navigation (`GET /api/v1/auth/google`),
+not a fetch request. It requests only `openid`, `email`, and `profile`; the
+backend stores a hashed, single-use state and nonce before redirecting to Google.
+
+With the current deployment URLs, register this exact Google Authorized
+redirect URI: `https://nexusbackend-1-0ffo.onrender.com/api/auth/google/callback`.
+Register `https://nexus-frontend-six-lilac.vercel.app` as the Authorized
+JavaScript origin. For local frontend development, also add
+`http://localhost:3000` as an authorized origin and use a matching local
+`redirect_URL` in the Google OAuth client configuration.
+
+Google returns to the configured backend callback path with `code` and `state`
+(or an OAuth `error`). The backend exchanges and verifies the ID token, then
+redirects to the fixed frontend path `/auth/google/callback` on the first origin
+in `FRONTEND_URL`. Success appends a short-lived, single-use `code` query
+parameter; cancellation/failure appends an `error` code. The frontend must
+immediately POST `{ "code": "..." }` to
+`POST /api/v1/auth/google/exchange` with `credentials: "include"`. The response
+uses the normal auth success envelope and contains `user`, `accessToken`,
+`tokenType`, `expiresIn`, `csrfToken`, and `session`; it sets the existing
+httpOnly `nexus_rt` and readable `nexus_csrf` cookies. The frontend should
+remove the one-time code from browser history after exchange. If 2FA is enabled,
+exchange returns the existing `twoFactorRequired` challenge and the regular
+`POST /api/v1/auth/2fa/challenge` flow completes login.
+
+Errors use the standard `{ "success": false, "error": { "code": string,
+"message": string } }` shape. OAuth-specific codes include
+`GOOGLE_AUTH_UNAVAILABLE`, `OAUTH_STATE_INVALID`, `GOOGLE_TOKEN_INVALID`,
+`GOOGLE_ACCOUNT_LINK_REQUIRED`, `OAUTH_CODE_INVALID`, and `OAUTH_CANCELLED`.
+An existing Nexus email is never linked automatically; the user must first
+authenticate normally and use a future authenticated linking flow. Verified
+Google email activates the account but creates only the private personal
+workspace. Company/institution workspace choice and setup remain the normal
+onboarding steps and are not inferred from Google profile data.
+
+For separate deployed origins, configure `CORS_ORIGINS`/`FRONTEND_URL` to
+include the exact frontend origin and enable `CORS_CREDENTIALS=true`. Since the
+frontend and Render API are cross-site, set `AUTH_COOKIE_SAME_SITE=none` and
+`AUTH_COOKIE_SECURE=true`; the existing parser rejects `SameSite=None` without
+Secure. The frontend must send `credentials: "include"` and send the readable
+`nexus_csrf` value in `X-CSRF-Token` on cookie-authenticated refresh/logout
+requests. The current dotenv has `CORS_CREDENTIALS=false` and
+`AUTH_COOKIE_SAME_SITE=lax`; keep those local values unchanged and apply the
+cross-site settings in the Render environment before enabling browser cookie
+authentication.
 
 ### Account deletion request and frontend behavior
 

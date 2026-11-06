@@ -10,7 +10,7 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Numbered phase definitions** | 30 |
-| **Current active phase** | Phase 4 — Transactional email and delivery infrastructure |
+| **Current active phase** | Phase 3.6 — Google OAuth authentication |
 | **Aggregate progress** | Not calculated: legacy and canonical phase lists contain duplicate and missing phase numbers |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
@@ -375,6 +375,18 @@ This tracker must be treated as the authoritative implementation sequence for ba
 - Authentication unit and PostgreSQL integration tests, typecheck, lint, and formatting checks pass
 
 **Blockers / Notes:** Verified on 2026-11-01. Removed four commented debug statements: registration-stage logs for `hashing`, `creating user`, and `queueing email` from `auth.service.ts`, and the `handler reached` log from `auth.controller.ts`. Also removed the two standalone `// ...` placeholder comments interspersed in the same obsolete service debug block. No active logging, explanatory comments, executable logic, or authentication behavior was changed. The auth-module search returns no commented `console.log` calls. `tests/auth-unit.test.ts` passes; `tests/auth-phase3.test.ts` passes 55/55 against disposable PostgreSQL. Typecheck, lint, format check, and `git diff --check` pass. Implementation commit `7de01e0` (`chore(phase-3.5): remove commented auth debug logs`) is pushed to `origin/feature/phase-3.5-auth-debug-cleanup`.
+
+---
+
+#### Phase 3.6 — Google OAuth authentication `[/]`
+
+**Objective:** Add Continue with Google through the existing Nexus account and session architecture.
+
+**Deliverables:** Google OpenID Connect authorization-code flow; one-use state and nonce; verified Google subject/email; unique external identity mapping; no matching-email auto-link; normal Nexus session and refresh-cookie issuance; existing 2FA preservation; frontend exchange contract and API documentation.
+
+**Status:** IN PROGRESS. The implementation and additive PostgreSQL migration are present. OAuth regression coverage is present; database-backed account-creation/lifecycle verification and runtime verification remain outstanding. The local `.env` was preserved. Its `redirect_URL` is used as the backend callback and takes precedence over `GOOGLE_CALLBACK_URL`; the configured callback path is mounted as an alias. Its existing `FRONTEND_URL` `||` separator is now parsed into allowed origins.
+
+**Deployment requirements:** Render must enable credentialed CORS and `SameSite=None; Secure` for cross-site refresh cookies. Confirm that the exact callback URL in `redirect_URL` is registered in the Google Cloud OAuth client.
 
 ---
 
@@ -1014,6 +1026,8 @@ Support:
 - Channel permissions are enforced.
 - Message notifications remain separate from general notifications.
 
+**Phase 10 implementation update — 2026-11-06:** Implemented message persistence, channel-scoped messaging, replies (one level), reactions, read receipts, unread counts, message pinning, edit/delete with permission checks, and Socket.IO server with JWT authentication, workspace/channel rooms, typing indicators, and presence. Migration `20261106053637_phase10_messaging_models` adds `Message`, `MessageReaction`, and `MessageReadReceipt` models. 11 message endpoints mounted at `/workspaces/:workspaceId/channels/:channelId/messages`. All message operations enforce channel access via `requireChannelAccess`. Message audit actions recorded. DB integration tests: 11/11 pass. Committed as `2d68f07` on `feature/phase-10-realtime-messaging`, pushed to origin. Deferred: @mention parsing, message attachments (Phase 12), message search, saved messages, conversation creation beyond existing channels, and message-to-task conversion.
+
 ---
 
 # PHASE 11 — Notification and Activity Infrastructure
@@ -1070,6 +1084,8 @@ Implement a centralised notification and activity system.
 - Retry mechanisms are bounded.
 - Users can configure notification preferences.
 
+**Phase 11 implementation update — 2026-11-06:** Implemented notification REST API (list with cursor pagination/unread filter/type filter, mark read, mark all read, unread count), notification preferences (list per-workspace, update with membership check), and activity feed (workspace-scoped audit log entries with cursor pagination). 7 endpoints under `/notifications`. Reuses existing `Notification`, `NotificationPreference`, and `AuditLog` models — no new migration needed. The existing `createNotification` service already enforces preferences and writes within transactions. Message unread counts remain independent (Phase 10 `MessageReadReceipt`) from general notification counts (Phase 11 `Notification.readAt`). Committed and pushed to `feature/phase-11-notifications`. Verification: tsc PASS, lint PASS, build PASS, 290 pass / 0 fail / 2 skip.
+
 ---
 
 # PHASE 12 — File Management and Nexus Drive
@@ -1111,6 +1127,8 @@ Implement secure file storage and management.
 - Metadata is persisted.
 - Storage operations are tested.
 
+**Phase 12 implementation update — 2026-11-06:** Implemented file upload (multer, 50 MB limit, 24 allowed MIME types validated server-side), authenticated file download (from private object storage), workspace-scoped file listing (cursor pagination, project/task filter), file deletion (soft delete + best-effort storage cleanup), and storage usage tracking (total bytes + file count). 5 endpoints at `/workspaces/:workspaceId/files`. Storage keys are server-generated (`workspaces/{id}/files/{uuid}/{filename}`) — client-supplied paths are never trusted. Project-level access enforced via `requireProjectAccess` (ViewFiles/ManageFiles capabilities). Upload/delete audit events recorded. Returns 503 OBJECT_STORAGE_UNAVAILABLE when storage is not configured. Committed on `feature/phase-12-file-management`. Verification: tsc PASS, lint PASS, build PASS, 290 pass / 0 fail / 2 skip. Deferred: folders, file versioning, file sharing links.
+
 ---
 
 # PHASE 13 — Document Collaboration
@@ -1136,6 +1154,8 @@ Provide document collaboration capabilities within Nexus.
 - Access permissions are enforced.
 - Document history is maintained where supported.
 - Documents can be connected to relevant workspace resources.
+
+**Phase 13 implementation update — 2026-11-06:** Implemented Document (title, content, project/task links), DocumentRevision (auto-saved before each content update), and DocumentComment (soft delete) models. Migration `20261106182450_phase13_documents` applied. 9 endpoints at `/workspaces/:workspaceId/documents` covering CRUD, revision history, and comments. Access enforced via `requireProjectAccess` (ViewFiles/ManageFiles) or document authorship. Audit events recorded for create, update, delete, and comment creation. Also fixed duplicate `BillingSeatSync` migration to be idempotent. Committed on `feature/phase-13-documents`. Verification: tsc PASS, lint PASS, build PASS, 290 pass / 0 fail / 2 skip.
 
 ---
 
@@ -1811,7 +1831,7 @@ Make the backend easy to understand, integrate, and maintain.
 
 ### Current Phase
 
-**Current phase:** Phase 3 — Authentication and account lifecycle — was reopened by the full audit because profile-image upload and optional TOTP were missing. Both implementations and opt-in PostgreSQL/Redis tests are now present. Phase 3 remains **IN PROGRESS** until those tests and migrations are verified against a disposable local database. Phase 8 is preserved as partially implemented; no later phase has been started. Phase 4.6 remains independently in progress.
+**Current phase:** Phase 3 core authentication is marked completed in its verification record. Phase 3.6 — Google OAuth authentication — is active for the explicitly requested work. Older incomplete records, including Phase 4.6 and Phase 8, remain in progress independently and are not changed by this OAuth implementation.
 
 ---
 

@@ -22,6 +22,7 @@ import type {
   RegisterInput,
 } from './auth.schemas';
 import type { RequestContext } from './auth.types';
+import { createGoogleOAuthService, type GoogleOAuthService } from './google-oauth.service';
 
 /**
  * HTTP layer for the authentication module.
@@ -35,6 +36,7 @@ export interface AuthControllerOptions {
   config: AppConfig;
   service: AuthService;
   csrf?: CsrfValidator;
+  googleOAuth?: GoogleOAuthService;
 }
 
 const GENERIC_EMAIL_RESPONSE =
@@ -44,6 +46,7 @@ export function createAuthController({
   config,
   service,
   csrf = createCsrfValidator(config),
+  googleOAuth = createGoogleOAuthService(config, service),
 }: AuthControllerOptions) {
   function context(req: Request): RequestContext {
     return {
@@ -140,6 +143,35 @@ export function createAuthController({
   }
 
   return {
+    async googleStart(_req: Request, res: Response): Promise<void> {
+      res.redirect(302, await googleOAuth.initiate());
+    },
+
+    async googleCallback(req: Request, res: Response): Promise<void> {
+      const code = typeof req.query.code === 'string' ? req.query.code : undefined;
+      const state = typeof req.query.state === 'string' ? req.query.state : undefined;
+      const error = typeof req.query.error === 'string' ? req.query.error : undefined;
+      res.redirect(302, await googleOAuth.callback({ code, state, error }));
+    },
+
+    async googleExchange(req: Request, res: Response): Promise<void> {
+      const body = req.validated?.body as { code: string };
+      const result = await googleOAuth.exchange(body.code, context(req));
+      if ('twoFactorRequired' in result) {
+        sendSuccess(res, result);
+        return;
+      }
+      setSessionCookies(res, result.refreshToken, result.csrfToken);
+      sendSuccess(res, {
+        user: result.user,
+        accessToken: result.accessToken,
+        tokenType: result.tokenType,
+        expiresIn: result.expiresIn,
+        csrfToken: result.csrfToken,
+        session: result.session,
+      });
+    },
+
     async register(req: Request, res: Response): Promise<void> {
       const body = req.validated?.body as RegisterInput;
       const result = await service.register(body, context(req));

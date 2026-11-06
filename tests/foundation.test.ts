@@ -191,7 +191,7 @@ test('CORS allows configured origins and rejects unknown origins', async () => {
       headers: {
         origin: 'https://app.example.com',
         'access-control-request-method': 'GET',
-        'access-control-request-headers': 'authorization,content-type',
+        'access-control-request-headers': 'authorization,content-type,x-csrf-token',
       },
     });
 
@@ -202,7 +202,7 @@ test('CORS allows configured origins and rejects unknown origins', async () => {
     );
     assert.equal(
       preflight.headers.get('access-control-allow-headers'),
-      'Content-Type,Authorization,X-Request-Id',
+      'Content-Type,Authorization,X-Request-Id,X-CSRF-Token',
     );
     assert.equal(preflight.headers.get('access-control-max-age'), '600');
 

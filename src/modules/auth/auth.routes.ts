@@ -21,6 +21,7 @@ import {
   twoFactorConfirmSchema,
   twoFactorDisableSchema,
   recoveryCodeRegenerateSchema,
+  googleExchangeSchema,
 } from './auth.schemas';
 import { createAuthController, type AuthController } from './auth.controller';
 import type { AuthService } from './auth.service';
@@ -135,6 +136,23 @@ export function createAuthRouter({
     code: 'MFA_RATE_LIMITED',
     message: 'Too many two-factor verification attempts. Please try again later.',
   });
+
+  const googleOAuthLimit = createRateLimiter({
+    namespace: `${config.rateLimitNamespace}:auth:google:ip`,
+    windowMs,
+    limit: config.authLoginRateLimitMax,
+    code: 'LOGIN_RATE_LIMITED',
+    message: 'Too many Google sign-in attempts. Please try again later.',
+  });
+
+  router.get('/google', googleOAuthLimit, controller.googleStart);
+  router.get('/google/callback', googleOAuthLimit, controller.googleCallback);
+  router.post(
+    '/google/exchange',
+    googleOAuthLimit,
+    validateBody(googleExchangeSchema),
+    controller.googleExchange,
+  );
 
   router.post(
     '/register',
