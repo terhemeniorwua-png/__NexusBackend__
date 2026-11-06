@@ -64,6 +64,12 @@ class CapturingEmailSender implements EmailSender {
 
     return token;
   }
+  codeFrom(message: EmailMessage | undefined): string {
+    assert.ok(message, 'Expected an email to have been sent');
+    const match = /\b(\d{6})\b/.exec(message.text);
+    assert.ok(match?.[1], 'Expected the email to contain a six-digit code');
+    return match[1];
+  }
 }
 
 let databaseUrl: string | null = null;
@@ -256,16 +262,16 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
   async function verifyAccount(email: string): Promise<string> {
     const message = sender.lastFor(email, 'account_verification');
-    const token = sender.tokenFrom(message);
+    const code = sender.codeFrom(message);
 
-    const response = await jsonRequest(`${baseUrl}/api/v1/auth/verify-email`, {
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/email/verify`, {
       method: 'POST',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ email, code }),
     });
 
     assert.equal(response.status, 200, JSON.stringify(response.body));
 
-    return token;
+    return code;
   }
 
   async function login(email: string, password = 'Correct-Horse-9'): Promise<AuthenticatedSession> {
@@ -463,7 +469,8 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const message = sender.lastFor(email, 'account_verification');
 
     assert.ok(message, 'A verification email should have been sent');
-    assert.match(message.text, /token=/);
+    assert.match(message.text, /\b\d{6}\b/);
+    assert.doesNotMatch(message.text, /token=/);
     assert.equal(
       message.text.includes('Correct-Horse-9'),
       false,
@@ -532,15 +539,15 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
   test('the verification token activates the account and cannot be reused', async () => {
     const account = await register();
-    const token = await verifyAccount(account.email);
+    const code = await verifyAccount(account.email);
 
-    const reuse = await jsonRequest(`${baseUrl}/api/v1/auth/verify-email`, {
+    const reuse = await jsonRequest(`${baseUrl}/api/v1/auth/email/verify`, {
       method: 'POST',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ email: account.email, code }),
     });
 
     assert.equal(reuse.status, 400);
-    assert.equal(reuse.body.error?.code, 'TOKEN_ALREADY_USED');
+    assert.equal(reuse.body.error?.code, 'INVALID_OR_EXPIRED_CODE');
 
     const stored = await prisma.user.findUnique({ where: { id: account.userId } });
 
@@ -571,13 +578,13 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
   });
 
   test('an unknown verification token is rejected', async () => {
-    const response = await jsonRequest(`${baseUrl}/api/v1/auth/verify-email`, {
+    const response = await jsonRequest(`${baseUrl}/api/v1/auth/email/verify`, {
       method: 'POST',
-      body: JSON.stringify({ token: 'x'.repeat(43) }),
+      body: JSON.stringify({ email: 'nobody@example.com', code: '123456' }),
     });
 
     assert.equal(response.status, 400);
-    assert.equal(response.body.error?.code, 'TOKEN_INVALID');
+    assert.equal(response.body.error?.code, 'INVALID_OR_EXPIRED_CODE');
   });
 
   test('signing in returns an access token and sets the session cookies', async () => {
@@ -956,11 +963,11 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     assert.equal(requested.status, 200);
 
-    const token = sender.tokenFrom(sender.lastFor(session.email, 'password_reset'));
+    const code = sender.codeFrom(sender.lastFor(session.email, 'password_reset'));
 
     const reset = await jsonRequest(`${baseUrl}/api/v1/auth/password/reset`, {
       method: 'POST',
-      body: JSON.stringify({ token, password: 'Brand-New-Secret-7' }),
+      body: JSON.stringify({ email: session.email, code, newPassword: 'Brand-New-Secret-7' }),
     });
 
     assert.equal(reset.status, 200, JSON.stringify(reset.body));
@@ -1478,10 +1485,10 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       method: 'POST',
       body: JSON.stringify({ email: session.email }),
     });
-    const token = sender.tokenFrom(sender.lastFor(session.email, 'password_reset'));
+    const code = sender.codeFrom(sender.lastFor(session.email, 'password_reset'));
     const reset = await jsonRequest(`${baseUrl}/api/v1/auth/password/reset`, {
       method: 'POST',
-      body: JSON.stringify({ token, password: 'New-Password-9' }),
+      body: JSON.stringify({ email: session.email, code, newPassword: 'New-Password-9' }),
     });
     assert.equal(reset.status, 200);
     const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
@@ -1564,11 +1571,12 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     assert.equal(locked.body.error?.code, 'MFA_LOCKED');
     const redis = getRedisClient('redis://localhost:6379/15');
     assert.equal(await redis.get(`${namespace}:mfa:fail:user:${session.userId}`), '5');
-    assert.equal(
-      await redis.get(`${namespace}:mfa:fail:ip:${hashSecret('127.0.0.1')}`),
-      '5',
+    assert.equal(await redis.get(`${namespace}:mfa:fail:ip:${hashSecret('127.0.0.1')}`), '5');
+    assert.ok(
+      sender
+        .lastFor(session.email, 'security_notification')
+        ?.subject.includes('verification failed'),
     );
-    assert.ok(sender.lastFor(session.email, 'security_notification')?.subject.includes('verification failed'));
     assert.equal(
       await prisma.auditLog.count({
         where: { action: 'auth.two_factor_failed', targetId: session.userId },
@@ -1932,20 +1940,20 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
   test('reactivating an unverified account returns it to pending verification', async () => {
     const account = await register();
-    const oldVerificationToken = sender.tokenFrom(
+    const oldVerificationCode = sender.codeFrom(
       sender.lastFor(account.email, 'account_verification'),
     );
     const session = await login(account.email, account.password);
 
     await deactivate(session);
 
-    const oldVerification = await jsonRequest(`${baseUrl}/api/v1/auth/verify-email`, {
+    const oldVerification = await jsonRequest(`${baseUrl}/api/v1/auth/email/verify`, {
       method: 'POST',
-      body: JSON.stringify({ token: oldVerificationToken }),
+      body: JSON.stringify({ email: account.email, code: oldVerificationCode }),
     });
 
-    assert.equal(oldVerification.status, 400);
-    assert.equal(oldVerification.body.error?.code, 'TOKEN_ALREADY_USED');
+    assert.equal(oldVerification.status, 410);
+    assert.equal(oldVerification.body.error?.code, 'LINK_TOKEN_DEPRECATED');
 
     const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
       method: 'POST',
@@ -2015,13 +2023,13 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
 
     assert.equal(requested.status, 200);
 
-    const token = sender.tokenFrom(sender.lastFor(session.email, 'password_reset'));
+    const code = sender.codeFrom(sender.lastFor(session.email, 'password_reset'));
 
     await deactivate(session);
 
     const reset = await jsonRequest(`${baseUrl}/api/v1/auth/password/reset`, {
       method: 'POST',
-      body: JSON.stringify({ token, password: 'Another-Good-Pass-4' }),
+      body: JSON.stringify({ email: session.email, code, newPassword: 'Another-Good-Pass-4' }),
     });
 
     assert.equal(reset.status, 400);

@@ -10,7 +10,7 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Numbered phase definitions** | 30 |
-| **Current active phase** | Phase 3.6 — Google OAuth authentication |
+| **Current active phase** | Phase 3.7 — Email verification and password reset codes |
 | **Aggregate progress** | Not calculated: legacy and canonical phase lists contain duplicate and missing phase numbers |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
@@ -2007,3 +2007,7 @@ The approved product decision is a 30-day scheduled deletion and recovery period
 **Phase 7 channel access — 2026-11-05:** Applied migration `20261105060720_phase7_channels` only to a fresh disposable loopback PostgreSQL database (`nexus_channel_test`) after verifying its database identity. The migration adds Channel and ChannelMembership access records plus the approved `description` field and a case-insensitive partial unique active-name index. Added access policy and metadata-only CRUD/private membership APIs. Parent team/department/project membership is checked dynamically; inaccessible or archived parents revoke access. Workspace viewers can view workspace channels, collaborators cannot. Private creator is ADMIN; added members receive MEMBER. Membership rows are removed on workspace membership removal and final account deletion. Message persistence/delivery, search and other channel conversations remain deferred to their own phase. This historical note is superseded by the completion record below.
 
 **Phase 7 completion — 2026-11-05 (owner-approved):** Channel access integration is complete: Channel and ChannelMembership models, migration `20261105060720_phase7_channels`, shared `requireChannelAccess` policy, channel access routes, audit and notification integration, and membership cleanup on workspace removal and account deletion. Verification: Phase 7 PostgreSQL suite 47/47; channel policy unit tests 18/18; typecheck, lint, build, and standard unit suite passed. Messaging—messages, delivery, threads, reactions, and attachments—remains deferred to the messaging phase. Phase 7 is **COMPLETED**.
+
+## Phase 3.7 — Email verification and password reset one-time codes — 2026-11-07
+
+**IN PROGRESS:** Link-based email verification and password reset delivery are being replaced with six-digit, 10-minute codes. The implementation adds HMAC-SHA256 code storage, one-active-code semantics, attempt counting, resend cooldown, encrypted OTP outbox bodies, code templates, new `/auth/email/verify` and `/auth/email/resend` paths, and legacy link endpoint deprecation. Verification retains its established behavior (account activation without issuing a session); password reset revokes all sessions. Migration `20261107120000_auth_one_time_codes` is added. Database integration tests and migration execution remain outstanding because no explicitly configured test database is available; do not mark this phase complete until those checks pass.

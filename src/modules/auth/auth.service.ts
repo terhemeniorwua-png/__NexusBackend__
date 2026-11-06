@@ -27,6 +27,7 @@ import { recordSecurityEvent, SecurityAction } from './security-events';
 import { scheduledAccountDeletionAt } from './account-deletion.service';
 import { ensurePersonalWorkspace } from '../workspaces/personal-workspace.service';
 import { enqueueWorkspaceSeatReduction } from '../billing/membership-billing';
+import { consumeOneTimeCode, issueOneTimeCode } from './one-time-code.service';
 import type {
   AuthenticationResult,
   PublicUser,
@@ -70,7 +71,10 @@ export function toPublicUser(user: User): PublicUser {
 
 export interface AuthService {
   register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }>;
-  verifyEmail(input: { token: string }, ctx: RequestContext): Promise<{ user: PublicUser }>;
+  verifyEmail(
+    input: { email: string; code: string },
+    ctx: RequestContext,
+  ): Promise<{ user: PublicUser }>;
   resendVerification(input: { email: string }, ctx: RequestContext): Promise<void>;
   login(
     input: LoginInput,
@@ -118,6 +122,51 @@ export interface AuthService {
 
 export function createAuthService(config: AppConfig, prisma?: PrismaClient): AuthService {
   const client = prisma ?? getPrismaClient();
+
+  async function sendVerificationCode(user: User, force: boolean): Promise<void> {
+    const issued = await issueOneTimeCode(client, config, {
+      userId: user.id,
+      purpose: 'EMAIL_VERIFICATION',
+      force,
+    });
+    if (!issued) return;
+    await invalidateAuthTokens(client, { userId: user.id, purpose: 'EMAIL_VERIFICATION' });
+    const result = await sendEmail(
+      buildVerificationEmail({
+        to: user.email,
+        name: user.name,
+        brand,
+        code: issued.code,
+        expiresAt: issued.expiresAt,
+        idempotencyKey: `auth:email_verification:${user.id}:${issued.expiresAt.getTime()}`,
+      }),
+    );
+    if (!result.accepted) console.error('email_verification_delivery_failed', { userId: user.id });
+    if (config.nodeEnv === 'development')
+      console.info('email_verification_code', { userId: user.id, code: issued.code });
+  }
+
+  async function sendPasswordResetCode(user: User): Promise<void> {
+    const issued = await issueOneTimeCode(client, config, {
+      userId: user.id,
+      purpose: 'PASSWORD_RESET',
+    });
+    if (!issued) return;
+    await invalidateAuthTokens(client, { userId: user.id, purpose: 'PASSWORD_RESET' });
+    const result = await sendEmail(
+      buildPasswordResetEmail({
+        to: user.email,
+        name: user.name,
+        brand,
+        code: issued.code,
+        expiresAt: issued.expiresAt,
+        idempotencyKey: `auth:password_reset:${user.id}:${issued.expiresAt.getTime()}`,
+      }),
+    );
+    if (!result.accepted) console.error('password_reset_delivery_failed', { userId: user.id });
+    if (config.nodeEnv === 'development')
+      console.info('password_reset_code', { userId: user.id, code: issued.code });
+  }
   const csrfKey = deriveKey(config.jwtAccessSecret, 'csrf');
   const brand = buildEmailBrand(config);
 
@@ -380,22 +429,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         },
       });
 
-      await issueAndSend(
-        {
-          user,
-          purpose: 'EMAIL_VERIFICATION',
-          ttlSeconds: config.verificationTokenTtlSeconds,
-        },
-        (token, expiresAt, tokenId) =>
-          buildVerificationEmail({
-            to: user.email,
-            name: user.name,
-            brand,
-            verificationUrl: buildLink(config.authVerificationLinkPath, token),
-            expiresAt,
-            idempotencyKey: `auth:email_verification:${tokenId}`,
-          }),
-      );
+      await sendVerificationCode(user, true);
 
       // An invitation that was sent before the account existed is bound to
       // it now, so the same link lets the new account join the workspace.
@@ -418,12 +452,13 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     },
 
     async verifyEmail(
-      input: { token: string },
+      input: { email: string; code: string },
       ctx: RequestContext,
     ): Promise<{ user: PublicUser }> {
       const user = await client.$transaction(async (tx) => {
-        const record = await consumeAuthToken(tx, {
-          token: input.token,
+        const record = await consumeOneTimeCode(client, config, {
+          email: input.email,
+          code: input.code,
           purpose: 'EMAIL_VERIFICATION',
         });
 
@@ -487,22 +522,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         return;
       }
 
-      await issueAndSend(
-        {
-          user,
-          purpose: 'EMAIL_VERIFICATION',
-          ttlSeconds: config.verificationTokenTtlSeconds,
-        },
-        (token, expiresAt, tokenId) =>
-          buildVerificationEmail({
-            to: user.email,
-            name: user.name,
-            brand,
-            verificationUrl: buildLink(config.authVerificationLinkPath, token),
-            expiresAt,
-            idempotencyKey: `auth:email_verification:${tokenId}`,
-          }),
-      );
+      await sendVerificationCode(user, false);
 
       await recordSecurityEvent(client, {
         action: SecurityAction.EmailVerificationRequested,
@@ -561,6 +581,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       assertUsableAccount(user);
+
+      if (user.status === 'PENDING_VERIFICATION') await sendVerificationCode(user, false);
 
       if (user.twoFactorEnabled) {
         return twoFactor.issueChallenge(user);
@@ -714,22 +736,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         return;
       }
 
-      await issueAndSend(
-        {
-          user,
-          purpose: 'PASSWORD_RESET',
-          ttlSeconds: config.passwordResetTokenTtlSeconds,
-        },
-        (token, expiresAt, tokenId) =>
-          buildPasswordResetEmail({
-            to: user.email,
-            name: user.name,
-            brand,
-            resetUrl: buildLink(config.authPasswordResetLinkPath, token),
-            expiresAt,
-            idempotencyKey: `auth:password_reset:${tokenId}`,
-          }),
-      );
+      await sendPasswordResetCode(user);
 
       await recordSecurityEvent(client, {
         action: SecurityAction.PasswordResetRequested,
@@ -742,8 +749,9 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     },
 
     async resetPassword(input: PasswordResetInput, ctx: RequestContext): Promise<void> {
-      const record = await consumeAuthToken(client, {
-        token: input.token,
+      const record = await consumeOneTimeCode(client, config, {
+        email: input.email,
+        code: input.code,
         purpose: 'PASSWORD_RESET',
       });
 
@@ -765,11 +773,11 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
       }
 
-      assertPasswordLength(input.password);
+      assertPasswordLength(input.newPassword);
 
       await twoFactor.revokeChallenges(record.userId);
 
-      const passwordHash = await hashPassword(input.password, config.bcryptSaltRounds);
+      const passwordHash = await hashPassword(input.newPassword, config.bcryptSaltRounds);
 
       await client.user.update({
         where: { id: record.userId },
@@ -1215,22 +1223,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       if (reactivated.status === 'PENDING_VERIFICATION') {
-        await issueAndSend(
-          {
-            user: reactivated,
-            purpose: 'EMAIL_VERIFICATION',
-            ttlSeconds: config.verificationTokenTtlSeconds,
-          },
-          (token, expiresAt, tokenId) =>
-            buildVerificationEmail({
-              to: reactivated.email,
-              name: reactivated.name,
-              brand,
-              verificationUrl: buildLink(config.authVerificationLinkPath, token),
-              expiresAt,
-              idempotencyKey: `auth:email_verification:${tokenId}`,
-            }),
-        );
+        await sendVerificationCode(reactivated, true);
       }
 
       await recordSecurityEvent(client, {

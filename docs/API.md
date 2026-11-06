@@ -29,8 +29,8 @@ listed here is not evidence that a roadmap phase is complete.
 | Method | Path                         | Access                              | Purpose                                                                                                                                |
 | ------ | ---------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | POST   | `/auth/register`             | Public, rate limited                | Register an account.                                                                                                                   |
-| POST   | `/auth/verify-email`         | Public, rate limited                | Verify an email address.                                                                                                               |
-| POST   | `/auth/resend-verification`  | Public, rate limited                | Resend email verification.                                                                                                             |
+| POST   | `/auth/email/verify`         | Public, rate limited                | Verify an email address with `{ email, code }`.                                                                                       |
+| POST   | `/auth/email/resend`         | Public, rate limited                | Request a verification code; response does not reveal account existence.                                                              |
 | POST   | `/auth/login`                | Public, rate limited                | Start an authenticated session.                                                                                                        |
 | GET    | `/auth/google`               | Public, rate limited                | Redirect the browser to Google OpenID Connect.                               |
 | GET    | `/auth/google/callback`      | Public, rate limited                | Validate Google's callback and redirect to the frontend with a one-time code. |
@@ -491,3 +491,16 @@ same phase change. Verify both against the registered Express routers and
 schemas. Do not document planned behavior as live API functionality. If a
 phase changes no HTTP contract, record that no API update was required in the
 phase completion notes.
+
+## Email verification and password reset codes (current contract)
+
+All paths below are prefixed by `/api/v1`. Codes are six digits, expire after 10 minutes, and are limited to five guesses. Each user may have only one active code per purpose; issuing another replaces the previous code. Requests are limited per IP and per normalized email, and sending has a 60-second per-user cooldown.
+
+- `POST /auth/email/verify` — `{ "email": "user@example.com", "code": "012345" }` → `{ "success": true, "data": { "user": { ... } } }`. Verification activates the account and does not sign the user in, matching the existing behavior.
+- `POST /auth/email/resend` — `{ "email": "user@example.com" }` → generic `{ "success": true, "data": { "message": "If the address can be used, a message with the next step has been sent." } }`, whether or not the account exists.
+- `POST /auth/password/forgot` — `{ "email": "user@example.com" }` → the same generic response for known and unknown addresses.
+- `POST /auth/password/reset` — `{ "email": "user@example.com", "code": "012345", "newPassword": "..." }` → `{ "success": true, "data": { "message": "Your password has been reset. Please sign in again." } }`. All existing sessions and refresh tokens are revoked.
+
+Invalid/expired codes return HTTP 400 with `INVALID_OR_EXPIRED_CODE`; the fifth incorrect guess returns HTTP 400 with `TOO_MANY_ATTEMPTS`. Legacy `POST /auth/verify-email`, `POST /auth/resend-verification`, and token-shaped password-reset requests return HTTP 410 `LINK_TOKEN_DEPRECATED`. Existing link-based pending accounts can use `/auth/email/resend` to receive a code.
+
+`OTP_HMAC_SECRET` is required in production and must be a stable random secret of at least 32 characters. Code hashes are HMAC-SHA256; code-bearing email bodies are encrypted in the transactional outbox and decrypted only for delivery. These code endpoints do not set authentication cookies.

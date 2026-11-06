@@ -180,8 +180,8 @@ export function createAuthController({
     },
 
     async verifyEmail(req: Request, res: Response): Promise<void> {
-      const body = req.validated?.body as { token: string };
-      const result = await service.verifyEmail({ token: body.token }, context(req));
+      const body = req.validated?.body as { email: string; code: string };
+      const result = await service.verifyEmail(body, context(req));
 
       sendSuccess(res, { user: result.user });
     },

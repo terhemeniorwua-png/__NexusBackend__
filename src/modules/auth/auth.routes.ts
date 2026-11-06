@@ -2,7 +2,11 @@ import { Router } from 'express';
 import { ipKeyGenerator } from 'express-rate-limit';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
-import { accountKeyGenerator, createRateLimiter } from '../../middleware/rate-limit';
+import {
+  accountKeyGenerator,
+  createRateLimiter,
+  emailKeyGenerator,
+} from '../../middleware/rate-limit';
 import { validateBody } from '../../middleware/validation';
 import {
   accountActionSchema,
@@ -25,6 +29,7 @@ import {
 } from './auth.schemas';
 import { createAuthController, type AuthController } from './auth.controller';
 import type { AuthService } from './auth.service';
+import { AppError } from '../../utils/errors';
 
 /**
  * Authentication routes.
@@ -93,11 +98,11 @@ export function createAuthRouter({
     message: 'Too many verification requests. Please try again later.',
   });
 
-  const verificationAccountLimit = createRateLimiter({
-    namespace: `${config.rateLimitNamespace}:auth:verification:account`,
+  const verificationEmailLimit = createRateLimiter({
+    namespace: `${config.rateLimitNamespace}:auth:verification:email`,
     windowMs,
-    limit: config.authVerificationRateLimitMax,
-    keyGenerator: accountKeyGenerator,
+    limit: 5,
+    keyGenerator: emailKeyGenerator,
     code: 'RATE_LIMITED',
     message: 'Too many verification requests for this email address. Please try again later.',
   });
@@ -110,13 +115,13 @@ export function createAuthRouter({
     message: 'Too many password requests. Please try again later.',
   });
 
-  const passwordAccountLimit = createRateLimiter({
-    namespace: `${config.rateLimitNamespace}:auth:password:account`,
+  const passwordEmailLimit = createRateLimiter({
+    namespace: `${config.rateLimitNamespace}:auth:password:email`,
     windowMs,
-    limit: config.authPasswordRateLimitMax,
-    keyGenerator: accountKeyGenerator,
+    limit: 5,
+    keyGenerator: emailKeyGenerator,
     code: 'RATE_LIMITED',
-    message: 'Too many password requests for this account. Please try again later.',
+    message: 'Too many password requests for this email address. Please try again later.',
   });
 
   const accountDeletionLimit = createRateLimiter({
@@ -161,18 +166,37 @@ export function createAuthRouter({
     validateBody(registerSchema),
     controller.register,
   );
+  router.post('/verify-email', (_req, _res, next) =>
+    next(
+      new AppError(
+        410,
+        'LINK_TOKEN_DEPRECATED',
+        'Email verification links are no longer supported. Request a verification code.',
+      ),
+    ),
+  );
   router.post(
-    '/verify-email',
+    '/email/verify',
     verificationIpLimit,
+    verificationEmailLimit,
     validateBody(verifyEmailSchema),
     controller.verifyEmail,
   );
   router.post(
-    '/resend-verification',
+    '/email/resend',
     verificationIpLimit,
-    verificationAccountLimit,
+    verificationEmailLimit,
     validateBody(emailOnlySchema),
     controller.resendVerification,
+  );
+  router.post('/resend-verification', (_req, _res, next) =>
+    next(
+      new AppError(
+        410,
+        'LINK_TOKEN_DEPRECATED',
+        'Use POST /auth/email/resend to request a verification code.',
+      ),
+    ),
   );
 
   router.post(
@@ -227,13 +251,27 @@ export function createAuthRouter({
   router.post(
     '/password/forgot',
     passwordIpLimit,
-    passwordAccountLimit,
+    passwordEmailLimit,
     validateBody(passwordResetRequestSchema),
     controller.requestPasswordReset,
   );
   router.post(
     '/password/reset',
     passwordIpLimit,
+    passwordEmailLimit,
+    (req, _res, next) => {
+      if (typeof req.body?.token === 'string') {
+        next(
+          new AppError(
+            410,
+            'LINK_TOKEN_DEPRECATED',
+            'Password reset links are no longer supported. Request a reset code.',
+          ),
+        );
+        return;
+      }
+      next();
+    },
     validateBody(passwordResetSchema),
     controller.resetPassword,
   );

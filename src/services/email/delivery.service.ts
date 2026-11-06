@@ -6,6 +6,7 @@ import type { EmailTransport } from '../providers/email';
 import { redactEmailAddresses, summarizeErrorForLog } from './log-privacy';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
+import { decryptOtpBody, encryptOtpBody } from './otp-body-encryption';
 
 /**
  * Transactional email outbox.
@@ -64,6 +65,10 @@ interface ClaimedDelivery {
   failedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+function isOtpTemplate(template: string): boolean {
+  return template === 'account_verification' || template === 'password_reset';
 }
 
 /**
@@ -130,8 +135,14 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
           fromAddress,
           template: message.template,
           subject: message.subject,
-          textBody: message.text,
-          htmlBody: message.html ?? null,
+          textBody: isOtpTemplate(message.template)
+            ? encryptOtpBody(message.text, deps.config.otpHmacSecret)
+            : message.text,
+          htmlBody: message.html
+            ? isOtpTemplate(message.template)
+              ? encryptOtpBody(message.html, deps.config.otpHmacSecret)
+              : message.html
+            : null,
           headers: { 'X-Nexus-Delivery-Id': deliveryId },
           ...(message.metadata ? { metadata: message.metadata as Prisma.InputJsonValue } : {}),
           provider: transport.provider,
@@ -330,8 +341,14 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       from: delivery.fromAddress,
       replyTo: deps.config.emailReplyToAddress || undefined,
       subject: delivery.subject,
-      text: delivery.textBody,
-      html: delivery.htmlBody ?? undefined,
+      text: isOtpTemplate(delivery.template)
+        ? decryptOtpBody(delivery.textBody, deps.config.otpHmacSecret)
+        : delivery.textBody,
+      html: delivery.htmlBody
+        ? isOtpTemplate(delivery.template)
+          ? decryptOtpBody(delivery.htmlBody, deps.config.otpHmacSecret)
+          : delivery.htmlBody
+        : undefined,
       headers: toHeaderRecord(delivery.headers),
     });
 

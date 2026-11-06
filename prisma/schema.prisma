@@ -191,6 +191,11 @@ enum AuthTokenPurpose {
   EMAIL_CHANGE
 }
 
+enum AuthOneTimeCodePurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
 enum EmailDeliveryStatus {
   QUEUED
   SENDING
@@ -276,6 +281,7 @@ model User {
   externalIdentities          ExternalIdentity[]
   googleOAuthLoginCodes       GoogleOAuthLoginCode[]
   authTokens                  AuthToken[]
+  authOneTimeCodes            AuthOneTimeCode[]
   twoFactorRecoveryCodes      TwoFactorRecoveryCode[]
   workspaceMemberships        WorkspaceMembership[]
   teamMemberships             TeamMembership[]
@@ -314,6 +320,8 @@ model User {
   documentComments            DocumentComment[]            @relation("DocumentCommentAuthor")
   calendarEventsCreated       CalendarEvent[]              @relation("EventCreatedBy")
   calendarInvitations         EventInvitation[]            @relation("EventInvitations")
+  meetingsCreated             Meeting[]                    @relation("MeetingCreatedBy")
+  meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
 
   @@index([status])
   @@index([createdAt])
@@ -426,6 +434,23 @@ model AuthToken {
   @@index([expiresAt])
 }
 
+model AuthOneTimeCode {
+  id         String                 @id @default(uuid())
+  userId     String
+  purpose    AuthOneTimeCodePurpose
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int                    @default(0)
+  lastSentAt DateTime               @default(now())
+  consumedAt DateTime?
+  createdAt  DateTime               @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, consumedAt])
+  @@index([expiresAt])
+}
+
 // ---------------------------------------------------------------------------
 // Workspaces, teams, and membership
 // ---------------------------------------------------------------------------
@@ -462,6 +487,7 @@ model Workspace {
   files               FileAttachment[]
   documents           Document[]
   calendarEvents      CalendarEvent[]
+  meetings            Meeting[]
   auditLogs           AuditLog[]
   subscription        Subscription?
   billingPayments     BillingPayment[]
@@ -860,6 +886,7 @@ model Project {
   attachments    FileAttachment[]
   documents      Document[]
   calendarEvents CalendarEvent[]
+  meetings       Meeting[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -1342,6 +1369,7 @@ model CalendarEvent {
   project     Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
   createdBy   User              @relation("EventCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   invitations EventInvitation[]
+  meetings    Meeting[]
 
   @@index([workspaceId, startAt])
   @@index([projectId])
@@ -1361,6 +1389,71 @@ model EventInvitation {
   user  User          @relation("EventInvitations", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId])
+  @@index([userId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Meetings (Phase 15)
+// ---------------------------------------------------------------------------
+
+enum MeetingStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+enum MeetingParticipantStatus {
+  INVITED
+  JOINED
+  LEFT
+  DECLINED
+}
+
+model Meeting {
+  id          String        @id @default(uuid())
+  workspaceId String?
+  projectId   String?
+  calendarEventId String?
+  createdById String
+  title       String
+  description String?
+  providerMeetingId String?
+  providerHostToken String?
+  status      MeetingStatus  @default(SCHEDULED)
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  endedAt     DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+
+  workspace    Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project      Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  calendarEvent CalendarEvent?      @relation(fields: [calendarEventId], references: [id], onDelete: SetNull)
+  createdBy    User                 @relation("MeetingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  participants MeetingParticipant[]
+
+  @@index([workspaceId, status])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([status, scheduledAt])
+}
+
+model MeetingParticipant {
+  id        String                  @id @default(uuid())
+  meetingId String
+  userId    String
+  status    MeetingParticipantStatus @default(INVITED)
+  joinedAt  DateTime?
+  leftAt    DateTime?
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation("MeetingParticipants", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userId])
   @@index([userId, status])
 }
 

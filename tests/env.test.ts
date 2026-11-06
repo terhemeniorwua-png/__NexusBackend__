@@ -21,6 +21,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   APP_NAME: 'Nexus',
   APP_VERSION: '0.1.0',
   JWT_ACCESS_SECRET: 'test-only-access-secret-do-not-use-in-production',
+  OTP_HMAC_SECRET: 'unit-test-otp-hmac-secret-value-that-is-long-enough',
   TOTP_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64url'),
 };
 

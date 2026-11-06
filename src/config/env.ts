@@ -79,6 +79,10 @@ const envSchema = z
         (value) => !value.includes('change-me') && !value.includes('changeme'),
         'JWT_ACCESS_SECRET must not be a placeholder value',
       ),
+    OTP_HMAC_SECRET: z
+      .string()
+      .min(32, 'OTP_HMAC_SECRET must be at least 32 characters')
+      .default('test-only-otp-hmac-secret-not-for-production'),
     JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().max(86_400).default(900),
     REFRESH_TOKEN_TTL_SECONDS: z.coerce
       .number()
@@ -303,6 +307,16 @@ const envSchema = z
       .default(15_000),
   })
   .superRefine((values, ctx) => {
+    if (
+      values.NODE_ENV === 'production' &&
+      values.OTP_HMAC_SECRET === 'test-only-otp-hmac-secret-not-for-production'
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OTP_HMAC_SECRET'],
+        message: 'OTP_HMAC_SECRET must be set in production',
+      });
+    }
     if (values.NODE_ENV !== 'test' && !/^[A-Za-z0-9_-]{43}$/.test(values.TOTP_ENCRYPTION_KEY)) {
       ctx.addIssue({
         code: 'custom',
@@ -528,6 +542,7 @@ export interface AppConfig {
   appVersion: string;
   apiPrefix: string;
   jwtAccessSecret: string;
+  otpHmacSecret: string;
   jwtAccessTtlSeconds: number;
   refreshTokenTtlSeconds: number;
   bcryptSaltRounds: number;
@@ -682,6 +697,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     appVersion: values.APP_VERSION,
     apiPrefix: '/api/v1',
     jwtAccessSecret: values.JWT_ACCESS_SECRET,
+    otpHmacSecret: values.OTP_HMAC_SECRET,
     jwtAccessTtlSeconds: values.JWT_ACCESS_TTL_SECONDS,
     refreshTokenTtlSeconds: values.REFRESH_TOKEN_TTL_SECONDS,
     bcryptSaltRounds: values.BCRYPT_SALT_ROUNDS,
@@ -765,6 +781,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
           LOG_LEVEL: 'silent',
           FRONTEND_URL: 'http://localhost:3000',
           JWT_ACCESS_SECRET: 'test-only-access-secret-do-not-use-in-production',
+          OTP_HMAC_SECRET: 'test-only-otp-hmac-secret-not-for-production',
           ...source,
         }
       : source;

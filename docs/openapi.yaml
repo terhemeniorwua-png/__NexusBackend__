@@ -866,7 +866,7 @@ paths:
     post:
       tags: [Authentication]
       operationId: verifyEmail
-      summary: Activate an account with an emailed token
+      summary: Deprecated link verification endpoint (410)
       security: []
       requestBody:
         required: true
@@ -876,7 +876,7 @@ paths:
               $ref: '#/components/schemas/TokenRequest'
       responses:
         '200':
-          description: The account is active.
+          description: Legacy link verification is disabled; use /auth/email/verify.
           content:
             application/json:
               schema:
@@ -891,7 +891,7 @@ paths:
     post:
       tags: [Authentication]
       operationId: resendVerification
-      summary: Request a new verification link
+      summary: Deprecated link resend endpoint (410)
       security: []
       description: The response is identical whether or not the address is registered.
       requestBody:
@@ -902,7 +902,52 @@ paths:
               $ref: '#/components/schemas/EmailRequest'
       responses:
         '200':
-          description: The request was accepted.
+          description: Legacy link resend is disabled; use /auth/email/resend.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /auth/email/verify:
+    post:
+      tags: [Authentication]
+      operationId: verifyEmailCode
+      summary: Verify an account with a six-digit code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailCodeRequest'
+      responses:
+        '200':
+          description: The account is active. This endpoint does not issue a session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid/expired code or too many attempts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/email/resend:
+    post:
+      tags: [Authentication]
+      operationId: resendVerificationCode
+      summary: Request a verification code
+      security: []
+      description: The generic response does not reveal whether an account exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+      responses:
+        '200':
+          description: Generic success response.
           content:
             application/json:
               schema:
@@ -1335,7 +1380,7 @@ paths:
     post:
       tags: [Authentication]
       operationId: requestPasswordReset
-      summary: Request a password reset link
+      summary: Request a password reset code
       security: []
       description: The response is identical whether or not the address is registered.
       requestBody:
@@ -1361,7 +1406,7 @@ paths:
     post:
       tags: [Authentication]
       operationId: resetPassword
-      summary: Set a new password with a reset token
+      summary: Set a new password with a six-digit reset code
       security: []
       description: Every existing session of the account is revoked.
       requestBody:
@@ -4888,6 +4933,17 @@ components:
         token:
           type: string
           description: The single-use token from the emailed link.
+    EmailCodeRequest:
+      type: object
+      required: [email, code]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        code:
+          type: string
+          pattern: '^\\d{6}$'
     RefreshRequest:
       type: object
       additionalProperties: false
@@ -4897,12 +4953,16 @@ components:
           description: Optional when the `nexus_rt` cookie is sent.
     PasswordResetRequest:
       type: object
-      required: [token, password]
+      required: [email, code, newPassword]
       additionalProperties: false
       properties:
-        token:
+        email:
           type: string
-        password:
+          format: email
+        code:
+          type: string
+          pattern: '^\\d{6}$'
+        newPassword:
           type: string
     PasswordChangeRequest:
       type: object
