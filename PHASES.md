@@ -1204,6 +1204,8 @@ Implement the shared Nexus calendar and scheduling infrastructure.
 - Synchronisation is reliable and does not create duplicate events.
 - Sync conflicts are handled safely.
 
+**Phase 14 implementation update — 2026-11-06:** Implemented CalendarEvent and EventInvitation models, 10 REST endpoints under `/workspaces/:workspaceId/events` covering CRUD, cancel, invitations (add/remove/list), and respond. Event creation sends `MEETING_INVITE` notifications. Time-range filtering, project filtering, and cursor pagination supported. Audit events recorded. Migration `20261106210800_phase14_calendar` applied. Committed on `feature/phase-14-calendar`. Verification: tsc PASS, lint PASS, build PASS. Deferred: Google/Microsoft two-way sync, recurring event expansion, reminders, calendar aggregation across workspaces.
+
 ---
 
 # PHASE 15 — Meetings and Calling Integration
