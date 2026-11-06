@@ -307,6 +307,9 @@ model User {
   messagesAuthored            Message[]                    @relation("MessageAuthor")
   messageReactions            MessageReaction[]            @relation("MessageReactions")
   messageReadReceipts         MessageReadReceipt[]         @relation("MessageReadReceipts")
+  documentsAuthored           Document[]                   @relation("DocumentAuthor")
+  documentRevisions           DocumentRevision[]           @relation("DocumentRevisionAuthor")
+  documentComments            DocumentComment[]            @relation("DocumentCommentAuthor")
 
   @@index([status])
   @@index([createdAt])
@@ -413,6 +416,7 @@ model Workspace {
   invitations         Invitation[]
   joinRequests        JoinRequest[]
   files               FileAttachment[]
+  documents           Document[]
   auditLogs           AuditLog[]
   subscription        Subscription?
   billingPayments     BillingPayment[]
@@ -809,6 +813,7 @@ model Project {
   tasks       Task[]
   channels    Channel[]
   attachments FileAttachment[]
+  documents   Document[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -882,6 +887,7 @@ model Task {
   blockers     TaskDependency[] @relation("BlockingTask")
   comments     Comment[]
   attachments  FileAttachment[]
+  documents    Document[]
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -1182,6 +1188,66 @@ model FileAttachment {
   @@index([commentId])
   @@index([uploadedById])
   @@index([storageKey])
+}
+
+// ---------------------------------------------------------------------------
+// Documents (Phase 13)
+// ---------------------------------------------------------------------------
+
+model Document {
+  id          String   @id @default(uuid())
+  workspaceId String
+  projectId   String?
+  taskId      String?
+  title       String
+  content     String   @default("")
+  authorId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project     Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  task        Task?              @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  author      User               @relation("DocumentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  revisions   DocumentRevision[]
+  comments    DocumentComment[]
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([taskId])
+  @@index([authorId])
+}
+
+model DocumentRevision {
+  id          String   @id @default(uuid())
+  documentId  String
+  content     String
+  authorId    String
+  createdAt   DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  author   User     @relation("DocumentRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([documentId, createdAt])
+  @@index([authorId])
+}
+
+model DocumentComment {
+  id         String    @id @default(uuid())
+  documentId String
+  authorId   String
+  body       String
+  editedAt   DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  author   User     @relation("DocumentCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([documentId, createdAt])
+  @@index([authorId])
 }
 
 model AuditLog {

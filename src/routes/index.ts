@@ -34,6 +34,7 @@ import { createTaskRouter } from '../modules/tasks/task.routes';
 import { createMessageRouter } from '../modules/messaging/message.routes';
 import { createNotificationRouter } from '../modules/notifications/notification.routes';
 import { createFileRouter } from '../modules/files/file.routes';
+import { createDocumentRouter } from '../modules/documents/document.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -94,6 +95,8 @@ export function createApiRouter({
   router.use('/notifications', createNotificationRouter({ config }));
   // Files are workspace-scoped
   router.use('/workspaces/:workspaceId/files', createFileRouter({ config }));
+  // Documents are workspace-scoped
+  router.use('/workspaces/:workspaceId/documents', createDocumentRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
