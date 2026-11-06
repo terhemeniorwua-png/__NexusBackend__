@@ -31,6 +31,7 @@ import { createProjectRouter } from '../modules/projects/project.routes';
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 import { createChannelRouter } from '../modules/channels/channel.routes';
 import { createTaskRouter } from '../modules/tasks/task.routes';
+import { createMessageRouter } from '../modules/messaging/message.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -83,6 +84,10 @@ export function createApiRouter({
     createTaskRouter({ config }),
   );
   router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
+  // Messages are nested under channels:
+  // /workspaces/:workspaceId/channels/:channelId/messages/…
+  // The message router uses mergeParams to access workspaceId and channelId.
+  router.use('/workspaces/:workspaceId/channels', createMessageRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.

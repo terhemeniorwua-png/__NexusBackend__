@@ -84,6 +84,18 @@ export const TaskAuditAction = {
 
 export type TaskAuditActionValue = (typeof TaskAuditAction)[keyof typeof TaskAuditAction];
 
+export const MessageAuditAction = {
+  MessageCreated: 'message.created',
+  MessageEdited: 'message.edited',
+  MessageDeleted: 'message.deleted',
+  MessagePinned: 'message.pinned',
+  MessageUnpinned: 'message.unpinned',
+  ReactionAdded: 'message.reaction_added',
+  ReactionRemoved: 'message.reaction_removed',
+} as const;
+
+export type MessageAuditActionValue = (typeof MessageAuditAction)[keyof typeof MessageAuditAction];
+
 export interface AuditEventInput {
   workspaceId?: string | null;
   actorId?: string | null;

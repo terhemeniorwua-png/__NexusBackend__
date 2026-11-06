@@ -304,6 +304,9 @@ model User {
   reviewedPrivacyRequests     PrivacyRequest[]             @relation("PrivacyRequestReviewer")
   channelsCreated             Channel[]                    @relation("ChannelCreatedBy")
   channelMemberships          ChannelMembership[]          @relation("ChannelMemberships")
+  messagesAuthored            Message[]                    @relation("MessageAuthor")
+  messageReactions            MessageReaction[]            @relation("MessageReactions")
+  messageReadReceipts         MessageReadReceipt[]         @relation("MessageReadReceipts")
 
   @@index([status])
   @@index([createdAt])
@@ -966,6 +969,8 @@ model Channel {
   project     Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
   createdBy   User                @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   memberships ChannelMembership[]
+  messages    Message[]
+  readReceipts MessageReadReceipt[]
 
   // A unique channel name per workspace among non-deleted channels cannot be
   // expressed in Prisma. It is added as a partial unique index in the
@@ -990,6 +995,66 @@ model ChannelMembership {
   user    User    @relation("ChannelMemberships", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([channelId, userId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Messaging (Phase 10)
+// ---------------------------------------------------------------------------
+
+model Message {
+  id          String      @id @default(uuid())
+  channelId   String
+  authorId    String
+  body        String
+  parentId    String?
+  editedAt    DateTime?
+  pinnedAt    DateTime?
+  deletedAt   DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  channel       Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  author        User             @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  parent        Message?         @relation("MessageReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies       Message[]        @relation("MessageReplies")
+  reactions     MessageReaction[]
+  readReceipts  MessageReadReceipt[]
+
+  @@index([channelId, createdAt])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([pinnedAt])
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation("MessageReactions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+}
+
+model MessageReadReceipt {
+  id        String   @id @default(uuid())
+  channelId String
+  userId    String
+  messageId String
+  readAt    DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation("MessageReadReceipts", fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([channelId])
   @@index([userId])
 }
 
