@@ -857,13 +857,17 @@ model Task {
   description  String?
   status       TaskStatus   @default(ASSIGNED)
   priority     TaskPriority @default(MEDIUM)
+  category     String?
+  labels       String[]     @default([])
   startDate    DateTime?
   dueDate      DateTime?
+  completedAt  DateTime?
   position     Int          @default(0)
   parentTaskId String?
   creatorId    String
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @default(now())
+  archivedAt   DateTime?
   deletedAt    DateTime?
 
   project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)

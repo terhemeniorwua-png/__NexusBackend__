@@ -910,7 +910,7 @@ Implement three visibility levels:
 
 **Visibility audit correction — 2026-11-05:** Audit found that team and department membership could make a `PRIVATE` project accessible and visible in project listings when a parent was attached. Updated `requireProjectAccess` and the list query so inherited parent membership applies only to `DEPARTMENT_TEAM`; `PRIVATE` requires explicit project membership or ownership. Added unit coverage for team and department cases and an opt-in PostgreSQL regression case for read and list visibility. The API index now documents the private-project rule. Focused policy/schema tests pass 20/20. The database regression remains unverified until an explicitly configured loopback test database is available. Phase 8 remains **IN PROGRESS**.
 
-# PHASE 9 — Task and Work Management
+# PHASE 9 — Task and Work Management — IN PROGRESS
 
 ### Objectives
 Implement Nexus task management and project execution capabilities.
@@ -951,6 +951,8 @@ Implement Nexus task management and project execution capabilities.
 - Task permissions are enforced.
 - Message-to-task conversion preserves context.
 - Task activity and notification events are generated correctly.
+
+**Phase 9 implementation update — 2026-11-06:** Implemented task CRUD, lifecycle (archive/restore, complete/reopen), assignee management with notifications, task dependencies with circular-dependency detection, task comments with replies, subtask support via parentTaskId, task filtering/sorting with cursor pagination, and 15 TaskAuditAction constants. Migration `20261105220610_phase9_task_labels_category_archival` adds `labels TEXT[]`, `category TEXT`, `completedAt TIMESTAMP`, and `archivedAt TIMESTAMP` to the Task model. 17 task endpoints are mounted at `/workspaces/:workspaceId/projects/:projectId/tasks` and use `requireProjectAccess` with `ProjectCapability.ViewTasks/CreateTask/ManageTask`. Verification: tsc PASS, lint PASS, build PASS, unit tests 6/6, DB integration tests 13/13, full suite 289 pass / 0 fail / 2 skip. Committed as `83547cd` on `feature/phase-9-task-management`, pushed to origin. Message-to-task conversion and task attachments are deferred pending Phase 10 (messaging) and Phase 12 (file management) respectively. Board/List/Timeline/Calendar views use the same shared task data and are frontend presentation concerns.
 
 ---
 
