@@ -9,6 +9,7 @@ import { createRequestLogger } from './middleware/request-logger';
 import { requestId } from './middleware/request-id';
 import { createEmailWebhookRouter } from './modules/webhooks/email-webhook.routes';
 import { createPaystackWebhookRouter } from './modules/billing/paystack-webhook.routes';
+import { createGoogleOAuthCallbackRouter } from './modules/auth/google-oauth.routes';
 import { createApiRouter } from './routes';
 import type { RateLimitRedisClient } from './services/cache/rate-limit-store';
 import { createReadinessProbe, type ReadinessProbe } from './services/health';
@@ -57,6 +58,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // signature is calculated over the raw request body.
   app.use(`${config.apiPrefix}/webhooks`, createEmailWebhookRouter({ config }));
   app.use(`${config.apiPrefix}/webhooks`, createPaystackWebhookRouter({ config }));
+
+  if (config.googleCallbackUrl) {
+    app.use(new URL(config.googleCallbackUrl).pathname, createGoogleOAuthCallbackRouter(config));
+  }
 
   app.use(
     express.json({

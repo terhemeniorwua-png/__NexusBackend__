@@ -253,26 +253,28 @@ enum PrivacyRequestStatus {
 // ---------------------------------------------------------------------------
 
 model User {
-  id                  String     @id @default(uuid())
-  email               String     @unique
-  passwordHash        String
-  name                String
-  status              UserStatus @default(PENDING_VERIFICATION)
-  isPlatformAdmin     Boolean    @default(false)
-  emailVerifiedAt     DateTime?
-  lastLoginAt         DateTime?
-  createdAt           DateTime   @default(now())
-  updatedAt           DateTime   @default(now())
-  deletedAt           DateTime?
-  deletionRequestedAt DateTime?
-  scheduledDeletionAt DateTime?
+  id                       String     @id @default(uuid())
+  email                    String     @unique
+  passwordHash             String
+  name                     String
+  status                   UserStatus @default(PENDING_VERIFICATION)
+  isPlatformAdmin          Boolean    @default(false)
+  emailVerifiedAt          DateTime?
+  lastLoginAt              DateTime?
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @default(now())
+  deletedAt                DateTime?
+  deletionRequestedAt      DateTime?
+  scheduledDeletionAt      DateTime?
   twoFactorSecretEncrypted String?
-  twoFactorEnabled         Boolean  @default(false)
+  twoFactorEnabled         Boolean    @default(false)
   twoFactorVerifiedAt      DateTime?
   twoFactorSetupExpiresAt  DateTime?
 
   profile                     UserProfile?
   sessions                    Session[]
+  externalIdentities          ExternalIdentity[]
+  googleOAuthLoginCodes       GoogleOAuthLoginCode[]
   authTokens                  AuthToken[]
   twoFactorRecoveryCodes      TwoFactorRecoveryCode[]
   workspaceMemberships        WorkspaceMembership[]
@@ -310,23 +312,65 @@ model User {
   documentsAuthored           Document[]                   @relation("DocumentAuthor")
   documentRevisions           DocumentRevision[]           @relation("DocumentRevisionAuthor")
   documentComments            DocumentComment[]            @relation("DocumentCommentAuthor")
+  calendarEventsCreated       CalendarEvent[]              @relation("EventCreatedBy")
+  calendarInvitations         EventInvitation[]            @relation("EventInvitations")
 
   @@index([status])
   @@index([createdAt])
   @@index([status, scheduledDeletionAt])
 }
 
+model ExternalIdentity {
+  id                String   @id @default(uuid())
+  userId            String
+  provider          String
+  providerSubjectId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubjectId])
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model GoogleOAuthState {
+  id         String    @id @default(uuid())
+  stateHash  String    @unique
+  nonceHash  String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
+model GoogleOAuthLoginCode {
+  id         String    @id @default(uuid())
+  codeHash   String    @unique
+  userId     String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId, consumedAt])
+}
+
 model UserProfile {
-  id        String   @id @default(uuid())
-  userId    String   @unique
-  bio       String?
-  jobTitle  String?
-  avatarUrl String?
-  avatarStorageKey String? @unique
-  timeZone  String   @default("UTC")
-  locale    String   @default("en")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  bio              String?
+  jobTitle         String?
+  avatarUrl        String?
+  avatarStorageKey String?  @unique
+  timeZone         String   @default("UTC")
+  locale           String   @default("en")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -417,6 +461,7 @@ model Workspace {
   joinRequests        JoinRequest[]
   files               FileAttachment[]
   documents           Document[]
+  calendarEvents      CalendarEvent[]
   auditLogs           AuditLog[]
   subscription        Subscription?
   billingPayments     BillingPayment[]
@@ -804,16 +849,17 @@ model Project {
   updatedAt    DateTime          @default(now())
   deletedAt    DateTime?
 
-  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  team        Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  department  Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  owner       User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members     ProjectMembership[]
-  milestones  ProjectMilestone[]
-  tasks       Task[]
-  channels    Channel[]
-  attachments FileAttachment[]
-  documents   Document[]
+  workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team           Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  department     Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  owner          User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members        ProjectMembership[]
+  milestones     ProjectMilestone[]
+  tasks          Task[]
+  channels       Channel[]
+  attachments    FileAttachment[]
+  documents      Document[]
+  calendarEvents CalendarEvent[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -825,15 +871,15 @@ model Project {
 }
 
 model ProjectMilestone {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   projectId   String
   name        String
   description String?
   dueDate     DateTime?
   completedAt DateTime?
-  position    Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -969,13 +1015,13 @@ model Channel {
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
-  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  team        Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  department  Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  project     Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  createdBy   User                @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  memberships ChannelMembership[]
-  messages    Message[]
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team         Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  department   Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  project      Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy    User                 @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  memberships  ChannelMembership[]
+  messages     Message[]
   readReceipts MessageReadReceipt[]
 
   // A unique channel name per workspace among non-deleted channels cannot be
@@ -1009,23 +1055,23 @@ model ChannelMembership {
 // ---------------------------------------------------------------------------
 
 model Message {
-  id          String      @id @default(uuid())
-  channelId   String
-  authorId    String
-  body        String
-  parentId    String?
-  editedAt    DateTime?
-  pinnedAt    DateTime?
-  deletedAt   DateTime?
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id        String    @id @default(uuid())
+  channelId String
+  authorId  String
+  body      String
+  parentId  String?
+  editedAt  DateTime?
+  pinnedAt  DateTime?
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
-  channel       Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  author        User             @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
-  parent        Message?         @relation("MessageReplies", fields: [parentId], references: [id], onDelete: Cascade)
-  replies       Message[]        @relation("MessageReplies")
-  reactions     MessageReaction[]
-  readReceipts  MessageReadReceipt[]
+  channel      Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  author       User                 @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  parent       Message?             @relation("MessageReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies      Message[]            @relation("MessageReplies")
+  reactions    MessageReaction[]
+  readReceipts MessageReadReceipt[]
 
   @@index([channelId, createdAt])
   @@index([authorId])
@@ -1195,23 +1241,23 @@ model FileAttachment {
 // ---------------------------------------------------------------------------
 
 model Document {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   projectId   String?
   taskId      String?
   title       String
-  content     String   @default("")
+  content     String    @default("")
   authorId    String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project     Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  task        Task?              @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  author      User               @relation("DocumentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
-  revisions   DocumentRevision[]
-  comments    DocumentComment[]
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  task      Task?              @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  author    User               @relation("DocumentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  revisions DocumentRevision[]
+  comments  DocumentComment[]
 
   @@index([workspaceId])
   @@index([projectId])
@@ -1220,11 +1266,11 @@ model Document {
 }
 
 model DocumentRevision {
-  id          String   @id @default(uuid())
-  documentId  String
-  content     String
-  authorId    String
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  documentId String
+  content    String
+  authorId   String
+  createdAt  DateTime @default(now())
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   author   User     @relation("DocumentRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
@@ -1248,6 +1294,74 @@ model DocumentComment {
 
   @@index([documentId, createdAt])
   @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Calendar and Scheduling (Phase 14)
+// ---------------------------------------------------------------------------
+
+enum CalendarEventStatus {
+  CONFIRMED
+  TENTATIVE
+  CANCELLED
+}
+
+enum EventInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  TENTATIVE
+}
+
+enum EventVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+model CalendarEvent {
+  id             String              @id @default(uuid())
+  workspaceId    String?
+  projectId      String?
+  createdById    String
+  title          String
+  description    String?
+  location       String?
+  startAt        DateTime
+  endAt          DateTime
+  allDay         Boolean             @default(false)
+  status         CalendarEventStatus @default(CONFIRMED)
+  visibility     EventVisibility     @default(PUBLIC)
+  recurrenceRule String?
+  externalId     String?
+  externalSource String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  deletedAt      DateTime?
+
+  workspace   Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project     Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy   User              @relation("EventCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  invitations EventInvitation[]
+
+  @@index([workspaceId, startAt])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([startAt, endAt])
+}
+
+model EventInvitation {
+  id        String                @id @default(uuid())
+  eventId   String
+  userId    String
+  status    EventInvitationStatus @default(PENDING)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  event CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User          @relation("EventInvitations", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId, status])
 }
 
 model AuditLog {

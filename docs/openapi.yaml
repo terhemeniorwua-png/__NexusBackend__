@@ -7,8 +7,8 @@ info:
 
     Phase 1 provides the foundation (health, configuration, error contract).
     Phase 3 adds the account lifecycle: registration, email verification,
-    sessions, password recovery, server-managed profile images and optional
-    TOTP two-factor authentication.
+    sessions, password recovery, Google OpenID Connect, server-managed profile
+    images and optional TOTP two-factor authentication.
     The backend provides a signed transactional email provider webhook.
     Workspace routes support workspace types, memberships, invitations,
     public discovery, join codes, join requests and membership
@@ -945,6 +945,101 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '429':
           description: Too many sign-in attempts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/google:
+    get:
+      tags: [Authentication]
+      operationId: initiateGoogleLogin
+      summary: Redirect to Google OpenID Connect
+      security: []
+      responses:
+        '302':
+          description: Redirects the browser to Google with state and nonce.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '429':
+          description: Too many sign-in attempts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/google/callback:
+    get:
+      tags: [Authentication]
+      operationId: googleLoginCallback
+      summary: Validate Google's callback and redirect to the frontend
+      security: []
+      parameters:
+        - in: query
+          name: code
+          schema:
+            type: string
+        - in: query
+          name: state
+          schema:
+            type: string
+        - in: query
+          name: error
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirects to the configured frontend callback path with a short-lived exchange code or an error code.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '400':
+          description: Invalid, expired, or replayed state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/google/exchange:
+    post:
+      tags: [Authentication]
+      operationId: exchangeGoogleLoginCode
+      summary: Exchange a one-time Google login code for a Nexus session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  minLength: 32
+                  maxLength: 256
+      responses:
+        '200':
+          description: The normal login response; 2FA challenge is returned when enabled. Session cookies are set when login is complete.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: The code is invalid, expired, or already used.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The verified email belongs to an unlinked Nexus account.
           content:
             application/json:
               schema:

@@ -50,6 +50,12 @@ const envSchema = z
       ),
     CORS_ORIGINS: z.string().default(''),
     FRONTEND_URL: z.string().default(''),
+    GOOGLE_CLIENT_ID: z.string().trim().default(''),
+    GOOGLE_CLIENT_SECRET: z.string().default(''),
+    GOOGLE_CALLBACK_URL: z.string().trim().default(''),
+    // Preserve the existing case-sensitive deployment key. This is the
+    // backend callback URL registered with Google.
+    redirect_URL: z.string().trim().default(''),
     CORS_CREDENTIALS: booleanString,
     LOG_LEVEL: z.enum(logLevels).default('info'),
     REQUEST_BODY_LIMIT: z
@@ -507,6 +513,9 @@ export interface AppConfig {
   corsOrigins: string[];
   corsCredentials: boolean;
   frontendUrl: string;
+  googleClientId: string;
+  googleClientSecret: string;
+  googleCallbackUrl: string;
   logLevel: (typeof logLevels)[number];
   requestBodyLimit: string;
   rateLimitWindowMs: number;
@@ -604,7 +613,7 @@ export class ConfigurationError extends Error {
 
 function parseOrigins(raw: string): string[] {
   const origins = raw
-    .split(',')
+    .split(/\s*(?:,|\|\|)\s*/)
     .map((value) => value.trim())
     .filter(Boolean)
     .map((value) => {
@@ -634,7 +643,19 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const values = result.data;
-  const corsOrigins = [...parseOrigins(values.CORS_ORIGINS), ...parseOrigins(values.FRONTEND_URL)];
+  const frontendOrigins = parseOrigins(values.FRONTEND_URL);
+  const corsOrigins = [...parseOrigins(values.CORS_ORIGINS), ...frontendOrigins];
+  const googleCallbackUrl = values.redirect_URL || values.GOOGLE_CALLBACK_URL;
+  if (googleCallbackUrl) {
+    try {
+      const callback = new URL(googleCallbackUrl);
+      if (callback.protocol !== 'https:' && values.NODE_ENV === 'production') {
+        throw new Error('HTTPS required');
+      }
+    } catch {
+      throw new ConfigurationError('redirect_URL must be an absolute callback URL');
+    }
+  }
 
   return {
     nodeEnv: values.NODE_ENV,
@@ -645,7 +666,10 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     redisUrl: values.REDIS_URL,
     corsOrigins: [...new Set(corsOrigins)],
     corsCredentials: values.CORS_CREDENTIALS,
-    frontendUrl: values.FRONTEND_URL,
+    frontendUrl: frontendOrigins[0] ?? '',
+    googleClientId: values.GOOGLE_CLIENT_ID,
+    googleClientSecret: values.GOOGLE_CLIENT_SECRET,
+    googleCallbackUrl,
     logLevel: values.LOG_LEVEL,
     requestBodyLimit: values.REQUEST_BODY_LIMIT,
     rateLimitWindowMs: values.RATE_LIMIT_WINDOW_MS,

@@ -34,6 +34,27 @@ test('parseEnv returns normalized configuration', () => {
   assert.deepEqual(config.corsOrigins, ['https://app.example.com', 'https://admin.example.com']);
 });
 
+test('parseEnv supports the existing Google callback key and pipe-separated frontend origins', () => {
+  const config = parseEnv({
+    ...baseEnv,
+    FRONTEND_URL: 'https://app.example.com || http://localhost:3000',
+    GOOGLE_CLIENT_ID: 'client-id',
+    GOOGLE_CLIENT_SECRET: 'server-secret',
+    GOOGLE_CALLBACK_URL: 'https://frontend.example.com',
+    redirect_URL: 'https://api.example.com/api/auth/google/callback',
+  });
+
+  assert.equal(config.googleCallbackUrl, 'https://api.example.com/api/auth/google/callback');
+  assert.equal(config.googleClientId, 'client-id');
+  assert.equal(config.googleClientSecret, 'server-secret');
+  assert.equal(config.frontendUrl, 'https://app.example.com');
+  assert.deepEqual(config.corsOrigins, [
+    'https://app.example.com',
+    'https://admin.example.com',
+    'http://localhost:3000',
+  ]);
+});
+
 test('parseEnv rejects a missing database URL', () => {
   const env = { ...baseEnv };
   delete env.DATABASE_URL;

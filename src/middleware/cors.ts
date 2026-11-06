@@ -4,7 +4,7 @@ import type { AppConfig } from '../config/env';
 import { AppError } from '../utils/errors';
 
 const allowedMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
-const allowedHeaders = ['Content-Type', 'Authorization', 'X-Request-Id'];
+const allowedHeaders = ['Content-Type', 'Authorization', 'X-Request-Id', 'X-CSRF-Token'];
 
 export function createCorsMiddleware(
   config: Pick<AppConfig, 'corsOrigins' | 'corsCredentials'>,

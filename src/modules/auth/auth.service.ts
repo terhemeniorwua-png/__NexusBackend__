@@ -13,7 +13,7 @@ import {
 import { assertPasswordLength, hashPassword, verifyPassword } from '../../services/password';
 import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
-import { deriveKey, hashSecret, signValue } from '../../utils/crypto';
+import { deriveKey, generateSecureToken, hashSecret, signValue } from '../../utils/crypto';
 import { signAccessToken } from './access-token.service';
 import { issueAuthToken, consumeAuthToken, invalidateAuthTokens } from './auth-token.service';
 import {
@@ -74,6 +74,17 @@ export interface AuthService {
   resendVerification(input: { email: string }, ctx: RequestContext): Promise<void>;
   login(
     input: LoginInput,
+    ctx: RequestContext,
+  ): Promise<
+    AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
+  >;
+  ensureGoogleAccount(input: {
+    subject: string;
+    email: string;
+    name: string;
+  }): Promise<{ id: string }>;
+  loginGoogleAccount(
+    userId: string,
     ctx: RequestContext,
   ): Promise<
     AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
@@ -243,6 +254,102 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
   return {
     twoFactor,
+    async ensureGoogleAccount(input): Promise<{ id: string }> {
+      const identity = await client.externalIdentity.findUnique({
+        where: {
+          provider_providerSubjectId: { provider: 'google', providerSubjectId: input.subject },
+        },
+        include: { user: true },
+      });
+      if (identity) {
+        assertUsableAccount(identity.user);
+        return { id: identity.user.id };
+      }
+
+      const email = input.email.trim().toLowerCase();
+      const existing = await findUserByEmail(email);
+      if (existing) {
+        throw new AppError(
+          409,
+          'GOOGLE_ACCOUNT_LINK_REQUIRED',
+          'This email already has a Nexus account. Sign in and link Google from account settings.',
+        );
+      }
+
+      const passwordHash = await hashPassword(generateSecureToken(), config.bcryptSaltRounds);
+      try {
+        const user = await client.$transaction(async (tx) => {
+          const created = await tx.user.create({
+            data: {
+              email,
+              name: input.name.trim().slice(0, 100) || email,
+              passwordHash,
+              status: 'ACTIVE',
+              emailVerifiedAt: new Date(),
+              externalIdentities: {
+                create: { provider: 'google', providerSubjectId: input.subject },
+              },
+            },
+          });
+          await ensurePersonalWorkspace(tx, created);
+          return created;
+        });
+        return { id: user.id };
+      } catch (error) {
+        if (
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          error.code === 'P2002'
+        ) {
+          const raced = await client.externalIdentity.findUnique({
+            where: {
+              provider_providerSubjectId: { provider: 'google', providerSubjectId: input.subject },
+            },
+            select: { userId: true },
+          });
+          if (raced) return { id: raced.userId };
+          const emailOwner = await findUserByEmail(email);
+          if (emailOwner) {
+            throw new AppError(
+              409,
+              'GOOGLE_ACCOUNT_LINK_REQUIRED',
+              'Sign in and link Google from account settings',
+            );
+          }
+        }
+        throw error;
+      }
+    },
+    async loginGoogleAccount(userId, ctx) {
+      const user = await client.user.findUnique({ where: { id: userId } });
+      if (!user)
+        throw new AppError(
+          401,
+          'GOOGLE_IDENTITY_INVALID',
+          'Google identity is no longer available',
+        );
+      assertUsableAccount(user);
+      if (user.twoFactorEnabled) return twoFactor.issueChallenge(user);
+
+      const { session, refreshToken } = await createSession(client, {
+        userId: user.id,
+        ttlSeconds: config.refreshTokenTtlSeconds,
+        userAgent: ctx.userAgent,
+        ip: ctx.ip,
+      });
+      await client.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+      await recordSecurityEvent(client, {
+        action: SecurityAction.LoginSucceeded,
+        targetType: 'Session',
+        targetId: session.id,
+        actorId: user.id,
+        metadata: { userId: user.id, status: user.status, provider: 'google' },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      return authenticateSession(session, user, refreshToken);
+    },
     async register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
       const existing = await findUserByEmail(input.email);
 

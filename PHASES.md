@@ -10,7 +10,7 @@
 |---|---|
 | **Project** | Nexus Backend |
 | **Numbered phase definitions** | 30 |
-| **Current active phase** | Phase 4 — Transactional email and delivery infrastructure |
+| **Current active phase** | Phase 3.6 — Google OAuth authentication |
 | **Aggregate progress** | Not calculated: legacy and canonical phase lists contain duplicate and missing phase numbers |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
@@ -375,6 +375,18 @@ This tracker must be treated as the authoritative implementation sequence for ba
 - Authentication unit and PostgreSQL integration tests, typecheck, lint, and formatting checks pass
 
 **Blockers / Notes:** Verified on 2026-11-01. Removed four commented debug statements: registration-stage logs for `hashing`, `creating user`, and `queueing email` from `auth.service.ts`, and the `handler reached` log from `auth.controller.ts`. Also removed the two standalone `// ...` placeholder comments interspersed in the same obsolete service debug block. No active logging, explanatory comments, executable logic, or authentication behavior was changed. The auth-module search returns no commented `console.log` calls. `tests/auth-unit.test.ts` passes; `tests/auth-phase3.test.ts` passes 55/55 against disposable PostgreSQL. Typecheck, lint, format check, and `git diff --check` pass. Implementation commit `7de01e0` (`chore(phase-3.5): remove commented auth debug logs`) is pushed to `origin/feature/phase-3.5-auth-debug-cleanup`.
+
+---
+
+#### Phase 3.6 — Google OAuth authentication `[/]`
+
+**Objective:** Add Continue with Google through the existing Nexus account and session architecture.
+
+**Deliverables:** Google OpenID Connect authorization-code flow; one-use state and nonce; verified Google subject/email; unique external identity mapping; no matching-email auto-link; normal Nexus session and refresh-cookie issuance; existing 2FA preservation; frontend exchange contract and API documentation.
+
+**Status:** IN PROGRESS. The implementation and additive PostgreSQL migration are present. OAuth regression coverage is present; database-backed account-creation/lifecycle verification and runtime verification remain outstanding. The local `.env` was preserved. Its `redirect_URL` is used as the backend callback and takes precedence over `GOOGLE_CALLBACK_URL`; the configured callback path is mounted as an alias. Its existing `FRONTEND_URL` `||` separator is now parsed into allowed origins.
+
+**Deployment requirements:** Render must enable credentialed CORS and `SameSite=None; Secure` for cross-site refresh cookies. Confirm that the exact callback URL in `redirect_URL` is registered in the Google Cloud OAuth client.
 
 ---
 
@@ -1819,7 +1831,7 @@ Make the backend easy to understand, integrate, and maintain.
 
 ### Current Phase
 
-**Current phase:** Phase 3 — Authentication and account lifecycle — was reopened by the full audit because profile-image upload and optional TOTP were missing. Both implementations and opt-in PostgreSQL/Redis tests are now present. Phase 3 remains **IN PROGRESS** until those tests and migrations are verified against a disposable local database. Phase 8 is preserved as partially implemented; no later phase has been started. Phase 4.6 remains independently in progress.
+**Current phase:** Phase 3 core authentication is marked completed in its verification record. Phase 3.6 — Google OAuth authentication — is active for the explicitly requested work. Older incomplete records, including Phase 4.6 and Phase 8, remain in progress independently and are not changed by this OAuth implementation.
 
 ---
 

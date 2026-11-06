@@ -205,6 +205,8 @@ export const refreshSchema = z
   })
   .strict();
 
+export const googleExchangeSchema = z.object({ code: z.string().trim().min(32).max(256) }).strict();
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type PasswordResetInput = z.infer<typeof passwordResetSchema>;
