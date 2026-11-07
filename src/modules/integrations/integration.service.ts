@@ -31,7 +31,13 @@ export function createIntegrationService(prisma: PrismaClient = getPrismaClient(
 
       const integration = await prisma.$transaction(async (tx) => {
         const created = await tx.integration.upsert({
-          where: { userId_provider_workspaceId: { userId: input.userId, provider: input.provider, workspaceId: input.workspaceId ?? null } },
+          where: {
+            userId_provider_workspaceId: {
+              userId: input.userId,
+              provider: input.provider,
+              workspaceId: input.workspaceId ?? '',
+            },
+          },
           create: {
             userId: input.userId, workspaceId: input.workspaceId ?? null,
             provider: input.provider, status: 'ACTIVE',
