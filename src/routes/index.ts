@@ -38,6 +38,7 @@ import { createDocumentRouter } from '../modules/documents/document.routes';
 import { createCalendarRouter } from '../modules/calendar/calendar.routes';
 import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 import { createFormRouter } from '../modules/forms/form.routes';
+import { createSearchRouter } from '../modules/search/search.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -96,6 +97,8 @@ export function createApiRouter({
   router.use('/workspaces/:workspaceId/channels', createMessageRouter({ config }));
   // Notifications are user-scoped, not workspace-scoped
   router.use('/notifications', createNotificationRouter({ config }));
+  // Search is user-scoped
+  router.use('/search', createSearchRouter({ config }));
   // Files are workspace-scoped
   router.use('/workspaces/:workspaceId/files', createFileRouter({ config }));
   // Documents are workspace-scoped
