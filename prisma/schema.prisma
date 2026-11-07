@@ -319,7 +319,10 @@ model User {
   documentRevisions           DocumentRevision[]           @relation("DocumentRevisionAuthor")
   documentComments            DocumentComment[]            @relation("DocumentCommentAuthor")
   calendarEventsCreated       CalendarEvent[]              @relation("EventCreatedBy")
+  formsCreated               Form[]                   @relation("FormCreatedBy")
+  formResponses              FormResponse[]           @relation("FormSubmitter")
   calendarInvitations         EventInvitation[]            @relation("EventInvitations")
+  integrations                Integration[]                @relation("UserIntegrations")
   meetingsCreated             Meeting[]                    @relation("MeetingCreatedBy")
   meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
 
@@ -487,6 +490,8 @@ model Workspace {
   files               FileAttachment[]
   documents           Document[]
   calendarEvents      CalendarEvent[]
+  forms              Form[]
+  integrations       Integration[]                @relation("WorkspaceIntegrations")
   meetings            Meeting[]
   auditLogs           AuditLog[]
   subscription        Subscription?
@@ -1455,6 +1460,143 @@ model MeetingParticipant {
 
   @@unique([meetingId, userId])
   @@index([userId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Forms and Surveys (Phase 16)
+// ---------------------------------------------------------------------------
+
+enum FormStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  ARCHIVED
+}
+
+enum FormFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  EMAIL
+  SELECT
+  MULTISELECT
+  RADIO
+  CHECKBOX
+  DATE
+  RATING
+  SCALE
+}
+
+model Form {
+  id          String     @id @default(uuid())
+  workspaceId String
+  createdById String
+  title       String
+  description String?
+  status      FormStatus @default(DRAFT)
+  isPublic    Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  deletedAt   DateTime?
+
+  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy  User          @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  fields     FormField[]
+  responses  FormResponse[]
+
+  @@index([workspaceId, status])
+  @@index([createdById])
+}
+
+model FormField {
+  id          String        @id @default(uuid())
+  formId      String
+  label       String
+  type        FormFieldType
+  required    Boolean       @default(false)
+  options     String[]      @default([])
+  placeholder String?
+  position    Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  form      Form           @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers   FormAnswer[]
+
+  @@index([formId, position])
+}
+
+model FormResponse {
+  id          String   @id @default(uuid())
+  formId      String
+  submittedBy String
+  createdAt   DateTime @default(now())
+
+  form     Form          @relation(fields: [formId], references: [id], onDelete: Cascade)
+  submitter User          @relation("FormSubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  answers  FormAnswer[]
+
+  @@index([formId, createdAt])
+  @@index([submittedBy])
+}
+
+model FormAnswer {
+  id         String @id @default(uuid())
+  responseId String
+  fieldId    String
+  value      String
+
+  response FormResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  field    FormField    @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@index([responseId])
+  @@index([fieldId])
+}
+
+// ---------------------------------------------------------------------------
+// Integrations Framework (Phase 19)
+// ---------------------------------------------------------------------------
+
+enum IntegrationProvider {
+  GOOGLE_DRIVE
+  ONEDRIVE
+  DROPBOX
+  GMAIL
+  OUTLOOK
+  SLACK
+  GITHUB
+  GITLAB
+  GOOGLE_CALENDAR
+  OUTLOOK_CALENDAR
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+model Integration {
+  id          String              @id @default(uuid())
+  userId      String
+  workspaceId String?
+  provider    IntegrationProvider
+  status      IntegrationStatus   @default(ACTIVE)
+  accessTokenCiphertext  String
+  refreshTokenCiphertext String?
+  tokenExpiresAt DateTime?
+  scopes      String[]            @default([])
+  externalUserId String?
+  externalEmail  String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  user      User       @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, workspaceId])
+  @@index([userId, status])
+  @@index([workspaceId, provider])
 }
 
 model AuditLog {
