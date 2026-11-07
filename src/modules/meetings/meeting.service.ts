@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
+import type { CollaborationEmailNotifier } from '../../services/collaboration-email-notifier';
 import { AppError } from '../../utils/errors';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 
@@ -32,8 +33,70 @@ function toSummary(row: {
 
 type Input = { userId: string; workspaceId: string };
 
-export function createMeetingService(prisma: PrismaClient = getPrismaClient()) {
+export interface MeetingServiceDependencies {
+  meetingNotifier?: CollaborationEmailNotifier;
+}
+
+export function createMeetingService(
+  prisma: PrismaClient = getPrismaClient(),
+  deps: MeetingServiceDependencies = {},
+) {
   const include = { _count: { select: { participants: true } } } as const;
+
+  // Emails go out after the database write commits and never fail the request.
+  async function notifyInvitees(
+    meeting: {
+      id: string;
+      title: string;
+      scheduledAt: Date | null;
+      workspaceId: string | null;
+      projectId: string | null;
+    },
+    organizerId: string,
+    inviteeIds: string[],
+  ): Promise<void> {
+    if (!deps.meetingNotifier || !meeting.scheduledAt) return;
+    try {
+      const ids = [...new Set(inviteeIds)].filter((id) => id !== organizerId);
+      if (ids.length === 0) return;
+      const [organizer, invitees, workspace, project] = await Promise.all([
+        prisma.user.findUnique({ where: { id: organizerId }, select: { name: true } }),
+        prisma.user.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, name: true, email: true, status: true, deletedAt: true },
+        }),
+        meeting.workspaceId
+          ? prisma.workspace.findUnique({ where: { id: meeting.workspaceId }, select: { name: true } })
+          : null,
+        meeting.projectId
+          ? prisma.project.findUnique({ where: { id: meeting.projectId }, select: { name: true } })
+          : null,
+      ]);
+      if (!organizer) return;
+      for (const invitee of invitees) {
+        if (invitee.status !== 'ACTIVE' || invitee.deletedAt) continue;
+        try {
+          await deps.meetingNotifier.notifyMeetingInvitation({
+            invitationId: `${meeting.id}:${invitee.id}`,
+            invitationStatus: 'PENDING',
+            inviteeId: invitee.id,
+            inviteeEmail: invitee.email,
+            inviteeName: invitee.name,
+            organizerName: organizer.name,
+            meetingTitle: meeting.title,
+            startsAt: meeting.scheduledAt,
+            meetingId: meeting.id,
+            ...(workspace ? { workspaceName: workspace.name } : {}),
+            ...(project ? { projectName: project.name } : {}),
+          });
+        } catch {
+          // Non-fatal: the invitation is already saved.
+        }
+      }
+    } catch {
+      // Non-fatal: the meeting change already committed.
+    }
+  }
 
   return {
     async create(input: Input & {
@@ -64,6 +127,7 @@ export function createMeetingService(prisma: PrismaClient = getPrismaClient()) {
         await recordAuditEvent(tx, { workspaceId: input.workspaceId, actorId: input.userId, action: 'meeting.created', targetType: 'Meeting', targetId: created.id, metadata: { title: input.title } });
         return created;
       });
+      await notifyInvitees(meeting, input.userId, input.participantIds ?? []);
       return toSummary(meeting);
     },
 
@@ -128,6 +192,7 @@ export function createMeetingService(prisma: PrismaClient = getPrismaClient()) {
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
       await prisma.meetingParticipant.upsert({ where: { meetingId_userId: { meetingId: input.meetingId, userId: input.targetUserId } }, create: { meetingId: input.meetingId, userId: input.targetUserId }, update: {} });
       await createNotification(prisma, { userId: input.targetUserId, type: 'MEETING_INVITE', title: `Meeting invitation: ${m.title}`, data: { workspaceId: input.workspaceId, meetingId: m.id } });
+      await notifyInvitees(m, input.userId, [input.targetUserId]);
     },
 
     async removeParticipant(input: Input & { meetingId: string; targetUserId: string }): Promise<void> {

@@ -10,13 +10,14 @@ import {
   meetingWorkspaceParams, participantParamsSchema, updateMeetingSchema,
   type CreateMeetingInput, type ListMeetingsQuery, type UpdateMeetingInput,
 } from './meeting.schemas';
+import { createCollaborationEmailNotifier } from '../../services/collaboration-email-notifier';
 import { createMeetingService } from './meeting.service';
 
 export interface MeetingRouterOptions { config: AppConfig; service?: ReturnType<typeof createMeetingService> }
 
 function userId(req: Request): string { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth.userId; }
 
-export function createMeetingRouter({ config, service = createMeetingService() }: MeetingRouterOptions): Router {
+export function createMeetingRouter({ config, service = createMeetingService(undefined, { meetingNotifier: createCollaborationEmailNotifier(config) }) }: MeetingRouterOptions): Router {
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);
   const requireActive = createRequireActiveAccount();
