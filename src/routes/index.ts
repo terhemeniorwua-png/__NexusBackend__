@@ -36,6 +36,7 @@ import { createNotificationRouter } from '../modules/notifications/notification.
 import { createFileRouter } from '../modules/files/file.routes';
 import { createDocumentRouter } from '../modules/documents/document.routes';
 import { createCalendarRouter } from '../modules/calendar/calendar.routes';
+import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -100,6 +101,8 @@ export function createApiRouter({
   router.use('/workspaces/:workspaceId/documents', createDocumentRouter({ config }));
   // Calendar events are workspace-scoped
   router.use('/workspaces/:workspaceId/events', createCalendarRouter({ config }));
+  // Meetings are workspace-scoped
+  router.use('/workspaces/:workspaceId/meetings', createMeetingRouter({ config }));
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
