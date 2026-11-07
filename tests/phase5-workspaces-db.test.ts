@@ -386,11 +386,13 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     }
 
     // The new account verifies its address, so it can hold a membership.
-    const verificationToken = tokenFromEmail(lastEmail('account_verification'));
+    const verificationCode = /\b(\d{6})\b/.exec(lastEmail('account_verification').text)?.[1];
 
-    const verified = await api('/auth/verify-email', {
+    assert.ok(verificationCode, 'Expected a six-digit code in the verification email');
+
+    const verified = await api('/auth/email/verify', {
       method: 'POST',
-      body: { token: verificationToken },
+      body: { email: inviteeEmail, code: verificationCode },
     });
 
     assert.equal(verified.status, 200, JSON.stringify(verified.body));

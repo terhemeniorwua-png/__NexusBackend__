@@ -254,7 +254,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.ok(captured);
     assert.equal(captured.to[0], email);
     assert.match(captured.from, /no-reply@example\.com/);
-    assert.match(captured.body, /token=/);
+    assert.match(plainTextOf(captured.body), /\b\d{6}\b/, 'Expected a six-digit code in the verification email');
     assert.match(captured.body, /<!doctype html>/i);
 
     const delivered = await prisma.emailDelivery.findUnique({ where: { id: queued.id } });
@@ -904,11 +904,10 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     assert.ok(captured);
 
-    const token = /token=([A-Za-z0-9_-]+)/.exec(captured.body)?.[1];
+    const code = /\b(\d{6})\b/.exec(plainTextOf(captured.body))?.[1];
 
-    assert.ok(token, 'Expected the email to contain a single use token');
-    assert.equal(logs.output.includes(token as string), false);
-    assert.equal(logs.output.includes('token='), false);
+    assert.ok(code, 'Expected the email to contain a six-digit code');
+    assert.equal(logs.output.includes(code), false);
   });
 
   test('the delivery lifecycle logs never expose the recipient address', async () => {
@@ -1054,3 +1053,13 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.equal(failed.attempt, 1);
   });
 });
+
+function plainTextOf(raw: string): string {
+  const decoded = raw
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-F]{2})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  const htmlAt = decoded.search(/Content-Type: text\/html/i);
+  const textPart = htmlAt === -1 ? decoded : decoded.slice(0, htmlAt);
+  const bodyStart = textPart.indexOf('\r\n\r\n');
+  return bodyStart === -1 ? textPart : textPart.slice(bodyStart + 4);
+}

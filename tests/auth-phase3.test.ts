@@ -1952,8 +1952,8 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       body: JSON.stringify({ email: account.email, code: oldVerificationCode }),
     });
 
-    assert.equal(oldVerification.status, 410);
-    assert.equal(oldVerification.body.error?.code, 'LINK_TOKEN_DEPRECATED');
+    assert.equal(oldVerification.status, 403, JSON.stringify(oldVerification.body));
+    assert.equal(oldVerification.body.error?.code, 'ACCOUNT_DEACTIVATED');
 
     const response = await jsonRequest(`${baseUrl}/api/v1/auth/reactivate`, {
       method: 'POST',
@@ -2032,8 +2032,8 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
       body: JSON.stringify({ email: session.email, code, newPassword: 'Another-Good-Pass-4' }),
     });
 
-    assert.equal(reset.status, 400);
-    assert.equal(reset.body.error?.code, 'TOKEN_ALREADY_USED');
+    assert.equal(reset.status, 403, JSON.stringify(reset.body));
+    assert.equal(reset.body.error?.code, 'ACCOUNT_DEACTIVATED');
 
     const stored = await prisma.user.findUnique({ where: { id: session.userId } });
 
