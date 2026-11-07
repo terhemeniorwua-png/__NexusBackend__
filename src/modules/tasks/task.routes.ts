@@ -26,6 +26,7 @@ import {
   type UpdateCommentInput,
   type UpdateTaskInput,
 } from './task.schemas';
+import { createTaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import { createTaskService } from './task.service';
 
 export interface TaskRouterOptions {
@@ -45,7 +46,9 @@ function userId(req: Request): string {
 
 export function createTaskRouter({
   config,
-  service = createTaskService(),
+  service = createTaskService(undefined, {
+    assignmentNotifier: createTaskAssignmentNotifier(config),
+  }),
 }: TaskRouterOptions): Router {
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);

@@ -1,3 +1,4 @@
+import type { TaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import type { Prisma, PrismaClient, TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
@@ -147,7 +148,14 @@ async function wouldCreateCycle(
   return false;
 }
 
-export function createTaskService(prisma: PrismaClient = getPrismaClient()) {
+export interface TaskServiceDependencies {
+  assignmentNotifier?: TaskAssignmentNotifier;
+}
+
+export function createTaskService(
+  prisma: PrismaClient = getPrismaClient(),
+  deps: TaskServiceDependencies = {},
+) {
   return {
     // -------------------------------------------------------------------------
     // List
@@ -707,7 +715,7 @@ export function createTaskService(prisma: PrismaClient = getPrismaClient()) {
           'That active workspace member does not exist',
         );
 
-      return prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx) => {
         const assignee = await tx.taskAssignee.upsert({
           where: {
             taskId_userId: { taskId: task.id, userId: input.targetUserId },
@@ -752,6 +760,19 @@ export function createTaskService(prisma: PrismaClient = getPrismaClient()) {
           assignedBy: input.userId,
         };
       });
+
+      if (deps.assignmentNotifier && input.targetUserId !== input.userId) {
+        try {
+          await deps.assignmentNotifier.notify({
+            taskId: task.id,
+            assigneeId: input.targetUserId,
+          });
+        } catch {
+          // The email seam is non-fatal: the assignment already committed.
+        }
+      }
+
+      return result;
     },
 
     async removeAssignee(
