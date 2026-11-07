@@ -323,6 +323,7 @@ model User {
   formResponses              FormResponse[]           @relation("FormSubmitter")
   calendarInvitations         EventInvitation[]            @relation("EventInvitations")
   integrations                Integration[]                @relation("UserIntegrations")
+  automationsCreated          Automation[]                 @relation("AutomationCreatedBy")
   meetingsCreated             Meeting[]                    @relation("MeetingCreatedBy")
   meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
 
@@ -492,6 +493,7 @@ model Workspace {
   calendarEvents      CalendarEvent[]
   forms              Form[]
   integrations       Integration[]                @relation("WorkspaceIntegrations")
+  automations        Automation[]                 @relation("WorkspaceAutomations")
   meetings            Meeting[]
   auditLogs           AuditLog[]
   subscription        Subscription?
@@ -1597,6 +1599,72 @@ model Integration {
   @@unique([userId, provider, workspaceId])
   @@index([userId, status])
   @@index([workspaceId, provider])
+}
+
+// ---------------------------------------------------------------------------
+// Automation (Phase 20)
+// ---------------------------------------------------------------------------
+
+enum AutomationTrigger {
+  EVENT_TASK_CREATED
+  EVENT_TASK_COMPLETED
+  EVENT_MEMBER_JOINED
+  SCHEDULED_DAILY
+  SCHEDULED_WEEKLY
+}
+
+enum AutomationActionType {
+  SEND_NOTIFICATION
+  CREATE_TASK
+  SEND_WEBHOOK
+}
+
+enum AutomationRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+model Automation {
+  id          String            @id @default(uuid())
+  workspaceId String
+  createdById String
+  name        String
+  trigger     AutomationTrigger
+  condition   Json?
+  action      AutomationActionType
+  actionConfig Json
+  enabled     Boolean           @default(true)
+  maxRetries  Int               @default(3)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace      @relation("WorkspaceAutomations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("AutomationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  runs      AutomationRun[]
+
+  @@index([workspaceId, enabled])
+  @@index([createdById])
+}
+
+model AutomationRun {
+  id           String              @id @default(uuid())
+  automationId String
+  status       AutomationRunStatus @default(PENDING)
+  attempts     Int                 @default(0)
+  error        String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, status])
+  @@index([automationId, createdAt])
 }
 
 model AuditLog {
