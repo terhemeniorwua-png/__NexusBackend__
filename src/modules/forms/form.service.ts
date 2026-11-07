@@ -76,7 +76,19 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
         }
       }
 
-      return prisma.formResponse.create({ data: { formId: input.formId, submittedBy: input.userId, answers: { create: input.answers.map((a) => { const f = fieldMap.get(a.fieldId); if (!f) throw new AppError(400, 'FIELD_NOT_FOUND', 'Unknown field'); return { fieldId: a.fieldId, value: a.value }; }) } });
+      return prisma.formResponse.create({
+        data: {
+          formId: input.formId,
+          submittedBy: input.userId,
+          answers: {
+            create: input.answers.map((a) => {
+              const f = fieldMap.get(a.fieldId);
+              if (!f) throw new AppError(400, 'FIELD_NOT_FOUND', 'Unknown field');
+              return { fieldId: a.fieldId, value: a.value };
+            }),
+          },
+        },
+      });
     },
 
     async listResponses(input: Input & { formId: string; cursor?: string; limit: number }) {
