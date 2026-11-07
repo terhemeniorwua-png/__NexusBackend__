@@ -491,6 +491,7 @@ model Workspace {
   documents           Document[]
   calendarEvents      CalendarEvent[]
   forms              Form[]
+  integrations       Integration[]                @relation("WorkspaceIntegrations")
   meetings            Meeting[]
   auditLogs           AuditLog[]
   subscription        Subscription?
