@@ -322,6 +322,7 @@ model User {
   formsCreated               Form[]                   @relation("FormCreatedBy")
   formResponses              FormResponse[]           @relation("FormSubmitter")
   calendarInvitations         EventInvitation[]            @relation("EventInvitations")
+  integrations                Integration[]                @relation("UserIntegrations")
   meetingsCreated             Meeting[]                    @relation("MeetingCreatedBy")
   meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
 
@@ -1549,6 +1550,52 @@ model FormAnswer {
 
   @@index([responseId])
   @@index([fieldId])
+}
+
+// ---------------------------------------------------------------------------
+// Integrations Framework (Phase 19)
+// ---------------------------------------------------------------------------
+
+enum IntegrationProvider {
+  GOOGLE_DRIVE
+  ONEDRIVE
+  DROPBOX
+  GMAIL
+  OUTLOOK
+  SLACK
+  GITHUB
+  GITLAB
+  GOOGLE_CALENDAR
+  OUTLOOK_CALENDAR
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+model Integration {
+  id          String              @id @default(uuid())
+  userId      String
+  workspaceId String?
+  provider    IntegrationProvider
+  status      IntegrationStatus   @default(ACTIVE)
+  accessTokenCiphertext  String
+  refreshTokenCiphertext String?
+  tokenExpiresAt DateTime?
+  scopes      String[]            @default([])
+  externalUserId String?
+  externalEmail  String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  user      User       @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, workspaceId])
+  @@index([userId, status])
+  @@index([workspaceId, provider])
 }
 
 model AuditLog {
