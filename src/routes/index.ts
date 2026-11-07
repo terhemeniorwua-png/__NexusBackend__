@@ -21,8 +21,6 @@ import {
 } from '../modules/workspaces/workspace.service';
 import { createTeamRouter } from '../modules/teams/team.routes';
 import { createTeamService, type TeamService } from '../modules/teams/team.service';
-import { createProjectRouter } from '../modules/projects/project.routes';
-import { createProjectService, type ProjectService } from '../modules/projects/project.service';
 import type { ReadinessProbe } from '../services/health';
 import { createHealthRouter } from './health';
 import { createBillingRouter } from '../modules/billing/billing.routes';
@@ -127,11 +125,6 @@ export function createApiRouter({
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
   router.use('/workspaces/:workspaceId/teams', createTeamRouter({ config, service: teamService }));
-  // Projects are nested under workspaces: /workspaces/:workspaceId/projects/…
-  router.use(
-    '/workspaces/:workspaceId/projects',
-    createProjectRouter({ config, service: projectService }),
-  );
 
   return router;
 }
