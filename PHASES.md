@@ -1208,7 +1208,7 @@ Implement the shared Nexus calendar and scheduling infrastructure.
 
 ---
 
-# PHASE 15 — Meetings and Calling Integration
+# PHASE 15 — Meetings and Calling Integration — IN PROGRESS
 
 ### Objectives
 Integrate the managed audio/video calling SDK.
@@ -1248,7 +1248,7 @@ Integrate the managed audio/video calling SDK.
 
 ---
 
-# PHASE 16 — Forms and Surveys
+# PHASE 16 — Forms and Surveys — IN PROGRESS
 
 ### Objectives
 Implement reusable forms and survey capabilities.
@@ -1371,7 +1371,7 @@ These approved prices and rules are recorded in the Phase 3 product decision log
 
 ---
 
-# PHASE 18 — Global Search and Full Document Search
+# PHASE 18 — Global Search and Full Document Search — IN PROGRESS
 
 ### Objectives
 Implement a unified search service across all workspaces a user is authorised to access.
@@ -1426,7 +1426,7 @@ Implement a unified search service across all workspaces a user is authorised to
 
 ---
 
-# PHASE 19 — Integrations Framework
+# PHASE 19 — Integrations Framework — IN PROGRESS
 
 ### Objectives
 Create a reusable integrations architecture.
@@ -1488,7 +1488,7 @@ Create a reusable integrations architecture.
 
 ---
 
-# PHASE 20 — Automation and Workflow Engine
+# PHASE 20 — Automation and Workflow Engine — IN PROGRESS
 
 ### Objectives
 Build reusable backend automation capabilities.
