@@ -13,6 +13,7 @@ import { createAccountDeletionWorker } from './modules/auth/account-deletion.ser
 import { createBillingService } from './modules/billing/billing.service';
 import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
 import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
+import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
 export interface RunningServer {
   server: Server;
@@ -67,6 +68,16 @@ export async function startServer(): Promise<RunningServer> {
 
   const app = createApp({ config, logger });
   const server = createServer(app);
+
+  // Realtime (Socket.IO) shares the HTTP server. A failure here must not stop
+  // the REST API from serving requests.
+  let socketServer: SocketServer | null = null;
+  try {
+    socketServer = await createSocketServer(server, config);
+    logger.info('socket_server_started');
+  } catch (error) {
+    logger.error('socket_server_failed', { error });
+  }
 
   // Every transactional email is written to the outbox before the provider is
   // contacted, and the worker delivers the queued messages.
@@ -136,9 +147,11 @@ export async function startServer(): Promise<RunningServer> {
 
     timeout.unref();
 
+    await socketServer?.close().catch(() => undefined);
+
     const closeServer = new Promise<void>((resolve, reject) => {
       server.close((error) => {
-        if (error) {
+        if (error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') {
           reject(error);
           return;
         }
