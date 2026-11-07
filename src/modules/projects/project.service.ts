@@ -20,6 +20,7 @@ import {
 } from '../authorization/organization-role';
 import type { RequestContext } from '../auth/auth.types';
 import type { CreateProjectInput, ListProjectsQuery, UpdateProjectInput } from './project.schemas';
+import { projectVisibleToUser } from './project-visibility';
 
 type Input = { userId: string; workspaceId: string };
 type ProjectSummary = Pick<
@@ -113,40 +114,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
                 ],
               }
             : {}),
-          ...(!unrestrictedLegacyManager
-            ? {
-                AND: [
-                  {
-                    OR: [
-                      { visibility: 'WORKSPACE' },
-                      { ownerId: input.userId },
-                      { members: { some: { userId: input.userId } } },
-                      {
-                        AND: [
-                          { visibility: 'DEPARTMENT_TEAM' },
-                          {
-                            team: {
-                              is: {
-                                status: 'ACTIVE',
-                                deletedAt: null,
-                                members: { some: { userId: input.userId } },
-                              },
-                            },
-                          },
-                        ],
-                      },
-                      {
-                        AND: [
-                          { visibility: 'DEPARTMENT_TEAM' },
-                          { teamId: null },
-                          { department: { is: { members: { some: { userId: input.userId } } } } },
-                        ],
-                      },
-                    ],
-                  },
-                ],
-              }
-            : {}),
+          ...(!unrestrictedLegacyManager ? { AND: [projectVisibleToUser(input.userId)] } : {}),
         },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
