@@ -171,7 +171,12 @@ function runTests(dbUrl: string): void {
 
   before(async () => {
     const db = await connectTestDatabase(dbUrl);
-    const config = (await import('../src/config/env')).loadEnv();
+    const config = (await import('../src/config/env')).loadEnv({
+      ...process.env,
+      RATE_LIMIT_NAMESPACE: `phase6-db-${process.pid}-${Date.now()}`,
+      RATE_LIMIT_MAX: '100000',
+      AUTH_REGISTER_RATE_LIMIT_MAX: '1000',
+    });
 
     await connectRedis({ redisUrl: 'redis://localhost:6379/15' });
 
