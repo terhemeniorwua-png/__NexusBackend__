@@ -4,14 +4,34 @@
 
 ---
 
-## Progress Dashboard
+## Progress Dashboard (updated 2026-11-07)
 
-| Metric | Count |
-|---|---|
-| **Project** | Nexus Backend |
-| **Numbered phase definitions** | 30 |
-| **Current active phase** | Phase 3.7 — Email verification and password reset codes |
-| **Aggregate progress** | Not calculated: legacy and canonical phase lists contain duplicate and missing phase numbers |
+Evidence: `main` was verified at `7b0b88d` (tsc, lint, build, 302/304 tests, plus all
+database-backed suites passing against a clean PostgreSQL). The Render deploy of `main` is green.
+Re-run the DB suites after PRs #42 and #43 before relying on this.
+
+| Phase | Status now | What closes it |
+|---|---|---|
+| 1 to 3.5 | Complete | None. |
+| 3.6 Google OAuth | In progress | Render `GOOGLE_CALLBACK_URL` corrected to the backend route on 2026-11-07. Needs an end-to-end sign-in test, cross-site cookie settings check, DB test. |
+| 3.7 One-time codes | Ready to close | Migration applied locally and on Aiven; DB suites passed. Confirm a real code email arrives via Brevo. |
+| 4 | In progress | SPF/DKIM/DMARC and Brevo webhook still external. |
+| 4.3 to 4.6 | In progress | Tasks, messaging, teams and projects now exist. Check each notifier has a production caller (grep for `notifyTaskAssignment`, `notifyMention`, `notifyTeamInvitation`, `notifyProjectInvitation`, meeting equivalent). |
+| 5 | Ready to close | The three Phase 5 DB suites were the missing evidence and have now passed. |
+| 6, 7 | Complete | DB suites pass. |
+| 8 | In progress | Re-run on current `main`. Audit that every project-scoped route (files, documents, calendar, meetings, forms, search) calls the shared project-access helper. |
+| 9 | Implemented | Message-to-task and task attachments were deferred; Phases 10 and 12 now exist, so they are unblocked. |
+| 10 | Implemented | Deferred: @mention parsing, attachments, search, saved messages, message-to-task. |
+| 11 | REST done | The record lists 7 REST endpoints but no real-time notification push. Confirm Socket.IO notification events exist (frontend is waiting on this). |
+| 12 | Implemented, no tests | Deferred: folders, versioning, share links. |
+| 13, 14 | Implemented, no tests | Phase 14 deferred: Google/Microsoft sync, recurrence, reminders, aggregation. |
+| 15, 16, 18, 19, 20 | Code on `main`, doc not updated | Marked IN PROGRESS with no implementation notes. Add them and add tests. |
+| 17 Billing | In progress | Release blockers and external dependencies as recorded in Phase 17. |
+| 21 to 26 | Code on `main`, unconfirmed | Verify AI, automation and audit modules against their completion criteria. |
+| 27 Reporting | Not found | No module seen. |
+| 28 API docs | Partial | `docs/API.md` and `docs/openapi.yaml` exist. |
+| 29 | Undefined | No section exists. |
+| 30 to 32 | Not started | |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
 
