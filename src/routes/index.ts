@@ -40,6 +40,9 @@ import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 import { createFormRouter } from '../modules/forms/form.routes';
 import { createSearchRouter } from '../modules/search/search.routes';
 import { createIntegrationRouter } from '../modules/integrations/integration.routes';
+import { createAutomationRouter } from '../modules/automation/automation.routes';
+import { createAiRouter } from '../modules/ai/ai.routes';
+import { createAuditRouter } from '../modules/audit/audit.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -102,6 +105,12 @@ export function createApiRouter({
   router.use('/search', createSearchRouter({ config }));
   // Integrations are user-scoped (optionally workspace-scoped via query)
   router.use('/integrations', createIntegrationRouter({ config }));
+  // Automations are workspace-scoped
+  router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));
+  // AI service proxy (Phases 21-23)
+  router.use('/ai', createAiRouter({ config }));
+  // Workspace audit log API (Phase 26)
+  router.use('/workspaces/:workspaceId/audit', createAuditRouter({ config }));
   // Files are workspace-scoped
   router.use('/workspaces/:workspaceId/files', createFileRouter({ config }));
   // Documents are workspace-scoped
