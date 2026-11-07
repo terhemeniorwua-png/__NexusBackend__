@@ -9,10 +9,10 @@ const uuid = z.string().uuid();
 
 export const createAutomationSchema = z.object({
   name: z.string().trim().min(1).max(200),
-  trigger: z.enum(['EVENT_TASK_CREATED', 'EVENT_TASK_COMPLETED', 'EVENT_MEMBER_JOINED', 'SCHEDULED_DAILY', 'SCHEDULED_WEEKLY']),
-  condition: z.record(z.unknown()).optional().nullable(),
-  action: z.enum(['SEND_NOTIFICATION', 'CREATE_TASK', 'SEND_WEBHOOK']),
-  actionConfig: z.record(z.unknown()),
+  trigger: z.enum(['EVENT_TASK_CREATED', 'EVENT_TASK_COMPLETED', 'EVENT_MEMBER_JOINED', 'SCHEDULED_DAILY', 'SCHEDULED_WEEKLY'] as const),
+  condition: z.record(z.string(), z.string()).optional().nullable(),
+  action: z.enum(['SEND_NOTIFICATION', 'CREATE_TASK', 'SEND_WEBHOOK'] as const),
+  actionConfig: z.record(z.string(), z.string()),
   enabled: z.boolean().optional().default(true),
   maxRetries: z.number().int().min(0).max(10).optional().default(3),
 }).strict();
