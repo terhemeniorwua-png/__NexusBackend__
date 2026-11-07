@@ -1,5 +1,6 @@
 import type { PrismaClient, Team, TeamMembership, TeamRole, WorkspaceRole } from '@prisma/client';
 import { AppError } from '../../utils/errors';
+import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
 
 /**
  * Team-level authorization policy.
@@ -135,19 +136,78 @@ export async function requireTeamAccess(
     throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
   }
 
-  // Workspace OWNER and PROJECT_MANAGER always have full team access.
-  if (workspaceRoleCanOnTeam(input.workspaceRole, input.capability)) {
-    return { team, teamMembership: null, workspaceRole: input.workspaceRole };
+  const workspaceMembership = await client.workspaceMembership.findUnique({
+    where: {
+      workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId },
+    },
+    include: { workspace: { select: { type: true } } },
+  });
+  if (!workspaceMembership || workspaceMembership.status !== 'ACTIVE') {
+    throw new AppError(403, 'TEAM_ACCESS_DENIED', 'You are not an active workspace member');
+  }
+  if (
+    workspaceMembership.organizationRole &&
+    !isOrganizationRoleForWorkspace(
+      workspaceMembership.workspace.type,
+      workspaceMembership.organizationRole,
+    )
+  ) {
+    throw new AppError(
+      403,
+      'ORGANIZATION_ROLE_WORKSPACE_MISMATCH',
+      'The organization role is invalid',
+    );
+  }
+  const effectiveRole = effectiveWorkspaceRole(
+    workspaceMembership.workspace.type,
+    workspaceMembership.role,
+    workspaceMembership.organizationRole,
+  );
+
+  if (workspaceMembership.organizationRole === 'INSTITUTION_DEPARTMENT_HEAD') {
+    if (!team.departmentId) {
+      throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
+    }
+    const department = await client.department.findFirst({
+      where: {
+        id: team.departmentId,
+        workspaceId: team.workspaceId,
+        members: { some: { userId: input.userId, role: 'HEAD' } },
+      },
+    });
+    if (!department) {
+      throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
+    }
+    if (
+      input.capability === TeamCapability.ArchiveTeam ||
+      input.capability === TeamCapability.DeleteTeam
+    ) {
+      throw new AppError(
+        403,
+        'INSUFFICIENT_TEAM_ROLE',
+        'Department heads cannot archive or delete teams',
+      );
+    }
+    return { team, teamMembership: null, workspaceRole: effectiveRole };
+  }
+
+  // Organization roles do not grant implicit access to every team. Preserve
+  // the legacy workspace-role behavior for existing memberships.
+  if (
+    !workspaceMembership.organizationRole &&
+    workspaceRoleCanOnTeam(effectiveRole, input.capability)
+  ) {
+    return { team, teamMembership: null, workspaceRole: effectiveRole };
   }
 
   // Workspace MEMBER with no explicit team membership can still VIEW teams
   // (they are visible within the workspace).
   if (
-    input.workspaceRole === 'MEMBER' &&
+    effectiveRole === 'MEMBER' &&
     (input.capability === TeamCapability.ViewTeam ||
       input.capability === TeamCapability.ViewMembers)
   ) {
-    return { team, teamMembership: null, workspaceRole: input.workspaceRole };
+    return { team, teamMembership: null, workspaceRole: effectiveRole };
   }
 
   // For all other workspace roles an explicit team membership row is required.
@@ -159,9 +219,42 @@ export async function requireTeamAccess(
     throw new AppError(403, 'TEAM_ACCESS_DENIED', 'You are not a member of this team');
   }
 
+  if (
+    workspaceMembership.organizationRole === 'COMPANY_VIEWER' ||
+    workspaceMembership.organizationRole === 'INSTITUTION_VIEWER'
+  ) {
+    if (
+      input.capability !== TeamCapability.ViewTeam &&
+      input.capability !== TeamCapability.ViewMembers
+    ) {
+      throw new AppError(403, 'INSUFFICIENT_TEAM_ROLE', 'Viewer roles have read-only team access');
+    }
+  }
+  if (
+    workspaceMembership.organizationRole === 'INSTITUTION_STUDENT' &&
+    (input.capability === TeamCapability.UpdateTeam ||
+      input.capability === TeamCapability.ArchiveTeam ||
+      input.capability === TeamCapability.DeleteTeam ||
+      input.capability === TeamCapability.ManageMembers)
+  ) {
+    throw new AppError(
+      403,
+      'INSUFFICIENT_TEAM_ROLE',
+      'Students cannot administer teams or members',
+    );
+  }
+
+  // Organization owners and admins keep their mapped workspace-level team
+  // capabilities when they have explicit membership in the team. This keeps
+  // team administration available without granting access to every team by
+  // virtue of an organization role alone.
+  if (workspaceRoleCanOnTeam(effectiveRole, input.capability)) {
+    return { team, teamMembership, workspaceRole: effectiveRole };
+  }
+
   if (!teamRoleCan(teamMembership.role, input.capability)) {
     throw new AppError(403, 'INSUFFICIENT_TEAM_ROLE', 'Your team role does not allow this action');
   }
 
-  return { team, teamMembership, workspaceRole: input.workspaceRole };
+  return { team, teamMembership, workspaceRole: effectiveRole };
 }

@@ -2,6 +2,7 @@ import type { AuthTokenPurpose, PrismaClient, User } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import {
   buildEmailBrand,
+  buildAccountDeletionScheduledEmail,
   buildEmailChangeEmail,
   buildPasswordChangedEmail,
   buildPasswordResetEmail,
@@ -12,7 +13,7 @@ import {
 import { assertPasswordLength, hashPassword, verifyPassword } from '../../services/password';
 import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
-import { deriveKey, hashSecret, signValue } from '../../utils/crypto';
+import { deriveKey, generateSecureToken, hashSecret, signValue } from '../../utils/crypto';
 import { signAccessToken } from './access-token.service';
 import { issueAuthToken, consumeAuthToken, invalidateAuthTokens } from './auth-token.service';
 import {
@@ -23,12 +24,17 @@ import {
   rotateSession,
 } from './session.service';
 import { recordSecurityEvent, SecurityAction } from './security-events';
+import { scheduledAccountDeletionAt } from './account-deletion.service';
+import { ensurePersonalWorkspace } from '../workspaces/personal-workspace.service';
+import { enqueueWorkspaceSeatReduction } from '../billing/membership-billing';
+import { consumeOneTimeCode, issueOneTimeCode } from './one-time-code.service';
 import type {
   AuthenticationResult,
   PublicUser,
   RequestContext,
   SessionSummary,
 } from './auth.types';
+import { createTwoFactorService, type TwoFactorService } from './two-factor.service';
 import type {
   AccountDeleteInput,
   EmailChangeInput,
@@ -65,9 +71,29 @@ export function toPublicUser(user: User): PublicUser {
 
 export interface AuthService {
   register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }>;
-  verifyEmail(input: { token: string }, ctx: RequestContext): Promise<{ user: PublicUser }>;
+  verifyEmail(
+    input: { email: string; code: string },
+    ctx: RequestContext,
+  ): Promise<{ user: PublicUser }>;
   resendVerification(input: { email: string }, ctx: RequestContext): Promise<void>;
-  login(input: LoginInput, ctx: RequestContext): Promise<AuthenticationResult>;
+  login(
+    input: LoginInput,
+    ctx: RequestContext,
+  ): Promise<
+    AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
+  >;
+  ensureGoogleAccount(input: {
+    subject: string;
+    email: string;
+    name: string;
+  }): Promise<{ id: string }>;
+  loginGoogleAccount(
+    userId: string,
+    ctx: RequestContext,
+  ): Promise<
+    AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
+  >;
+  twoFactor: TwoFactorService;
   refresh(input: { refreshToken: string }, ctx: RequestContext): Promise<AuthenticationResult>;
   logout(input: { sessionId: string }, ctx: RequestContext): Promise<void>;
   logoutAll(input: { userId: string }, ctx: RequestContext): Promise<number>;
@@ -87,11 +113,60 @@ export interface AuthService {
     input: { userId: string; currentPassword: string },
     ctx: RequestContext,
   ): Promise<void>;
-  deleteAccount(input: AccountDeleteInput & { userId: string }, ctx: RequestContext): Promise<void>;
+  reactivateAccount(input: LoginInput, ctx: RequestContext): Promise<{ user: PublicUser }>;
+  deleteAccount(
+    input: AccountDeleteInput & { userId: string },
+    ctx: RequestContext,
+  ): Promise<{ scheduledDeletionAt: Date }>;
 }
 
 export function createAuthService(config: AppConfig, prisma?: PrismaClient): AuthService {
   const client = prisma ?? getPrismaClient();
+
+  async function sendVerificationCode(user: User, force: boolean): Promise<void> {
+    const issued = await issueOneTimeCode(client, config, {
+      userId: user.id,
+      purpose: 'EMAIL_VERIFICATION',
+      force,
+    });
+    if (!issued) return;
+    await invalidateAuthTokens(client, { userId: user.id, purpose: 'EMAIL_VERIFICATION' });
+    const result = await sendEmail(
+      buildVerificationEmail({
+        to: user.email,
+        name: user.name,
+        brand,
+        code: issued.code,
+        expiresAt: issued.expiresAt,
+        idempotencyKey: `auth:email_verification:${user.id}:${issued.expiresAt.getTime()}`,
+      }),
+    );
+    if (!result.accepted) console.error('email_verification_delivery_failed', { userId: user.id });
+    if (config.nodeEnv === 'development')
+      console.info('email_verification_code', { userId: user.id, code: issued.code });
+  }
+
+  async function sendPasswordResetCode(user: User): Promise<void> {
+    const issued = await issueOneTimeCode(client, config, {
+      userId: user.id,
+      purpose: 'PASSWORD_RESET',
+    });
+    if (!issued) return;
+    await invalidateAuthTokens(client, { userId: user.id, purpose: 'PASSWORD_RESET' });
+    const result = await sendEmail(
+      buildPasswordResetEmail({
+        to: user.email,
+        name: user.name,
+        brand,
+        code: issued.code,
+        expiresAt: issued.expiresAt,
+        idempotencyKey: `auth:password_reset:${user.id}:${issued.expiresAt.getTime()}`,
+      }),
+    );
+    if (!result.accepted) console.error('password_reset_delivery_failed', { userId: user.id });
+    if (config.nodeEnv === 'development')
+      console.info('password_reset_code', { userId: user.id, code: issued.code });
+  }
   const csrfKey = deriveKey(config.jwtAccessSecret, 'csrf');
   const brand = buildEmailBrand(config);
 
@@ -171,6 +246,31 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     };
   }
 
+  async function finishTwoFactorLogin(
+    user: User,
+    ctx: RequestContext,
+  ): Promise<AuthenticationResult> {
+    const { session, refreshToken } = await createSession(client, {
+      userId: user.id,
+      ttlSeconds: config.refreshTokenTtlSeconds,
+      userAgent: ctx.userAgent,
+      ip: ctx.ip,
+    });
+    await client.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    await recordSecurityEvent(client, {
+      action: SecurityAction.LoginSucceeded,
+      targetType: 'Session',
+      targetId: session.id,
+      actorId: user.id,
+      metadata: { userId: user.id, status: user.status, twoFactor: true },
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+    return authenticateSession(session, user, refreshToken);
+  }
+
+  const twoFactor = createTwoFactorService(config, client, finishTwoFactorLogin);
+
   function assertUsableAccount(user: User): void {
     if (user.deletedAt) {
       throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deleted');
@@ -183,6 +283,14 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     if (user.status === 'DEACTIVATED') {
       throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
     }
+
+    if (user.status === 'PENDING_DELETION') {
+      throw new AppError(
+        403,
+        'ACCOUNT_PENDING_DELETION',
+        'This account is being deleted and can no longer sign in.',
+      );
+    }
   }
 
   async function requirePassword(user: User, password: string): Promise<void> {
@@ -194,6 +302,103 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
   }
 
   return {
+    twoFactor,
+    async ensureGoogleAccount(input): Promise<{ id: string }> {
+      const identity = await client.externalIdentity.findUnique({
+        where: {
+          provider_providerSubjectId: { provider: 'google', providerSubjectId: input.subject },
+        },
+        include: { user: true },
+      });
+      if (identity) {
+        assertUsableAccount(identity.user);
+        return { id: identity.user.id };
+      }
+
+      const email = input.email.trim().toLowerCase();
+      const existing = await findUserByEmail(email);
+      if (existing) {
+        throw new AppError(
+          409,
+          'GOOGLE_ACCOUNT_LINK_REQUIRED',
+          'This email already has a Nexus account. Sign in and link Google from account settings.',
+        );
+      }
+
+      const passwordHash = await hashPassword(generateSecureToken(), config.bcryptSaltRounds);
+      try {
+        const user = await client.$transaction(async (tx) => {
+          const created = await tx.user.create({
+            data: {
+              email,
+              name: input.name.trim().slice(0, 100) || email,
+              passwordHash,
+              status: 'ACTIVE',
+              emailVerifiedAt: new Date(),
+              externalIdentities: {
+                create: { provider: 'google', providerSubjectId: input.subject },
+              },
+            },
+          });
+          await ensurePersonalWorkspace(tx, created);
+          return created;
+        });
+        return { id: user.id };
+      } catch (error) {
+        if (
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          error.code === 'P2002'
+        ) {
+          const raced = await client.externalIdentity.findUnique({
+            where: {
+              provider_providerSubjectId: { provider: 'google', providerSubjectId: input.subject },
+            },
+            select: { userId: true },
+          });
+          if (raced) return { id: raced.userId };
+          const emailOwner = await findUserByEmail(email);
+          if (emailOwner) {
+            throw new AppError(
+              409,
+              'GOOGLE_ACCOUNT_LINK_REQUIRED',
+              'Sign in and link Google from account settings',
+            );
+          }
+        }
+        throw error;
+      }
+    },
+    async loginGoogleAccount(userId, ctx) {
+      const user = await client.user.findUnique({ where: { id: userId } });
+      if (!user)
+        throw new AppError(
+          401,
+          'GOOGLE_IDENTITY_INVALID',
+          'Google identity is no longer available',
+        );
+      assertUsableAccount(user);
+      if (user.twoFactorEnabled) return twoFactor.issueChallenge(user);
+
+      const { session, refreshToken } = await createSession(client, {
+        userId: user.id,
+        ttlSeconds: config.refreshTokenTtlSeconds,
+        userAgent: ctx.userAgent,
+        ip: ctx.ip,
+      });
+      await client.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+      await recordSecurityEvent(client, {
+        action: SecurityAction.LoginSucceeded,
+        targetType: 'Session',
+        targetId: session.id,
+        actorId: user.id,
+        metadata: { userId: user.id, status: user.status, provider: 'google' },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      return authenticateSession(session, user, refreshToken);
+    },
     async register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
       const existing = await findUserByEmail(input.email);
 
@@ -224,22 +429,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         },
       });
 
-      await issueAndSend(
-        {
-          user,
-          purpose: 'EMAIL_VERIFICATION',
-          ttlSeconds: config.verificationTokenTtlSeconds,
-        },
-        (token, expiresAt, tokenId) =>
-          buildVerificationEmail({
-            to: user.email,
-            name: user.name,
-            brand,
-            verificationUrl: buildLink(config.authVerificationLinkPath, token),
-            expiresAt,
-            idempotencyKey: `auth:email_verification:${tokenId}`,
-          }),
-      );
+      await sendVerificationCode(user, true);
 
       // An invitation that was sent before the account existed is bound to
       // it now, so the same link lets the new account join the workspace.
@@ -262,20 +452,54 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     },
 
     async verifyEmail(
-      input: { token: string },
+      input: { email: string; code: string },
       ctx: RequestContext,
     ): Promise<{ user: PublicUser }> {
-      const record = await consumeAuthToken(client, {
-        token: input.token,
-        purpose: 'EMAIL_VERIFICATION',
-      });
+      const user = await client.$transaction(async (tx) => {
+        const record = await consumeOneTimeCode(client, config, {
+          email: input.email,
+          code: input.code,
+          purpose: 'EMAIL_VERIFICATION',
+        });
 
-      const user = await client.user.update({
-        where: { id: record.userId },
-        data: {
-          status: 'ACTIVE',
-          emailVerifiedAt: new Date(),
-        },
+        const verified = await tx.user.updateMany({
+          where: {
+            id: record.userId,
+            deletedAt: null,
+            status: { in: ['PENDING_VERIFICATION', 'ACTIVE'] },
+          },
+          data: {
+            status: 'ACTIVE',
+            emailVerifiedAt: new Date(),
+          },
+        });
+
+        if (verified.count === 0) {
+          const current = await tx.user.findUnique({ where: { id: record.userId } });
+
+          if (!current || current.deletedAt) {
+            throw new AppError(
+              400,
+              'TOKEN_INVALID',
+              'This link is invalid or has already been used',
+            );
+          }
+
+          if (current.status === 'SUSPENDED') {
+            throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+          }
+
+          if (current.status === 'DEACTIVATED' || current.status === 'PENDING_DELETION') {
+            throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account is not active');
+          }
+
+          throw new AppError(409, 'ACCOUNT_NOT_VERIFIABLE', 'This account cannot be verified');
+        }
+
+        const verifiedUser = await tx.user.findUniqueOrThrow({ where: { id: record.userId } });
+        await ensurePersonalWorkspace(tx, verifiedUser);
+
+        return verifiedUser;
       });
 
       await recordSecurityEvent(client, {
@@ -298,22 +522,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         return;
       }
 
-      await issueAndSend(
-        {
-          user,
-          purpose: 'EMAIL_VERIFICATION',
-          ttlSeconds: config.verificationTokenTtlSeconds,
-        },
-        (token, expiresAt, tokenId) =>
-          buildVerificationEmail({
-            to: user.email,
-            name: user.name,
-            brand,
-            verificationUrl: buildLink(config.authVerificationLinkPath, token),
-            expiresAt,
-            idempotencyKey: `auth:email_verification:${tokenId}`,
-          }),
-      );
+      await sendVerificationCode(user, false);
 
       await recordSecurityEvent(client, {
         action: SecurityAction.EmailVerificationRequested,
@@ -325,7 +534,12 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       });
     },
 
-    async login(input: LoginInput, ctx: RequestContext): Promise<AuthenticationResult> {
+    async login(
+      input: LoginInput,
+      ctx: RequestContext,
+    ): Promise<
+      AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
+    > {
       const user = await findUserByEmail(input.email);
 
       if (!user) {
@@ -367,6 +581,12 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       assertUsableAccount(user);
+
+      if (user.status === 'PENDING_VERIFICATION') await sendVerificationCode(user, false);
+
+      if (user.twoFactorEnabled) {
+        return twoFactor.issueChallenge(user);
+      }
 
       const { session, refreshToken } = await createSession(client, {
         userId: user.id,
@@ -410,6 +630,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           userId: outcome.session.userId,
           reason: 'REFRESH_TOKEN_REUSE',
         });
+        await twoFactor.revokeChallenges(outcome.session.userId);
 
         await recordSecurityEvent(client, {
           action: SecurityAction.SessionReuseDetected,
@@ -463,6 +684,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     },
 
     async logoutAll(input: { userId: string }, ctx: RequestContext): Promise<number> {
+      await twoFactor.revokeChallenges(input.userId);
       const revoked = await revokeAllSessions(client, {
         userId: input.userId,
         reason: 'LOGOUT_ALL',
@@ -505,26 +727,16 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       const user = await findUserByEmail(input.email);
 
       // The response never reveals whether the address is registered.
-      if (!user || user.deletedAt || user.status === 'DEACTIVATED') {
+      if (
+        !user ||
+        user.deletedAt ||
+        user.status === 'DEACTIVATED' ||
+        user.status === 'PENDING_DELETION'
+      ) {
         return;
       }
 
-      await issueAndSend(
-        {
-          user,
-          purpose: 'PASSWORD_RESET',
-          ttlSeconds: config.passwordResetTokenTtlSeconds,
-        },
-        (token, expiresAt, tokenId) =>
-          buildPasswordResetEmail({
-            to: user.email,
-            name: user.name,
-            brand,
-            resetUrl: buildLink(config.authPasswordResetLinkPath, token),
-            expiresAt,
-            idempotencyKey: `auth:password_reset:${tokenId}`,
-          }),
-      );
+      await sendPasswordResetCode(user);
 
       await recordSecurityEvent(client, {
         action: SecurityAction.PasswordResetRequested,
@@ -537,14 +749,35 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     },
 
     async resetPassword(input: PasswordResetInput, ctx: RequestContext): Promise<void> {
-      const record = await consumeAuthToken(client, {
-        token: input.token,
+      const record = await consumeOneTimeCode(client, config, {
+        email: input.email,
+        code: input.code,
         purpose: 'PASSWORD_RESET',
       });
 
-      assertPasswordLength(input.password);
+      const account = await client.user.findUnique({ where: { id: record.userId } });
 
-      const passwordHash = await hashPassword(input.password, config.bcryptSaltRounds);
+      if (!account || account.deletedAt) {
+        throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+      }
+
+      if (account.status === 'PENDING_DELETION') {
+        throw new AppError(
+          403,
+          'ACCOUNT_PENDING_DELETION',
+          'Recover the account before changing its password',
+        );
+      }
+
+      if (account.status === 'DEACTIVATED') {
+        throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+      }
+
+      assertPasswordLength(input.newPassword);
+
+      await twoFactor.revokeChallenges(record.userId);
+
+      const passwordHash = await hashPassword(input.newPassword, config.bcryptSaltRounds);
 
       await client.user.update({
         where: { id: record.userId },
@@ -595,6 +828,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       assertPasswordLength(input.newPassword);
 
+      await twoFactor.revokeChallenges(user.id);
+
       const passwordHash = await hashPassword(input.newPassword, config.bcryptSaltRounds);
 
       await client.user.update({
@@ -644,6 +879,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       await requirePassword(user, input.currentPassword);
+
+      await twoFactor.revokeChallenges(user.id);
 
       if (input.email === user.email) {
         throw new AppError(
@@ -720,6 +957,20 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
       }
 
+      const current = await client.user.findUnique({ where: { id: record.userId } });
+
+      if (!current || current.deletedAt) {
+        throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+      }
+
+      if (current.status === 'SUSPENDED') {
+        throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+      }
+
+      if (current.status === 'DEACTIVATED' || current.status === 'PENDING_DELETION') {
+        throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+      }
+
       const existing = await findUserByEmail(record.targetEmail);
 
       if (existing && existing.id !== record.userId) {
@@ -730,14 +981,38 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         );
       }
 
-      const user = await client.user.update({
-        where: { id: record.userId },
+      const changed = await client.user.updateMany({
+        where: {
+          id: record.userId,
+          deletedAt: null,
+          status: { in: ['PENDING_VERIFICATION', 'ACTIVE'] },
+        },
         data: {
           email: record.targetEmail,
           emailVerifiedAt: new Date(),
           status: 'ACTIVE',
         },
       });
+
+      if (changed.count === 0) {
+        const latest = await client.user.findUnique({ where: { id: record.userId } });
+
+        if (!latest || latest.deletedAt) {
+          throw new AppError(400, 'TOKEN_INVALID', 'This link is invalid or has already been used');
+        }
+
+        if (latest.status === 'SUSPENDED') {
+          throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+        }
+
+        if (latest.status === 'DEACTIVATED' || latest.status === 'PENDING_DELETION') {
+          throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
+        }
+
+        throw new AppError(409, 'ACCOUNT_NOT_CHANGEABLE', 'This account cannot be changed');
+      }
+
+      const user = await client.user.findUniqueOrThrow({ where: { id: record.userId } });
 
       await recordSecurityEvent(client, {
         action: SecurityAction.EmailChanged,
@@ -763,19 +1038,25 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       await requirePassword(user, input.currentPassword);
 
-      await client.user.update({
-        where: { id: user.id },
-        data: { status: 'DEACTIVATED' },
-      });
+      await twoFactor.revokeChallenges(user.id);
 
-      await revokeAllSessions(client, {
-        userId: user.id,
-        reason: 'ACCOUNT_DEACTIVATED',
-      });
+      const deactivatedAt = new Date();
 
-      await invalidateAuthTokens(client, {
-        userId: user.id,
-        purpose: 'EMAIL_VERIFICATION',
+      await client.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: { status: 'DEACTIVATED' },
+        });
+
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: deactivatedAt, revokedReason: 'ACCOUNT_DEACTIVATED' },
+        });
+
+        await tx.authToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: deactivatedAt },
+        });
       });
 
       await recordSecurityEvent(client, {
@@ -788,10 +1069,183 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       });
     },
 
+    async reactivateAccount(input: LoginInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
+      const user = await findUserByEmail(input.email);
+
+      async function recordReactivationFailure(userId: string, reason: string): Promise<void> {
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: userId,
+          actorId: userId,
+          metadata: { reason },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+      }
+
+      if (!user || user.deletedAt) {
+        await verifyPassword(input.password, TIMING_EQUALIZER_HASH);
+
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: user?.id ?? 'unknown',
+          ...(user ? { actorId: user.id } : {}),
+          metadata: { emailHash: hashSecret(input.email), reason: 'INVALID_CREDENTIALS' },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        throw new AppError(
+          401,
+          'INVALID_CREDENTIALS',
+          'The email address or password is incorrect',
+        );
+      }
+
+      const matches = await verifyPassword(input.password, user.passwordHash);
+
+      if (!matches) {
+        await recordSecurityEvent(client, {
+          action: SecurityAction.AccountReactivationFailed,
+          targetType: 'User',
+          targetId: user.id,
+          actorId: user.id,
+          metadata: { reason: 'INVALID_CREDENTIALS' },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+
+        throw new AppError(
+          401,
+          'INVALID_CREDENTIALS',
+          'The email address or password is incorrect',
+        );
+      }
+
+      if (user.status === 'SUSPENDED') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_SUSPENDED');
+        throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+      }
+
+      if (
+        user.status === 'PENDING_DELETION' &&
+        (!user.scheduledDeletionAt || user.scheduledDeletionAt <= new Date())
+      ) {
+        await recordReactivationFailure(user.id, 'DELETION_RECOVERY_PERIOD_EXPIRED');
+        throw new AppError(
+          409,
+          'DELETION_RECOVERY_PERIOD_EXPIRED',
+          'The account recovery period has expired',
+        );
+      }
+
+      if (user.status === 'ACTIVE') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_ALREADY_ACTIVE');
+        throw new AppError(409, 'ACCOUNT_ALREADY_ACTIVE', 'This account is already active');
+      }
+
+      if (user.status !== 'DEACTIVATED' && user.status !== 'PENDING_DELETION') {
+        await recordReactivationFailure(user.id, 'ACCOUNT_NOT_DEACTIVATED');
+        throw new AppError(409, 'ACCOUNT_NOT_DEACTIVATED', 'This account is not deactivated');
+      }
+
+      const nextStatus = user.emailVerifiedAt ? 'ACTIVE' : 'PENDING_VERIFICATION';
+
+      const reactivated = await client.$transaction(async (tx) => {
+        const updated = await tx.user.updateMany({
+          where: {
+            id: user.id,
+            status: user.status,
+            deletedAt: null,
+            ...(user.status === 'PENDING_DELETION'
+              ? { scheduledDeletionAt: { gt: new Date() } }
+              : {}),
+          },
+          data: {
+            status: nextStatus,
+            deletionRequestedAt: null,
+            scheduledDeletionAt: null,
+          },
+        });
+
+        if (updated.count === 0) {
+          return null;
+        }
+
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: new Date(), revokedReason: 'ACCOUNT_REACTIVATED' },
+        });
+
+        await tx.authToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+
+        const restored = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+
+        if (restored.status === 'ACTIVE') {
+          await ensurePersonalWorkspace(tx, restored);
+          if (user.status === 'PENDING_DELETION') {
+            await tx.workspace.updateMany({
+              where: { ownerId: restored.id, deletionSuspendedAt: { not: null }, deletedAt: null },
+              data: { status: 'ACTIVE', deletionSuspendedAt: null },
+            });
+            await tx.billingCancellation.updateMany({
+              where: {
+                workspace: { ownerId: restored.id },
+                status: { in: ['PENDING', 'PROCESSING'] },
+              },
+              data: { status: 'CANCELLED', lastError: null },
+            });
+          }
+          const memberships = await tx.workspaceMembership.findMany({
+            where: { userId: restored.id, status: 'ACTIVE' },
+            select: { workspaceId: true },
+          });
+          for (const workspaceId of new Set(memberships.map(({ workspaceId }) => workspaceId))) {
+            await enqueueWorkspaceSeatReduction(tx, workspaceId);
+          }
+        }
+
+        return restored;
+      });
+
+      if (!reactivated) {
+        await recordReactivationFailure(user.id, 'ACCOUNT_NOT_REACTIVATABLE');
+        throw new AppError(
+          409,
+          'ACCOUNT_NOT_REACTIVATABLE',
+          'This account can no longer be reactivated',
+        );
+      }
+
+      if (reactivated.status === 'PENDING_VERIFICATION') {
+        await sendVerificationCode(reactivated, true);
+      }
+
+      await recordSecurityEvent(client, {
+        action: SecurityAction.AccountReactivated,
+        targetType: 'User',
+        targetId: reactivated.id,
+        actorId: reactivated.id,
+        metadata: {
+          status: reactivated.status,
+          verificationRequired: reactivated.status === 'PENDING_VERIFICATION',
+        },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+
+      return { user: toPublicUser(reactivated) };
+    },
+
     async deleteAccount(
       input: AccountDeleteInput & { userId: string },
-      ctx: RequestContext,
-    ): Promise<void> {
+      _ctx: RequestContext,
+    ): Promise<{ scheduledDeletionAt: Date }> {
       const user = await client.user.findUnique({ where: { id: input.userId } });
 
       if (!user) {
@@ -799,6 +1253,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       await requirePassword(user, input.currentPassword);
+
+      await twoFactor.revokeChallenges(user.id);
 
       if (input.confirmation.toLowerCase() !== user.email.toLowerCase()) {
         throw new AppError(
@@ -808,66 +1264,163 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         );
       }
 
-      const ownedWorkspaces = await client.workspace.count({
-        where: {
-          ownerId: user.id,
-          deletedAt: null,
-          status: 'ACTIVE',
-        },
-      });
-
-      if (ownedWorkspaces > 0) {
-        throw new AppError(
-          409,
-          'WORKSPACE_OWNERSHIP_TRANSFER_REQUIRED',
-          'Transfer ownership of your workspaces before deleting your account',
-        );
-      }
-
-      await revokeAllSessions(client, {
-        userId: user.id,
-        reason: 'ACCOUNT_DELETED',
-      });
+      const requestedAt = new Date();
+      const scheduledDeletionAt = scheduledAccountDeletionAt(requestedAt);
 
       await client.$transaction(async (tx) => {
+        const [lockedUser] = await tx.$queryRaw<
+          Array<{ status: string; deletedAt: Date | null }>
+        >`SELECT "status"::text AS "status", "deletedAt"
+          FROM "User"
+          WHERE "id" = ${user.id}
+          FOR UPDATE`;
+
+        if (!lockedUser) {
+          throw new AppError(404, 'USER_NOT_FOUND', 'The requested account was not found');
+        }
+
+        if (lockedUser.deletedAt || lockedUser.status === 'DEACTIVATED') {
+          throw new AppError(
+            409,
+            'ACCOUNT_ALREADY_DELETED',
+            'This account has already been deleted or deactivated',
+          );
+        }
+
+        if (lockedUser.status === 'PENDING_DELETION') {
+          throw new AppError(
+            409,
+            'ACCOUNT_DELETION_ALREADY_REQUESTED',
+            'This account is already scheduled for deletion',
+          );
+        }
+
+        if (lockedUser.status === 'SUSPENDED') {
+          throw new AppError(403, 'ACCOUNT_SUSPENDED', 'This account has been suspended');
+        }
+
+        const administrativeRoles = [
+          'COMPANY_OWNER',
+          'COMPANY_ADMIN',
+          'INSTITUTION_OWNER',
+          'INSTITUTION_ADMIN',
+        ] as const;
+        const administrativeMemberships = await tx.workspaceMembership.findMany({
+          where: {
+            userId: user.id,
+            status: 'ACTIVE',
+            workspace: {
+              type: { in: ['COMPANY', 'INSTITUTION'] },
+              status: 'ACTIVE',
+            },
+          },
+          select: {
+            workspaceId: true,
+            role: true,
+            organizationRole: true,
+            workspace: { select: { ownerId: true } },
+          },
+        });
+        for (const membership of administrativeMemberships) {
+          const isAdministrator =
+            membership.role === 'PROJECT_MANAGER' ||
+            membership.role === 'OWNER' ||
+            administrativeRoles.includes(
+              membership.organizationRole as (typeof administrativeRoles)[number],
+            );
+          // An owner may schedule deletion; the owned workspace is suspended
+          // until a successor accepts the transfer. A non-owner administrator
+          // cannot leave an active organization without another active owner
+          // or administrator who can manage that suspended workspace.
+          if (!isAdministrator || membership.workspace.ownerId === user.id) continue;
+
+          const activeSuccessors = await tx.workspaceMembership.count({
+            where: {
+              workspaceId: membership.workspaceId,
+              userId: { not: user.id },
+              status: 'ACTIVE',
+              user: { status: 'ACTIVE', deletedAt: null },
+              OR: [
+                { role: { in: ['OWNER', 'PROJECT_MANAGER'] } },
+                { organizationRole: { in: [...administrativeRoles] } },
+              ],
+            },
+          });
+          if (activeSuccessors === 0) {
+            throw new AppError(
+              409,
+              'LAST_ORGANIZATION_ADMIN',
+              'Another active owner or administrator must remain in the organization',
+            );
+          }
+        }
+
+        await tx.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: requestedAt, revokedReason: 'ACCOUNT_PENDING_DELETION' },
+        });
         await tx.authToken.updateMany({
           where: { userId: user.id, usedAt: null },
-          data: { usedAt: new Date() },
+          data: { usedAt: requestedAt },
         });
-
-        await tx.userProfile.updateMany({
-          where: { userId: user.id },
-          data: { bio: null, jobTitle: null, avatarUrl: null },
-        });
-
         await tx.user.update({
           where: { id: user.id },
           data: {
-            // The address is released so the person can register again.
-            email: `deleted+${user.id}@nexus.invalid`,
-            name: 'Deleted user',
-            // The password can never be matched again.
-            passwordHash: TIMING_EQUALIZER_HASH,
-            status: 'DEACTIVATED',
-            deletedAt: new Date(),
+            status: 'PENDING_DELETION',
+            deletionRequestedAt: requestedAt,
+            scheduledDeletionAt,
           },
         });
+
+        const ownedWorkspaces = await tx.workspace.findMany({
+          where: { ownerId: user.id, deletedAt: null, status: 'ACTIVE' },
+          select: { id: true, subscription: { select: { id: true, status: true } } },
+        });
+        await tx.workspace.updateMany({
+          where: { ownerId: user.id, deletedAt: null, status: 'ACTIVE' },
+          data: { status: 'SUSPENDED', deletionSuspendedAt: requestedAt },
+        });
+        await tx.workspaceOwnershipTransfer.updateMany({
+          where: { initiatedById: user.id, status: 'PENDING' },
+          data: { expiresAt: scheduledDeletionAt },
+        });
+        for (const workspace of ownedWorkspaces) {
+          if (!workspace.subscription || workspace.subscription.status === 'CANCELLED') continue;
+          await tx.billingCancellation.upsert({
+            where: { workspaceId: workspace.id },
+            create: {
+              workspaceId: workspace.id,
+              status: 'PENDING',
+              nextAttemptAt: scheduledDeletionAt,
+            },
+            update: {
+              status: 'PENDING',
+              attempts: 0,
+              nextAttemptAt: scheduledDeletionAt,
+              lastError: null,
+            },
+          });
+        }
       });
 
       await recordSecurityEvent(client, {
-        action: SecurityAction.AccountDeleted,
+        action: SecurityAction.AccountDeletionRequested,
         targetType: 'User',
         targetId: user.id,
         actorId: user.id,
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
+        metadata: { scheduledDeletionAt: scheduledDeletionAt.toISOString() },
       });
+      await sendEmail(
+        buildAccountDeletionScheduledEmail({
+          to: user.email,
+          name: user.name,
+          brand,
+          scheduledDeletionAt,
+          idempotencyKey: `auth:deletion_requested:${user.id}:${requestedAt.getTime()}`,
+        }),
+      );
 
-      //       console.log('register: hashing');
-      // // ...
-      // console.log('register: creating user');
-      // // ...
-      // console.log('register: queueing email');
+      return { scheduledDeletionAt };
     },
   };
 }

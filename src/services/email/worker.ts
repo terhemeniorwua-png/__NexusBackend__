@@ -1,6 +1,7 @@
 import type { AppConfig } from '../../config/env';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import type { DeliveryPassResult, EmailDeliveryService } from './delivery.service';
+import { summarizeErrorForLog } from './log-privacy';
 
 /**
  * Email delivery worker.
@@ -56,7 +57,7 @@ export function createEmailWorker(deps: EmailWorkerDependencies): EmailWorker {
         });
       }
     } catch (error) {
-      log.error('email_worker_pass_failed', { error });
+      log.error('email_worker_pass_failed', { error: summarizeErrorForLog(error) });
     } finally {
       running = false;
       schedule();

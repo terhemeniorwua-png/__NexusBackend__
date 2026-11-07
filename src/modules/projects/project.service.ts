@@ -1,900 +1,1138 @@
-import type { PrismaClient, Project, ProjectRole, User } from '@prisma/client';
+import type { Prisma, PrismaClient, Project, ProjectRole, WorkspaceRole } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
-import type { RequestContext } from '../auth/auth.types';
-import { ProjectAuditAction, recordAuditEvent } from '../../services/audit';
+import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
 import {
+  DepartmentCapability,
   ProjectCapability,
+  organizationRoleCanOwnProjects,
+  requireDepartmentAccess,
   requireProjectAccess,
+  requireTeamAccess,
   requireWorkspaceAccess,
+  TeamCapability,
   WorkspaceCapability,
 } from '../authorization';
-import type {
-  AddProjectMemberInput,
-  ChangeProjectOwnerInput,
-  CreateProjectInput,
-  ListProjectsQuery,
-  ProjectActivityQuery,
-  UpdateProjectInput,
-  UpdateProjectMemberRoleInput,
-} from './project.schemas';
-import type {
-  Pagination,
-  ProjectActivityEntry,
-  ProjectActivityResult,
-  ProjectDetailSummary,
-  ProjectListResult,
-  ProjectMemberSummary,
-  ProjectOverview,
-  ProjectSummary,
-} from './project.types';
 import {
-  canTransitionProjectStatus,
-  isValidProjectKey,
-  projectKeyCandidate,
-  projectKeyFromName,
-} from './project.rules';
+  effectiveWorkspaceRole,
+  isOrganizationRoleForWorkspace,
+} from '../authorization/organization-role';
+import type { RequestContext } from '../auth/auth.types';
+import type { CreateProjectInput, ListProjectsQuery, UpdateProjectInput } from './project.schemas';
 
-export interface ProjectService {
-  create(
-    input: { userId: string; workspaceId: string } & CreateProjectInput,
-    ctx: RequestContext,
-  ): Promise<ProjectSummary>;
-  list(
-    input: { userId: string; workspaceId: string } & ListProjectsQuery,
-  ): Promise<ProjectListResult>;
-  get(input: { userId: string; workspaceId: string; projectId: string }): Promise<ProjectSummary>;
-  getDetail(input: {
-    userId: string;
-    workspaceId: string;
-    projectId: string;
-  }): Promise<ProjectDetailSummary>;
-  overview(input: { userId: string; workspaceId: string }): Promise<ProjectOverview>;
-  update(
-    input: { userId: string; workspaceId: string; projectId: string } & UpdateProjectInput,
-    ctx: RequestContext,
-  ): Promise<ProjectSummary>;
-  archive(
-    input: { userId: string; workspaceId: string; projectId: string },
-    ctx: RequestContext,
-  ): Promise<ProjectSummary>;
-  remove(
-    input: { userId: string; workspaceId: string; projectId: string },
-    ctx: RequestContext,
-  ): Promise<void>;
-  listMembers(input: {
-    userId: string;
-    workspaceId: string;
-    projectId: string;
-  }): Promise<ProjectMemberSummary[]>;
-  addMember(
-    input: {
-      userId: string;
-      workspaceId: string;
-      projectId: string;
-      targetUserId: string;
-    } & AddProjectMemberInput,
-    ctx: RequestContext,
-  ): Promise<ProjectMemberSummary>;
-  updateMemberRole(
-    input: {
-      userId: string;
-      workspaceId: string;
-      projectId: string;
-      targetUserId: string;
-    } & UpdateProjectMemberRoleInput,
-    ctx: RequestContext,
-  ): Promise<ProjectMemberSummary>;
-  removeMember(
-    input: { userId: string; workspaceId: string; projectId: string; targetUserId: string },
-    ctx: RequestContext,
-  ): Promise<void>;
-  changeOwner(
-    input: { userId: string; workspaceId: string; projectId: string } & Partial<ChangeProjectOwnerInput>,
-    ctx: RequestContext,
-  ): Promise<ProjectSummary>;
-  activity(
-    input: { userId: string; workspaceId: string; projectId: string } & ProjectActivityQuery,
-  ): Promise<ProjectActivityResult>;
-}
+type Input = { userId: string; workspaceId: string };
+type ProjectSummary = Pick<
+  Project,
+  | 'id'
+  | 'workspaceId'
+  | 'teamId'
+  | 'departmentId'
+  | 'name'
+  | 'key'
+  | 'description'
+  | 'category'
+  | 'labels'
+  | 'status'
+  | 'visibility'
+  | 'startDate'
+  | 'dueDate'
+  | 'ownerId'
+  | 'createdAt'
+  | 'updatedAt'
+> & {
+  owner: { id: string; name: string };
+  memberCount: number;
+  taskCount: number;
+  myRole: ProjectRole | null;
+};
 
-type ProjectWithOwner = Project & { owner: Pick<User, 'id' | 'name' | 'email'> };
+const projectInclude = {
+  owner: { select: { id: true, name: true } },
+  _count: { select: { members: true, tasks: true } },
+} as const;
 
 function toSummary(
-  project: ProjectWithOwner,
-  memberCount: number,
-  taskCount: number,
+  row: Prisma.ProjectGetPayload<{ include: typeof projectInclude }>,
+  myRole: ProjectRole | null,
 ): ProjectSummary {
+  const { _count, ...project } = row;
+  return { ...project, memberCount: _count.members, taskCount: _count.tasks, myRole };
+}
+
+function effectiveProjectRole(
+  workspaceRole: WorkspaceRole,
+  membership: ProjectRole | null,
+  isOwner: boolean,
+): ProjectRole | null {
+  if (isOwner) return 'PROJECT_MANAGER';
+  if (membership) return membership;
+  if (workspaceRole === 'OWNER' || workspaceRole === 'PROJECT_MANAGER') return 'PROJECT_MANAGER';
+  return null;
+}
+
+function mapConflict(error: unknown): never {
+  if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
+    throw new AppError(
+      409,
+      'PROJECT_KEY_CONFLICT',
+      'A project with that key already exists in this workspace',
+    );
+  }
+  throw error;
+}
+
+function dateOrNull(value: string | null | undefined): Date | null | undefined {
+  return value === undefined ? undefined : value === null ? null : new Date(value);
+}
+
+export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
   return {
-    id: project.id,
-    workspaceId: project.workspaceId,
-    teamId: project.teamId,
-    name: project.name,
-    key: project.key,
-    description: project.description,
-    status: project.status,
-    visibility: project.visibility,
-    startDate: project.startDate,
-    dueDate: project.dueDate,
-    ownerId: project.ownerId,
-    owner: { id: project.owner.id, name: project.owner.name, email: project.owner.email },
-    settings: (project as any).settings ?? null,
-    memberCount,
-    taskCount,
-    createdAt: project.createdAt,
-    updatedAt: project.updatedAt,
-  };
-}
-
-function toMember(m: {
-  id: string;
-  projectId: string;
-  userId: string;
-  role: ProjectRole;
-  createdAt: Date;
-  user: Pick<User, 'id' | 'name' | 'email'>;
-}): ProjectMemberSummary {
-  return {
-    id: m.id,
-    projectId: m.projectId,
-    userId: m.user.id,
-    role: m.role,
-    name: m.user.name,
-    email: m.user.email,
-    joinedAt: m.createdAt,
-  };
-}
-
-function pagination(page: number, pageSize: number, total: number): Pagination {
-  return { page, pageSize, total, totalPages: total === 0 ? 0 : Math.ceil(total / pageSize) };
-}
-
-function isDueSoon(d: Date | null) {
-  if (!d) return false;
-  const now = Date.now();
-  return d.getTime() >= now && d.getTime() <= now + 7 * 24 * 3600 * 1000;
-}
-function isOverdue(d: Date | null) {
-  if (!d) return false;
-  return d.getTime() < Date.now();
-}
-
-export function createProjectService(prisma?: PrismaClient): ProjectService {
-  const client = prisma ?? getPrismaClient();
-
-  async function uniqueProjectKey(
-    workspaceId: string,
-    name: string,
-    requested?: string,
-  ): Promise<string> {
-    const base = requested && isValidProjectKey(requested) ? requested : projectKeyFromName(name);
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const candidate = projectKeyCandidate(base, attempt);
-      const exists = await client.project.findUnique({
-        where: { workspaceId_key: { workspaceId, key: candidate } },
-        select: { id: true },
+    async list(input: Input & ListProjectsQuery) {
+      const access = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
       });
-      if (!exists) return candidate;
-    }
-    throw new AppError(409, 'PROJECT_KEY_CONFLICT', 'Unable to generate a unique project key');
-  }
+      const manager =
+        access.effectiveRole === 'OWNER' || access.effectiveRole === 'PROJECT_MANAGER';
+      const unrestrictedLegacyManager = manager && !access.membership.organizationRole;
+      const rows = await prisma.project.findMany({
+        where: {
+          workspaceId: input.workspaceId,
+          deletedAt: null,
+          ...(input.status ? { status: input.status } : {}),
+          ...(!input.includeArchived ? { status: input.status ?? { not: 'ARCHIVED' } } : {}),
+          ...(input.visibility ? { visibility: input.visibility } : {}),
+          ...(input.teamId ? { teamId: input.teamId } : {}),
+          ...(input.departmentId ? { departmentId: input.departmentId } : {}),
+          ...(input.search
+            ? {
+                OR: [
+                  { name: { contains: input.search, mode: 'insensitive' } },
+                  { key: { contains: input.search, mode: 'insensitive' } },
+                ],
+              }
+            : {}),
+          ...(!unrestrictedLegacyManager
+            ? {
+                AND: [
+                  {
+                    OR: [
+                      { visibility: 'WORKSPACE' },
+                      { ownerId: input.userId },
+                      { members: { some: { userId: input.userId } } },
+                      {
+                        AND: [
+                          { visibility: 'DEPARTMENT_TEAM' },
+                          {
+                            team: {
+                              is: {
+                                status: 'ACTIVE',
+                                deletedAt: null,
+                                members: { some: { userId: input.userId } },
+                              },
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        AND: [
+                          { visibility: 'DEPARTMENT_TEAM' },
+                          { teamId: null },
+                          { department: { is: { members: { some: { userId: input.userId } } } } },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        take: input.limit + 1,
+        include: projectInclude,
+      });
+      const hasMore = rows.length > input.limit;
+      const page = rows.slice(0, input.limit);
+      const projectIds = page.map((row) => row.id);
+      const memberships = projectIds.length
+        ? await prisma.projectMembership.findMany({
+            where: { userId: input.userId, projectId: { in: projectIds } },
+            select: { projectId: true, role: true },
+          })
+        : [];
+      const roleByProject = new Map(
+        memberships.map((membership) => [membership.projectId, membership.role]),
+      );
+      const items = page.map((row) =>
+        toSummary(
+          row,
+          roleByProject.get(row.id) ??
+            (row.ownerId === input.userId ||
+            (unrestrictedLegacyManager && !access.membership.organizationRole)
+              ? 'PROJECT_MANAGER'
+              : null),
+        ),
+      );
+      return { items, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null };
+    },
 
-  async function loadProjectSummary(
-    projectId: string,
-    workspaceId: string,
-  ): Promise<ProjectSummary> {
-    const project = await client.project.findFirst({
-      where: { id: projectId, workspaceId, deletedAt: null },
-      include: {
-        owner: { select: { id: true, name: true, email: true } },
-        _count: { select: { members: true, tasks: true } },
-      },
-    });
-    if (!project) throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
-    const { _count, ...data } = project;
-    return toSummary(data, _count.members, _count.tasks);
-  }
-
-  return {
-    async create(input, ctx): Promise<ProjectSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
+    async create(input: Input & CreateProjectInput, context: RequestContext) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
         capability: WorkspaceCapability.UpdateWorkspace,
       });
+      let teamDepartmentId: string | null = null;
       if (input.teamId) {
-        const team = await client.team.findFirst({
-          where: { id: input.teamId, workspaceId: workspace.id, deletedAt: null },
-          select: { id: true },
+        const team = await requireTeamAccess(prisma, {
+          ...input,
+          teamId: input.teamId,
+          workspaceRole: workspace.effectiveRole,
+          capability: TeamCapability.ViewTeam,
         });
-        if (!team) throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
+        if (team.team.status !== 'ACTIVE' || team.team.deletedAt)
+          throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
+        teamDepartmentId = team.team.departmentId;
       }
-      const ownerId = input.ownerId ?? input.userId;
-      if (ownerId !== input.userId) {
-        const om = await client.workspaceMembership.findUnique({
-          where: { workspaceId_userId: { workspaceId: workspace.id, userId: ownerId } },
+      if (input.departmentId) {
+        await requireDepartmentAccess(prisma, {
+          ...input,
+          departmentId: input.departmentId,
+          capability: DepartmentCapability.ManageProjects,
         });
-        if (!om)
+      }
+      if (teamDepartmentId && input.departmentId && teamDepartmentId !== input.departmentId) {
+        throw new AppError(
+          409,
+          'PROJECT_ORGANIZATION_MISMATCH',
+          'The project team and department must belong together',
+        );
+      }
+      if (teamDepartmentId && !input.departmentId && input.teamId) {
+        // Keep project visibility and its department relationship aligned with a department-bound team.
+        input = { ...input, departmentId: teamDepartmentId };
+      }
+      if (input.visibility === 'DEPARTMENT_TEAM' && !input.teamId && !input.departmentId) {
+        throw new AppError(
+          400,
+          'PROJECT_SCOPE_REQUIRED',
+          'Department/team-only projects require a team or department',
+        );
+      }
+      try {
+        return await prisma.$transaction(async (tx) => {
+          const project = await tx.project.create({
+            data: {
+              workspaceId: input.workspaceId,
+              ownerId: input.userId,
+              name: input.name,
+              key: input.key.toUpperCase(),
+              description: input.description ?? null,
+              category: input.category ?? null,
+              labels: input.labels ?? [],
+              visibility: input.visibility,
+              teamId: input.teamId ?? null,
+              departmentId: input.departmentId ?? null,
+              startDate: dateOrNull(input.startDate) ?? null,
+              dueDate: dateOrNull(input.dueDate) ?? null,
+            },
+            include: projectInclude,
+          });
+          await tx.projectMembership.create({
+            data: { projectId: project.id, userId: input.userId, role: 'PROJECT_MANAGER' },
+          });
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: 'project.created',
+            targetType: 'Project',
+            targetId: project.id,
+            metadata: { name: project.name, key: project.key, visibility: project.visibility },
+            ...context,
+          });
+          const created = await tx.project.findUniqueOrThrow({
+            where: { id: project.id },
+            include: projectInclude,
+          });
+          return toSummary(created, 'PROJECT_MANAGER');
+        });
+      } catch (error) {
+        return mapConflict(error);
+      }
+    },
+
+    async get(input: Input & { projectId: string }) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ViewProject,
+      });
+      const row = await prisma.project.findUniqueOrThrow({
+        where: { id: access.project.id },
+        include: projectInclude,
+      });
+      return toSummary(
+        row,
+        effectiveProjectRole(
+          access.workspaceRole,
+          access.projectMembership?.role ?? null,
+          row.ownerId === input.userId,
+        ),
+      );
+    },
+
+    async transferOwnership(
+      input: Input & {
+        projectId: string;
+        newOwnerId: string;
+        previousOwnerRole: 'MANAGER' | 'MEMBER' | 'REMOVE';
+      },
+      context: RequestContext,
+    ) {
+      const requestStartedAt = new Date();
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const initialAccess = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ViewProject,
+      });
+      if (input.newOwnerId === initialAccess.project.ownerId)
+        throw new AppError(
+          400,
+          'PROJECT_OWNER_UNCHANGED',
+          'The new owner must be different from the current owner',
+        );
+
+      const initiallyOwner = initialAccess.project.ownerId === input.userId;
+      const initiallyAdmin =
+        workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
+      if (!initiallyOwner && !initiallyAdmin) {
+        const racingTransfer = await prisma.auditLog.findFirst({
+          where: {
+            targetType: 'Project',
+            targetId: input.projectId,
+            action: 'project.ownership_transferred',
+            createdAt: { gte: requestStartedAt },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: { metadata: true },
+        });
+        if (
+          racingTransfer?.metadata &&
+          typeof racingTransfer.metadata === 'object' &&
+          'previousOwnerId' in racingTransfer.metadata &&
+          racingTransfer.metadata.previousOwnerId === input.userId
+        ) {
           throw new AppError(
-            404,
-            'OWNER_NOT_FOUND',
-            'The project owner must be a member of the workspace',
+            409,
+            'PROJECT_OWNERSHIP_CHANGED',
+            'Project ownership changed while this transfer was in progress',
           );
-      }
-      const key = await uniqueProjectKey(workspace.id, input.name, input.key);
-
-      const project = await client.$transaction(async (tx) => {
-        const created = await tx.project.create({
-          data: {
-            workspaceId: workspace.id,
-            teamId: input.teamId ?? null,
-            name: input.name,
-            key,
-            ...(input.description !== undefined ? { description: input.description } : {}),
-            status: input.status,
-            visibility: input.visibility,
-            ownerId,
-            ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
-            ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
-            ...(input.settings !== undefined ? { settings: input.settings as any } : {}),
-          },
-          include: { owner: { select: { id: true, name: true, email: true } } },
-        });
-        await tx.projectMembership.create({
-          data: {
-            projectId: created.id,
-            userId: input.userId,
-            role:
-              membership.role === 'OWNER' || membership.role === 'PROJECT_MANAGER'
-                ? 'PROJECT_MANAGER'
-                : 'MEMBER',
-          },
-        });
-        if (ownerId !== input.userId) {
-          const ex = await tx.projectMembership.findUnique({
-            where: { projectId_userId: { projectId: created.id, userId: ownerId } },
-          });
-          if (!ex)
-            await tx.projectMembership.create({
-              data: { projectId: created.id, userId: ownerId, role: 'PROJECT_MANAGER' },
-            });
-          else if (ex.role !== 'PROJECT_MANAGER')
-            await tx.projectMembership.update({
-              where: { id: ex.id },
-              data: { role: 'PROJECT_MANAGER' },
-            });
         }
-        await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
-          actorId: input.userId,
-          action: ProjectAuditAction.ProjectCreated,
-          targetType: 'Project',
-          targetId: created.id,
-          metadata: { name: created.name, key: created.key },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
-        });
-        if (ownerId !== input.userId) {
-          await createNotification(tx, {
-            userId: ownerId,
-            type: 'PROJECT_UPDATE',
-            title: `You own ${created.name}`,
-            body: `You have been assigned as the owner of the project ${created.name}.`,
-            data: { workspaceId: workspace.id, projectId: created.id },
-          });
-        }
-        return created;
-      });
-      const memberCount = await client.projectMembership.count({
-        where: { projectId: project.id },
-      });
-      const taskCount = await client.task.count({
-        where: { projectId: project.id, deletedAt: null },
-      });
-      return toSummary(project, memberCount, taskCount);
-    },
-
-    async list(input): Promise<ProjectListResult> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const where: any = { workspaceId: workspace.id, deletedAt: null };
-      if (!input.includeArchived) where.status = { not: 'ARCHIVED' };
-      else if (input.status) where.status = input.status;
-      if (input.visibility) where.visibility = input.visibility;
-      if (input.teamId) where.teamId = input.teamId;
-      if (input.ownerId) where.ownerId = input.ownerId;
-      if (input.search)
-        where.OR = [
-          { name: { contains: input.search, mode: 'insensitive' } },
-          { key: { contains: input.search, mode: 'insensitive' } },
-        ];
-      if (membership.role !== 'OWNER' && membership.role !== 'PROJECT_MANAGER') {
-        where.OR = [{ visibility: 'WORKSPACE' }, { members: { some: { userId: input.userId } } }];
+        throw new AppError(
+          403,
+          'PROJECT_TRANSFER_FORBIDDEN',
+          'Only the project owner or a workspace administrator can transfer ownership',
+        );
       }
-      const [rows, total] = await Promise.all([
-        client.project.findMany({
-          where,
-          include: {
-            owner: { select: { id: true, name: true, email: true } },
-            _count: { select: { members: true, tasks: true } },
-          },
-          orderBy: { [input.sortBy]: input.sortOrder },
-          skip: (input.page - 1) * input.pageSize,
-          take: input.pageSize,
-        }),
-        client.project.count({ where }),
-      ]);
-      return {
-        items: rows.map(({ _count, ...p }) => toSummary(p, _count.members, _count.tasks)),
-        pagination: pagination(input.page, input.pageSize, total),
-      };
-    },
 
-    async get(input): Promise<ProjectSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
-        capability: ProjectCapability.ViewProject,
-      });
-      return loadProjectSummary(input.projectId, workspace.id);
-    },
-
-    async getDetail(input): Promise<ProjectDetailSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
-        capability: ProjectCapability.ViewProject,
-      });
-      const [project, memberCount, taskCount, completedTaskCount, memberRolesRows, recentAudit] =
-        await Promise.all([
-          client.project.findFirst({
-            where: { id: input.projectId, workspaceId: workspace.id, deletedAt: null },
-            include: { owner: { select: { id: true, name: true, email: true } } },
-          }),
-          client.projectMembership.count({ where: { projectId: input.projectId } }),
-          client.task.count({ where: { projectId: input.projectId, deletedAt: null } }),
-          client.task.count({
-            where: { projectId: input.projectId, deletedAt: null, status: 'APPROVED' },
-          }),
-          client.projectMembership.groupBy({
-            by: ['role'],
-            where: { projectId: input.projectId },
-            _count: { role: true },
-          }),
-          client.auditLog.findMany({
-            where: { targetType: 'Project', targetId: input.projectId },
-            include: { actor: { select: { id: true, name: true, email: true } } },
-            orderBy: { createdAt: 'desc' },
-            take: 5,
-          }),
-        ]);
-      if (!project) throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
-      const memberRoles: any = { PROJECT_MANAGER: 0, MEMBER: 0, VIEWER: 0 };
-      for (const r of memberRolesRows) memberRoles[r.role] = r._count.role;
-      const recentActivity: ProjectActivityEntry[] = recentAudit.map((e) => ({
-        id: e.id,
-        action: e.action,
-        targetType: e.targetType,
-        targetId: e.targetId,
-        actor: e.actor ? { id: e.actor.id, name: e.actor.name, email: e.actor.email } : null,
-        metadata: e.metadata,
-        createdAt: e.createdAt,
-      }));
-      return {
-        ...toSummary(project, memberCount, taskCount),
-        memberRoles,
-        completedTaskCount,
-        recentActivity,
-      };
-    },
-
-    async overview(input): Promise<ProjectOverview> {
-      await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const [total, byStatusRows, byVisibilityRows, projectsWithDue] = await Promise.all([
-        client.project.count({ where: { workspaceId: input.workspaceId, deletedAt: null } }),
-        client.project.groupBy({
-          by: ['status'],
-          where: { workspaceId: input.workspaceId, deletedAt: null },
-          _count: { status: true },
-        }),
-        client.project.groupBy({
-          by: ['visibility'],
-          where: { workspaceId: input.workspaceId, deletedAt: null },
-          _count: { visibility: true },
-        }),
-        client.project.findMany({
-          where: { workspaceId: input.workspaceId, deletedAt: null, status: { not: 'ARCHIVED' } },
-          select: { dueDate: true },
-        }),
-      ]);
-      const byStatus: any = { PLANNING: 0, ACTIVE: 0, ON_HOLD: 0, COMPLETED: 0, ARCHIVED: 0 };
-      for (const r of byStatusRows) byStatus[r.status] = r._count.status;
-      const byVisibility: any = { PRIVATE: 0, WORKSPACE: 0 };
-      for (const r of byVisibilityRows) byVisibility[r.visibility] = r._count.visibility;
-      let overdue = 0,
-        dueSoon = 0;
-      for (const p of projectsWithDue) {
-        if (isOverdue(p.dueDate)) overdue += 1;
-        else if (isDueSoon(p.dueDate)) dueSoon += 1;
-      }
-      return { total, byStatus, byVisibility, overdue, dueSoon };
-    },
-
-    async update(input, ctx): Promise<ProjectSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const { project } = await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
-        capability: ProjectCapability.UpdateProject,
-      });
-      if (project.status === 'ARCHIVED')
-        throw new AppError(409, 'PROJECT_ARCHIVED', 'An archived project cannot be updated');
-      if (input.teamId) {
-        const team = await client.team.findFirst({
-          where: { id: input.teamId, workspaceId: workspace.id, deletedAt: null },
-          select: { id: true },
-        });
-        if (!team) throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
-      }
-      if (input.status && input.status !== project.status) {
-        if (!canTransitionProjectStatus(project.status, input.status))
+      return prisma.$transaction(async (tx) => {
+        const [locked] = await tx.$queryRaw<Project[]>`
+          SELECT * FROM "Project"
+          WHERE "id" = ${input.projectId} AND "workspaceId" = ${input.workspaceId}
+          FOR UPDATE
+        `;
+        if (!locked || locked.deletedAt)
+          throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+        if (locked.ownerId !== initialAccess.project.ownerId)
+          throw new AppError(
+            409,
+            'PROJECT_OWNERSHIP_CHANGED',
+            'Project ownership changed before this transfer could complete',
+          );
+        if (locked.ownerId === input.newOwnerId)
           throw new AppError(
             400,
-            'INVALID_PROJECT_STATUS_TRANSITION',
-            'That project status transition is not allowed',
+            'PROJECT_OWNER_UNCHANGED',
+            'The new owner must be different from the current owner',
           );
-      }
-      const updated = await client.$transaction(async (tx) => {
-        const changed = await tx.project.update({
-          where: { id: project.id },
-          data: {
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.description !== undefined ? { description: input.description } : {}),
-            ...(input.status !== undefined ? { status: input.status } : {}),
-            ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-            ...(input.teamId !== undefined ? { teamId: input.teamId } : {}),
-            ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
-            ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
-            ...(input.settings !== undefined ? { settings: input.settings as unknown as object } : {}),
-          } as any,
-          include: { owner: { select: { id: true, name: true, email: true } } },
+
+        await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT wm."id" FROM "WorkspaceMembership" wm
+          JOIN "User" u ON u."id" = wm."userId"
+          WHERE wm."workspaceId" = ${input.workspaceId} AND wm."userId" = ${input.userId}
+          FOR UPDATE OF wm, u
+        `;
+        const actorMembership = await tx.workspaceMembership.findUnique({
+          where: { workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId } },
+          include: { workspace: { select: { type: true } } },
         });
-        await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
-          actorId: input.userId,
-          action: ProjectAuditAction.ProjectUpdated,
-          targetType: 'Project',
-          targetId: changed.id,
-          metadata: {
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.status !== undefined ? { status: input.status } : {}),
+        if (!actorMembership || actorMembership.status !== 'ACTIVE')
+          throw new AppError(
+            403,
+            'PROJECT_TRANSFER_FORBIDDEN',
+            'An active workspace membership is required',
+          );
+        const actorRole = effectiveWorkspaceRole(
+          actorMembership.workspace.type,
+          actorMembership.role,
+          actorMembership.organizationRole,
+        );
+        const actorIsOwner = locked.ownerId === input.userId;
+        const actorIsWorkspaceAdmin = actorRole === 'OWNER' || actorRole === 'PROJECT_MANAGER';
+        if (!actorIsOwner && !actorIsWorkspaceAdmin)
+          throw new AppError(
+            403,
+            'PROJECT_TRANSFER_FORBIDDEN',
+            'Only the project owner or a workspace administrator can transfer ownership',
+          );
+
+        await requireProjectAccess(tx, {
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          workspaceRole: actorRole,
+          capability: ProjectCapability.ViewProject,
+        });
+
+        await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT wm."id" FROM "WorkspaceMembership" wm
+          JOIN "User" u ON u."id" = wm."userId"
+          WHERE wm."workspaceId" = ${input.workspaceId} AND wm."userId" = ${input.newOwnerId}
+          FOR UPDATE OF wm, u
+        `;
+        const target = await tx.workspaceMembership.findUnique({
+          where: {
+            workspaceId_userId: { workspaceId: input.workspaceId, userId: input.newOwnerId },
           },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          include: {
+            user: { select: { status: true, deletedAt: true } },
+            workspace: { select: { type: true } },
+          },
         });
-        return changed;
+        if (
+          !target ||
+          target.status !== 'ACTIVE' ||
+          target.user.status !== 'ACTIVE' ||
+          target.user.deletedAt !== null ||
+          (target.organizationRole &&
+            !isOrganizationRoleForWorkspace(target.workspace.type, target.organizationRole)) ||
+          !organizationRoleCanOwnProjects(target.organizationRole)
+        ) {
+          throw new AppError(
+            422,
+            'PROJECT_OWNER_TARGET_INELIGIBLE',
+            'The new owner must be an eligible active workspace member',
+          );
+        }
+
+        // Parent eligibility is OR across supported scope types. If a project
+        // has a team, that narrower team membership takes precedence; its
+        // department link is not an alternate access path.
+        if (locked.visibility === 'DEPARTMENT_TEAM') {
+          let eligibleParentMember = false;
+          if (locked.teamId) {
+            await tx.$queryRaw<Array<{ id: string }>>`
+              SELECT "id" FROM "Team"
+              WHERE "id" = ${locked.teamId} AND "workspaceId" = ${input.workspaceId}
+                AND "status" = 'ACTIVE' AND "deletedAt" IS NULL
+              FOR UPDATE
+            `;
+            const team = await tx.team.findFirst({
+              where: {
+                id: locked.teamId,
+                workspaceId: input.workspaceId,
+                status: 'ACTIVE',
+                deletedAt: null,
+              },
+              select: { id: true },
+            });
+            if (team) {
+              await tx.$queryRaw<Array<{ id: string }>>`
+                SELECT "id" FROM "TeamMembership"
+                WHERE "teamId" = ${team.id} AND "userId" = ${input.newOwnerId}
+                FOR UPDATE
+              `;
+              eligibleParentMember = Boolean(
+                await tx.teamMembership.findUnique({
+                  where: { teamId_userId: { teamId: team.id, userId: input.newOwnerId } },
+                  select: { id: true },
+                }),
+              );
+            }
+          } else if (locked.departmentId) {
+            await tx.$queryRaw<Array<{ id: string }>>`
+              SELECT "id" FROM "Department"
+              WHERE "id" = ${locked.departmentId} AND "workspaceId" = ${input.workspaceId}
+              FOR UPDATE
+            `;
+            const department = await tx.department.findFirst({
+              where: { id: locked.departmentId, workspaceId: input.workspaceId },
+              select: { id: true },
+            });
+            if (department) {
+              await tx.$queryRaw<Array<{ id: string }>>`
+                SELECT "id" FROM "DepartmentMembership"
+                WHERE "departmentId" = ${department.id} AND "userId" = ${input.newOwnerId}
+                FOR UPDATE
+              `;
+              eligibleParentMember = Boolean(
+                await tx.departmentMembership.findUnique({
+                  where: {
+                    departmentId_userId: { departmentId: department.id, userId: input.newOwnerId },
+                  },
+                  select: { id: true },
+                }),
+              );
+            }
+          }
+          if (!eligibleParentMember)
+            throw new AppError(
+              422,
+              'PROJECT_OWNER_TARGET_INELIGIBLE',
+              'The new owner must belong to the project team or department',
+            );
+        }
+
+        const previousOwnerId = locked.ownerId;
+        const previousMembershipRole: ProjectRole =
+          input.previousOwnerRole === 'MANAGER' ? 'PROJECT_MANAGER' : 'MEMBER';
+        const previousOwnerResultingRole =
+          input.previousOwnerRole === 'REMOVE' ? 'REMOVED' : previousMembershipRole;
+        const newMembership = await tx.projectMembership.upsert({
+          where: { projectId_userId: { projectId: input.projectId, userId: input.newOwnerId } },
+          create: { projectId: input.projectId, userId: input.newOwnerId, role: 'PROJECT_MANAGER' },
+          update: { role: 'PROJECT_MANAGER' },
+        });
+        if (input.previousOwnerRole === 'REMOVE') {
+          await tx.projectMembership.deleteMany({
+            where: { projectId: input.projectId, userId: previousOwnerId },
+          });
+        } else {
+          await tx.projectMembership.upsert({
+            where: { projectId_userId: { projectId: input.projectId, userId: previousOwnerId } },
+            create: {
+              projectId: input.projectId,
+              userId: previousOwnerId,
+              role: previousMembershipRole,
+            },
+            update: { role: previousMembershipRole },
+          });
+        }
+        const managers = await tx.projectMembership.count({
+          where: { projectId: input.projectId, role: 'PROJECT_MANAGER' },
+        });
+        if (managers < 1)
+          throw new AppError(
+            409,
+            'PROJECT_MANAGER_REQUIRED',
+            'A project must retain at least one owner or project manager',
+          );
+
+        const now = new Date();
+        const updated = await tx.project.updateMany({
+          where: {
+            id: input.projectId,
+            workspaceId: input.workspaceId,
+            ownerId: previousOwnerId,
+            deletedAt: null,
+          },
+          data: { ownerId: input.newOwnerId, updatedAt: now },
+        });
+        if (updated.count !== 1)
+          throw new AppError(
+            409,
+            'PROJECT_OWNERSHIP_CHANGED',
+            'Project ownership changed before this transfer could complete',
+          );
+
+        const forcedAdminTransfer = !actorIsOwner;
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'project.ownership_transferred',
+          targetType: 'Project',
+          targetId: input.projectId,
+          metadata: {
+            actorId: input.userId,
+            previousOwnerId,
+            newOwnerId: input.newOwnerId,
+            previousOwnerRole: previousOwnerResultingRole,
+            previousOwnerRoleChoice: input.previousOwnerRole,
+            forcedAdminTransfer,
+          },
+          ...context,
+        });
+        return {
+          projectId: input.projectId,
+          previousOwnerId,
+          ownerId: input.newOwnerId,
+          ownerRole: newMembership.role,
+          previousOwnerRole: input.previousOwnerRole,
+          previousOwnerResultingRole,
+          forcedAdminTransfer,
+          updatedAt: now,
+        };
       });
-      const memberCount = await client.projectMembership.count({
-        where: { projectId: updated.id },
-      });
-      const taskCount = await client.task.count({
-        where: { projectId: updated.id, deletedAt: null },
-      });
-      return toSummary(updated, memberCount, taskCount);
     },
 
-    async archive(input, ctx): Promise<ProjectSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
+    async update(
+      input: Input & { projectId: string } & UpdateProjectInput,
+      context: RequestContext,
+    ) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      const { project } = await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.UpdateProject,
+      });
+      if (access.project.status === 'ARCHIVED')
+        throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+      const teamId = input.teamId === undefined ? access.project.teamId : input.teamId;
+      let departmentId =
+        input.departmentId === undefined ? access.project.departmentId : input.departmentId;
+      if (teamId) {
+        const team = await requireTeamAccess(prisma, {
+          ...input,
+          teamId,
+          workspaceRole: workspace.effectiveRole,
+          capability: TeamCapability.ViewTeam,
+        });
+        if (team.team.status !== 'ACTIVE' || team.team.deletedAt)
+          throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
+        if (team.team.departmentId) {
+          if (departmentId && departmentId !== team.team.departmentId)
+            throw new AppError(
+              409,
+              'PROJECT_ORGANIZATION_MISMATCH',
+              'The project team and department must belong together',
+            );
+          departmentId = team.team.departmentId;
+        }
+      }
+      if (departmentId)
+        await requireDepartmentAccess(prisma, {
+          ...input,
+          departmentId,
+          capability: DepartmentCapability.ManageProjects,
+        });
+      if (
+        (input.visibility ?? access.project.visibility) === 'DEPARTMENT_TEAM' &&
+        !teamId &&
+        !departmentId
+      ) {
+        throw new AppError(
+          400,
+          'PROJECT_SCOPE_REQUIRED',
+          'Department/team-only projects require a team or department',
+        );
+      }
+      try {
+        return await prisma.$transaction(async (tx) => {
+          const row = await tx.project.update({
+            where: { id: access.project.id },
+            data: {
+              ...(input.name !== undefined ? { name: input.name } : {}),
+              ...(input.key !== undefined ? { key: input.key.toUpperCase() } : {}),
+              ...(input.description !== undefined ? { description: input.description } : {}),
+              ...(input.category !== undefined ? { category: input.category } : {}),
+              ...(input.labels !== undefined ? { labels: input.labels } : {}),
+              ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+              ...(input.status !== undefined ? { status: input.status } : {}),
+              ...(input.teamId !== undefined ? { teamId } : {}),
+              ...(input.departmentId !== undefined || input.teamId !== undefined
+                ? { departmentId }
+                : {}),
+              ...(input.startDate !== undefined ? { startDate: dateOrNull(input.startDate) } : {}),
+              ...(input.dueDate !== undefined ? { dueDate: dateOrNull(input.dueDate) } : {}),
+            },
+            include: projectInclude,
+          });
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: 'project.updated',
+            targetType: 'Project',
+            targetId: row.id,
+            metadata: {
+              visibility: row.visibility,
+              status: row.status,
+              name: row.name,
+              key: row.key,
+            },
+            ...context,
+          });
+          const myMembership = await tx.projectMembership.findUnique({
+            where: { projectId_userId: { projectId: row.id, userId: input.userId } },
+          });
+          return toSummary(
+            row,
+            effectiveProjectRole(
+              access.workspaceRole,
+              myMembership?.role ?? null,
+              row.ownerId === input.userId,
+            ),
+          );
+        });
+      } catch (error) {
+        return mapConflict(error);
+      }
+    },
+
+    async archive(input: Input & { projectId: string }, context: RequestContext) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
         capability: ProjectCapability.ArchiveProject,
       });
-      if (project.status === 'ARCHIVED')
-        throw new AppError(409, 'PROJECT_ALREADY_ARCHIVED', 'This project is already archived');
-      const archived = await client.$transaction(async (tx) => {
-        const changed = await tx.project.update({
-          where: { id: project.id },
+      if (access.project.status === 'ARCHIVED')
+        return { id: access.project.id, status: access.project.status };
+      return prisma.$transaction(async (tx) => {
+        const row = await tx.project.update({
+          where: { id: access.project.id },
           data: { status: 'ARCHIVED' },
-          include: { owner: { select: { id: true, name: true, email: true } } },
         });
         await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
+          workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: ProjectAuditAction.ProjectArchived,
+          action: 'project.archived',
           targetType: 'Project',
-          targetId: changed.id,
-          metadata: { name: changed.name },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          targetId: row.id,
+          metadata: { previousStatus: access.project.status },
+          ...context,
         });
-        return changed;
+        return { id: row.id, status: row.status };
       });
-      const memberCount = await client.projectMembership.count({
-        where: { projectId: archived.id },
-      });
-      const taskCount = await client.task.count({
-        where: { projectId: archived.id, deletedAt: null },
-      });
-      return toSummary(archived, memberCount, taskCount);
     },
 
-    async remove(input, ctx): Promise<void> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
+    async restore(input: Input & { projectId: string }, context: RequestContext) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      const { project } = await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ArchiveProject,
+      });
+      if (access.project.status !== 'ARCHIVED')
+        return { id: access.project.id, status: access.project.status };
+      const previous = await prisma.auditLog.findFirst({
+        where: { targetType: 'Project', targetId: access.project.id, action: 'project.archived' },
+        orderBy: { createdAt: 'desc' },
+        select: { metadata: true },
+      });
+      const status =
+        previous?.metadata &&
+        typeof previous.metadata === 'object' &&
+        'previousStatus' in previous.metadata &&
+        ['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED'].includes(
+          String(previous.metadata.previousStatus),
+        )
+          ? (previous.metadata.previousStatus as 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED')
+          : 'PLANNING';
+      return prisma.$transaction(async (tx) => {
+        const row = await tx.project.update({ where: { id: access.project.id }, data: { status } });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'project.restored',
+          targetType: 'Project',
+          targetId: row.id,
+          metadata: { status: row.status },
+          ...context,
+        });
+        return { id: row.id, status: row.status };
+      });
+    },
+
+    async remove(input: Input & { projectId: string }, context: RequestContext) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
         capability: ProjectCapability.DeleteProject,
       });
-      const members = await client.projectMembership.findMany({
-        where: { projectId: project.id },
-        select: { userId: true },
-      });
-      await client.$transaction(async (tx) => {
+      await prisma.$transaction(async (tx) => {
         await tx.project.update({
-          where: { id: project.id },
-          data: { deletedAt: new Date(), status: 'ARCHIVED' },
+          where: { id: access.project.id },
+          data: { deletedAt: new Date() },
         });
         await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
+          workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: ProjectAuditAction.ProjectDeleted,
+          action: 'project.deleted',
           targetType: 'Project',
-          targetId: project.id,
-          metadata: { name: project.name },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          targetId: access.project.id,
+          ...context,
         });
-        for (const m of members) {
-          if (m.userId !== input.userId) {
-            await createNotification(tx, {
-              userId: m.userId,
-              type: 'PROJECT_UPDATE',
-              title: `Project "${project.name}" was deleted`,
-              body: `The project ${project.name} has been removed from the workspace.`,
-              data: { workspaceId: workspace.id, projectId: project.id },
-            });
-          }
-        }
       });
+      return { id: access.project.id, deleted: true };
     },
 
-    async listMembers(input): Promise<ProjectMemberSummary[]> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
+    async listMembers(input: Input & { projectId: string }) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
-        capability: ProjectCapability.ViewProject,
-      });
-      const memberships = await client.projectMembership.findMany({
-        where: { projectId: input.projectId },
-        include: { user: { select: { id: true, name: true, email: true } } },
-        orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
-      });
-      return memberships.map(toMember);
-    },
-
-    async addMember(input, ctx): Promise<ProjectMemberSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const { project } = await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
         capability: ProjectCapability.ManageMembers,
       });
-      const targetWs = await client.workspaceMembership.findUnique({
-        where: { workspaceId_userId: { workspaceId: workspace.id, userId: input.targetUserId } },
-        include: { user: { select: { id: true, name: true, email: true } } },
+      return prisma.projectMembership.findMany({
+        where: { projectId: access.project.id },
+        orderBy: [{ createdAt: 'asc' }, { userId: 'asc' }],
+        select: {
+          userId: true,
+          role: true,
+          createdAt: true,
+          user: { select: { id: true, name: true, email: true } },
+        },
       });
-      if (!targetWs)
+    },
+
+    async addMember(
+      input: Input & { projectId: string; targetUserId: string; role: ProjectRole },
+      context: RequestContext,
+    ) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ManageMembers,
+      });
+      if (access.project.status === 'ARCHIVED')
+        throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+      const target = await prisma.workspaceMembership.findUnique({
+        where: {
+          workspaceId_userId: { workspaceId: input.workspaceId, userId: input.targetUserId },
+        },
+      });
+      if (!target || target.status !== 'ACTIVE')
         throw new AppError(
           404,
           'WORKSPACE_MEMBER_NOT_FOUND',
-          'The user must be a member of the workspace',
+          'That active workspace member does not exist',
         );
-      const existing = await client.projectMembership.findUnique({
-        where: { projectId_userId: { projectId: project.id, userId: input.targetUserId } },
-      });
-      if (existing)
-        throw new AppError(409, 'ALREADY_A_MEMBER', 'This user is already a member of the project');
-      const newMembership = await client.$transaction(async (tx) => {
-        const created = await tx.projectMembership.create({
-          data: {
-            projectId: project.id,
-            userId: input.targetUserId,
-            role: input.role as ProjectRole,
-          },
-          include: { user: { select: { id: true, name: true, email: true } } },
+      if (input.targetUserId === access.project.ownerId && input.role !== 'PROJECT_MANAGER')
+        throw new AppError(
+          409,
+          'PROJECT_OWNER_ROLE_REQUIRED',
+          'The project owner must retain the project manager role',
+        );
+      return prisma.$transaction(async (tx) => {
+        const membership = await tx.projectMembership.upsert({
+          where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
+          create: { projectId: access.project.id, userId: input.targetUserId, role: input.role },
+          update: { role: input.role },
+          select: { projectId: true, userId: true, role: true, createdAt: true },
         });
         await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
+          workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: ProjectAuditAction.MemberAdded,
+          action: 'project.member_added',
           targetType: 'ProjectMembership',
-          targetId: created.id,
-          metadata: { projectId: project.id, userId: input.targetUserId, role: input.role },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          targetId: membership.userId,
+          metadata: { projectId: access.project.id, role: membership.role },
+          ...context,
         });
         await createNotification(tx, {
           userId: input.targetUserId,
-          type: 'PROJECT_UPDATE',
-          title: `You joined ${project.name}`,
-          body: `Your role in the project is ${String(input.role).toLowerCase().replace('_', ' ')}.`,
-          data: { workspaceId: workspace.id, projectId: project.id, role: input.role },
+          type: 'MEMBERSHIP_CHANGED',
+          title: 'Added to a project',
+          data: { workspaceId: input.workspaceId, projectId: access.project.id },
         });
-        return created;
+        return membership;
       });
-      return toMember(newMembership);
     },
 
-    async updateMemberRole(input, ctx): Promise<ProjectMemberSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
+    async updateMember(
+      input: Input & { projectId: string; targetUserId: string; role: ProjectRole },
+      context: RequestContext,
+    ) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      const { project } = await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
         capability: ProjectCapability.ManageMembers,
       });
-      const target = await client.projectMembership.findUnique({
-        where: { projectId_userId: { projectId: project.id, userId: input.targetUserId } },
-        include: { user: { select: { id: true, name: true, email: true } } },
-      });
-      if (!target)
-        throw new AppError(404, 'MEMBER_NOT_FOUND', 'That user is not a member of this project');
-      if (input.targetUserId === project.ownerId && input.role !== 'PROJECT_MANAGER') {
+      if (access.project.ownerId === input.targetUserId && input.role !== 'PROJECT_MANAGER')
         throw new AppError(
-          403,
-          'OWNER_ROLE_REQUIRED',
-          'The project owner must remain a project manager or ownership must be transferred',
+          409,
+          'PROJECT_OWNER_ROLE_REQUIRED',
+          'The project owner must retain the project manager role',
         );
-      }
-      const updated = await client.$transaction(async (tx) => {
-        const previousRole = target.role;
-        const changed = await tx.projectMembership.update({
-          where: { id: target.id },
-          data: { role: input.role as ProjectRole },
-          include: { user: { select: { id: true, name: true, email: true } } },
+      const existing = await prisma.projectMembership.findUnique({
+        where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
+      });
+      if (!existing)
+        throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
+      return prisma.$transaction(async (tx) => {
+        const row = await tx.projectMembership.update({
+          where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
+          data: { role: input.role },
+          select: { projectId: true, userId: true, role: true, createdAt: true },
         });
         await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
+          workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: ProjectAuditAction.MemberRoleChanged,
+          action: 'project.member_role_changed',
           targetType: 'ProjectMembership',
-          targetId: changed.id,
-          metadata: {
-            projectId: project.id,
-            userId: changed.user.id,
-            previousRole,
-            role: input.role,
-          },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          targetId: row.userId,
+          metadata: { projectId: access.project.id, previousRole: existing.role, role: row.role },
+          ...context,
         });
-        await createNotification(tx, {
-          userId: changed.user.id,
-          type: 'PROJECT_UPDATE',
-          title: `Your role in ${project.name} changed`,
-          body: `Your project role is now ${String(input.role).toLowerCase().replace('_', ' ')}.`,
-          data: { workspaceId: workspace.id, projectId: project.id, role: input.role },
-        });
-        return changed;
+        return row;
       });
-      return toMember(updated);
     },
 
-    async removeMember(input, ctx): Promise<void> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
+    async removeMember(
+      input: Input & { projectId: string; targetUserId: string },
+      context: RequestContext,
+    ) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      const { project } = await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
         capability: ProjectCapability.ManageMembers,
       });
-      if (input.targetUserId === project.ownerId)
+      if (access.project.ownerId === input.targetUserId)
         throw new AppError(
-          403,
-          'OWNER_CANNOT_BE_REMOVED',
-          'Transfer ownership before removing the project owner',
+          409,
+          'PROJECT_OWNER_CANNOT_BE_REMOVED',
+          'Transfer project ownership before removing the project owner',
         );
-      const target = await client.projectMembership.findUnique({
-        where: { projectId_userId: { projectId: project.id, userId: input.targetUserId } },
-        include: { user: { select: { id: true, name: true, email: true } } },
-      });
-      if (!target)
-        throw new AppError(404, 'MEMBER_NOT_FOUND', 'That user is not a member of this project');
-      await client.$transaction(async (tx) => {
-        await tx.projectMembership.delete({ where: { id: target.id } });
+      return prisma.$transaction(async (tx) => {
+        const result = await tx.projectMembership.deleteMany({
+          where: { projectId: access.project.id, userId: input.targetUserId },
+        });
+        if (!result.count)
+          throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
         await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
+          workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: ProjectAuditAction.MemberRemoved,
+          action: 'project.member_removed',
           targetType: 'ProjectMembership',
-          targetId: target.id,
-          metadata: { projectId: project.id, userId: target.user.id, role: target.role },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          targetId: input.targetUserId,
+          metadata: { projectId: access.project.id },
+          ...context,
         });
-        if (target.userId !== input.userId) {
-          await createNotification(tx, {
-            userId: target.userId,
-            type: 'PROJECT_UPDATE',
-            title: `You were removed from ${project.name}`,
-            body: `Your membership in the project ${project.name} was removed.`,
-            data: { workspaceId: workspace.id, projectId: project.id },
-          });
-        }
+        return { projectId: access.project.id, userId: input.targetUserId, removed: true };
       });
     },
 
-    async changeOwner(input, ctx): Promise<ProjectSummary> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
+    async activity(input: Input & { projectId: string; cursor?: Date; limit: number }) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      if (membership.role !== 'OWNER')
-        throw new AppError(
-          403,
-          'INSUFFICIENT_ROLE',
-          'Only the workspace owner can change the project owner',
-        );
-      const project = await client.project.findFirst({
-        where: { id: input.projectId, workspaceId: workspace.id, deletedAt: null },
-      });
-      if (!project) throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
-      const newOwnerId = ((input as any).userId as string) ?? ((input as ChangeProjectOwnerInput).userId);
-      if (newOwnerId === project.ownerId)
-        throw new AppError(400, 'SAME_OWNER', 'The selected user is already the project owner');
-      const newOwnerWs = await client.workspaceMembership.findUnique({
-        where: { workspaceId_userId: { workspaceId: workspace.id, userId: newOwnerId } },
-      });
-      if (!newOwnerWs)
-        throw new AppError(
-          404,
-          'OWNER_NOT_FOUND',
-          'The new owner must be a member of the workspace',
-        );
-      const updated = await client.$transaction(async (tx) => {
-        const changed = await tx.project.update({
-          where: { id: project.id },
-          data: { ownerId: newOwnerId },
-          include: { owner: { select: { id: true, name: true, email: true } } },
-        });
-        const existing = await tx.projectMembership.findUnique({
-          where: { projectId_userId: { projectId: project.id, userId: newOwnerId } },
-        });
-        if (!existing)
-          await tx.projectMembership.create({
-            data: { projectId: project.id, userId: newOwnerId, role: 'PROJECT_MANAGER' },
-          });
-        else if (existing.role !== 'PROJECT_MANAGER')
-          await tx.projectMembership.update({
-            where: { id: existing.id },
-            data: { role: 'PROJECT_MANAGER' },
-          });
-        await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
-          actorId: input.userId,
-          action: ProjectAuditAction.OwnerChanged,
-          targetType: 'Project',
-          targetId: changed.id,
-          metadata: { previousOwnerId: project.ownerId, newOwnerId },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
-        });
-        await createNotification(tx, {
-          userId: newOwnerId,
-          type: 'PROJECT_UPDATE',
-          title: `You own ${changed.name}`,
-          body: `You have been assigned as the owner of the project ${changed.name}.`,
-          data: { workspaceId: workspace.id, projectId: changed.id },
-        });
-        return changed;
-      });
-      const memberCount = await client.projectMembership.count({
-        where: { projectId: updated.id },
-      });
-      const taskCount = await client.task.count({
-        where: { projectId: updated.id, deletedAt: null },
-      });
-      return toSummary(updated, memberCount, taskCount);
-    },
-
-    async activity(input): Promise<ProjectActivityResult> {
-      const { workspace, membership } = await requireWorkspaceAccess(client, {
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      await requireProjectAccess(client, {
-        userId: input.userId,
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        workspaceRole: membership.role,
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
         capability: ProjectCapability.ViewProject,
       });
-      const [rows, total] = await Promise.all([
-        client.auditLog.findMany({
-          where: { targetType: 'Project', targetId: input.projectId },
-          include: { actor: { select: { id: true, name: true, email: true } } },
-          orderBy: { createdAt: 'desc' },
-          skip: (input.page - 1) * input.pageSize,
-          take: input.pageSize,
-        }),
-        client.auditLog.count({ where: { targetType: 'Project', targetId: input.projectId } }),
-      ]);
-      const items: ProjectActivityEntry[] = rows.map((e) => ({
-        id: e.id,
-        action: e.action,
-        targetType: e.targetType,
-        targetId: e.targetId,
-        actor: e.actor ? { id: e.actor.id, name: e.actor.name, email: e.actor.email } : null,
-        metadata: e.metadata,
-        createdAt: e.createdAt,
-      }));
-      return { items, pagination: pagination(input.page, input.pageSize, total) };
+      const rows = await prisma.auditLog.findMany({
+        where: {
+          targetType: 'Project',
+          targetId: access.project.id,
+          ...(input.cursor ? { createdAt: { lt: input.cursor } } : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+        select: { id: true, action: true, actorId: true, metadata: true, createdAt: true },
+      });
+      const hasMore = rows.length > input.limit;
+      const items = rows.slice(0, input.limit);
+      return {
+        items,
+        nextCursor: hasMore ? (items.at(-1)?.createdAt.toISOString() ?? null) : null,
+      };
+    },
+
+    async listMilestones(input: Input & { projectId: string }) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ViewProject,
+      });
+      return prisma.projectMilestone.findMany({
+        where: { projectId: access.project.id },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      });
+    },
+
+    async createMilestone(
+      input: Input & {
+        projectId: string;
+        name: string;
+        description?: string | null;
+        dueDate?: string | null;
+        position?: number;
+      },
+      context: RequestContext,
+    ) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.UpdateProject,
+      });
+      if (access.project.status === 'ARCHIVED')
+        throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+      return prisma.$transaction(async (tx) => {
+        const milestone = await tx.projectMilestone.create({
+          data: {
+            projectId: access.project.id,
+            name: input.name,
+            description: input.description ?? null,
+            dueDate: dateOrNull(input.dueDate) ?? null,
+            position: input.position ?? 0,
+          },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'project.milestone_created',
+          targetType: 'Project',
+          targetId: access.project.id,
+          metadata: { milestoneId: milestone.id, name: milestone.name },
+          ...context,
+        });
+        return milestone;
+      });
+    },
+
+    async updateMilestone(
+      input: Input & {
+        projectId: string;
+        milestoneId: string;
+        name?: string;
+        description?: string | null;
+        dueDate?: string | null;
+        completed?: boolean;
+        position?: number;
+      },
+      context: RequestContext,
+    ) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.UpdateProject,
+      });
+      if (access.project.status === 'ARCHIVED')
+        throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+      const existing = await prisma.projectMilestone.findFirst({
+        where: { id: input.milestoneId, projectId: access.project.id },
+      });
+      if (!existing)
+        throw new AppError(
+          404,
+          'PROJECT_MILESTONE_NOT_FOUND',
+          'That project milestone does not exist',
+        );
+      return prisma.$transaction(async (tx) => {
+        const milestone = await tx.projectMilestone.update({
+          where: { id: existing.id },
+          data: {
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.description !== undefined ? { description: input.description } : {}),
+            ...(input.dueDate !== undefined ? { dueDate: dateOrNull(input.dueDate) } : {}),
+            ...(input.completed !== undefined
+              ? { completedAt: input.completed ? (existing.completedAt ?? new Date()) : null }
+              : {}),
+            ...(input.position !== undefined ? { position: input.position } : {}),
+          },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'project.milestone_updated',
+          targetType: 'Project',
+          targetId: access.project.id,
+          metadata: { milestoneId: milestone.id },
+          ...context,
+        });
+        return milestone;
+      });
+    },
+
+    async deleteMilestone(
+      input: Input & { projectId: string; milestoneId: string },
+      context: RequestContext,
+    ) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        ...input,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        ...input,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.UpdateProject,
+      });
+      if (access.project.status === 'ARCHIVED')
+        throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+      const existing = await prisma.projectMilestone.findFirst({
+        where: { id: input.milestoneId, projectId: access.project.id },
+        select: { id: true },
+      });
+      if (!existing)
+        throw new AppError(
+          404,
+          'PROJECT_MILESTONE_NOT_FOUND',
+          'That project milestone does not exist',
+        );
+      await prisma.$transaction(async (tx) => {
+        await tx.projectMilestone.delete({ where: { id: existing.id } });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'project.milestone_deleted',
+          targetType: 'Project',
+          targetId: access.project.id,
+          metadata: { milestoneId: existing.id },
+          ...context,
+        });
+      });
+      return { id: existing.id, deleted: true };
     },
   };
 }

@@ -7,8 +7,13 @@ import {
   createInvitationService,
   type InvitationService,
 } from '../modules/workspaces/invitation.service';
+import { createJoinRequestRouter } from '../modules/workspaces/join-request.routes';
+import {
+  createJoinRequestService,
+  type JoinRequestService,
+} from '../modules/workspaces/join-request.service';
 import { createUsersRouter } from '../modules/users/users.routes';
-import { createUsersService, type UsersService } from '../modules/users/users.service';
+import type { UsersService } from '../modules/users/users.service';
 import { createWorkspaceRouter } from '../modules/workspaces/workspace.routes';
 import {
   createWorkspaceService,
@@ -20,6 +25,26 @@ import { createProjectRouter } from '../modules/projects/project.routes';
 import { createProjectService, type ProjectService } from '../modules/projects/project.service';
 import type { ReadinessProbe } from '../services/health';
 import { createHealthRouter } from './health';
+import { createBillingRouter } from '../modules/billing/billing.routes';
+import { createBillingService, type BillingService } from '../modules/billing/billing.service';
+import { createOrganizationRouter } from '../modules/organizations/organization.routes';
+import { createProjectOrganizationRouter } from '../modules/projects/organization-access.routes';
+import { createProjectRouter } from '../modules/projects/project.routes';
+import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
+import { createChannelRouter } from '../modules/channels/channel.routes';
+import { createTaskRouter } from '../modules/tasks/task.routes';
+import { createMessageRouter } from '../modules/messaging/message.routes';
+import { createNotificationRouter } from '../modules/notifications/notification.routes';
+import { createFileRouter } from '../modules/files/file.routes';
+import { createDocumentRouter } from '../modules/documents/document.routes';
+import { createCalendarRouter } from '../modules/calendar/calendar.routes';
+import { createMeetingRouter } from '../modules/meetings/meeting.routes';
+import { createFormRouter } from '../modules/forms/form.routes';
+import { createSearchRouter } from '../modules/search/search.routes';
+import { createIntegrationRouter } from '../modules/integrations/integration.routes';
+import { createAutomationRouter } from '../modules/automation/automation.routes';
+import { createAiRouter } from '../modules/ai/ai.routes';
+import { createAuditRouter } from '../modules/audit/audit.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -28,30 +53,77 @@ interface ApiRouterOptions {
   usersService?: UsersService;
   workspaceService?: WorkspaceService;
   invitationService?: InvitationService;
+  joinRequestService?: JoinRequestService;
   teamService?: TeamService;
-  projectService?: ProjectService;
+  billingService?: BillingService;
 }
 
 export function createApiRouter({
   config,
   readinessProbe,
   authService = createAuthService(config),
-  usersService = createUsersService(),
+  usersService,
   workspaceService = createWorkspaceService(config),
   invitationService = createInvitationService(config),
+  joinRequestService = createJoinRequestService(config),
   teamService = createTeamService(),
-  projectService = createProjectService(),
+  billingService = createBillingService(config),
 }: ApiRouterOptions): Router {
   const router = Router();
 
   router.use('/health', createHealthRouter({ config, readinessProbe }));
+  router.use('/billing', createBillingRouter({ config, service: billingService }));
+  router.use('/privacy-requests', createPrivacyRouter({ config }));
   router.use('/auth', createAuthRouter({ config, service: authService }));
-  router.use('/users', createUsersRouter({ config, service: usersService }));
+  router.use(
+    '/users',
+    createUsersRouter({ config, ...(usersService ? { service: usersService } : {}) }),
+  );
+  // Discovery and join routes must be registered before the workspace router
+  // so `/workspaces/discover` is not read as a workspace id.
+  router.use('/workspaces', createJoinRequestRouter({ config, service: joinRequestService }));
   router.use(
     '/workspaces',
     createWorkspaceRouter({ config, service: workspaceService, invitationService }),
   );
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
+  router.use('/workspaces/:workspaceId/projects', createProjectOrganizationRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects', createProjectRouter({ config }));
+  // Tasks are nested under projects:
+  // /workspaces/:workspaceId/projects/:projectId/tasks/…
+  // The task router uses mergeParams to access workspaceId and projectId.
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/tasks',
+    createTaskRouter({ config }),
+  );
+  router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
+  // Messages are nested under channels:
+  // /workspaces/:workspaceId/channels/:channelId/messages/…
+  // The message router uses mergeParams to access workspaceId and channelId.
+  router.use('/workspaces/:workspaceId/channels', createMessageRouter({ config }));
+  // Notifications are user-scoped, not workspace-scoped
+  router.use('/notifications', createNotificationRouter({ config }));
+  // Search is user-scoped
+  router.use('/search', createSearchRouter({ config }));
+  // Integrations are user-scoped (optionally workspace-scoped via query)
+  router.use('/integrations', createIntegrationRouter({ config }));
+  // Automations are workspace-scoped
+  router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));
+  // AI service proxy (Phases 21-23)
+  router.use('/ai', createAiRouter({ config }));
+  // Workspace audit log API (Phase 26)
+  router.use('/workspaces/:workspaceId/audit', createAuditRouter({ config }));
+  // Files are workspace-scoped
+  router.use('/workspaces/:workspaceId/files', createFileRouter({ config }));
+  // Documents are workspace-scoped
+  router.use('/workspaces/:workspaceId/documents', createDocumentRouter({ config }));
+  // Calendar events are workspace-scoped
+  router.use('/workspaces/:workspaceId/events', createCalendarRouter({ config }));
+  // Meetings are workspace-scoped
+  router.use('/workspaces/:workspaceId/meetings', createMeetingRouter({ config }));
+  // Forms are workspace-scoped
+  router.use('/workspaces/:workspaceId/forms', createFormRouter({ config }));
+  router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
   router.use('/workspaces/:workspaceId/teams', createTeamRouter({ config, service: teamService }));

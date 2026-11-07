@@ -18,6 +18,7 @@ export const WorkspaceAuditAction = {
   WorkspaceCreated: 'workspace.created',
   WorkspaceUpdated: 'workspace.updated',
   WorkspaceArchived: 'workspace.archived',
+  WorkspaceRestored: 'workspace.restored',
   WorkspaceDeleted: 'workspace.deleted',
   OwnershipTransferred: 'workspace.ownership_transferred',
   MemberAdded: 'workspace.member_added',
@@ -27,6 +28,20 @@ export const WorkspaceAuditAction = {
   InvitationResent: 'workspace.invitation_resent',
   InvitationRevoked: 'workspace.invitation_revoked',
   InvitationAccepted: 'workspace.invitation_accepted',
+  InvitationDeclined: 'workspace.invitation_declined',
+  JoinRequestCreated: 'workspace.join_request_created',
+  JoinRequestApproved: 'workspace.join_request_approved',
+  JoinRequestRejected: 'workspace.join_request_rejected',
+  JoinRequestWithdrawn: 'workspace.join_request_withdrawn',
+  JoinCodeRotated: 'workspace.join_code_rotated',
+  JoinCodeDisabled: 'workspace.join_code_disabled',
+  MemberSuspended: 'workspace.member_suspended',
+  MemberRestored: 'workspace.member_restored',
+  DepartmentCreated: 'institution.department_created',
+  DepartmentUpdated: 'institution.department_updated',
+  DepartmentMemberAdded: 'institution.department_member_added',
+  DepartmentMemberRemoved: 'institution.department_member_removed',
+  TaskReassigned: 'task.reassigned',
 } as const;
 
 export type WorkspaceAuditActionValue =
@@ -45,18 +60,41 @@ export const TeamAuditAction = {
 
 export type TeamAuditActionValue = (typeof TeamAuditAction)[keyof typeof TeamAuditAction];
 
-export const ProjectAuditAction = {
-  ProjectCreated: 'project.created',
-  ProjectUpdated: 'project.updated',
-  ProjectArchived: 'project.archived',
-  ProjectDeleted: 'project.deleted',
-  MemberAdded: 'project.member_added',
-  MemberRoleChanged: 'project.member_role_changed',
-  MemberRemoved: 'project.member_removed',
-  OwnerChanged: 'project.owner_changed',
+export const ChannelAuditAction = {
+  Created: 'channel.created', Updated: 'channel.updated', Archived: 'channel.archived',
+  Deleted: 'channel.deleted', MemberAdded: 'channel.member_added', MemberRemoved: 'channel.member_removed',
 } as const;
 
-export type ProjectAuditActionValue = (typeof ProjectAuditAction)[keyof typeof ProjectAuditAction];
+export const TaskAuditAction = {
+  TaskCreated: 'task.created',
+  TaskUpdated: 'task.updated',
+  TaskDeleted: 'task.deleted',
+  TaskArchived: 'task.archived',
+  TaskRestored: 'task.restored',
+  TaskCompleted: 'task.completed',
+  TaskReopened: 'task.reopened',
+  AssigneeAdded: 'task.assignee_added',
+  AssigneeRemoved: 'task.assignee_removed',
+  DependencyAdded: 'task.dependency_added',
+  DependencyRemoved: 'task.dependency_removed',
+  CommentCreated: 'task.comment_created',
+  CommentUpdated: 'task.comment_updated',
+  CommentDeleted: 'task.comment_deleted',
+} as const;
+
+export type TaskAuditActionValue = (typeof TaskAuditAction)[keyof typeof TaskAuditAction];
+
+export const MessageAuditAction = {
+  MessageCreated: 'message.created',
+  MessageEdited: 'message.edited',
+  MessageDeleted: 'message.deleted',
+  MessagePinned: 'message.pinned',
+  MessageUnpinned: 'message.unpinned',
+  ReactionAdded: 'message.reaction_added',
+  ReactionRemoved: 'message.reaction_removed',
+} as const;
+
+export type MessageAuditActionValue = (typeof MessageAuditAction)[keyof typeof MessageAuditAction];
 
 export interface AuditEventInput {
   workspaceId?: string | null;

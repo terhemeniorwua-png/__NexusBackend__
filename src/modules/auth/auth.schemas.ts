@@ -81,9 +81,58 @@ export const loginSchema = z
   })
   .strict();
 
+const totpCodeSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{6}$/, 'Enter a six-digit authentication code');
+const recoveryCodeSchema = z.string().trim().min(8).max(32);
+
+export const twoFactorChallengeSchema = z
+  .object({
+    challengeToken: z.string().trim().min(20).max(1024),
+    code: totpCodeSchema.optional(),
+    recoveryCode: recoveryCodeSchema.optional(),
+  })
+  .strict()
+  .refine((value) => Boolean(value.code) !== Boolean(value.recoveryCode), {
+    message: 'Provide either a TOTP code or a recovery code',
+    path: ['code'],
+  });
+export const twoFactorConfirmSchema = z.object({ code: totpCodeSchema }).strict();
+export const twoFactorDisableSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(PASSWORD_MAX_LENGTH),
+    code: totpCodeSchema.optional(),
+    recoveryCode: recoveryCodeSchema.optional(),
+  })
+  .strict()
+  .refine((value) => Boolean(value.code) !== Boolean(value.recoveryCode), {
+    message: 'Provide either a TOTP code or a recovery code',
+    path: ['code'],
+  });
+export const recoveryCodeRegenerateSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(PASSWORD_MAX_LENGTH).optional(),
+    code: totpCodeSchema.optional(),
+    recoveryCode: recoveryCodeSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) => {
+      const password = Boolean(value.currentPassword);
+      const proof = Boolean(value.code) !== Boolean(value.recoveryCode);
+      return password !== proof && !(value.code && value.recoveryCode);
+    },
+    {
+      message: 'Provide either your current password or one verification code',
+      path: ['currentPassword'],
+    },
+  );
+
 export const verifyEmailSchema = z
   .object({
-    token: z.string().trim().min(20, 'The verification token is invalid').max(512),
+    email: emailSchema,
+    code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit verification code'),
   })
   .strict();
 
@@ -101,8 +150,9 @@ export const passwordResetRequestSchema = z
 
 export const passwordResetSchema = z
   .object({
-    token: z.string().trim().min(20, 'The reset token is invalid').max(512),
-    password: passwordSchema,
+    email: emailSchema,
+    code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit reset code'),
+    newPassword: passwordSchema,
   })
   .strict();
 
@@ -156,6 +206,8 @@ export const refreshSchema = z
     refreshToken: z.string().trim().min(20).max(512).optional(),
   })
   .strict();
+
+export const googleExchangeSchema = z.object({ code: z.string().trim().min(32).max(256) }).strict();
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;

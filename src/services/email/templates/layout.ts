@@ -30,6 +30,7 @@ export interface EmailDocument {
   heading: string;
   preheader?: string | undefined;
   paragraphs: string[];
+  code?: string;
   action?: EmailAction | undefined;
   note?: string | undefined;
   footerNote?: string | undefined;
@@ -123,6 +124,9 @@ export function renderEmailHtml(document: EmailDocument, brand: EmailBrand): str
         `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:${COLORS.text};">${escapeHtml(paragraph)}</p>`,
     )
     .join('\n              ');
+  const codeBlock = document.code
+    ? `<p style="margin:8px 32px 20px;text-align:center;font-size:34px;line-height:1.3;letter-spacing:8px;font-weight:700;color:${COLORS.accent};">${escapeHtml(document.code)}</p>`
+    : '';
 
   const note = document.note
     ? `<p style="margin:0 0 14px;font-size:13px;line-height:1.6;color:${COLORS.muted};">${escapeHtml(document.note)}</p>`
@@ -149,7 +153,7 @@ export function renderEmailHtml(document: EmailDocument, brand: EmailBrand): str
             </tr>
             <tr>
               <td style="padding:0 32px;">
-                ${paragraphs}
+              ${paragraphs}${codeBlock}
                 ${note}
               </td>
             </tr>
@@ -179,6 +183,11 @@ export function renderEmailText(document: EmailDocument, brand: EmailBrand): str
 
   for (const paragraph of document.paragraphs) {
     lines.push(toPlainText(paragraph));
+    lines.push('');
+  }
+
+  if (document.code) {
+    lines.push(document.code);
     lines.push('');
   }
 

@@ -1,48 +1,44 @@
 import { Router, type Request } from 'express';
+import type { ProjectRole } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
-  addProjectMemberSchema,
-  changeProjectOwnerSchema,
   createProjectSchema,
   listProjectsQuerySchema,
   projectActivityQuerySchema,
   projectMemberParamsSchema,
+  projectMemberSchema,
   projectParamsSchema,
-  updateProjectMemberRoleSchema,
+  projectMilestoneParamsSchema,
+  projectWorkspaceParamsSchema,
+  createProjectMilestoneSchema,
+  updateProjectMilestoneSchema,
+  transferProjectOwnershipSchema,
+  updateProjectMemberSchema,
   updateProjectSchema,
-  workspaceIdParamsSchema,
-  type AddProjectMemberInput,
-  type ChangeProjectOwnerInput,
   type CreateProjectInput,
   type ListProjectsQuery,
-  type ProjectActivityQuery,
   type UpdateProjectInput,
-  type UpdateProjectMemberRoleInput,
+  type TransferProjectOwnershipInput,
 } from './project.schemas';
-import { createProjectService, type ProjectService } from './project.service';
+import { createProjectService } from './project.service';
 
 export interface ProjectRouterOptions {
   config: AppConfig;
-  service?: ProjectService;
+  service?: ReturnType<typeof createProjectService>;
 }
 
 function context(req: Request) {
-  return {
-    ip: req.ip,
-    userAgent: req.header('user-agent'),
-  };
+  return { ip: req.ip, userAgent: req.header('user-agent') };
 }
 
-function requireUser(req: Request): string {
-  const auth = req.auth;
-  if (!auth) {
+function userId(req: Request): string {
+  if (!req.auth)
     throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-  }
-  return auth.userId;
+  return req.auth.userId;
 }
 
 export function createProjectRouter({
@@ -57,24 +53,11 @@ export function createProjectRouter({
     '/',
     requireAuth,
     requireActiveAccount,
-    validate({ params: workspaceIdParamsSchema, query: listProjectsQuerySchema }),
+    validate({ params: projectWorkspaceParamsSchema, query: listProjectsQuerySchema }),
     async (req, res) => {
-      const { workspaceId } = req.validated?.params as { workspaceId: string };
-      const query = req.validated?.query as ListProjectsQuery;
-      const result = await service.list({ userId: requireUser(req), workspaceId, ...query });
-      sendSuccess(res, result);
-    },
-  );
-
-  router.get(
-    '/overview',
-    requireAuth,
-    requireActiveAccount,
-    validate({ params: workspaceIdParamsSchema }),
-    async (req, res) => {
-      const { workspaceId } = req.validated?.params as { workspaceId: string };
-      const overview = await service.overview({ userId: requireUser(req), workspaceId });
-      sendSuccess(res, overview);
+      const { workspaceId } = req.validated!.params as { workspaceId: string };
+      const query = req.validated!.query as ListProjectsQuery;
+      sendSuccess(res, await service.list({ userId: userId(req), workspaceId, ...query }));
     },
   );
 
@@ -82,97 +65,162 @@ export function createProjectRouter({
     '/',
     requireAuth,
     requireActiveAccount,
-    validate({ params: workspaceIdParamsSchema, body: createProjectSchema }),
+    validate({ params: projectWorkspaceParamsSchema, body: createProjectSchema }),
     async (req, res) => {
-      const { workspaceId } = req.validated?.params as { workspaceId: string };
-      const input = req.validated?.body as CreateProjectInput;
-      const project = await service.create(
-        { userId: requireUser(req), workspaceId, ...input },
-        context(req),
+      const { workspaceId } = req.validated!.params as { workspaceId: string };
+      const body = req.validated!.body as CreateProjectInput;
+      sendSuccess(
+        res,
+        await service.create({ userId: userId(req), workspaceId, ...body }, context(req)),
+        201,
       );
-      sendSuccess(res, project, 201);
     },
   );
 
   router.get(
-    '/:projectId',
+    '/:projectId/activity',
     requireAuth,
     requireActiveAccount,
-    validate({ params: projectParamsSchema }),
+    validate({ params: projectParamsSchema, query: projectActivityQuerySchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
       };
-      const project = await service.get({ userId: requireUser(req), workspaceId, projectId });
-      sendSuccess(res, project);
+      const query = req.validated!.query as { cursor?: string; limit: number };
+      sendSuccess(
+        res,
+        await service.activity({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          cursor: query.cursor ? new Date(query.cursor) : undefined,
+          limit: query.limit,
+        }),
+      );
+    },
+  );
+
+  router.post(
+    '/:projectId/transfer-ownership',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema, body: transferProjectOwnershipSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      const body = req.validated!.body as TransferProjectOwnershipInput;
+      sendSuccess(
+        res,
+        await service.transferOwnership(
+          { userId: userId(req), workspaceId, projectId, ...body },
+          context(req),
+        ),
+      );
     },
   );
 
   router.get(
-    '/:projectId/detail',
+    '/:projectId/milestones',
     requireAuth,
     requireActiveAccount,
     validate({ params: projectParamsSchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
       };
-      const detail = await service.getDetail({ userId: requireUser(req), workspaceId, projectId });
-      sendSuccess(res, detail);
+      sendSuccess(
+        res,
+        await service.listMilestones({ userId: userId(req), workspaceId, projectId }),
+      );
+    },
+  );
+
+  router.post(
+    '/:projectId/milestones',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema, body: createProjectMilestoneSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      sendSuccess(
+        res,
+        await service.createMilestone(
+          {
+            userId: userId(req),
+            workspaceId,
+            projectId,
+            ...(req.validated!.body as {
+              name: string;
+              description?: string | null;
+              dueDate?: string | null;
+              position?: number;
+            }),
+          },
+          context(req),
+        ),
+        201,
+      );
     },
   );
 
   router.patch(
-    '/:projectId',
+    '/:projectId/milestones/:milestoneId',
     requireAuth,
     requireActiveAccount,
-    validate({ params: projectParamsSchema, body: updateProjectSchema }),
+    validate({ params: projectMilestoneParamsSchema, body: updateProjectMilestoneSchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId, milestoneId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
+        milestoneId: string;
       };
-      const input = req.validated?.body as UpdateProjectInput;
-      const project = await service.update(
-        { userId: requireUser(req), workspaceId, projectId, ...input },
-        context(req),
+      sendSuccess(
+        res,
+        await service.updateMilestone(
+          {
+            userId: userId(req),
+            workspaceId,
+            projectId,
+            milestoneId,
+            ...(req.validated!.body as {
+              name?: string;
+              description?: string | null;
+              dueDate?: string | null;
+              completed?: boolean;
+              position?: number;
+            }),
+          },
+          context(req),
+        ),
       );
-      sendSuccess(res, project);
-    },
-  );
-
-  router.post(
-    '/:projectId/archive',
-    requireAuth,
-    requireActiveAccount,
-    validate({ params: projectParamsSchema }),
-    async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
-        workspaceId: string;
-        projectId: string;
-      };
-      const project = await service.archive(
-        { userId: requireUser(req), workspaceId, projectId },
-        context(req),
-      );
-      sendSuccess(res, project);
     },
   );
 
   router.delete(
-    '/:projectId',
+    '/:projectId/milestones/:milestoneId',
     requireAuth,
     requireActiveAccount,
-    validate({ params: projectParamsSchema }),
+    validate({ params: projectMilestoneParamsSchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId, milestoneId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
+        milestoneId: string;
       };
-      await service.remove({ userId: requireUser(req), workspaceId, projectId }, context(req));
-      sendSuccess(res, { id: projectId, deleted: true });
+      sendSuccess(
+        res,
+        await service.deleteMilestone(
+          { userId: userId(req), workspaceId, projectId, milestoneId },
+          context(req),
+        ),
+      );
     },
   );
 
@@ -182,16 +230,11 @@ export function createProjectRouter({
     requireActiveAccount,
     validate({ params: projectParamsSchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
       };
-      const members = await service.listMembers({
-        userId: requireUser(req),
-        workspaceId,
-        projectId,
-      });
-      sendSuccess(res, members);
+      sendSuccess(res, await service.listMembers({ userId: userId(req), workspaceId, projectId }));
     },
   );
 
@@ -199,24 +242,27 @@ export function createProjectRouter({
     '/:projectId/members',
     requireAuth,
     requireActiveAccount,
-    validate({ params: projectParamsSchema, body: addProjectMemberSchema }),
+    validate({ params: projectParamsSchema, body: projectMemberSchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
       };
-      const input = req.validated?.body as AddProjectMemberInput;
-      const member = await service.addMember(
-        {
-          userId: requireUser(req),
-          workspaceId,
-          projectId,
-          targetUserId: (input as AddProjectMemberInput).userId,
-          role: (input as AddProjectMemberInput).role,
-        },
-        context(req),
+      const body = req.validated!.body as { userId: string; role: ProjectRole };
+      sendSuccess(
+        res,
+        await service.addMember(
+          {
+            userId: userId(req),
+            workspaceId,
+            projectId,
+            targetUserId: body.userId,
+            role: body.role,
+          },
+          context(req),
+        ),
+        201,
       );
-      sendSuccess(res, member, 201);
     },
   );
 
@@ -224,19 +270,21 @@ export function createProjectRouter({
     '/:projectId/members/:userId',
     requireAuth,
     requireActiveAccount,
-    validate({ params: projectMemberParamsSchema, body: updateProjectMemberRoleSchema }),
+    validate({ params: projectMemberParamsSchema, body: updateProjectMemberSchema }),
     async (req, res) => {
       const {
         workspaceId,
         projectId,
         userId: targetUserId,
-      } = req.validated?.params as { workspaceId: string; projectId: string; userId: string };
-      const input = req.validated?.body as UpdateProjectMemberRoleInput;
-      const member = await service.updateMemberRole(
-        { userId: requireUser(req), workspaceId, projectId, targetUserId, ...input },
-        context(req),
+      } = req.validated!.params as { workspaceId: string; projectId: string; userId: string };
+      const body = req.validated!.body as { role: ProjectRole };
+      sendSuccess(
+        res,
+        await service.updateMember(
+          { userId: userId(req), workspaceId, projectId, targetUserId, role: body.role },
+          context(req),
+        ),
       );
-      sendSuccess(res, member);
     },
   );
 
@@ -250,53 +298,100 @@ export function createProjectRouter({
         workspaceId,
         projectId,
         userId: targetUserId,
-      } = req.validated?.params as { workspaceId: string; projectId: string; userId: string };
-      await service.removeMember(
-        { userId: requireUser(req), workspaceId, projectId, targetUserId },
-        context(req),
+      } = req.validated!.params as { workspaceId: string; projectId: string; userId: string };
+      sendSuccess(
+        res,
+        await service.removeMember(
+          { userId: userId(req), workspaceId, projectId, targetUserId },
+          context(req),
+        ),
       );
-      sendSuccess(res, { userId: targetUserId, removed: true });
     },
   );
 
-  router.patch(
-    '/:projectId/owner',
+  router.post(
+    '/:projectId/archive',
     requireAuth,
     requireActiveAccount,
-    validate({ params: projectParamsSchema, body: changeProjectOwnerSchema }),
+    validate({ params: projectParamsSchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
       };
-      const input = req.validated?.body as ChangeProjectOwnerInput;
-      const callerId = requireUser(req);
-      const project = await service.changeOwner(
-        { userId: callerId, workspaceId, projectId } as any,
-        { ...context(req), userId: input.userId } as any,
+      sendSuccess(
+        res,
+        await service.archive({ userId: userId(req), workspaceId, projectId }, context(req)),
       );
-      sendSuccess(res, project);
+    },
+  );
+
+  router.post(
+    '/:projectId/restore',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      sendSuccess(
+        res,
+        await service.restore({ userId: userId(req), workspaceId, projectId }, context(req)),
+      );
     },
   );
 
   router.get(
-    '/:projectId/activity',
+    '/:projectId',
     requireAuth,
     requireActiveAccount,
-    validate({ params: projectParamsSchema, query: projectActivityQuerySchema }),
+    validate({ params: projectParamsSchema }),
     async (req, res) => {
-      const { workspaceId, projectId } = req.validated?.params as {
+      const { workspaceId, projectId } = req.validated!.params as {
         workspaceId: string;
         projectId: string;
       };
-      const query = req.validated?.query as ProjectActivityQuery;
-      const activity = await service.activity({
-        userId: requireUser(req),
-        workspaceId,
-        projectId,
-        ...query,
-      });
-      sendSuccess(res, activity);
+      sendSuccess(res, await service.get({ userId: userId(req), workspaceId, projectId }));
+    },
+  );
+
+  router.patch(
+    '/:projectId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema, body: updateProjectSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      const body = req.validated!.body as UpdateProjectInput;
+      sendSuccess(
+        res,
+        await service.update(
+          { userId: userId(req), workspaceId, projectId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.delete(
+    '/:projectId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      sendSuccess(
+        res,
+        await service.remove({ userId: userId(req), workspaceId, projectId }, context(req)),
+      );
     },
   );
 

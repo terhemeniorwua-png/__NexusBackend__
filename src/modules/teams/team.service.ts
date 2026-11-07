@@ -6,6 +6,8 @@ import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
 import {
   TeamCapability,
+  DepartmentCapability,
+  requireDepartmentAccess,
   requireTeamAccess,
   requireWorkspaceAccess,
   WorkspaceCapability,
@@ -105,6 +107,7 @@ function toSummary(team: TeamWithLead, memberCount: number): TeamSummary {
     workspaceId: team.workspaceId,
     name: team.name,
     description: team.description,
+    departmentId: team.departmentId,
     status: team.status,
     leadId: team.leadId,
     lead: team.lead ? { id: team.lead.id, name: team.lead.name, email: team.lead.email } : null,
@@ -184,6 +187,15 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         }
       }
 
+      if (input.departmentId) {
+        await requireDepartmentAccess(client, {
+          userId: input.userId,
+          workspaceId: workspace.id,
+          departmentId: input.departmentId,
+          capability: DepartmentCapability.ManageTeams,
+        });
+      }
+
       const creatorRole: TeamRole =
         membership.role === 'OWNER' || membership.role === 'PROJECT_MANAGER'
           ? 'TEAM_LEAD'
@@ -195,6 +207,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
             workspaceId: workspace.id,
             name: input.name,
             ...(input.description !== undefined ? { description: input.description } : {}),
+            ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
             ...(input.leadId !== undefined ? { leadId: input.leadId } : {}),
           },
           include: {
@@ -306,7 +319,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         capability: WorkspaceCapability.ViewWorkspace,
       });
 
-      await requireTeamAccess(client, {
+      const { team } = await requireTeamAccess(client, {
         userId: input.userId,
         workspaceId: workspace.id,
         teamId: input.teamId,
@@ -314,17 +327,44 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         capability: TeamCapability.UpdateTeam,
       });
 
+      if (input.departmentId !== undefined && input.departmentId !== team.departmentId) {
+        if (team.departmentId) {
+          await requireDepartmentAccess(client, {
+            userId: input.userId,
+            workspaceId: workspace.id,
+            departmentId: team.departmentId,
+            capability: DepartmentCapability.ManageTeams,
+          });
+        }
+        if (input.departmentId) {
+          await requireDepartmentAccess(client, {
+            userId: input.userId,
+            workspaceId: workspace.id,
+            departmentId: input.departmentId,
+            capability: DepartmentCapability.ManageTeams,
+          });
+        }
+      }
+
       const updatedTeam = await client.$transaction(async (tx) => {
         const changed = await tx.team.update({
           where: { id: input.teamId },
           data: {
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
+            ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
           },
           include: {
             lead: { select: { id: true, name: true, email: true } },
           },
         });
+
+        if (input.departmentId !== undefined && input.departmentId !== team.departmentId) {
+          await tx.project.updateMany({
+            where: { teamId: team.id, departmentId: team.departmentId },
+            data: { departmentId: changed.departmentId },
+          });
+        }
 
         await recordAuditEvent(tx, {
           workspaceId: workspace.id,
@@ -335,6 +375,9 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
           metadata: {
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
+            ...(input.departmentId !== undefined
+              ? { previousDepartmentId: team.departmentId, departmentId: changed.departmentId }
+              : {}),
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,

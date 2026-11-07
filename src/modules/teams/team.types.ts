@@ -12,6 +12,7 @@ export interface TeamSummary {
   workspaceId: string;
   name: string;
   description: string | null;
+  departmentId: string | null;
   status: 'ACTIVE' | 'ARCHIVED';
   leadId: string | null;
   lead: TeamLeadSummary | null;

@@ -1,9 +1,14 @@
 import type {
   InvitationStatus,
   InvitationType,
+  JoinRequestStatus,
+  OrganizationRole,
   UserStatus,
+  WorkspaceMembershipStatus,
   WorkspaceRole,
   WorkspaceStatus,
+  WorkspaceType,
+  WorkspaceVisibility,
 } from '@prisma/client';
 
 /**
@@ -18,10 +23,16 @@ export interface WorkspaceSummary {
   name: string;
   slug: string;
   description: string | null;
+  type: WorkspaceType;
+  isPersonal: boolean;
+  visibility: WorkspaceVisibility;
   status: WorkspaceStatus;
   ownerId: string;
   /** The role of the caller inside this workspace. */
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
+  /** True when an administrator has enabled a join code. */
+  joinCodeEnabled: boolean;
   memberCount: number;
   projectCount: number;
   teamCount: number;
@@ -36,9 +47,20 @@ export interface WorkspaceMember {
   email: string;
   status: UserStatus;
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
+  membershipStatus: WorkspaceMembershipStatus;
   joinedAt: Date;
   /** True for the account that owns the workspace. */
   owner: boolean;
+}
+
+export interface DepartmentSummary {
+  id: string;
+  workspaceId: string;
+  name: string;
+  memberCount: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface InvitationSummary {
@@ -47,11 +69,13 @@ export interface InvitationSummary {
   workspaceName: string;
   email: string;
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
   type: InvitationType;
   status: InvitationStatus;
   invitedBy: { id: string; name: string };
   expiresAt: Date;
   acceptedAt: Date | null;
+  declinedAt: Date | null;
   revokedAt: Date | null;
   createdAt: Date;
 }
@@ -68,6 +92,7 @@ export interface InvitationPreview {
   workspace: { id: string; name: string; slug: string };
   invitedBy: { id: string; name: string };
   role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
   status: InvitationStatus;
   expiresAt: Date;
   /** The address the invitation was sent to, with the local part masked. */
@@ -80,4 +105,39 @@ export interface InvitationResult {
   invitation: InvitationSummary;
   /** False when the invitation could not be handed to the mail provider. */
   emailSent: boolean;
+}
+
+/** A workspace shown in organisation discovery. */
+export interface DiscoveredWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  type: WorkspaceType;
+  memberCount: number;
+}
+
+export interface JoinRequestSummary {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  status: JoinRequestStatus;
+  role: WorkspaceRole;
+  organizationRole: OrganizationRole | null;
+  teamId: string | null;
+  message: string | null;
+  reviewedBy: { id: string; name: string } | null;
+  reviewedAt: Date | null;
+  decisionNote: string | null;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
+export interface JoinCodeResult {
+  workspaceId: string;
+  code: string;
+  link: string;
 }

@@ -3,8 +3,10 @@ import type { AppConfig } from '../../config/env';
 import { hashSecret } from '../../utils/crypto';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import type { EmailTransport } from '../providers/email';
+import { redactEmailAddresses, summarizeErrorForLog } from './log-privacy';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
+import { decryptOtpBody, encryptOtpBody } from './otp-body-encryption';
 
 /**
  * Transactional email outbox.
@@ -63,6 +65,10 @@ interface ClaimedDelivery {
   failedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+function isOtpTemplate(template: string): boolean {
+  return template === 'account_verification' || template === 'password_reset';
 }
 
 /**
@@ -129,8 +135,14 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
           fromAddress,
           template: message.template,
           subject: message.subject,
-          textBody: message.text,
-          htmlBody: message.html ?? null,
+          textBody: isOtpTemplate(message.template)
+            ? encryptOtpBody(message.text, deps.config.otpHmacSecret)
+            : message.text,
+          htmlBody: message.html
+            ? isOtpTemplate(message.template)
+              ? encryptOtpBody(message.html, deps.config.otpHmacSecret)
+              : message.html
+            : null,
           headers: { 'X-Nexus-Delivery-Id': deliveryId },
           ...(message.metadata ? { metadata: message.metadata as Prisma.InputJsonValue } : {}),
           provider: transport.provider,
@@ -162,7 +174,6 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
     log.info('email_delivery_queued', {
       deliveryId,
       template: message.template,
-      to: message.to,
     });
 
     return { accepted: true, providerMessageId: deliveryId };
@@ -179,7 +190,9 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       WHERE d."id" IN (
         SELECT "id"
         FROM "EmailDelivery"
-        WHERE "status" = 'QUEUED' AND "nextAttemptAt" <= NOW()
+        WHERE "status" = 'QUEUED'
+          AND "nextAttemptAt" <= NOW()
+          AND "attempts" < "maxAttempts"
         ORDER BY "nextAttemptAt" ASC
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
@@ -193,6 +206,23 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
     `;
 
     return rows;
+  }
+
+  /**
+   * Moves rows that already used every attempt out of the queue before the
+   * claim runs. Older code could leave an exhausted row in `QUEUED`, and a
+   * row in that state must never be handed to the provider again.
+   */
+  async function failExhaustedQueued(): Promise<number> {
+    return client.$executeRaw`
+      UPDATE "EmailDelivery"
+      SET "status" = 'FAILED',
+          "lastError" = COALESCE("lastError", 'Retry limit reached before delivery'),
+          "lastErrorCode" = COALESCE("lastErrorCode", 'MAX_ATTEMPTS_EXHAUSTED'),
+          "failedAt" = COALESCE("failedAt", NOW()),
+          "updatedAt" = NOW()
+      WHERE "status" = 'QUEUED' AND "attempts" >= "maxAttempts"
+    `;
   }
 
   async function markSuppressed(delivery: ClaimedDelivery): Promise<void> {
@@ -249,6 +279,47 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
   }
 
   /**
+   * Applies the single retry decision used by every failure path.
+   *
+   * The attempt counter is incremented atomically when the row is claimed, so
+   * this function never resets it. It schedules a backoff only while attempts
+   * remain and otherwise moves the row to the terminal `FAILED` state.
+   */
+  async function retryOrFail(
+    delivery: ClaimedDelivery,
+    error: string,
+    errorCode: string,
+  ): Promise<'retried' | 'failed'> {
+    if (delivery.attempts >= delivery.maxAttempts) {
+      await markFailed(delivery, error, errorCode);
+
+      log.error('email_delivery_failed', {
+        deliveryId: delivery.id,
+        template: delivery.template,
+        attempt: delivery.attempts,
+        maxAttempts: delivery.maxAttempts,
+        errorCode: redactEmailAddresses(errorCode),
+      });
+
+      return 'failed';
+    }
+
+    const delay = retryDelayMs(delivery.attempts, deps.config);
+    await markRetry(delivery, error, errorCode, delay);
+
+    log.warn('email_delivery_retry_scheduled', {
+      deliveryId: delivery.id,
+      template: delivery.template,
+      attempt: delivery.attempts,
+      maxAttempts: delivery.maxAttempts,
+      retryInMs: delay,
+      errorCode: redactEmailAddresses(errorCode),
+    });
+
+    return 'retried';
+  }
+
+  /**
    * Sends one claimed delivery and records the outcome.
    */
   async function deliver(
@@ -270,8 +341,14 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       from: delivery.fromAddress,
       replyTo: deps.config.emailReplyToAddress || undefined,
       subject: delivery.subject,
-      text: delivery.textBody,
-      html: delivery.htmlBody ?? undefined,
+      text: isOtpTemplate(delivery.template)
+        ? decryptOtpBody(delivery.textBody, deps.config.otpHmacSecret)
+        : delivery.textBody,
+      html: delivery.htmlBody
+        ? isOtpTemplate(delivery.template)
+          ? decryptOtpBody(delivery.htmlBody, deps.config.otpHmacSecret)
+          : delivery.htmlBody
+        : undefined,
       headers: toHeaderRecord(delivery.headers),
     });
 
@@ -289,20 +366,8 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
     const error = result.error ?? 'Unknown email delivery failure';
     const errorCode = result.errorCode ?? 'UNKNOWN';
 
-    if (result.retryable && delivery.attempts < delivery.maxAttempts) {
-      const delay = retryDelayMs(delivery.attempts, deps.config);
-      await markRetry(delivery, error, errorCode, delay);
-
-      log.warn('email_delivery_retry_scheduled', {
-        deliveryId: delivery.id,
-        template: delivery.template,
-        attempt: delivery.attempts,
-        maxAttempts: delivery.maxAttempts,
-        retryInMs: delay,
-        errorCode,
-      });
-
-      return 'retried';
+    if (result.retryable) {
+      return retryOrFail(delivery, error, errorCode);
     }
 
     await markFailed(delivery, error, errorCode);
@@ -311,7 +376,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       deliveryId: delivery.id,
       template: delivery.template,
       attempt: delivery.attempts,
-      errorCode,
+      errorCode: redactEmailAddresses(errorCode),
     });
 
     return 'failed';
@@ -321,14 +386,19 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
    * Runs one pass of the worker: claim, send, record.
    */
   async function processPending(limit: number): Promise<DeliveryPassResult> {
+    const exhausted = await failExhaustedQueued();
     const claimed = await claimDue(limit);
     const result: DeliveryPassResult = {
       claimed: claimed.length,
       sent: 0,
-      failed: 0,
+      failed: exhausted,
       retried: 0,
       suppressed: 0,
     };
+
+    if (exhausted > 0) {
+      log.error('email_delivery_attempts_exhausted', { count: exhausted });
+    }
 
     for (const delivery of claimed) {
       try {
@@ -344,21 +414,32 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
           result.suppressed += 1;
         }
       } catch (error) {
-        // An unexpected error must not stop the pass. The row goes back to the
-        // queue so the next pass can pick it up.
+        // An unexpected error must not stop the pass. It is retried under the
+        // same bounded policy as a transient provider failure.
         log.error('email_delivery_unexpected_error', {
           deliveryId: delivery.id,
-          error,
+          error: summarizeErrorForLog(error),
         });
 
-        await markRetry(
-          delivery,
-          error instanceof Error ? error.message : 'Unexpected delivery error',
-          'UNEXPECTED',
-          retryDelayMs(delivery.attempts, deps.config),
-        );
+        const message =
+          error instanceof Error ? error.message.slice(0, 500) : 'Unexpected delivery error';
 
-        result.retried += 1;
+        try {
+          const outcome = await retryOrFail(delivery, message, 'UNEXPECTED');
+
+          if (outcome === 'retried') {
+            result.retried += 1;
+          } else {
+            result.failed += 1;
+          }
+        } catch (persistenceError) {
+          // The row stays in SENDING, so it is never retried an unbounded
+          // number of times. The next pass reports the persistence failure.
+          log.error('email_delivery_retry_persistence_failed', {
+            deliveryId: delivery.id,
+            error: summarizeErrorForLog(persistenceError),
+          });
+        }
       }
     }
 

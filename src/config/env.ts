@@ -50,6 +50,12 @@ const envSchema = z
       ),
     CORS_ORIGINS: z.string().default(''),
     FRONTEND_URL: z.string().default(''),
+    GOOGLE_CLIENT_ID: z.string().trim().default(''),
+    GOOGLE_CLIENT_SECRET: z.string().default(''),
+    GOOGLE_CALLBACK_URL: z.string().trim().default(''),
+    // Preserve the existing case-sensitive deployment key. This is the
+    // backend callback URL registered with Google.
+    redirect_URL: z.string().trim().default(''),
     CORS_CREDENTIALS: booleanString,
     LOG_LEVEL: z.enum(logLevels).default('info'),
     REQUEST_BODY_LIMIT: z
@@ -73,6 +79,10 @@ const envSchema = z
         (value) => !value.includes('change-me') && !value.includes('changeme'),
         'JWT_ACCESS_SECRET must not be a placeholder value',
       ),
+    OTP_HMAC_SECRET: z
+      .string()
+      .min(32, 'OTP_HMAC_SECRET must be at least 32 characters')
+      .default('test-only-otp-hmac-secret-not-for-production'),
     JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().max(86_400).default(900),
     REFRESH_TOKEN_TTL_SECONDS: z.coerce
       .number()
@@ -97,6 +107,16 @@ const envSchema = z
     AUTH_REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
     AUTH_PASSWORD_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
     AUTH_VERIFICATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    TOTP_ENCRYPTION_KEY: z.string().trim().default(''),
+    AVATAR_MAX_FILE_SIZE_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(20 * 1024 * 1024)
+      .default(5 * 1024 * 1024),
+    AVATAR_MAX_DIMENSION: z.coerce.number().int().min(256).max(8192).default(4096),
+    AVATAR_MAX_PIXELS: z.coerce.number().int().min(65_536).max(40_000_000).default(16_000_000),
+    AVATAR_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
 
     // Frontend routes that receive the single-use links. They are configurable
     // so the frontend contract can change without a backend deployment.
@@ -106,20 +126,68 @@ const envSchema = z
 
     // --- Workspaces and invitations (Phase 5) ------------------------------
     //
-    // An invitation is a single use link with a deadline. The lifetime is
-    // generous enough for a person to notice the mail and the path points at
-    // the frontend page that shows the invitation.
+    // An invitation is a single use link with a deadline. The product rule is
+    // 48 hours, which is long enough for a person to notice the mail while
+    // keeping an unused invitation from staying live indefinitely. The path
+    // points at the frontend page that shows the invitation.
     WORKSPACE_INVITATION_TTL_SECONDS: z.coerce
       .number()
       .int()
       .positive()
       .max(2_592_000)
-      .default(604_800),
+      .default(172_800),
     WORKSPACE_INVITATION_LINK_PATH: z
       .string()
       .trim()
       .startsWith('/')
       .default('/workspaces/invitations/accept'),
+    // Join requests are reviewed by a human, so they live longer than an
+    // invitation. The product rule is seven days.
+    WORKSPACE_JOIN_REQUEST_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(2_592_000)
+      .default(604_800),
+    WORKSPACE_JOIN_LINK_PATH: z.string().trim().startsWith('/').default('/workspaces/join'),
+    TASK_ASSIGNMENT_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .refine(
+        (value) => value.includes(':projectId') && value.includes(':taskId'),
+        'TASK_ASSIGNMENT_LINK_PATH must include :projectId and :taskId',
+      )
+      .default('/projects/:projectId/tasks/:taskId'),
+    COMMENT_MENTION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .refine(
+        (value) =>
+          value.includes(':projectId') && value.includes(':taskId') && value.includes(':commentId'),
+        'COMMENT_MENTION_LINK_PATH must include :projectId, :taskId and :commentId',
+      )
+      .default('/projects/:projectId/tasks/:taskId#comment-:commentId'),
+    MEETING_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .refine(
+        (value) => value.includes(':meetingId'),
+        'MEETING_INVITATION_LINK_PATH must include :meetingId',
+      )
+      .default('/meetings/:meetingId'),
+    TEAM_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .default('/teams/invitations/accept'),
+    PROJECT_INVITATION_LINK_PATH: z
+      .string()
+      .trim()
+      .startsWith('/')
+      .default('/projects/invitations/accept'),
 
     // Prefix for Redis keys. Environments that share a Redis instance must use
     // different namespaces so their rate-limit counters stay separate.
@@ -137,8 +205,11 @@ const envSchema = z
     //
     // The transport is provider agnostic. Resend, Brevo and Amazon SES all
     // expose an SMTP endpoint, so a single adapter covers all three and only
-    // the connection details change.
-    EMAIL_PROVIDER: z.enum(['smtp', 'console', 'disabled']).default('console'),
+    // the connection details change. The `brevo-api` provider sends over HTTPS
+    // instead, which works on hosts that block outbound SMTP ports.
+    EMAIL_PROVIDER: z.enum(['smtp', 'brevo-api', 'console', 'disabled']).default('console'),
+    EMAIL_API_KEY: z.string().trim().default(''),
+    EMAIL_API_URL: z.string().trim().url().default('https://api.brevo.com'),
     EMAIL_SMTP_HOST: z.string().trim().default(''),
     EMAIL_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
     EMAIL_SMTP_SECURE: booleanString,
@@ -203,8 +274,65 @@ const envSchema = z
     EMAIL_WORKER_ENABLED: booleanString.default(true),
     EMAIL_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),
     EMAIL_WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+
+    // Paystack hosted checkout uses only the server secret. USD remains
+    // disabled until the merchant account has been approved for USD.
+    PAYSTACK_SECRET_KEY: z.string().trim().default(''),
+    PAYSTACK_WEBHOOK_SECRET: z.string().trim().default(''),
+    PAYSTACK_WEBHOOK_PREVIOUS_SECRET: z.string().trim().default(''),
+    PAYSTACK_ENCRYPTION_KEY: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || /^[A-Za-z0-9_-]{43,44}$/.test(value),
+        'PAYSTACK_ENCRYPTION_KEY must be a base64url-encoded 32-byte key',
+      ),
+    PAYSTACK_USD_ENABLED: booleanString.default(false),
+    PAYSTACK_CALLBACK_URL: z.string().trim().default(''),
+    PAYSTACK_API_URL: z.string().trim().url().default('https://api.paystack.co'),
+    PAYSTACK_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(15_000),
+
+    // Private S3-compatible object storage used by organization branding.
+    OBJECT_STORAGE_ENDPOINT: z.string().trim().default(''),
+    OBJECT_STORAGE_BUCKET: z.string().trim().default(''),
+    OBJECT_STORAGE_REGION: z.string().trim().default('us-east-1'),
+    OBJECT_STORAGE_ACCESS_KEY_ID: z.string().trim().default(''),
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: z.string().default(''),
+    OBJECT_STORAGE_REQUEST_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(60_000)
+      .default(15_000),
   })
   .superRefine((values, ctx) => {
+    if (
+      values.NODE_ENV === 'production' &&
+      values.OTP_HMAC_SECRET === 'test-only-otp-hmac-secret-not-for-production'
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OTP_HMAC_SECRET'],
+        message: 'OTP_HMAC_SECRET must be set in production',
+      });
+    }
+    if (values.NODE_ENV !== 'test' && !/^[A-Za-z0-9_-]{43}$/.test(values.TOTP_ENCRYPTION_KEY)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TOTP_ENCRYPTION_KEY'],
+        message: 'TOTP_ENCRYPTION_KEY must be a base64url-encoded 32-byte key',
+      });
+    } else if (
+      values.TOTP_ENCRYPTION_KEY &&
+      Buffer.from(values.TOTP_ENCRYPTION_KEY, 'base64url').length !== 32
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TOTP_ENCRYPTION_KEY'],
+        message: 'TOTP_ENCRYPTION_KEY must encode exactly 32 bytes',
+      });
+    }
     if (values.AUTH_COOKIE_SAME_SITE === 'none' && !values.AUTH_COOKIE_SECURE) {
       ctx.addIssue({
         code: 'custom',
@@ -259,12 +387,133 @@ const envSchema = z
       }
     }
 
-    if (values.NODE_ENV === 'production' && values.EMAIL_PROVIDER !== 'smtp') {
+    if (values.EMAIL_PROVIDER === 'brevo-api' && !values.EMAIL_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_API_KEY'],
+        message: 'EMAIL_API_KEY is required when EMAIL_PROVIDER is "brevo-api"',
+      });
+    }
+
+    if (
+      values.NODE_ENV === 'production' &&
+      !['smtp', 'brevo-api'].includes(values.EMAIL_PROVIDER)
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['EMAIL_PROVIDER'],
-        message: 'EMAIL_PROVIDER must be "smtp" in production',
+        message: 'EMAIL_PROVIDER must be "smtp" or "brevo-api" in production',
       });
+    }
+
+    if (
+      values.PAYSTACK_SECRET_KEY &&
+      !/^(sk_test_|sk_live_)[A-Za-z0-9]+$/.test(values.PAYSTACK_SECRET_KEY)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_SECRET_KEY'],
+        message: 'PAYSTACK_SECRET_KEY must be a Paystack secret key',
+      });
+    }
+
+    if (values.PAYSTACK_USD_ENABLED && !values.PAYSTACK_SECRET_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_SECRET_KEY'],
+        message: 'PAYSTACK_SECRET_KEY is required when USD billing is enabled',
+      });
+    }
+
+    if (values.PAYSTACK_USD_ENABLED && !values.PAYSTACK_CALLBACK_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_CALLBACK_URL'],
+        message: 'PAYSTACK_CALLBACK_URL is required when USD billing is enabled',
+      });
+    }
+
+    if (values.PAYSTACK_USD_ENABLED && !values.PAYSTACK_ENCRYPTION_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYSTACK_ENCRYPTION_KEY'],
+        message: 'PAYSTACK_ENCRYPTION_KEY is required when USD billing is enabled',
+      });
+    }
+
+    if (values.PAYSTACK_CALLBACK_URL) {
+      try {
+        const callback = new URL(values.PAYSTACK_CALLBACK_URL);
+        if (values.NODE_ENV === 'production' && callback.protocol !== 'https:') {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['PAYSTACK_CALLBACK_URL'],
+            message: 'PAYSTACK_CALLBACK_URL must use https in production',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PAYSTACK_CALLBACK_URL'],
+          message: 'PAYSTACK_CALLBACK_URL must be an absolute URL',
+        });
+      }
+    }
+
+    const storageConfigured = Boolean(
+      values.OBJECT_STORAGE_ENDPOINT ||
+      values.OBJECT_STORAGE_BUCKET ||
+      values.OBJECT_STORAGE_ACCESS_KEY_ID ||
+      values.OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    );
+    if (storageConfigured) {
+      for (const field of [
+        'OBJECT_STORAGE_ENDPOINT',
+        'OBJECT_STORAGE_BUCKET',
+        'OBJECT_STORAGE_ACCESS_KEY_ID',
+        'OBJECT_STORAGE_SECRET_ACCESS_KEY',
+      ] as const) {
+        if (!values[field]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: `${field} is required when private object storage is configured`,
+          });
+        }
+      }
+    }
+
+    if (values.OBJECT_STORAGE_ENDPOINT) {
+      try {
+        const endpoint = new URL(values.OBJECT_STORAGE_ENDPOINT);
+        if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['OBJECT_STORAGE_ENDPOINT'],
+            message:
+              'OBJECT_STORAGE_ENDPOINT must not contain credentials, query parameters, or fragments',
+          });
+        }
+        if (
+          endpoint.protocol !== 'https:' &&
+          !(
+            values.NODE_ENV !== 'production' &&
+            ['localhost', '127.0.0.1'].includes(endpoint.hostname)
+          )
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['OBJECT_STORAGE_ENDPOINT'],
+            message: 'OBJECT_STORAGE_ENDPOINT must use https outside local development',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OBJECT_STORAGE_ENDPOINT'],
+          message: 'OBJECT_STORAGE_ENDPOINT must be an absolute URL',
+        });
+      }
     }
   });
 
@@ -278,6 +527,9 @@ export interface AppConfig {
   corsOrigins: string[];
   corsCredentials: boolean;
   frontendUrl: string;
+  googleClientId: string;
+  googleClientSecret: string;
+  googleCallbackUrl: string;
   logLevel: (typeof logLevels)[number];
   requestBodyLimit: string;
   rateLimitWindowMs: number;
@@ -290,6 +542,7 @@ export interface AppConfig {
   appVersion: string;
   apiPrefix: string;
   jwtAccessSecret: string;
+  otpHmacSecret: string;
   jwtAccessTtlSeconds: number;
   refreshTokenTtlSeconds: number;
   bcryptSaltRounds: number;
@@ -304,13 +557,27 @@ export interface AppConfig {
   authRegisterRateLimitMax: number;
   authPasswordRateLimitMax: number;
   authVerificationRateLimitMax: number;
+  totpEncryptionKey: string;
+  avatarMaxFileSizeBytes: number;
+  avatarMaxDimension: number;
+  avatarMaxPixels: number;
+  avatarRateLimitMax: number;
   authVerificationLinkPath: string;
   authPasswordResetLinkPath: string;
   authEmailChangeLinkPath: string;
   rateLimitNamespace: string;
   workspaceInvitationTtlSeconds: number;
   workspaceInvitationLinkPath: string;
-  emailProvider: 'smtp' | 'console' | 'disabled';
+  workspaceJoinRequestTtlSeconds: number;
+  workspaceJoinLinkPath: string;
+  taskAssignmentLinkPath: string;
+  commentMentionLinkPath: string;
+  meetingInvitationLinkPath: string;
+  teamInvitationLinkPath: string;
+  projectInvitationLinkPath: string;
+  emailProvider: 'smtp' | 'brevo-api' | 'console' | 'disabled';
+  emailApiKey: string;
+  emailApiUrl: string;
   emailSmtpHost: string;
   emailSmtpPort: number;
   emailSmtpSecure: boolean;
@@ -333,6 +600,20 @@ export interface AppConfig {
   emailWorkerEnabled: boolean;
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
+  paystackSecretKey: string;
+  paystackWebhookSecret: string;
+  paystackWebhookPreviousSecret: string;
+  paystackEncryptionKey: string;
+  paystackUsdEnabled: boolean;
+  paystackCallbackUrl: string;
+  paystackApiUrl: string;
+  paystackRequestTimeoutMs: number;
+  objectStorageEndpoint: string;
+  objectStorageBucket: string;
+  objectStorageRegion: string;
+  objectStorageAccessKeyId: string;
+  objectStorageSecretAccessKey: string;
+  objectStorageRequestTimeoutMs: number;
 }
 
 export class ConfigurationError extends Error {
@@ -347,7 +628,7 @@ export class ConfigurationError extends Error {
 
 function parseOrigins(raw: string): string[] {
   const origins = raw
-    .split(',')
+    .split(/\s*(?:,|\|\|)\s*/)
     .map((value) => value.trim())
     .filter(Boolean)
     .map((value) => {
@@ -377,7 +658,19 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const values = result.data;
-  const corsOrigins = [...parseOrigins(values.CORS_ORIGINS), ...parseOrigins(values.FRONTEND_URL)];
+  const frontendOrigins = parseOrigins(values.FRONTEND_URL);
+  const corsOrigins = [...parseOrigins(values.CORS_ORIGINS), ...frontendOrigins];
+  const googleCallbackUrl = values.redirect_URL || values.GOOGLE_CALLBACK_URL;
+  if (googleCallbackUrl) {
+    try {
+      const callback = new URL(googleCallbackUrl);
+      if (callback.protocol !== 'https:' && values.NODE_ENV === 'production') {
+        throw new Error('HTTPS required');
+      }
+    } catch {
+      throw new ConfigurationError('redirect_URL must be an absolute callback URL');
+    }
+  }
 
   return {
     nodeEnv: values.NODE_ENV,
@@ -388,7 +681,10 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     redisUrl: values.REDIS_URL,
     corsOrigins: [...new Set(corsOrigins)],
     corsCredentials: values.CORS_CREDENTIALS,
-    frontendUrl: values.FRONTEND_URL,
+    frontendUrl: frontendOrigins[0] ?? '',
+    googleClientId: values.GOOGLE_CLIENT_ID,
+    googleClientSecret: values.GOOGLE_CLIENT_SECRET,
+    googleCallbackUrl,
     logLevel: values.LOG_LEVEL,
     requestBodyLimit: values.REQUEST_BODY_LIMIT,
     rateLimitWindowMs: values.RATE_LIMIT_WINDOW_MS,
@@ -401,6 +697,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     appVersion: values.APP_VERSION,
     apiPrefix: '/api/v1',
     jwtAccessSecret: values.JWT_ACCESS_SECRET,
+    otpHmacSecret: values.OTP_HMAC_SECRET,
     jwtAccessTtlSeconds: values.JWT_ACCESS_TTL_SECONDS,
     refreshTokenTtlSeconds: values.REFRESH_TOKEN_TTL_SECONDS,
     bcryptSaltRounds: values.BCRYPT_SALT_ROUNDS,
@@ -415,13 +712,27 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     authRegisterRateLimitMax: values.AUTH_REGISTER_RATE_LIMIT_MAX,
     authPasswordRateLimitMax: values.AUTH_PASSWORD_RATE_LIMIT_MAX,
     authVerificationRateLimitMax: values.AUTH_VERIFICATION_RATE_LIMIT_MAX,
+    totpEncryptionKey: values.TOTP_ENCRYPTION_KEY,
+    avatarMaxFileSizeBytes: values.AVATAR_MAX_FILE_SIZE_BYTES,
+    avatarMaxDimension: values.AVATAR_MAX_DIMENSION,
+    avatarMaxPixels: values.AVATAR_MAX_PIXELS,
+    avatarRateLimitMax: values.AVATAR_RATE_LIMIT_MAX,
     authVerificationLinkPath: values.AUTH_VERIFICATION_LINK_PATH,
     authPasswordResetLinkPath: values.AUTH_PASSWORD_RESET_LINK_PATH,
     authEmailChangeLinkPath: values.AUTH_EMAIL_CHANGE_LINK_PATH,
     rateLimitNamespace: values.RATE_LIMIT_NAMESPACE,
     workspaceInvitationTtlSeconds: values.WORKSPACE_INVITATION_TTL_SECONDS,
     workspaceInvitationLinkPath: values.WORKSPACE_INVITATION_LINK_PATH,
+    workspaceJoinRequestTtlSeconds: values.WORKSPACE_JOIN_REQUEST_TTL_SECONDS,
+    workspaceJoinLinkPath: values.WORKSPACE_JOIN_LINK_PATH,
+    taskAssignmentLinkPath: values.TASK_ASSIGNMENT_LINK_PATH,
+    commentMentionLinkPath: values.COMMENT_MENTION_LINK_PATH,
+    meetingInvitationLinkPath: values.MEETING_INVITATION_LINK_PATH,
+    teamInvitationLinkPath: values.TEAM_INVITATION_LINK_PATH,
+    projectInvitationLinkPath: values.PROJECT_INVITATION_LINK_PATH,
     emailProvider: values.EMAIL_PROVIDER,
+    emailApiKey: values.EMAIL_API_KEY,
+    emailApiUrl: values.EMAIL_API_URL.replace(/\/+$/, ''),
     emailSmtpHost: values.EMAIL_SMTP_HOST,
     emailSmtpPort: values.EMAIL_SMTP_PORT,
     emailSmtpSecure: values.EMAIL_SMTP_SECURE || values.EMAIL_SMTP_PORT === 465,
@@ -444,6 +755,20 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailWorkerEnabled: values.EMAIL_WORKER_ENABLED,
     emailWorkerPollIntervalMs: values.EMAIL_WORKER_POLL_INTERVAL_MS,
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
+    paystackSecretKey: values.PAYSTACK_SECRET_KEY,
+    paystackWebhookSecret: values.PAYSTACK_WEBHOOK_SECRET,
+    paystackWebhookPreviousSecret: values.PAYSTACK_WEBHOOK_PREVIOUS_SECRET,
+    paystackEncryptionKey: values.PAYSTACK_ENCRYPTION_KEY,
+    paystackUsdEnabled: values.PAYSTACK_USD_ENABLED,
+    paystackCallbackUrl: values.PAYSTACK_CALLBACK_URL,
+    paystackApiUrl: values.PAYSTACK_API_URL,
+    paystackRequestTimeoutMs: values.PAYSTACK_REQUEST_TIMEOUT_MS,
+    objectStorageEndpoint: values.OBJECT_STORAGE_ENDPOINT.replace(/\/$/, ''),
+    objectStorageBucket: values.OBJECT_STORAGE_BUCKET,
+    objectStorageRegion: values.OBJECT_STORAGE_REGION,
+    objectStorageAccessKeyId: values.OBJECT_STORAGE_ACCESS_KEY_ID,
+    objectStorageSecretAccessKey: values.OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    objectStorageRequestTimeoutMs: values.OBJECT_STORAGE_REQUEST_TIMEOUT_MS,
   };
 }
 
@@ -456,6 +781,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
           LOG_LEVEL: 'silent',
           FRONTEND_URL: 'http://localhost:3000',
           JWT_ACCESS_SECRET: 'test-only-access-secret-do-not-use-in-production',
+          OTP_HMAC_SECRET: 'test-only-otp-hmac-secret-not-for-production',
           ...source,
         }
       : source;

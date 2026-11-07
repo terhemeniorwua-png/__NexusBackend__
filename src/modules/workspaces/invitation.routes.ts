@@ -89,5 +89,18 @@ export function createInvitationRouter({
     },
   );
 
+  router.post(
+    '/:token/decline',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: invitationTokenParamsSchema }),
+    async (req, res) => {
+      const { token } = req.validated?.params as { token: string };
+      const invitation = await service.decline({ userId: requireUser(req), token }, context(req));
+
+      sendSuccess(res, invitation);
+    },
+  );
+
   return router;
 }

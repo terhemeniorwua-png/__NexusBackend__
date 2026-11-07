@@ -1,344 +1,815 @@
-# Nexus Backend
+# NEXUS BACKEND
 
-**Real-Time Workspace & Project Management Platform**
+## Real-Time Workspace & Project Management Platform
 
-Nexus is a collaborative workspace platform designed to bring project management, task tracking, team communication, shared documents, notifications, meetings, and AI-assisted productivity into one connected environment.
+The Nexus backend powers the application's business logic, authentication, authorisation, workspace management, project management, real-time messaging, notifications, file management, integrations, billing, automation, and AI orchestration.
 
-The Nexus backend powers the platform's business logic, data persistence, authentication, authorization, real-time communication, integrations, and API services.
+It provides the APIs and services consumed by the Nexus frontend and coordinates communication with external services.
 
-## Table of Contents
+The backend is designed to be secure, scalable, maintainable, and suitable for a multi-workspace productivity platform.
 
-- [Overview](#overview)
-- [Core Features](#core-features)
-- [Architecture](#architecture)
-- [Technology Stack](#technology-stack)
-- [User Roles](#user-roles)
-- [Task Workflow](#task-workflow)
-- [Project Structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Environment Configuration](#environment-configuration)
-- [Database Setup](#database-setup)
-- [Running the Server](#running-the-server)
-- [API Design](#api-design)
-- [Authentication](#authentication)
-- [Workspaces and Invitations](#workspaces-and-invitations)
-- [Real-Time Communication](#real-time-communication)
-- [Redis and Caching](#redis-and-caching)
-- [Email and Notifications](#email-and-notifications)
-- [Meetings and AI Integration](#meetings-and-ai-integration)
-- [Security](#security)
-- [Testing](#testing)
-- [Frontend Integration](#frontend-integration)
-- [Deployment](#deployment)
-- [Development Workflow](#development-workflow)
-- [Contributing](#contributing)
+---
 
-## Overview
+# 1. Project Overview
 
-Modern teams often use separate applications for project management, documents, messaging, and meetings. This can fragment conversations, decisions, and task information.
+Nexus is a Real-Time Workspace & Project Management Platform combining:
 
-Nexus aims to bring these activities together in one workspace, connecting communication directly to the work being performed.
+- Project and task management.
+- Team collaboration.
+- Real-time messaging.
+- Document and file management.
+- Calendar and scheduling.
+- Audio and video meetings.
+- Forms and surveys.
+- Subscription and billing.
+- Third-party integrations.
+- Workflow automation.
+- AI-powered productivity.
+- Writing assistance.
 
-The backend provides the services required to manage users, workspaces, teams, projects, tasks, conversations, documents, notifications, and supported external integrations.
+Nexus supports three workspace types:
 
-The backend and frontend are maintained in separate repositories and communicate through documented HTTP APIs and real-time events where supported.
+1. Individual.
+2. Company.
+3. Institution.
 
-## Core Features
+All workspace types share the same core backend architecture.
 
-### 1. Authentication and User Management
+Workspace type, subscription plan, membership, role, and permissions determine which resources and capabilities are available.
 
-- User registration and login.
-- Session management and logout.
-- Secure password handling.
-- User profiles and account settings.
-- Authentication failure and expired-session handling.
-- Role-aware access control.
-- Email verification and password recovery where implemented.
+## Core product principles
 
-### 2. Workspaces and Teams
+- One Nexus identity per user.
+- Multiple workspace memberships.
+- Personal and organisational data separation.
+- Strong workspace isolation.
+- Server-side permission enforcement.
+- Real-time collaboration.
+- Durable data storage.
+- Explicit approval for AI mutations.
+- Secure integrations.
+- Scalable event processing.
 
-- Workspace creation, update, archive and deletion. The creator becomes the owner.
-- Membership aware reads: a caller only ever sees the workspaces it belongs to.
-- Member management: adding a registered account, changing a role and removing a member.
-- Invitations with a single use token, an expiry and a mail that carries the workspace, the inviter, the role and the acceptance link.
-- Workspace and project access control.
-- Role-based permissions.
-- Private and shared workspaces according to configured permissions.
+---
 
-### 3. Project Management
+# 2. Backend Technology Stack
 
-- Create and manage projects.
-- Assign members to projects.
-- Manage project visibility and access.
-- Organize work into tasks and relevant resources.
-- Track project activity and progress.
-- Support project-level discussions and collaboration.
+The backend architecture uses the following technology categories.
 
-### 4. Task Management
+| Area | Technology |
+|---|---|
+| Runtime | Node.js |
+| Main language | TypeScript |
+| Framework | Express.js |
+| Primary database | PostgreSQL |
+| Cache and coordination | Redis |
+| Real-time communication | Existing WebSocket infrastructure |
+| Background processing | Existing queue/job infrastructure |
+| File storage | Private object storage |
+| AI service | Python and FastAPI |
+| AI provider | Managed AI APIs |
+| Email delivery | Approved email provider |
+| Payment processing | Approved payment provider |
+| Calling | Managed audio/video SDK |
 
-- Create, update, and assign tasks.
-- Manage task descriptions, priority, due dates, and status.
-- Support Kanban and list-based task organization.
-- Track task comments and activity where implemented.
-- Support task submission, review, approval, and change requests.
-- Calculate project progress according to defined business rules.
+**Important:** The exact ORM, migration framework, queue library, WebSocket implementation, provider names, and package versions must be determined from the actual repository.
 
-### 5. Connected Communication
+Do not replace existing technology choices without approval.
 
-Nexus connects conversations to the work they concern.
+---
 
-Potential capabilities include:
+# 3. Backend Architecture
+
+Nexus uses a modular backend architecture.
+
+The Express.js and TypeScript application is the authoritative application backend.
+
+It handles:
+
+- Authentication.
+- Authorisation.
+- User management.
+- Workspace management.
+- Membership.
+- Roles and permissions.
+- Projects.
+- Tasks.
+- Messaging.
+- Notifications.
+- File access.
+- Documents.
+- Calendar.
+- Meetings.
+- Forms.
+- Billing.
+- Integrations.
+- Automation.
+- AI request orchestration.
+- Audit logging.
+
+The Python/FastAPI service is a separate AI processing service.
+
+It must not become an alternative application backend or bypass the Express application's security model.
+
+## Architectural responsibilities
+
+### Express application backend
+
+Responsible for application workflows, permission enforcement, validation, persistence, API delivery, and orchestration.
+
+### PostgreSQL
+
+The durable source of truth for application data.
+
+### Redis
+
+Supports:
+
+- Caching.
+- Rate limiting.
+- Real-time coordination.
+- Ephemeral state.
+- Background queue infrastructure.
+- Distributed coordination where needed.
+
+Redis must not replace PostgreSQL as the permanent source of truth for messages, notifications, or other durable business records.
+
+### Object storage
+
+Stores uploaded files and other media.
+
+Use private storage and backend-authorised access.
+
+### Python AI service
+
+Provides AI processing through managed AI APIs.
+
+### External providers
+
+Provide specialised services such as:
+
+- Email delivery.
+- Payments.
+- Audio/video calling.
+- Calendar integrations.
+- File integrations.
+- AI inference.
+
+---
+
+# 4. Backend Architecture Principles
+
+The backend must follow these principles:
+
+1. Modular and maintainable design.
+2. Strong TypeScript typing.
+3. Server-side authorisation.
+4. Workspace-aware data access.
+5. Clear separation of concerns.
+6. Centralised validation.
+7. Secure API design.
+8. Durable data persistence.
+9. Reliable event processing.
+10. Idempotent background operations where appropriate.
+11. Structured logging.
+12. Automated testing.
+13. Scalable infrastructure.
+14. Explicit AI action approval.
+15. Backward-compatible changes where practical.
+
+The existing repository architecture is authoritative for implementation decisions.
+
+HTTP request validation is centralized in middleware. Joi schemas are used for
+new billing request validation, while the middleware continues to accept the
+existing Zod schemas during migration. Joi validation converts supported input
+values, collects field errors, and rejects unknown keys. Browser CORS policy is
+implemented with the `cors` package and the exact normalized origins configured
+by `CORS_ORIGINS` and `FRONTEND_URL`; wildcard origins are not enabled.
+
+---
+
+# 5. Main Backend Components
+
+A logical module organisation may include:
+
+- Authentication.
+- Users.
+- Workspaces.
+- Membership.
+- Invitations.
+- Join requests.
+- Roles and permissions.
+- Departments.
+- Teams and groups.
+- Projects.
+- Tasks.
+- Messaging.
+- Channels.
+- Notifications.
+- Activity feed.
+- File management.
+- Documents.
+- Calendar.
+- Meetings.
+- Forms and surveys.
+- Billing.
+- Search.
+- Integrations.
+- Automation.
+- AI.
+- Nexus Write.
+- AI action execution.
+- Background jobs.
+- Email delivery.
+- Audit logging.
+- Analytics.
+
+This is a logical module list, not a requirement to create a new directory structure when equivalent modules already exist.
+
+---
+
+# 6. User Identity and Authentication
+
+Nexus uses one identity per user.
+
+A user may belong to multiple workspaces without creating multiple accounts.
+
+The authentication system must support the existing approved authentication methods.
+
+Expected capabilities include:
+
+- Registration.
+- Sign-in.
+- Email verification.
+- Password recovery.
+- Password reset.
+- Session management.
+- Logout.
+- Token or cookie-based authentication according to the existing architecture.
+- OAuth where supported.
+- Security-related account operations.
+
+## Authentication requirements
+
+- Secure password hashing.
+- Appropriate session or token handling.
+- Secure cookie configuration where applicable.
+- Expiration and revocation.
+- Rate limiting.
+- Input validation.
+- Authentication event logging where appropriate.
+- Protection against brute-force attacks.
+- Safe account recovery.
+
+Authentication must be implemented and enforced server-side.
+
+Never trust frontend authentication state as proof of access.
+
+### Account deletion lifecycle
+
+`POST /auth/delete` requires an authenticated session, the current password,
+and an exact email confirmation. It revokes the user's sessions and unused
+authentication tokens, marks the account `PENDING_DELETION`, and schedules
+permanent deletion 30 days later. The account and its workspaces remain during
+this recovery period. The account is signed out immediately and cannot use
+normal authenticated routes.
+
+Before the scheduled date, the user can cancel deletion through
+`POST /auth/reactivate` using the account email and password. Recovery clears
+the deletion schedule but never restores revoked sessions; the user must sign
+in again. At finalization, workspaces and collaboration records are retained,
+untransferred owned workspaces are suspended, and the account identity becomes
+a neutral `Deleted user` tombstone so foreign keys and shared attribution stay
+valid. An owner can initiate a transfer during the recovery period; the
+recipient can list, accept, or reject incoming offers. A paid workspace
+remains suspended until the successor separately accepts billing
+responsibility. A non-owner administrator cannot leave an active organization
+without another active owner or administrator. Financial records remain
+pending legal and accounting retention review.
+
+The deletion worker classifies attachments by their workspace owner and
+sharing relationships, not uploader ID alone. It deletes only attachments
+uploaded by the deleting account into that account's personal workspace when
+there are no other workspace members, no other project members or owners, no
+other task participants, and no discussion relationship. Shared workspace or
+project files, task discussion attachments, and uploads by other users are
+retained. The worker performs idempotent private object deletion while holding
+the account row lock, then removes the metadata row in the same PostgreSQL
+transaction. Storage failures are audited, keep metadata intact, and leave the
+account pending for retry. The S3-compatible adapter treats `404` on DELETE as
+already complete. See
+[`docs/ACCOUNT_LIFECYCLE.md`](docs/ACCOUNT_LIFECYCLE.md) and
+[`docs/financial-retention-decisions.md`](docs/financial-retention-decisions.md).
+
+### Privacy requests
+
+Verified active accounts can submit ACCESS, CORRECTION, ERASURE, or REDACTION
+requests and read their own statuses and outcomes. Active platform
+administrators review and decide requests. Approved redaction requests can
+replace exact text in a task comment while preserving the rest of the comment;
+the comment update, request completion, and audit records are transactional.
+The current backend has no Message, Conversation, or Channel models, so
+messaging and channel content redaction is not implemented. The reviewer
+workflow records approved access/correction/erasure outcomes after the
+authorized work has been performed. See [`docs/API.md`](docs/API.md) for the
+request/response contracts and role requirements.
+
+### Invoices
+
+The database persists subscription payment and checkout history but has no
+Invoice model or workspace-to-invoice mapping. The backend does not create
+Paystack Payment Request invoices. A workspace invoice list cannot safely be
+implemented until product/billing defines invoice creation and workspace/payer
+ownership; listing all invoices for a Paystack customer could expose another
+workspace's financial records. The existing workspace payment-history API
+remains available.
+
+---
+
+# 7. Workspace Architecture
+
+Nexus supports three workspace types.
+
+## Individual workspace
+
+Provides personal productivity and collaboration.
+
+Email verification provisions one private personal workspace for each
+activated account. It is marked internally as personal, cannot be archived or
+deleted separately, and is removed only when the account's 30-day deletion
+period completes. Ordinary `INDIVIDUAL` workspaces remain distinct from this
+personal workspace marker.
+
+## Company workspace
+
+Provides organisational collaboration for businesses.
+
+## Institution workspace
+
+Provides collaboration for institutions, including departments, groups, staff, and students.
+
+Foundational Company and Institution profile fields are tracked in Phase 4.
+Company-specific and Institution-specific profile APIs, notification
+preferences, and full organization settings are implemented in Phase 7.
+Branding uploads depend on the private file-storage work; no subscription or
+pricing rules are defined here.
+
+### Workspace functionality
+
+- Creation.
+- Updating.
+- Archiving.
+- Restoration where supported.
+- Settings.
+- Branding.
+- Membership.
+- Invitations.
+- Subscription management.
+- Workspace switching context.
+- Access control.
+
+### Workspace isolation
+
+Every workspace-scoped operation must verify that the requesting user has access to the relevant workspace.
+
+Never rely exclusively on a client-provided workspace ID.
+
+Workspace isolation must be enforced in service logic and database queries.
+
+---
+
+# 8. Membership, Invitations, and Join Requests
+
+Nexus supports organisational discovery and membership workflows.
+
+## Join requests
+
+- Users can discover organisations through supported search and invitation mechanisms.
+- Organisations can provide links or codes.
+- Matching email domains alone do not automatically grant membership.
+- Join requests require administrator approval.
+- Pending applicants cannot access private workspace content.
+- Applicants can withdraw requests where supported.
+- Join requests expire after seven days.
+- Expired applicants can be notified and may submit a new request.
+
+## Direct invitations
+
+- Direct invitations expire after 48 hours.
+- Expiration is enforced server-side.
+- Expired invitations cannot be accepted.
+- Administrators can resend invitations with a new expiry.
+- Invitations can be revoked.
+
+## Membership statuses
+
+- Pending.
+- Approved.
+- Rejected.
+- Withdrawn.
+- Expired.
+
+## Membership rules
+
+- Organisation membership is separate from team membership.
+- Users may belong to multiple teams.
+- Users may belong to an organisation without team assignment.
+- Removing organisation membership must not delete the user's Nexus identity.
+- Personal workspaces must remain independent.
+- Organisation assets and audit history must be preserved.
+- Assigned tasks and responsibilities must be handled appropriately when membership changes.
+
+---
+
+# 9. Roles and Permissions
+
+Permissions must be enforced in the backend.
+
+Organization roles are stored on workspace memberships, never globally on a
+user. Company workspaces use `COMPANY_OWNER`, `COMPANY_ADMIN`,
+`COMPANY_PROJECT_MANAGER`, `COMPANY_MEMBER`, `COMPANY_COLLABORATOR`, and
+`COMPANY_VIEWER`. Institution workspaces use `INSTITUTION_OWNER`,
+`INSTITUTION_ADMIN`, `INSTITUTION_DEPARTMENT_HEAD`,
+`INSTITUTION_LECTURER_STAFF`, `INSTITUTION_STUDENT`,
+`INSTITUTION_COLLABORATOR`, and `INSTITUTION_VIEWER`.
+
+These roles map into the existing centralized workspace, project, and team
+policies; they do not replace them or grant implicit access to every project or
+team. Organization-role members need explicit project/team assignment.
+Institution Department Heads are further limited to departments where they
+have department-head membership. Existing persisted `OWNER`,
+`PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, and `VIEWER` roles remain valid in
+their existing contexts. Multiple organization owners are supported and the
+last owner cannot be removed or demoted through member management. Custom
+organization role definitions and permission builders are deferred to a later
+phase.
+
+## Company roles
+
+- `COMPANY_OWNER`.
+- `COMPANY_ADMIN`.
+- `COMPANY_PROJECT_MANAGER`.
+- `COMPANY_MEMBER`.
+- `COMPANY_COLLABORATOR`.
+- `COMPANY_VIEWER`.
+
+## Institution roles
+
+- `INSTITUTION_OWNER`.
+- `INSTITUTION_ADMIN`.
+- `INSTITUTION_DEPARTMENT_HEAD`.
+- `INSTITUTION_LECTURER_STAFF`.
+- `INSTITUTION_STUDENT`.
+- `INSTITUTION_COLLABORATOR`.
+- `INSTITUTION_VIEWER`.
+
+### Confirmed permission rules
+
+- Admins may remove ordinary members and guests.
+- Only the Owner can remove or demote another administrator.
+- Admins cannot remove the Owner.
+- Team Leads cannot remove organisation members unless explicitly granted permission.
+- Owner retains ultimate control.
+- Organisation membership and team membership are separate.
+- Organisation Admin does not automatically grant access to private projects.
+
+### Security requirements
+
+- Enforce permissions in services and resource queries.
+- Never rely only on route-level checks.
+- Prevent privilege escalation.
+- Prevent insecure direct object references.
+- Prevent cross-workspace data leakage.
+- Verify resource ownership and membership.
+- Revalidate permissions for sensitive operations.
+- Log relevant administrative changes.
+
+Permission logic should be centralised and reusable.
+
+---
+
+# 10. Departments, Teams, and Groups
+
+The backend supports organisational structures.
+
+### Company
+
+- Departments.
+- Teams.
+- Team membership.
+- Team Leads.
+- Department administration.
+
+### Institution
+
+- Departments.
+- Groups.
+- Group membership.
+- Staff and student distinctions where supported.
+- Department administration.
+
+Users may belong to multiple teams or groups.
+
+Do not automatically assign every organisation member to a team.
+
+---
+
+# 11. Project Management
+
+Projects are shared collaboration resources.
+
+## Project visibility
+
+The backend must support:
+
+1. Organisation-wide.
+2. Department/team-only.
+3. Private/invitation-only.
+
+### Project functionality
+
+- Project creation.
+- Project updates.
+- Project archiving.
+- Project membership.
+- Project settings.
+- Project activity.
+- Project discussions.
+- Project files.
+- Project milestones.
+- Project timeline.
+- Project insights.
+
+### Visibility enforcement
+
+Project visibility must also apply to associated resources:
+
+- Tasks.
+- Files.
+- Documents.
+- Messages.
+- Meetings.
+- Activity.
+- Search results.
+
+Changing project visibility must not accidentally expose previously private information.
+
+All project-related queries must enforce access permissions.
+
+---
+
+# 12. Task Management
+
+The task system supports project and general work management.
+
+### Task capabilities
+
+- Title.
+- Description.
+- Status.
+- Priority.
+- Creator.
+- Responsible owner.
+- Multiple assignees where supported.
+- Start date.
+- Due date.
+- Subtasks.
+- Checklists.
+- Comments.
+- @mentions.
+- Attachments.
+- Labels.
+- Dependencies.
+- Activity history.
+- Completion and reopening.
+
+### Task views
+
+The backend provides data required for:
+
+- Board.
+- List.
+- Timeline.
+- Calendar.
+
+These views must operate on the same underlying task records.
+
+### Additional requirements
+
+- Task permissions must respect project visibility.
+- Task assignment must validate membership and eligibility.
+- Task updates must produce relevant events.
+- Task history must be preserved according to the approved retention model.
+- Message-to-task conversion must preserve the original message or conversation reference.
+
+---
+
+# 13. Messaging and Conversations
+
+Nexus provides real-time communication.
+
+## Conversation types
 
 - Direct messages.
-- Team and project conversations.
-- Task-specific discussions.
-- User mentions.
-- Message-to-task conversion.
-- Contextual file sharing.
-- Real-time message delivery where supported.
-- Notifications for relevant activity.
+- Group conversations.
+- Team channels.
+- Project conversations.
+- Announcements.
 
-### 6. Documents and Collaboration
+## Messaging capabilities
 
-- Store and organize workspace documents.
-- Control access to shared resources.
-- Support document creation and editing where implemented.
-- Track saving and update states.
-- Integrate collaborative editing services when configured.
+- Sending and retrieving messages.
+- Replies and threads.
+- Reactions.
+- @mentions.
+- Editing.
+- Deletion.
+- Attachments.
+- Pinned messages.
+- Saved messages.
+- Read indicators.
+- Typing indicators.
+- Presence.
+- Conversation search.
 
-Real-time collaborative editing requires a compatible implementation; it is not guaranteed by ordinary REST endpoints or Socket.IO alone.
+## Channel management
 
-### 7. Notifications
+- Owners have full control.
+- Admins manage channels according to their permissions.
+- Team Leads may manage assigned team channels when authorised.
+- Members cannot create channels by default.
+- Guests access explicitly shared channels only.
 
-- Task assignment notifications.
-- Comment and mention notifications.
-- Project activity notifications.
-- Messaging notifications.
-- Read and unread status where implemented.
-- Real-time notification delivery where supported.
-- Email notifications through a configured provider.
+### Message-to-task conversion
 
-### 8. Meetings and AI-Assisted Productivity
+The backend should support converting eligible messages into tasks while preserving the relationship to the original conversation.
 
-The architecture may support integrations for:
+### Security
 
-- Starting meetings from a workspace, project, or conversation.
-- Meeting metadata and participant management.
-- Meeting summaries and action items.
-- AI-assisted task or project workflows.
-- Summarization of authorized workspace content.
+- Verify conversation membership.
+- Verify channel access.
+- Verify project visibility.
+- Prevent cross-workspace message access.
+- Validate all message operations.
+- Enforce edit and deletion permissions.
 
-These capabilities depend on the relevant providers, credentials, permissions, and backend services being configured.
+---
 
-### 9. Files and Attachments
+# 14. Notification and Activity Architecture
 
-Where implemented, file-related services should support:
+Nexus has two distinct communication surfaces.
 
-- Uploading and associating files with relevant resources.
-- File metadata and access control.
-- Configurable storage providers.
-- File type and size restrictions.
-- Authorized file retrieval.
+1. Messages.
+2. General notifications.
 
-Large files should generally use appropriate object storage rather than being stored directly in relational database records.
+These must remain separate.
 
-## Architecture
+## General notifications
 
-Nexus uses a separated frontend/backend architecture.
+Examples:
 
-```text
-┌─────────────────────────────────────┐
-│        Nexus Frontend               │
-│     Next.js + TypeScript            │
-└──────────────────┬──────────────────┘
-                   │
-          HTTPS / REST API
-                   │
-          Socket.IO connection
-                   │
-┌──────────────────▼──────────────────┐
-│          Nexus Backend              │
-│        Node.js + Express            │
-│             TypeScript              │
-├─────────────────────────────────────┤
-│ Authentication and Authorization    │
-│ Workspace and Project Services      │
-│ Task and Document Services          │
-│ Messaging and Notification Services │
-│ Integration and Validation Layers   │
-└───────────┬─────────────┬───────────┘
-            │             │
-     ┌──────▼──────┐ ┌────▼─────┐
-     │ PostgreSQL  │ │  Redis   │
-     │  + Prisma   │ │ Cache /  │
-     │             │ │ Support  │
-     └─────────────┘ └──────────┘
-```
+- Task assignments.
+- Task-comment mentions.
+- Meeting invitations and changes.
+- Join request decisions.
+- Directly shared files.
+- Security and access changes.
 
-The exact implementation may include additional services for email delivery, file storage, meetings, AI processing, or background jobs.
+## Messages
 
-### Architectural Principles
+Direct messages, group messages, channel messages, and message @mentions belong to the messaging system.
 
-- Separation of concerns.
-- Explicit API contracts.
-- Centralized validation and error handling.
-- Authentication and authorization enforced on the server.
-- Reusable business services.
-- Database integrity and transactional consistency.
-- Real-time events that reflect authorized state changes.
-- Environment-based configuration.
-- Testable, maintainable code.
+### Critical separation requirement
 
-## Technology Stack
+Message events must not be added to the general notification bell.
 
-| Technology | Purpose |
-|---|---|
-| Node.js | JavaScript runtime |
-| Express.js | HTTP API framework |
-| TypeScript | Type-safe application development |
-| PostgreSQL | Relational database |
-| Prisma ORM | Database access, schema, and migrations |
-| Redis | Caching and other configured real-time or background-work support |
-| Socket.IO | Real-time communication |
-| JWT or secure session mechanism | Authentication, according to the implementation |
-| Email provider | Transactional email where configured |
-| Testing tools | Automated quality assurance |
+The backend must maintain independent unread states for:
 
-Use the versions and scripts defined in the repository's package manifest and lockfile.
+- General notifications.
+- Direct and group messages.
+- Channel messages.
 
-## User Roles
+### Notification infrastructure
 
-Nexus supports the following intended roles:
+Support:
 
-| Role | Intended responsibility |
-|---|---|
-| Owner | Workspace administration and ownership |
-| PM | Project planning and management |
-| Member | Participation in assigned or authorized work |
-| Viewer | Read-only access where permitted |
-| Collaborator | Access to explicitly shared resources |
+- Durable notification persistence.
+- Read and unread states.
+- Mark-as-read.
+- Mark-all-as-read.
+- Notification preferences.
+- Real-time delivery.
+- Email delivery where configured.
+- Deduplication.
+- Bounded retries.
+- Activity feed.
+- Appropriate retention.
 
-The backend must enforce the actual permission matrix for each resource and action. The descriptions above are conceptual; the implemented authorization rules are authoritative.
+Use a centralised event and notification architecture where practical.
 
-## Task Workflow
+Do not create duplicate notification records when background jobs retry.
 
-The intended task lifecycle is:
+---
 
-`ASSIGNED → IN_PROGRESS → SUBMITTED → UNDER_REVIEW → APPROVED`
+# 15. File Management and Nexus Drive
 
-An additional state is:
+The backend provides secure file management.
 
-`CHANGES_REQUESTED`
+### Capabilities
 
-The backend should validate permitted transitions, verify the acting user's permissions, and preserve the task's relevant activity history.
+- File uploads.
+- File metadata.
+- Folder management.
+- File listing.
+- File downloads.
+- File preview access.
+- File sharing.
+- Access control.
+- File deletion.
+- Restoration where supported.
+- Version history where supported.
+- Storage usage tracking.
 
-Project progress should follow a consistent server-defined calculation rather than relying on independently calculated frontend values.
+### Storage architecture
 
-## Project Structure
+Use private object storage.
 
-The following is an illustrative structure. Adapt it to the repository's actual organization.
+The backend should manage:
 
-```text
-nexusbackend/
-├── prisma/
-│   ├── schema.prisma
-│   └── migrations/
-├── src/
-│   ├── config/
-│   ├── controllers/
-│   ├── middleware/
-│   ├── routes/
-│   ├── services/
-│   │   ├── cache/
-│   │   ├── email/
-│   │   │   └── templates/
-│   │   └── providers/
-│   │       └── email/
-│   ├── repositories/
-│   ├── validators/
-│   ├── types/
-│   ├── utils/
-│   ├── sockets/
-│   ├── integrations/
-│   ├── modules/
-│   │   ├── auth/
-│   │   ├── users/
-│   │   ├── webhooks/
-│   │   └── workspaces/
-│   ├── app.ts
-│   └── server.ts
-├── tests/
-│   └── helpers/
-├── nexus-database/
-│   └── SKILL.md
-├── emailing/
-│   └── SKILL.md
-├── ai-meetings/
-│   └── SKILL.md
-├── real-messaging/
-│   └── SKILL.md
-├── testing-deployment/
-│   └── SKILL.md
-├── agent.md
-├── PHASES.md
-├── .env.example
-├── package.json
-└── README.md
-```
+- Upload authorisation.
+- Object metadata.
+- Signed URLs or streaming.
+- Download permissions.
+- File ownership.
+- Workspace association.
+- Project association.
+- File deletion.
+- Storage limits.
 
-Not every folder must exist. Follow the actual project architecture and avoid creating unnecessary layers.
+### Security requirements
 
-## Prerequisites
+- Never expose storage credentials.
+- Never assume a file URL grants access.
+- Verify file permissions before download.
+- Validate file metadata and supported content types.
+- Apply upload size restrictions.
+- Use appropriate scanning or security controls where configured.
+- Preserve access boundaries across workspaces.
 
-Install or configure:
+---
 
-- A supported Node.js version.
-- npm, pnpm, or the package manager specified by the repository.
-- PostgreSQL.
-- Redis if required by the configured application features.
-- Git.
-- Access to any external services required for the features being developed.
+# 16. Document Collaboration
 
-## Installation
+Nexus supports document creation and collaboration.
 
-Clone the backend repository and enter its directory:
+Expected capabilities:
 
-```bash
-git clone <YOUR_NEXUS_BACKEND_REPOSITORY_URL>
-cd nexusbackend
-```
+- Document creation.
+- Document editing.
+- Document listing.
+- Document sharing.
+- Comments.
+- Version history.
+- Access controls.
+- Search.
+- Workspace and project associations.
 
-Install dependencies using the repository's package manager.
+The backend must define the authoritative document storage and collaboration model.
 
-For npm:
+Do not introduce a separate document persistence architecture without approval.
 
-```bash
-npm install
-```
+---
 
-Create your local environment file from the example, if provided:
+# 17. Calendar and Scheduling
 
-```bash
-cp .env.example .env
-```
+The backend supports Nexus calendar functionality.
 
-Configure the required values before starting the application.
+### Features
 
-Never commit `.env` or real credentials.
+- Event creation.
+- Event updates.
+- Event deletion.
+- Event invitations.
+- Participant management.
+- Personal calendars.
+- Workspace calendars.
+- Calendar aggregation.
+- Event privacy.
+- Calendar synchronisation.
 
-## Environment Configuration
+### External integrations
 
-The exact environment variable names must match the application's configuration code.
+- Google Calendar.
+- Microsoft Outlook Calendar.
 
-Typical configuration categories include:
+## Two-way synchronisation
 
 | Variable or setting | Purpose |
 |---|---|
 | `NODE_ENV` | Runtime environment |
 | `PORT` | HTTP server port |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Redis connection string, if used |
+| `REDIS_URL` | Redis connection string; required for distributed rate limiting |
 | `FRONTEND_URL` | Trusted frontend origin |
 | `JWT_SECRET` | JWT signing secret, if JWT is used |
 | `SESSION_SECRET` | Session signing secret, if applicable |
@@ -353,7 +824,7 @@ Use strong secrets in development and production. Never expose backend secrets t
 
 ### Authentication settings
 
-The variables below are read by `src/config/env.ts`. All of them have defaults except `JWT_ACCESS_SECRET`, which must be at least 32 characters and must not be a placeholder.
+The variables below are read by `src/config/env.ts`. `JWT_ACCESS_SECRET` and `TOTP_ENCRYPTION_KEY` must be configured; the latter must decode from base64url to exactly 32 bytes. Test configuration may omit the TOTP key because tests use an explicit test environment and do not run production MFA configuration.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -372,6 +843,11 @@ The variables below are read by `src/config/env.ts`. All of them have defaults e
 | `AUTH_REGISTER_RATE_LIMIT_MAX` | `5` | Registrations per window per IP address and per account |
 | `AUTH_PASSWORD_RATE_LIMIT_MAX` | `5` | Password requests per window per IP address and per account |
 | `AUTH_VERIFICATION_RATE_LIMIT_MAX` | `5` | Verification requests per window per IP address and per account |
+| `TOTP_ENCRYPTION_KEY` | required outside tests | Base64url-encoded 32-byte AES-256-GCM key used to encrypt TOTP secrets |
+| `AVATAR_MAX_FILE_SIZE_BYTES` | `5242880` | Maximum upload size (5 MiB) |
+| `AVATAR_MAX_DIMENSION` | `4096` | Maximum image width or height |
+| `AVATAR_MAX_PIXELS` | `16000000` | Maximum decoded pixel count |
+| `AVATAR_RATE_LIMIT_MAX` | `5` | Avatar upload/delete requests per user and IP per auth rate window |
 | `AUTH_VERIFICATION_LINK_PATH` | `/verify-email` | Frontend path that receives the verification link |
 | `AUTH_PASSWORD_RESET_LINK_PATH` | `/reset-password` | Frontend path that receives the reset link |
 | `AUTH_EMAIL_CHANGE_LINK_PATH` | `/settings/email` | Frontend path that receives the email change link |
@@ -379,12 +855,49 @@ The variables below are read by `src/config/env.ts`. All of them have defaults e
 
 The verification, reset and email change links are built from `FRONTEND_URL` and the configured path, so the frontend contract can change without a backend deployment.
 
+TOTP uses the encrypted secret stored in PostgreSQL. To rotate
+`TOTP_ENCRYPTION_KEY`, run a controlled re-encryption migration/job that reads
+each `v1` secret with the old key and writes it with the new key; verify all
+rows before replacing the deployed key. Keep the old key available for rollback
+until validation completes. Never log decrypted secrets, enrollment URIs, or
+recovery codes. Password resets revoke sessions but preserve enabled 2FA; the
+user must still complete TOTP verification at the next login.
+Security notification emails and audit events are recorded when 2FA is enabled
+or disabled, recovery codes are regenerated, or a verification attempt fails.
+
+Profile images use the existing private S3-compatible object-storage settings
+below. Uploads are detected by file signature, bounded by the size and pixel
+limits above, decoded and re-encoded to remove metadata. Avatar downloads are
+authenticated and only available to the signed-in account. Existing stored
+`avatarUrl` values remain readable for backward compatibility, but profile
+updates cannot set that field; new uploads replace legacy values.
+
 ### Workspace settings
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `WORKSPACE_INVITATION_TTL_SECONDS` | `604800` | Lifetime of an invitation link |
 | `WORKSPACE_INVITATION_LINK_PATH` | `/workspaces/invitations/accept` | Frontend route that receives the acceptance link |
+| `TASK_ASSIGNMENT_LINK_PATH` | `/projects/:projectId/tasks/:taskId` | Frontend route for an assigned task. `:projectId` and `:taskId` are replaced with encoded identifiers |
+| `COMMENT_MENTION_LINK_PATH` | `/projects/:projectId/tasks/:taskId#comment-:commentId` | Frontend route for a comment mention. Route parameters are replaced with encoded identifiers |
+| `MEETING_INVITATION_LINK_PATH` | `/meetings/:meetingId` | Frontend route for a meeting invitation. `:meetingId` is replaced with an encoded identifier |
+| `TEAM_INVITATION_LINK_PATH` | `/teams/invitations/accept` | Frontend route that accepts a team invitation. The single-use token is appended as the `token` query parameter |
+| `PROJECT_INVITATION_LINK_PATH` | `/projects/invitations/accept` | Frontend route that accepts a project invitation. The single-use token is appended as the `token` query parameter |
+
+### Private organization logo storage
+
+Company and Institution logos use the authenticated private-object storage adapter. Configure an S3-compatible endpoint and a bucket with public access blocked. Logos are limited to 2 MB and are fetched only after workspace membership is verified. The API does not return public object URLs.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OBJECT_STORAGE_ENDPOINT` | empty | HTTPS S3-compatible endpoint; HTTP is allowed only for localhost development/test adapters |
+| `OBJECT_STORAGE_BUCKET` | empty | Private bucket name |
+| `OBJECT_STORAGE_REGION` | `us-east-1` | AWS signing region |
+| `OBJECT_STORAGE_ACCESS_KEY_ID` | empty | Server-side storage access key |
+| `OBJECT_STORAGE_SECRET_ACCESS_KEY` | empty | Server-side storage secret |
+| `OBJECT_STORAGE_REQUEST_TIMEOUT_MS` | `15000` | Per-request timeout, capped at 60 seconds |
+
+Logo APIs return `503 OBJECT_STORAGE_UNAVAILABLE` until storage is configured. Never grant public read access to the bucket or expose these credentials to clients.
 
 ### Email settings
 
@@ -424,447 +937,1015 @@ After configuring the database connection, inspect the Prisma scripts in `packag
 
 Typical development commands, if supported by the project, include:
 
+### Requirements
+
+- OAuth.
+- Secure token storage.
+- Token refresh.
+- Event mapping.
+- Duplicate prevention.
+- Conflict detection.
+- Updates.
+- Deletions.
+- Sync history.
+- Origin tracking.
+- Idempotency.
+- Loop prevention.
+
+### Privacy
+
+Private event details must not be exposed to unauthorised workspace members.
+
+---
+
+Prisma Migrate does not provide automatic down migrations. The recovery policy, migration risk review and backup/restore procedures are documented in [`docs/migration-recovery.md`](docs/migration-recovery.md). Verify the procedure against a disposable database with:
+
 ```bash
-npx prisma validate
-npx prisma generate
-npx prisma migrate dev
+DATABASE_URL="postgresql://<test-user>:<test-password>@<host>:<port>/<test-database>" \
+SHADOW_DATABASE_URL="postgresql://<test-user>:<test-password>@<host>:<port>/<shadow-database>" \
+./scripts/verify-migration-recovery.sh
 ```
-
-For production deployments, use the repository's approved migration process, commonly:
-
-```bash
-npx prisma migrate deploy
-```
-
-Do not run migrations against production without reviewing the migration, confirming the target database, and following the deployment procedure.
-
-Avoid destructive database resets unless explicitly authorized and safely isolated to a disposable development database.
 
 ## Running the Server
 
-Inspect `package.json` for the actual scripts.
+Nexus uses a managed audio/video calling SDK.
 
-Common examples include:
+The backend coordinates:
 
-```bash
-npm run dev
-```
+- Meeting creation.
+- Meeting scheduling.
+- Meeting invitations.
+- Participant authorisation.
+- Meeting access.
+- Meeting metadata.
+- Project association.
+- Meeting lifecycle.
+- Meeting history.
 
-For a configured production build:
+The calling provider handles the specialised real-time media infrastructure.
 
-```bash
-npm run build
-npm start
-```
+### Additional capabilities
 
-The exact commands depend on the repository's scripts and TypeScript build configuration.
+- Audio calls.
+- Video calls.
+- Group meetings.
+- Screen sharing.
+- Meeting chat.
+- Participant management.
+- Meeting summaries and action items where supported.
 
-When running locally, confirm that:
+Do not replace the existing approved calling SDK without explicit approval.
+
+---
+
+# 19. Forms and Surveys
+
+The backend supports form and survey functionality.
+
+### Capabilities
+
+- Form creation.
+- Form editing.
+- Field configuration.
+- Validation.
+- Publishing.
+- Access control.
+- Response submission.
+- Response storage.
+- Response management.
+- Survey results.
+
+Ensure that response access is permission-controlled.
+
+---
+
+# 20. Subscription and Billing
+
+Nexus supports individual and organisational subscription models.
+
+## Individual
+
+- Free.
+- Premium.
+
+## Company and Institution
+
+- Free and paid plans.
+
+### Subscription functionality
+
+- Subscription creation.
+- Trial management.
+- Plan changes.
+- Billing.
+- Payment methods.
+- Renewal.
+- Cancellation.
+- Invoices.
+- Usage limits.
+- Subscription status.
+
+### Business rules
+
+- Premium trial lasts 14 days.
+- No card is required to start the trial.
+- Trial expiration must not silently convert a user to paid.
+- Subscription requires active user consent.
+- Monthly and yearly billing.
+- Organisation billing is controlled by the Owner.
+- Organisation members do not separately pay for organisation features.
+- Personal subscription is independent of organisational subscription.
+- Leaving an organisation does not remove the personal workspace.
+- Organisation plans control organisation features and limits, not personal plans.
+- Downgrading must preserve existing data.
+- Over-limit features may be restricted without deleting data.
+- Ownership transfer must explicitly handle billing ownership.
+
+### Payment security
+
+- Use the approved payment provider.
+- Never store raw card details or CVV.
+- Use provider tokenisation.
+- Validate payment webhooks.
+- Verify webhook signatures.
+- Ensure idempotent payment processing.
+- Keep billing records auditable.
 
 - The server starts successfully.
 - PostgreSQL is reachable.
 - Required migrations have been applied.
-- Redis connects if required.
+- Redis is reachable; rate limiting fails closed without it.
 - Required environment variables are present.
 - The frontend can reach the API using the configured URL.
 
-## API Design
+---
 
-Organize APIs by resource and domain.
+# 21. Global Search and Full Document Search
 
-Potential resource groups include:
+Nexus provides global search across authorised resources.
 
-- Authentication and users.
-- Workspaces and teams.
-- Members and invitations.
-- Projects and project membership.
-- Tasks and task activity.
+### Search categories
+
+- People.
+- Workspaces.
+- Teams.
+- Projects.
+- Tasks.
+- Messages.
+- Conversations.
+- Files.
 - Documents.
-- Conversations and messages.
-- Notifications.
-- Meetings and AI-assisted features.
-- Files and attachments.
+- Meetings.
+- Announcements.
 
-These are domain categories, not claims that specific endpoints already exist.
+### Full document search
 
-### API Guidelines
+Search should cover:
 
-- Use consistent HTTP methods and status codes.
-- Validate request parameters and bodies.
-- Authenticate protected requests.
-- Enforce resource-level authorization.
-- Return consistent response and error structures.
-- Apply pagination to large collections.
-- Validate sorting and filtering parameters.
-- Use database transactions for operations that must succeed or fail together.
-- Document request and response contracts for the frontend.
-- Avoid returning sensitive fields unnecessarily.
+- File names.
+- Metadata.
+- Readable document contents.
+- Supported PDF documents.
+- Word documents.
+- Text files.
+- Other approved document formats.
 
-Maintain API documentation using the documentation approach adopted by the repository.
+### Initial search architecture
 
-## Authentication
+PostgreSQL full-text search is the initial approach unless the existing implementation or performance requirements justify another engine.
 
-Phase 3 implements the account lifecycle. The full contract is in `docs/openapi.yaml`.
+### Security requirements
 
-### Session model
+- Filter results by permissions.
+- Do not expose private documents.
+- Update indexes after creation and editing.
+- Handle deletion.
+- Handle permission changes.
+- Revoke access when membership is removed.
+- Respect project visibility.
 
-| Credential | Where it lives | Lifetime | Notes |
-|---|---|---|---|
-| Access token | Response body, sent as `Authorization: Bearer <token>` | `JWT_ACCESS_TTL_SECONDS` (default 15 minutes) | Short-lived HS256 JWT. Never stored in a cookie. |
-| Refresh token | httpOnly `nexus_rt` cookie | `REFRESH_TOKEN_TTL_SECONDS` (default 30 days) | Opaque random value. Only its SHA-256 digest is stored in PostgreSQL. |
-| CSRF token | Response body and readable `nexus_csrf` cookie | Same as the refresh token | Sent back in the `x-csrf-token` header. |
+Search must never become a way to bypass resource access controls.
 
-Rules that the implementation enforces:
+---
 
 - Every authenticated request is checked against the `Session` row in PostgreSQL, so signing out, changing a password or resetting a password revokes access immediately instead of waiting for the access token to expire.
 - The refresh token rotates on every use. Presenting a token that was already rotated is treated as a compromise and revokes every session of the account (`SESSION_REUSE_DETECTED`).
 - Requests that rely on the `nexus_rt` cookie must also send the `x-csrf-token` header. The header is required: the `nexus_csrf` cookie alone is not accepted, because a browser attaches cookies to cross-site requests automatically. The cookie only gives the frontend a way to read the value. Requests that present the refresh token in the request body are not cookie-authenticated and do not need one.
 - Only cookie-authenticated requests exist, so the business endpoints never accept the access token from a cookie and are therefore not exposed to cross-site request forgery.
 - One-time tokens (email verification, password reset, email change) are single use, expiring, and stored only as digests. The newest token of a purpose invalidates the older ones.
+- Deactivation revokes every session and invalidates every outstanding one-time token, so a link issued before deactivation cannot restore access or change the account. Reactivation is self-service with the account email address and password, never creates a session, and returns an unverified account to `PENDING_VERIFICATION` with a fresh verification link. Deleted and suspended accounts cannot reactivate themselves.
 - Passwords are hashed with bcrypt, are limited to 72 bytes so nothing is silently truncated, and are never logged or emailed.
 - Endpoints that accept an email address (`resend-verification`, `password/forgot`) always return the same response, so they cannot be used to discover which addresses are registered.
-- Sign-in, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and fall back to an in-process counter when Redis is unavailable.
+- Sign-in, registration, verification and password endpoints are rate limited per IP address and per account. The counters live in Redis and are shared across backend instances. If Redis is unavailable, rate-limited requests fail closed with `503 RATE_LIMIT_UNAVAILABLE` instead of falling back to a process-local counter.
 - Account level security events are written to the `AuditLog` table with a null `workspaceId`. They never contain passwords, tokens or verification links.
 
-### Endpoints
+Nexus supports personal and workspace integrations.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/api/v1/auth/register` | Create an account and send the verification link |
-| `POST` | `/api/v1/auth/verify-email` | Activate the account with the emailed token |
-| `POST` | `/api/v1/auth/resend-verification` | Request a new verification link |
-| `POST` | `/api/v1/auth/login` | Start a session |
-| `POST` | `/api/v1/auth/refresh` | Rotate the session |
-| `POST` | `/api/v1/auth/logout` | End the current session |
-| `POST` | `/api/v1/auth/logout-all` | End every session of the account |
-| `GET` | `/api/v1/auth/sessions` | List the active sessions |
-| `GET` | `/api/v1/auth/me` | The signed-in account |
-| `POST` | `/api/v1/auth/password/forgot` | Request a password reset link |
-| `POST` | `/api/v1/auth/password/reset` | Set a new password with the reset token |
-| `POST` | `/api/v1/auth/password/change` | Change the password of the signed-in account |
-| `POST` | `/api/v1/auth/email/change` | Request an email address change |
-| `POST` | `/api/v1/auth/email/change/confirm` | Confirm the email address change |
-| `POST` | `/api/v1/auth/deactivate` | Deactivate the signed-in account |
-| `POST` | `/api/v1/auth/delete` | Delete the signed-in account |
-| `GET` | `/api/v1/users/me` | The profile of the signed-in account |
-| `PATCH` | `/api/v1/users/me` | Update the profile of the signed-in account |
+### Planned integrations
 
-### Email delivery
+- Google Drive.
+- Microsoft OneDrive.
+- Dropbox.
+- Gmail.
+- Microsoft Outlook.
+- Slack.
+- Microsoft Teams.
+- Google Calendar.
+- Microsoft Outlook Calendar.
+- GitHub.
+- GitLab.
+- Webhooks and automation providers.
 
-`src/services/email` is the delivery seam. `src/services/providers/email` holds the provider adapter. The default sender only records delivery metadata and never logs message bodies, links or tokens.
+### Integration architecture
 
-Phase 4 installs the transactional sender at startup (`installOutboxEmailSender()` in `src/server.ts`), so application modules only call `sendEmail()` and never touch the provider.
+- OAuth.
+- Secure token storage.
+- Token refresh.
+- Permission scopes.
+- Connection status.
+- Disconnection.
+- Sync history.
+- Error handling.
+- Webhook processing.
+- Workspace-level configuration.
 
-### Provider webhooks
+### Important rules
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/api/v1/webhooks/email` | Provider delivery, bounce and complaint events |
-| `POST` | `/api/v1/webhooks/email/:token` | The same events, authenticated with the URL token |
+- Personal connections and shared workspace connections are separate.
+- Personal account connections must not automatically become workspace connections.
+- Use least-privilege OAuth scopes.
+- Securely revoke and refresh tokens.
+- Disconnecting an integration must not delete provider data.
 
-The endpoint is unauthenticated but protected by a shared secret. Two mechanisms are supported:
+---
 
-- A provider that signs its events sends an HMAC signature in the `x-nexus-signature` header (the header name is configurable).
-- A provider that does not sign its events, Brevo among them, is verified with the token that the webhook URL carries.
+# 23. Automation and Workflow Engine
 
-The route is mounted before the JSON body parser so the raw payload can be verified. The response is `200` with the processing outcome, `401` for a missing or invalid secret and `503` while neither a webhook secret nor a token is configured.
+Nexus includes an automation and workflow system.
 
-## Brevo
+### Capabilities
 
-Brevo is the configured provider. It is reached through its SMTP relay, so no provider specific code is needed in the application.
+- Workflow creation.
+- Trigger definitions.
+- Conditions.
+- Actions.
+- Execution.
+- Scheduling.
+- Activation and deactivation.
+- Execution history.
+- Error tracking.
+- Permission checks.
 
-| Setting | Value |
-|---|---|
-| Host | `smtp-relay.brevo.com` |
-| Port | `587` with STARTTLS, `465` with implicit TLS |
-| User | the account email, or the SMTP key as the user name |
-| Password | the SMTP key of the account |
+Automation must execute through approved backend services.
 
-The deployment also needs:
+Ensure that workflow execution is secure, auditable, and idempotent where appropriate.
 
-- The sending address in `EMAIL_FROM_ADDRESS` added as an authorised sender in the Brevo account.
-- SPF, DKIM and DMARC records for the sending domain. Brevo publishes the DKIM record to add.
-- The transactional event webhook configured as `https://<backend-host>/api/v1/webhooks/email/<EMAIL_WEBHOOK_TOKEN>`.
+---
 
-The provider events are mapped onto the stored deliveries:
+# 24. Python AI Service
 
-| Brevo event | Effect |
-|---|---|
-| `delivered` | The delivery is marked `DELIVERED` |
-| `hard_bounce` | The delivery is marked `BOUNCED` and the address is suppressed |
-| `soft_bounce` | Nothing changes. A soft bounce is temporary and must not suppress the address |
-| `blocked` | The delivery is marked `BOUNCED` and the address is suppressed |
-| `spam` | The delivery is marked `COMPLAINED` and the address is suppressed |
-| `unsubscribe` | The delivery is marked `COMPLAINED` and the address is suppressed |
-| `sent`, `queued` | Recorded, but the delivery state does not change |
+Nexus uses a separate Python/FastAPI service for AI processing.
 
-The application builds the SMTP message id itself, so the local part of the message id is the id of the delivery row. A Brevo event that carries the message id therefore matches the delivery exactly, and the recipient is only used as a fallback.
+The Python service is independently deployable and communicates with the Express backend through an approved service interface.
 
-## Workspaces and Invitations
+## AI capabilities
 
-Phase 5 implements workspaces, their members and the invitations that grant access. The full contract is in `docs/openapi.yaml`.
+- AI conversations.
+- Contextual assistance.
+- Retrieval-augmented generation.
+- Document analysis.
+- Summarisation.
+- Meeting intelligence.
+- Writing assistance.
+- Grammar correction.
+- Tone adjustment.
+- Recommendations.
+- AI action proposals.
 
-### Rules that the implementation enforces
+## Responsibility separation
 
-- The creator of a workspace becomes its owner. The owner role cannot be handed out, changed or removed, so a workspace always has exactly one owner.
-- Every read and every change is checked against the membership of the caller in the database. A role that a client sends in a request body is never trusted.
-- A workspace that does not exist is reported as missing, a workspace the caller does not belong to is reported as forbidden. The two are kept apart, so the endpoints cannot be used to probe for identifiers.
-- A member that is removed loses the access to the workspace immediately, because the access is decided by the membership row and not by a token.
-- The owner of a workspace may manage every member. A project manager may manage members as well, but not another project manager: a role can only be widened by the owner.
-- An invitation is a single use link. Only the SHA-256 digest of the token is stored, so a database leak does not hand out access.
-- A pending invitation is unique per address and workspace. An accepted, revoked or expired invitation never blocks a new one, so an address can be invited again.
-- The accepting account has to be the one the invitation was meant for: either the account the invitation is bound to, or the account that owns the address it was sent to. An invitation that was sent before the address had an account is bound to that account when it registers.
-- The acceptance is applied once. A second attempt with the same token is rejected, also when it arrives at the same moment as the first one.
-- An expired, revoked or already used token is rejected with a distinct error code, so the frontend can explain what happened.
-- Every change to a workspace, a member or an invitation is written to the `AuditLog` table inside the transaction that performs the change.
-- The inviter is notified when an invitation is accepted, and a member is notified when their role changes or their access is removed.
+### Express backend
 
-### Endpoints
+- Authenticates the user.
+- Checks permissions.
+- Prepares authorised context.
+- Coordinates AI requests.
+- Validates approved mutations.
+- Executes application changes.
+- Persists application data.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/api/v1/workspaces` | Create a workspace. The caller becomes its owner |
-| `GET` | `/api/v1/workspaces` | The workspaces the caller belongs to |
-| `GET` | `/api/v1/workspaces/{workspaceId}` | Read one workspace |
-| `PATCH` | `/api/v1/workspaces/{workspaceId}` | Change the name or the description |
-| `POST` | `/api/v1/workspaces/{workspaceId}/archive` | Archive the workspace |
-| `DELETE` | `/api/v1/workspaces/{workspaceId}` | Delete the workspace. The records keep their history |
-| `POST` | `/api/v1/workspaces/{workspaceId}/switch` | Validate the membership and return the workspace to work in |
-| `GET` | `/api/v1/workspaces/{workspaceId}/members` | List the members |
-| `POST` | `/api/v1/workspaces/{workspaceId}/members` | Add a registered account to the workspace |
-| `PATCH` | `/api/v1/workspaces/{workspaceId}/members/{userId}` | Change the role of a member |
-| `DELETE` | `/api/v1/workspaces/{workspaceId}/members/{userId}` | Remove a member |
-| `GET` | `/api/v1/workspaces/{workspaceId}/invitations` | List the invitations, optionally filtered by state |
-| `POST` | `/api/v1/workspaces/{workspaceId}/invitations` | Invite an address and send the invitation mail |
-| `POST` | `/api/v1/workspaces/{workspaceId}/invitations/{invitationId}/resend` | Send the invitation again with a new token |
-| `DELETE` | `/api/v1/workspaces/{workspaceId}/invitations/{invitationId}` | Revoke an invitation |
-| `GET` | `/api/v1/invitations` | The invitations that are addressed to the signed-in account |
-| `GET` | `/api/v1/invitations/{token}` | The invitation behind the link, without a session |
-| `POST` | `/api/v1/invitations/{token}/accept` | Accept the invitation and join the workspace |
+### Python service
 
-### Invitation states
+- Performs AI processing.
+- Communicates with managed AI APIs.
+- Processes supplied context.
+- Produces structured AI outputs.
+- Generates recommendations and proposed actions.
 
-| State | Meaning |
-|---|---|
-| `PENDING` | The link is live. It can be accepted, resent or revoked |
-| `ACCEPTED` | The link was used. The membership exists |
-| `REVOKED` | The inviter withdrew the invitation. The link no longer works |
-| `EXPIRED` | The deadline passed. The link no longer works |
+### Important security rules
 
-## Real-Time Communication
+- Python must not independently bypass Express authorisation.
+- Python must not directly mutate the main application database by default.
+- AI must not be trusted as an authority for user permissions.
+- AI outputs must be validated.
+- Core application functionality must continue when the AI service is unavailable.
 
-Socket.IO may be used for live messaging, task updates, notifications, presence, and other supported events.
+---
 
-Real-time events should:
+# 25. Nexus Write
 
-- Authenticate connections.
-- Verify access to requested resources and rooms.
-- Validate event payloads.
-- Avoid exposing private workspace information.
-- Use consistent event names and payload schemas.
-- Avoid broadcasting sensitive data to unauthorized users.
-- Cleanly handle disconnects and reconnections.
-- Integrate with persisted database state where appropriate.
+Nexus Write provides Grammarly-like writing assistance.
 
-If multiple backend instances are deployed, configure a suitable shared Socket.IO adapter when cross-instance event delivery is required.
+### Capabilities
 
-Document the event contract so the frontend can subscribe to the correct events without guessing.
+- Spelling.
+- Grammar.
+- Punctuation.
+- Clarity.
+- Vocabulary.
+- Tone.
+- Rewriting.
+- Summarisation.
+- Translation.
+- Explanation.
 
-## Redis and Caching
+### Backend requirements
 
-Redis can support selected infrastructure needs, including:
+- Accept approved writing analysis requests.
+- Validate user access.
+- Process text through the AI service.
+- Return structured suggestions.
+- Support selected-text workflows.
+- Respect retention and privacy rules.
+- Avoid unnecessary storage of private text.
+
+The backend must not silently overwrite user content.
+
+Suggestions are returned for user review and explicit acceptance through the frontend.
+
+---
+
+Redis supports the following configured infrastructure needs:
 
 - Caching frequently accessed data.
-- Rate limiting.
+- Rate limiting (required; requests fail closed when Redis is unavailable).
 - Temporary state.
 - Background-job infrastructure, if configured.
 - Socket.IO cross-instance coordination when the relevant adapter is installed.
 
-Use Redis only for responsibilities actually configured in the project.
+### Background processing use cases
+
+### Distributed rate limiting
+
+The global limiter and the route-specific authentication, invitation and workspace limiters use Redis-backed counters. The store has no in-process fallback, so two backend instances sharing the same Redis deployment and `RATE_LIMIT_NAMESPACE` enforce one shared counter set. Keys use the form `rl:{RATE_LIMIT_NAMESPACE}:{limiter}:{client-key}` and expire with the configured window.
+
+- `REDIS_URL` must point at the shared Redis deployment. Use a separate Redis database or namespace per environment and per test run.
+- `RATE_LIMIT_NAMESPACE` separates counters when environments share one Redis instance.
+- `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX` configure the global limiter.
+- `TRUST_PROXY` controls whether Express trusts forwarded addresses. Leave it disabled unless the application is behind a trusted proxy; the limiter uses `req.ip`, not an arbitrary forwarded header.
+
+Health endpoints are exempt from the global limiter. If Redis is unavailable, rate-limited requests are denied with `503 RATE_LIMIT_UNAVAILABLE`; this is deliberate fail-closed behavior for authentication and abuse-sensitive traffic. The readiness endpoint reports Redis status, and the server logs `redis_unavailable` without logging connection credentials. Deployments must provide a reachable Redis instance before relying on the API for authentication or other rate-limited operations.
 
 Define cache expiration and invalidation rules. Do not allow stale cached data to bypass authorization or expose data after permissions change.
 
-PostgreSQL should remain the authoritative store for persistent relational application data unless a specific service has a documented alternative.
+### Reliability requirements
 
-## Email and Notifications
+- Bounded retries.
+- Backoff strategies.
+- Failure handling.
+- Dead-letter or equivalent failure handling where configured.
+- Idempotent job execution where appropriate.
+- Monitoring.
+- Structured logs.
 
-Phase 4 implements transactional email as a reusable platform capability.
+Do not implement infinite retries.
+
+Do not log sensitive information such as passwords, access tokens, or unnecessary recipient details.
 
 - **Provider adapter** — `src/services/providers/email` sends through a provider-agnostic SMTP transport. Resend, Brevo and Amazon SES all expose an SMTP endpoint, so switching provider only changes the connection details. A `console` transport records delivery metadata without sending, and `disabled` accepts messages without sending them. Provider credentials stay server-side. Brevo is the configured provider, see the section below.
 - **Templates** — `src/services/email/templates` renders a responsive branded HTML document and a plain-text alternative from one shared document model. HTML output is escaped. The available templates are `account_verification`, `password_reset`, `password_changed`, `email_change_verification`, `security_notification`, `workspace_invitation`, `team_invitation`, `project_invitation`, `task_assignment`, `mention` and `meeting_invitation`.
 - **Outbox and delivery metadata** — every message is written to `EmailDelivery` with its template, recipient, status, attempt count, provider message id and timestamps. `EmailSuppression` records bounced and complained addresses, `EmailWebhookEvent` records processed provider events.
 - **Background delivery** — a worker polls the outbox and claims due rows with `FOR UPDATE SKIP LOCKED`, so several instances can run it safely. Rows are claimed atomically and the worker stops with the server.
-- **Retries and deduplication** — transient failures are retried with exponential backoff and jitter up to `EMAIL_MAX_ATTEMPTS`; permanent failures stop immediately. A unique idempotency key per logical send prevents duplicate rows and duplicate sends.
+- **Retries and deduplication** — transient provider failures and unexpected worker errors are retried with exponential backoff and jitter only while `EMAIL_MAX_ATTEMPTS` remains. Permanent failures stop immediately, and an exhausted delivery moves to the terminal `FAILED` state instead of returning to the queue. A unique idempotency key per logical send prevents duplicate rows and duplicate sends.
 - **Provider webhooks** — `POST /api/v1/webhooks/email` verifies an HMAC signature over the raw payload, then applies delivery, bounce and complaint events. Providers that do not sign their events, Brevo among them, are verified with the token in the webhook URL. Repeated events are applied once.
-- **Logging** — verification tokens, reset links and message bodies are never written to the application log.
+- **Task assignment notifier** — `src/services/task-assignment-notifier.ts` turns a persisted `TaskAssignee` row into the existing `task_assignment` email. It validates the active workspace and project membership, uses suppression rules, builds the task link from `EMAIL_APP_URL` and `TASK_ASSIGNMENT_LINK_PATH`, and derives its idempotency key from the assignment timestamp. The Phase 9 task service will call it after committing an assignment; delivery failure is reported without changing task data.
+- **Collaboration email notifier** — `src/services/collaboration-email-notifier.ts` provides post-commit handlers for persisted comment mentions, pending meeting invitations, persisted team invitations and persisted project invitations. Mention recipients are looked up from active users with workspace membership and the comment author is excluded. Meeting invitations are sent only for a `PENDING` invitation, include the organizer, time, location and optional workspace/project context, and link to the configured meeting route. Team invitations load a persisted `TEAM` invitation, require an active workspace, team and inviter, verify the raw token against the stored digest, and build the acceptance link from `EMAIL_APP_URL` plus `TEAM_INVITATION_LINK_PATH`. Project invitations load a persisted `PROJECT` invitation, require an active workspace, a live (non-archived) project and an active inviter, and include the project name, workspace name, inviter, expiration and a configured `PROJECT_INVITATION_LINK_PATH` link. All handlers use the transactional outbox, address suppression, stable idempotency keys and links rooted at `EMAIL_APP_URL`. Team and project idempotency use the invitation and token digest, so re-processing one token sends once while a resend with a new token sends once. The raw invitation token is never logged, written to outbox metadata or embedded in an idempotency key. The repository currently has no mention parser, meeting model, or team/project invitation workflow, so these handlers do not create mention events or create, revoke, expire or accept invitations; their owning workflows must call them after commit and supply the persisted context. Notification preferences are not modeled yet; the existing suppression list is enforced.
+- **Logging** — verification tokens, reset links and message bodies are never written to the application log. Delivery logs carry the delivery ID, template, provider, attempt and failure category, but not the recipient email address; provider and worker error text is redacted before it is logged.
+
+---
+
+# 28. Email Delivery
+
+The backend uses an approved email provider.
+
+Email functionality includes:
+
+- Email verification.
+- Password recovery.
+- Invitation emails.
+- Join request notifications.
+- Task assignment emails.
+- Mention notifications where approved.
+- Meeting invitations.
+- Important workspace updates.
+- Subscription and billing communications.
+
+### Requirements
+
+- Centralised email service.
+- Reusable templates.
+- Queue-based delivery where appropriate.
+- Bounded retries.
+- Delivery status tracking.
+- Failure handling.
+- Deduplication.
+- Secure template data.
+- Appropriate logging.
+
+Email delivery must not block unrelated application workflows unnecessarily.
+
+---
+
+# 29. Real-Time Architecture
+
+Nexus requires real-time application functionality.
+
+The backend should support real-time events for:
+
+- Messaging.
+- Typing indicators.
+- Presence.
+- Task updates.
+- Project updates.
+- General notifications.
+- Workspace membership changes.
+- Relevant permission changes.
+- Meeting-related events.
+
+### Requirements
+
+- Authenticated connections.
+- Workspace-aware authorisation.
+- Secure event delivery.
+- Event validation.
+- Reconnection support.
+- Appropriate event naming.
+- Duplicate prevention.
+- Distributed coordination where required.
+
+Do not send events to users who lack permission to access the relevant resource.
+
+Redis may coordinate real-time delivery across multiple backend instances.
+
+---
+
+# 30. API Architecture
+
+The backend exposes APIs for the Nexus frontend and approved integrations.
+
+### API design requirements
+
+- Consistent route organisation.
+- Request validation.
+- Response consistency.
+- Authentication.
+- Authorisation.
+- Pagination.
+- Filtering.
+- Sorting.
+- Appropriate HTTP status codes.
+- Centralised error handling.
+- API documentation.
+
+### API standards
+
+- Do not expose database implementation details unnecessarily.
+- Do not trust client-provided roles.
+- Validate all user input.
+- Validate workspace and resource access.
+- Avoid leaking internal errors.
+- Keep API contracts stable where practical.
+- Document breaking changes.
+
+The actual route structure and API conventions must follow the existing backend implementation.
+
+---
+
+# 31. Database Architecture
+
+PostgreSQL is the primary persistent database.
+
+The backend must maintain clear relationships between:
+
+- Users.
+- Workspaces.
+- Workspace memberships.
+- Invitations.
+- Join requests.
+- Roles and permissions.
+- Departments.
+- Teams and groups.
+- Projects.
+- Tasks.
+- Conversations.
+- Messages.
+- Notifications.
+- Files.
+- Documents.
+- Calendar events.
+- Meetings.
+- Forms.
+- Subscriptions.
+- Integrations.
+- Automations.
+- Audit records.
+
+### Database principles
+
+- Use appropriate constraints.
+- Add indexes for common queries.
+- Use transactions for multi-step operations.
+- Maintain referential integrity.
+- Prevent cross-workspace access.
+- Use migrations for schema changes.
+- Preserve existing data.
+- Avoid destructive migrations without explicit approval.
+- Consider query performance.
+- Avoid unnecessary duplication.
+
+The actual ORM and migration tooling must be discovered from the repository.
+
+Do not assume a particular ORM.
+
+---
+
+# 32. Audit Logging and Monitoring
+
+Important actions should be auditable.
+
+Examples:
+
+- Authentication events.
+- Role changes.
+- Membership changes.
+- Workspace settings changes.
+- Project visibility changes.
+- Sensitive file sharing.
+- Billing changes.
+- Integration connections and disconnections.
+- Security-related actions.
+- AI-assisted mutations.
+
+### Logging requirements
+
+- Structured logging.
+- Appropriate log levels.
+- Request correlation where configured.
+- Error tracking.
+- Job execution logging.
+- Security event logging.
+- Monitoring for critical failures.
+
+Never log:
+
+- Passwords.
+- Raw access tokens.
+- Private API secrets.
+- CVV.
+- Unnecessary private user content.
+
+Avoid logging unnecessary personal information.
+
+---
+
+# 33. Backend Security
+
+Security must be enforced throughout the backend.
+
+### Authentication
+
+- Secure credential handling.
+- Password hashing.
+- Session and token protection.
+- Expiration.
+- Revocation.
+- Account recovery protection.
+
+### Authorisation
+
+- Server-side permission checks.
+- Workspace isolation.
+- Resource ownership checks.
+- Role validation.
+- Protection against privilege escalation.
+- Protection against insecure direct object references.
+
+### API security
+
+- Input validation.
+- Rate limiting.
+- Secure CORS configuration.
+- Safe error handling.
+- Appropriate security headers.
+- Request size limits.
+- File upload validation.
+- Webhook signature validation.
+
+### Data security
+
+- Secure database credentials.
+- Private object storage.
+- Secure token storage.
+- Appropriate encryption.
+- Safe logging.
+- Environment secret protection.
+
+### AI security
+
+- AI does not determine user permissions.
+- AI cannot silently mutate application data.
+- Every mutation requires explicit approval.
+- Express rechecks permissions before execution.
+
+---
+
+# 34. Error Handling and Validation
+
+The backend must use consistent validation and error handling.
 
 Requirements:
 
-- Keep provider credentials server-side.
-- Validate recipient addresses.
-- Handle provider failures and retries appropriately.
-- Avoid duplicate notifications.
-- Do not expose credentials or sensitive content in logs.
-- Use templates consistently.
-- Record delivery status where required and supported.
+- Validate request parameters.
+- Validate request bodies.
+- Validate query parameters.
+- Validate resource access.
+- Return consistent errors.
+- Avoid leaking stack traces in production.
+- Log useful diagnostic information.
+- Handle external provider failures.
+- Handle database failures.
+- Handle Redis failures.
+- Handle background job failures.
+- Handle AI service failures.
 
-Do not assume email delivery is working until the provider is configured and tested. The sending domain needs SPF, DKIM and DMARC records before a production deployment sends real mail.
+A failure in an optional service should not unnecessarily disable unrelated core functionality.
 
-## Meetings and AI Integration
+---
 
-Integrations should be isolated behind clear service boundaries.
+# 35. Testing Strategy
 
-For AI and meeting providers:
+The backend must be tested throughout development.
 
-- Store API credentials securely.
-- Validate incoming requests.
-- Apply appropriate user and resource permissions.
-- Handle timeouts, rate limits, and provider errors.
-- Track relevant usage where required.
-- Protect transcripts, recordings, summaries, and other private content.
-- Avoid treating AI-generated output as verified facts without appropriate validation.
+### Testing categories
 
-Do not make external services mandatory for unrelated features unless the product architecture requires it.
+- Unit tests.
+- Service tests.
+- Integration tests.
+- API tests.
+- Database tests.
+- Permission tests.
+- Security tests.
+- Real-time tests.
+- Background job tests.
+- External provider integration tests where practical.
 
-## Security
+### Important workflows
 
-Security must be enforced by the backend, regardless of what the frontend displays.
+- Authentication.
+- Workspace creation.
+- Workspace switching and membership.
+- Invitations.
+- Join requests.
+- Role changes.
+- Privilege escalation prevention.
+- Project visibility.
+- Task management.
+- Messaging.
+- Notification separation.
+- File access.
+- Document access.
+- Calendar synchronisation.
+- Meeting access.
+- Billing.
+- Search.
+- Integrations.
+- Automation.
+- AI requests.
+- Nexus Write.
+- AI action approval.
+- Background job retries.
+- Workspace isolation.
 
-Key requirements include:
+Do not remove tests to make an implementation appear successful.
 
-- Secure password hashing.
-- Strong session or token management.
-- Authorization on every protected resource.
-- Input validation.
-- SQL injection protection through safe database access patterns.
-- Rate limiting for sensitive or abuse-prone operations.
-- Secure CORS configuration.
-- Safe error responses.
-- Secret management.
-- Upload validation and access controls.
-- Protection against unauthorized workspace and project access.
-- Appropriate audit logging.
-- Dependency and configuration maintenance.
+---
 
-Never log passwords, access tokens, private keys, or unnecessary sensitive user data.
+# 36. Environment Configuration
 
-## Testing
+Inspect the existing environment configuration before adding or changing variables.
 
-Test the system at multiple levels:
+Configuration categories may include:
 
-- Unit tests for services and utilities.
-- API integration tests.
-- Authentication and authorization tests.
-- Database integration tests using isolated test data.
-- Task workflow and permission tests.
-- Real-time event tests where applicable.
-- Email and external-provider tests using safe test configurations.
-- Regression tests for existing functionality.
+- Application environment.
+- API port.
+- PostgreSQL connection.
+- Redis connection.
+- Authentication secrets.
+- Frontend origin.
+- Object storage.
+- Email provider.
+- Payment provider.
+- Calling provider.
+- AI service connection.
+- OAuth providers.
+- Logging and monitoring.
 
-Run the scripts actually configured in `package.json`. Do not run tests against production data.
+The actual variable names must be taken from the existing configuration and application code.
 
-### Running the tests
+### Mandatory rules
 
-The unit and HTTP contract tests always run:
+- Never overwrite `.env`.
+- Never delete environment files.
+- Never commit secrets.
+- Never print credentials in logs.
+- Never place production secrets in example files.
+- Keep local, staging, and production configurations separate.
+- Document newly required variables.
+- Preserve existing deployment configuration.
 
-```bash
-npm test
+---
+
+# 37. Suggested Backend Project Structure
+
+The actual structure must be determined from the existing repository.
+
+A possible organisation is:
+
+```text
+backend/
+├── src/
+│   ├── app/
+│   ├── config/
+│   ├── database/
+│   ├── middleware/
+│   ├── modules/
+│   │   ├── auth/
+│   │   ├── users/
+│   │   ├── workspaces/
+│   │   ├── memberships/
+│   │   ├── invitations/
+│   │   ├── permissions/
+│   │   ├── teams/
+│   │   ├── projects/
+│   │   ├── tasks/
+│   │   ├── messaging/
+│   │   ├── notifications/
+│   │   ├── files/
+│   │   ├── documents/
+│   │   ├── calendar/
+│   │   ├── meetings/
+│   │   ├── forms/
+│   │   ├── billing/
+│   │   ├── search/
+│   │   ├── integrations/
+│   │   ├── automation/
+│   │   └── ai/
+│   ├── services/
+│   ├── jobs/
+│   ├── queues/
+│   ├── realtime/
+│   ├── utils/
+│   └── types/
+├── tests/
+├── migrations/
+├── .env.example
+├── package.json
+└── README.md
+
+ai-service/
+├── app/
+├── tests/
+├── requirements.txt
+└── README.md
 ```
 
-The database integration tests are opt-in. They create and delete accounts, so they only run when the target database is explicitly marked as a test database. The helper refuses to run against a database whose name does not contain `test`.
+This is illustrative only.
+
+Do not restructure the existing repository simply to match this example.
+
+---
+
+# 38. Development and Execution
+
+Before starting development:
+
+1. Inspect the repository.
+2. Read `package.json`.
+3. Confirm the Node.js version.
+4. Confirm the package manager.
+5. Inspect the existing database configuration.
+6. Inspect Redis configuration.
+7. Review environment variables.
+8. Confirm migration tooling.
+9. Confirm test scripts.
+10. Review frontend integration requirements.
+
+Use the scripts already defined by the repository.
+
+Typical commands may resemble:
 
 ```bash
-RUN_PHASE2_DB_TESTS=true \
-RUN_PHASE3_DB_TESTS=true \
-RUN_PHASE4_DB_TESTS=true \
-RUN_PHASE5_DB_TESTS=true \
-DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus_test" \
-npm test
+pnpm install
+pnpm dev
+pnpm lint
+pnpm test
+pnpm build
 ```
 
-Apply the migrations to the test database first, or let the test helper apply them:
+Database migration commands must be taken from the actual backend package scripts and migration tooling.
 
-```bash
-DATABASE_URL="postgresql://nexus:nexus@localhost:5432/nexus_test" npx prisma migrate deploy
-```
+Do not blindly run commands from examples in this document.
 
-The Phase 3 suite covers registration, verification, sign-in, session rotation, refresh token replay detection, CSRF enforcement, sign-out, password reset and change, email change, deactivation, deletion, profile updates, rate limiting and the audit trail.
+---
 
-The Phase 4 suite covers template rendering in HTML and plain text, configuration validation, transport error classification, outbox enqueue and claiming, idempotent sends, transient retries, permanent failures, the attempt limit, address suppression, webhook verification and idempotency, and that verification tokens never reach the application log. The integration tests talk to a local SMTP capture server, so no provider credentials and no outbound mail are required.
+# 39. Deployment and Production Operations
 
-The Phase 5 suite covers the workspace lifecycle, the membership rules and the invitation flow: the content of the invitation mail, an invitee that registers after the invitation was sent, a single use token, expired, revoked and duplicate invitations, an invitation that belongs to another account, a resend that replaces the token, the member rules for the owner and for a project manager, the audit trail of every membership change and the state of the workspace after an archive and a deletion.
+The backend must be deployable independently of the frontend and AI service.
 
-With every database integration suite enabled the full suite is 125 tests, and all of them pass.
+Production readiness includes:
 
-## Frontend Integration
+- Secure environment variables.
+- PostgreSQL connectivity.
+- Redis connectivity.
+- Database migrations.
+- Object storage configuration.
+- Email provider configuration.
+- Payment provider configuration.
+- Calling provider configuration.
+- AI service connectivity.
+- CORS configuration.
+- Authentication configuration.
+- Background worker configuration.
+- Real-time infrastructure.
+- Monitoring.
+- Error tracking.
+- Health checks.
+- Backup and recovery procedures.
 
-The frontend is a separate Next.js and TypeScript application.
+### Deployment principles
 
-Integration requires agreement on:
+- Avoid destructive production migrations.
+- Never commit production secrets.
+- Verify migrations before deployment.
+- Maintain compatibility between frontend and backend API contracts.
+- Monitor background workers.
+- Verify real-time connectivity.
+- Verify external provider callbacks.
+- Test critical workflows after deployment.
 
-- API base URL.
-- Authentication and session strategy.
-- Request and response types.
-- Error formats.
-- Pagination conventions.
-- CORS and allowed origins.
-- Socket.IO URL and authentication.
-- Event names and payload schemas.
-- Upload and download behavior.
-- Date, time, and timezone conventions.
+---
 
-Maintain a documented contract between both repositories. Update the frontend types and integration code when a backend contract intentionally changes.
+# 40. Scalability and Performance
 
-## Deployment
+The backend must be designed for increasing users, workspaces, and concurrent operations.
 
-Before deploying:
+Important areas:
 
-1. Review configuration and secrets.
-2. Verify database connectivity.
-3. Review pending migrations.
-4. Run the appropriate automated checks.
-5. Build the application.
-6. Configure Redis and required external services.
-7. Configure frontend origins and CORS.
-8. Configure HTTPS and production secrets.
-9. Deploy using the approved process.
-10. Verify health, logs, database access, and essential user flows.
+- Database indexing.
+- Query optimisation.
+- Pagination.
+- Caching.
+- Redis coordination.
+- Background processing.
+- Connection management.
+- Real-time scaling.
+- File processing.
+- Search indexing.
+- API rate limiting.
+- Efficient event delivery.
 
-Use backward-compatible database changes when possible. Prepare a rollback or recovery procedure for risky releases.
+Do not introduce unnecessary infrastructure prematurely.
 
-## Development Workflow
+Scale based on actual architectural and performance requirements.
 
-The repository may contain:
+---
 
-- `agent.md` for project-wide development instructions.
-- `PHASES.md` for the implementation roadmap and progress.
-- Specialized `SKILL.md` files for database work, messaging, email, AI meetings, testing, and deployment.
+# 41. Development Rules for AI Coding Agents
 
-Before implementing a feature:
+All coding agents must follow:
 
-1. Read the relevant instructions and phase.
-2. Inspect existing code and configuration.
-3. Identify dependencies and API contracts.
-4. Implement the smallest coherent change.
-5. Run relevant tests and checks.
-6. Document unresolved issues.
-7. Update phase status only when acceptance criteria are verified.
+- `agent.md`
+- `phases.md`
+- Existing architecture documentation.
+- Existing API documentation.
+- Relevant module documentation.
 
-## Contributing
+### Mandatory rules
 
-Contributions should preserve the existing architecture, maintain security and data integrity, and include appropriate tests.
+1. Read documentation before coding.
+2. Inspect existing implementation.
+3. Work only on the assigned phase.
+4. Preserve existing functionality.
+5. Use TypeScript for the main backend.
+6. Keep Python limited to the separate AI service.
+7. Do not invent APIs.
+8. Do not bypass service-level authorisation.
+9. Preserve workspace isolation.
+10. Do not expose secrets.
+11. Never delete or overwrite `.env`.
+12. Do not replace existing architecture without approval.
+13. Run relevant tests and checks.
+14. Update `phases.md`.
+15. Commit changes to a dedicated feature branch.
+16. Never commit directly to `main`.
+17. Never force-push.
+18. Never merge without explicit approval.
 
-Before submitting changes:
+---
 
-- Verify the affected functionality.
-- Run applicable lint, type-check, test, and build commands.
-- Document API or schema changes.
-- Avoid committing credentials or local environment files.
-- Explain known limitations and required configuration.
+# 42. Current Implementation Status
 
-## Project Status
+This README describes the intended backend architecture and product requirements.
 
-The precise implementation status of each feature is determined by the source code, tests, configuration, and current roadmap—not by the feature descriptions in this README.
+The Phase 4 suite covers template rendering in HTML and plain text, configuration validation, transport error classification, outbox enqueue and claiming, idempotent sends, transient retries, permanent failures, the attempt limit, bounded retry of unexpected worker errors, recovery after a temporary worker failure, repair of exhausted queued rows, concurrent claim safety, address suppression, webhook verification and idempotency, that verification tokens never reach the application log, and that queued, sent and failure events do not expose recipient addresses. The Phase 4.3 task-assignment integration suite covers recipient and context selection, reassignment, duplicate events, suppression, ineligible recipients, and delivery failure without assignment corruption. The Phase 4.4/4.5 meeting, team and project invitation suite covers meeting context, time, configured links, duplicate meeting events, team invitation delivery, project invitation delivery with the project and workspace context, expired, archived, wrong-type and missing-target invitations, token mismatch, resend, suppression, inactive inviters, duplicate processing and failure isolation without changing the persisted invitation. The integration tests talk to a local SMTP capture server or the transactional outbox, so no provider credentials and no outbound mail are required.
 
-`PHASES.md` is the implementation tracker. Phases 1 to 5 (foundation, infrastructure, authentication, transactional email, workspaces and invitations) are complete. The next phase is Phase 6, roles, permissions and authorization.
+The actual implementation status must be established by inspecting the repository and the `phases.md` tracker.
 
+Use the tracker to record:
+
+- Completed features.
+- In-progress features.
+- Pending features.
+- Blocked features.
+- Missing API contracts.
+- Outstanding infrastructure dependencies.
+- Known security or reliability issues.
+
+Do not report planned functionality as implemented.
+
+---
+
+# 43. Future Enhancements
+
+The following are potential future improvements and are not automatically part of the initial implementation scope:
+
+- Native mobile application APIs.
+- Collaborative whiteboards.
+- Advanced knowledge base.
+- Advanced document collaboration.
+- Custom permission builder.
+- Workflow marketplace.
+- Advanced AI agents.
+- Additional third-party integrations.
+- Advanced enterprise security monitoring.
+- Advanced analytics.
+- Offline synchronisation.
+
+These features require explicit approval before implementation.
+
+---
+
+Use backward-compatible database changes when possible. Prepare a rollback or recovery procedure for risky releases. See [`docs/migration-recovery.md`](docs/migration-recovery.md) for the migration recovery policy and the verification script.
+
+A backend feature is complete only when:
+
+1. The requirement is implemented.
+2. Existing functionality is preserved.
+3. Request validation is implemented.
+4. Authentication is enforced where required.
+5. Authorisation is enforced server-side.
+6. Workspace isolation is verified.
+7. Database changes are migrated safely where required.
+8. Error handling is implemented.
+9. Relevant events and background jobs are handled.
+10. Relevant tests pass.
+11. TypeScript checks pass.
+12. Linting passes.
+13. Build checks pass where applicable.
+14. API documentation is updated where necessary.
+15. `phases.md` is updated accurately.
+16. Changes are committed to the appropriate feature branch.
+17. The feature branch is pushed when required.
+18. Outstanding limitations are documented.
+
+A route returning HTTP 200 does not automatically mean its feature is complete.
+
+---
+
+# 45. Final Objective
+
+The Nexus backend must provide a secure, reliable, scalable, and maintainable foundation for the entire Nexus platform.
+
+It must coordinate users, workspaces, memberships, projects, tasks, conversations, notifications, files, documents, meetings, subscriptions, integrations, automation, and AI-powered workflows.
+
+The Express and TypeScript application remains the authoritative application backend.
+
+PostgreSQL remains the durable source of truth.
+
+Redis supports performance and real-time coordination.
+
+Python/FastAPI provides separate AI processing.
+
+All application resources must respect workspace isolation and server-side permissions.
+
+The ultimate goal is to provide a backend capable of supporting a connected productivity platform across Individual, Company, and Institution workspaces.

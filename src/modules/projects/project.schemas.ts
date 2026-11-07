@@ -1,216 +1,133 @@
 import { z } from 'zod';
 
-/**
- * Validation for the project endpoints.
- *
- * Unknown keys are rejected, so a client cannot set server-owned fields such
- * as the project id, its archival state or its audit history.
- */
-
-// ---------------------------------------------------------------------------
-// Shared field schemas
-// ---------------------------------------------------------------------------
-
-const nameSchema = z
+const uuid = z.string().uuid();
+const projectKey = z
   .string()
   .trim()
-  .min(2, 'Name must be at least 2 characters')
-  .max(120, 'Name must be at most 120 characters');
+  .min(2)
+  .max(16)
+  .regex(/^[A-Za-z0-9_-]+$/);
+const dateInput = z.string().datetime({ offset: true }).optional().nullable();
 
-const descriptionSchema = z
-  .string()
-  .trim()
-  .max(2000, 'Description must be at most 2000 characters')
-  .nullable();
-
-const projectKeySchema = z
-  .string()
-  .trim()
-  .regex(/^[A-Z][A-Z0-9]{1,9}$/, 'A project key is 2–10 uppercase letters or digits');
-
-const dateSchema = z
-  .string()
-  .trim()
-  .min(1, 'Enter a date')
-  .transform((value, ctx) => {
-    const date = new Date(value);
-
-    if (Number.isNaN(date.getTime())) {
-      ctx.addIssue({ code: 'custom', message: 'Enter a valid ISO 8601 date' });
-      return z.NEVER;
-    }
-
-    return date;
-  });
-
-const nullableDateSchema = z.union([dateSchema, z.null()]);
-
-const labelSchema = z
-  .object({
-    name: z.string().trim().min(1).max(40),
-    color: z
-      .string()
-      .trim()
-      .regex(/^#[0-9a-fA-F]{6}$/, 'Use a six-digit hex colour such as #4f46e5')
-      .optional(),
-  })
-  .strict();
-
-const customFieldSchema = z
-  .object({
-    name: z.string().trim().min(1).max(60),
-    type: z.enum(['text', 'number', 'date', 'select', 'checkbox']),
-    options: z.array(z.string().trim().min(1).max(80)).max(50).optional(),
-  })
-  .strict();
-
-/**
- * Project settings hold lightweight per-project configuration.
- *
- * Labels and custom fields are declared here rather than as separate tables
- * because they are project metadata. Task records that reference them belong
- * to the task phase.
- */
-export const projectSettingsSchema = z
-  .object({
-    labels: z.array(labelSchema).max(100).optional(),
-    customFields: z.array(customFieldSchema).max(100).optional(),
-  })
-  .strict();
-
-export const projectRoleSchema = z.enum(['PROJECT_MANAGER', 'MEMBER', 'VIEWER']);
-
-export const projectStatusSchema = z.enum([
-  'PLANNING',
-  'ACTIVE',
-  'ON_HOLD',
-  'COMPLETED',
-  'ARCHIVED',
-]);
-
-const updateProjectStatusSchema = z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED']);
-
-export const projectVisibilitySchema = z.enum(['PRIVATE', 'WORKSPACE']);
-
-// ---------------------------------------------------------------------------
-// Parameter schemas
-// ---------------------------------------------------------------------------
-
-export const workspaceIdParamsSchema = z.object({
-  workspaceId: z.string().trim().uuid('The workspace id is not valid'),
-});
-
-export const projectParamsSchema = z.object({
-  workspaceId: z.string().trim().uuid('The workspace id is not valid'),
-  projectId: z.string().trim().uuid('The project id is not valid'),
-});
-
+export const projectParamsSchema = z.object({ workspaceId: uuid, projectId: uuid });
+export const projectWorkspaceParamsSchema = z.object({ workspaceId: uuid });
 export const projectMemberParamsSchema = z.object({
-  workspaceId: z.string().trim().uuid('The workspace id is not valid'),
-  projectId: z.string().trim().uuid('The project id is not valid'),
-  userId: z.string().trim().uuid('The user id is not valid'),
+  workspaceId: uuid,
+  projectId: uuid,
+  userId: uuid,
 });
-
-// ---------------------------------------------------------------------------
-// Query schemas
-// ---------------------------------------------------------------------------
-
-const booleanString = z
-  .enum(['true', 'false'])
-  .optional()
-  .transform((value) => value === 'true');
 
 export const listProjectsQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
-  status: projectStatusSchema.optional(),
-  visibility: projectVisibilitySchema.optional(),
-  teamId: z.string().trim().uuid('The team id is not valid').optional(),
-  ownerId: z.string().trim().uuid('The owner id is not valid').optional(),
-  search: z.string().trim().min(1).max(120).optional(),
-  includeArchived: booleanString,
-  sortBy: z
-    .enum(['name', 'status', 'startDate', 'dueDate', 'createdAt', 'updatedAt'])
-    .default('createdAt'),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  cursor: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  status: z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'ARCHIVED']).optional(),
+  visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).optional(),
+  teamId: uuid.optional(),
+  departmentId: uuid.optional(),
+  search: z.string().trim().min(1).max(100).optional(),
+  includeArchived: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
 });
-
-export const projectActivityQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
-});
-
-// ---------------------------------------------------------------------------
-// Body schemas
-// ---------------------------------------------------------------------------
 
 export const createProjectSchema = z
   .object({
-    name: nameSchema,
-    key: projectKeySchema.optional(),
-    description: descriptionSchema.optional(),
-    status: z.enum(['PLANNING', 'ACTIVE']).default('PLANNING'),
-    visibility: projectVisibilitySchema.default('WORKSPACE'),
-    teamId: z.string().trim().uuid('The team id is not valid').optional().nullable(),
-    ownerId: z.string().trim().uuid('The owner id is not valid').optional(),
-    startDate: nullableDateSchema.optional(),
-    dueDate: nullableDateSchema.optional(),
-    settings: z.union([projectSettingsSchema, z.null()]).optional(),
+    name: z.string().trim().min(2).max(100),
+    key: projectKey,
+    description: z.string().trim().max(5000).nullable().optional(),
+    category: z.string().trim().min(1).max(80).nullable().optional(),
+    labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
+    visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).default('WORKSPACE'),
+    teamId: uuid.optional().nullable(),
+    departmentId: uuid.optional().nullable(),
+    startDate: dateInput,
+    dueDate: dateInput,
   })
   .strict()
   .refine(
     (value) =>
-      !value.startDate || !value.dueDate || value.startDate.getTime() <= value.dueDate.getTime(),
+      !value.startDate || !value.dueDate || new Date(value.startDate) <= new Date(value.dueDate),
     {
+      message: 'Start date must be on or before the due date',
       path: ['dueDate'],
-      message: 'The due date must not be earlier than the start date',
+    },
+  )
+  .refine(
+    (value) =>
+      value.visibility !== 'DEPARTMENT_TEAM' || Boolean(value.teamId || value.departmentId),
+    {
+      message: 'Department/team-only projects must be assigned to a team or department',
+      path: ['visibility'],
     },
   );
 
 export const updateProjectSchema = z
   .object({
-    name: nameSchema.optional(),
-    description: descriptionSchema.optional(),
-    status: updateProjectStatusSchema.optional(),
-    visibility: projectVisibilitySchema.optional(),
-    teamId: z.string().trim().uuid('The team id is not valid').optional().nullable(),
-    startDate: nullableDateSchema.optional(),
-    dueDate: nullableDateSchema.optional(),
-    settings: z.union([projectSettingsSchema, z.null()]).optional(),
+    name: z.string().trim().min(2).max(100).optional(),
+    key: projectKey.optional(),
+    description: z.string().trim().max(5000).nullable().optional(),
+    category: z.string().trim().min(1).max(80).nullable().optional(),
+    labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
+    visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).optional(),
+    status: z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED']).optional(),
+    teamId: uuid.nullable().optional(),
+    departmentId: uuid.nullable().optional(),
+    startDate: dateInput,
+    dueDate: dateInput,
   })
   .strict()
-  .refine((value) => Object.keys(value).length > 0, {
-    message: 'Provide at least one field to update',
-  });
+  .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update');
 
-export const addProjectMemberSchema = z
+export const projectMemberSchema = z
   .object({
-    userId: z.string().trim().uuid('The user id is not valid'),
-    role: projectRoleSchema.default('MEMBER'),
+    userId: uuid,
+    role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'VIEWER']).default('MEMBER'),
   })
   .strict();
 
-export const updateProjectMemberRoleSchema = z
+export const updateProjectMemberSchema = z
   .object({
-    role: projectRoleSchema,
+    role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'VIEWER']),
   })
   .strict();
 
-export const changeProjectOwnerSchema = z
+export const projectActivityQuerySchema = z.object({
+  cursor: z.string().datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const projectMilestoneParamsSchema = z.object({
+  workspaceId: uuid,
+  projectId: uuid,
+  milestoneId: uuid,
+});
+export const transferProjectOwnershipSchema = z
   .object({
-    userId: z.string().trim().uuid('The user id is not valid'),
+    newOwnerId: uuid,
+    previousOwnerRole: z.enum(['MANAGER', 'MEMBER', 'REMOVE']).default('MANAGER'),
   })
   .strict();
-
-// ---------------------------------------------------------------------------
-// Inferred types
-// ---------------------------------------------------------------------------
+export const createProjectMilestoneSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    description: z.string().trim().max(2000).nullable().optional(),
+    dueDate: dateInput,
+    position: z.number().int().min(0).optional(),
+  })
+  .strict();
+export const updateProjectMilestoneSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120).optional(),
+    description: z.string().trim().max(2000).nullable().optional(),
+    dueDate: dateInput,
+    completed: z.boolean().optional(),
+    position: z.number().int().min(0).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update');
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
-export type AddProjectMemberInput = z.infer<typeof addProjectMemberSchema>;
-export type UpdateProjectMemberRoleInput = z.infer<typeof updateProjectMemberRoleSchema>;
-export type ChangeProjectOwnerInput = z.infer<typeof changeProjectOwnerSchema>;
 export type ListProjectsQuery = z.infer<typeof listProjectsQuerySchema>;
-export type ProjectActivityQuery = z.infer<typeof projectActivityQuerySchema>;
-export type ProjectSettingsInput = z.infer<typeof projectSettingsSchema>;
+export type TransferProjectOwnershipInput = z.infer<typeof transferProjectOwnershipSchema>;
