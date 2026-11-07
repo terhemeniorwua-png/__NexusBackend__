@@ -6,6 +6,10 @@ import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import { connectIntegrationSchema, disconnectParamsSchema, listIntegrationsQuerySchema, type ConnectIntegrationInput, type ListIntegrationsQuery } from './integration.schemas';
 import { createIntegrationService } from './integration.service';
+import { getPrismaClient } from '../../db/prisma';
+import { logger } from '../../utils/logger';
+import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { buildSlackAuthorizeUrl, exchangeSlackCode, slackAuthorizeQuerySchema, slackCallbackQuerySchema, slackResultUrl, verifySlackState } from './slack.oauth';
 
 export interface IntegrationRouterOptions { config: AppConfig; service?: ReturnType<typeof createIntegrationService> }
 function userId(req: Request): string { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth.userId; }
@@ -29,6 +33,32 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
     const { integrationId } = req.validated!.params as { integrationId: string };
     await service.disconnect({ userId: userId(req), integrationId });
     sendSuccess(res, { ok: true });
+  });
+
+  // Slack step 1 (authenticated): the frontend asks for the Slack consent URL.
+  router.get('/slack/authorize', requireAuth, requireActive, validate({ query: slackAuthorizeQuerySchema }), async (req, res) => {
+    const { workspaceId } = req.validated!.query as { workspaceId: string };
+    await requireWorkspaceAccess(getPrismaClient(), { userId: userId(req), workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+    sendSuccess(res, { url: buildSlackAuthorizeUrl({ userId: userId(req), workspaceId }) });
+  });
+
+  // Slack step 2 (public): Slack redirects the browser here. Identity comes from the signed state.
+  router.get('/slack/callback', async (req, res) => {
+    const done = (status: 'connected' | 'denied' | 'error') => res.redirect(302, slackResultUrl(status));
+    const parsed = slackCallbackQuerySchema.safeParse(req.query);
+    if (!parsed.success) return done('error');
+    const { code, state, error } = parsed.data;
+    if (error) return done('denied');
+    if (!code) return done('error');
+    try {
+      const claims = verifySlackState(state);
+      const token = await exchangeSlackCode(code);
+      await service.connect({ userId: claims.userId, provider: 'SLACK', workspaceId: claims.workspaceId, ...token });
+      return done('connected');
+    } catch (err) {
+      logger.warn('slack_oauth_failed', { error: err });
+      return done('error');
+    }
   });
 
   return router;
