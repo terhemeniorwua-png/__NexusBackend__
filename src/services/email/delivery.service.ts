@@ -7,6 +7,7 @@ import type {
   EmailTransportRequest,
   EmailTransportResult,
 } from '../providers/email';
+import { redactEmailAddresses, summarizeErrorForLog } from './log-privacy';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
 import { decryptOtpBody, encryptOtpBody } from './otp-body-encryption';
