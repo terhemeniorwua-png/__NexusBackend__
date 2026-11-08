@@ -24,6 +24,17 @@ export async function createNotification(
   client: NotificationClient,
   input: NotificationInput,
 ): Promise<void> {
+  const workspaceId = input.data?.workspaceId;
+  if (typeof workspaceId === 'string') {
+    const preference = await client.notificationPreference.findUnique({
+      where: {
+        workspaceId_userId_type: { workspaceId, userId: input.userId, type: input.type },
+      },
+      select: { inAppEnabled: true },
+    });
+    if (preference?.inAppEnabled === false) return;
+  }
+
   await client.notification.create({
     data: {
       userId: input.userId,

@@ -11,16 +11,55 @@ datasource db {
 // Enums
 // ---------------------------------------------------------------------------
 
+enum ChannelRole {
+  ADMIN
+  MEMBER
+}
+
+enum ChannelType {
+  WORKSPACE
+  TEAM
+  DEPARTMENT
+  PROJECT
+  PRIVATE
+}
+
 enum UserStatus {
   PENDING_VERIFICATION
   ACTIVE
   SUSPENDED
   DEACTIVATED
+  PENDING_DELETION
 }
 
 enum WorkspaceStatus {
   ACTIVE
+  SUSPENDED
   ARCHIVED
+}
+
+enum WorkspaceType {
+  INDIVIDUAL
+  COMPANY
+  INSTITUTION
+}
+
+enum WorkspaceVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum WorkspaceMembershipStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  EXPIRED
 }
 
 enum WorkspaceRole {
@@ -29,6 +68,40 @@ enum WorkspaceRole {
   MEMBER
   VIEWER
   COLLABORATOR
+}
+
+enum OrganizationRole {
+  COMPANY_OWNER
+  COMPANY_ADMIN
+  COMPANY_PROJECT_MANAGER
+  COMPANY_MEMBER
+  COMPANY_COLLABORATOR
+  COMPANY_VIEWER
+  INSTITUTION_OWNER
+  INSTITUTION_ADMIN
+  INSTITUTION_DEPARTMENT_HEAD
+  INSTITUTION_LECTURER_STAFF
+  INSTITUTION_STUDENT
+  INSTITUTION_COLLABORATOR
+  INSTITUTION_VIEWER
+}
+
+enum DepartmentMembershipRole {
+  HEAD
+  MEMBER
+}
+
+enum InstitutionType {
+  UNIVERSITY
+  COLLEGE
+  SCHOOL
+  RESEARCH_INSTITUTION
+  OTHER
+}
+
+enum InstitutionGroupRole {
+  LEAD
+  MEMBER
 }
 
 enum TeamStatus {
@@ -51,6 +124,7 @@ enum ProjectStatus {
 
 enum ProjectVisibility {
   PRIVATE
+  DEPARTMENT_TEAM
   WORKSPACE
 }
 
@@ -87,6 +161,7 @@ enum InvitationStatus {
   ACCEPTED
   REVOKED
   EXPIRED
+  DECLINED
 }
 
 enum NotificationType {
@@ -98,7 +173,12 @@ enum NotificationType {
   CHANGES_REQUESTED
   COMMENT_REPLY
   MEMBERSHIP_CHANGED
+  MEMBERSHIP_SUSPENDED
+  MEMBERSHIP_RESTORED
   INVITATION_ACCEPTED
+  JOIN_REQUEST_RECEIVED
+  JOIN_REQUEST_APPROVED
+  JOIN_REQUEST_REJECTED
   MEETING_INVITE
   MEETING_RESCHEDULED
   MEETING_CANCELLED
@@ -109,6 +189,11 @@ enum AuthTokenPurpose {
   EMAIL_VERIFICATION
   PASSWORD_RESET
   EMAIL_CHANGE
+}
+
+enum AuthOneTimeCodePurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
 }
 
 enum EmailDeliveryStatus {
@@ -128,58 +213,190 @@ enum EmailSuppressionReason {
   MANUAL
 }
 
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  NON_RENEWING
+  CANCELLED
+  ATTENTION
+}
+
+enum SubscriptionPlanId {
+  PRO
+  BUSINESS
+}
+
+enum SubscriptionInterval {
+  MONTHLY
+  ANNUAL
+}
+
+enum BillingCheckoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
+enum PrivacyRequestType {
+  ACCESS
+  CORRECTION
+  ERASURE
+  REDACTION
+}
+
+enum PrivacyRequestStatus {
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
 
 model User {
-  id              String     @id @default(uuid())
-  email           String     @unique
-  passwordHash    String
-  name            String
-  status          UserStatus @default(PENDING_VERIFICATION)
-  emailVerifiedAt DateTime?
-  lastLoginAt     DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @default(now())
-  deletedAt       DateTime?
+  id                       String     @id @default(uuid())
+  email                    String     @unique
+  passwordHash             String
+  name                     String
+  status                   UserStatus @default(PENDING_VERIFICATION)
+  isPlatformAdmin          Boolean    @default(false)
+  emailVerifiedAt          DateTime?
+  lastLoginAt              DateTime?
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @default(now())
+  deletedAt                DateTime?
+  deletionRequestedAt      DateTime?
+  scheduledDeletionAt      DateTime?
+  twoFactorSecretEncrypted String?
+  twoFactorEnabled         Boolean    @default(false)
+  twoFactorVerifiedAt      DateTime?
+  twoFactorSetupExpiresAt  DateTime?
 
-  profile              UserProfile?
-  sessions             Session[]
-  authTokens           AuthToken[]
-  workspaceMemberships WorkspaceMembership[]
-  teamMemberships      TeamMembership[]
-  projectMemberships   ProjectMembership[]
-  createdTasks         Task[]                @relation("TaskCreator")
-  assignedTasks        TaskAssignee[]
-  authoredComments     Comment[]
-  notifications        Notification[]
-  uploadedFiles        FileAttachment[]
-  auditLogs            AuditLog[]
-  invitedWorkspaces    Invitation[]          @relation("InvitedBy")
-  pendingInvitations   Invitation[]          @relation("InvitedUser")
-  acceptedInvitations  Invitation[]          @relation("AcceptedBy")
-  ownedWorkspaces      Workspace[]           @relation("WorkspaceOwner")
-  ownedProjects        Project[]             @relation("ProjectOwner")
-  ledTeams             Team[]                @relation("TeamLead")
-  taskAssignments      TaskAssignee[]        @relation("TaskAssigner")
+  profile                     UserProfile?
+  sessions                    Session[]
+  externalIdentities          ExternalIdentity[]
+  googleOAuthLoginCodes       GoogleOAuthLoginCode[]
+  authTokens                  AuthToken[]
+  authOneTimeCodes            AuthOneTimeCode[]
+  twoFactorRecoveryCodes      TwoFactorRecoveryCode[]
+  workspaceMemberships        WorkspaceMembership[]
+  teamMemberships             TeamMembership[]
+  departmentMemberships       DepartmentMembership[]
+  institutionGroupMemberships InstitutionGroupMembership[]
+  projectMemberships          ProjectMembership[]
+  createdTasks                Task[]                       @relation("TaskCreator")
+  assignedTasks               TaskAssignee[]
+  authoredComments            Comment[]
+  notifications               Notification[]
+  uploadedFiles               FileAttachment[]
+  auditLogs                   AuditLog[]
+  invitedWorkspaces           Invitation[]                 @relation("InvitedBy")
+  pendingInvitations          Invitation[]                 @relation("InvitedUser")
+  acceptedInvitations         Invitation[]                 @relation("AcceptedBy")
+  ownedWorkspaces             Workspace[]                  @relation("WorkspaceOwner")
+  ownedProjects               Project[]                    @relation("ProjectOwner")
+  ledTeams                    Team[]                       @relation("TeamLead")
+  taskAssignments             TaskAssignee[]               @relation("TaskAssigner")
+  joinRequests                JoinRequest[]                @relation("JoinRequestApplicant")
+  reviewedJoinRequests        JoinRequest[]                @relation("JoinRequestReviewer")
+  ledInstitutionGroups        InstitutionGroup[]           @relation("InstitutionGroupLead")
+  initiatedOwnershipTransfers WorkspaceOwnershipTransfer[] @relation("OwnershipTransferInitiator")
+  receivedOwnershipTransfers  WorkspaceOwnershipTransfer[] @relation("OwnershipTransferRecipient")
+  acceptedBillingTransfers    WorkspaceOwnershipTransfer[] @relation("BillingResponsibilityAcceptor")
+  billingOwnedSubscriptions   Subscription[]               @relation("SubscriptionBillingOwner")
+  privacyRequests             PrivacyRequest[]             @relation("PrivacyRequestOwner")
+  reviewedPrivacyRequests     PrivacyRequest[]             @relation("PrivacyRequestReviewer")
+  channelsCreated             Channel[]                    @relation("ChannelCreatedBy")
+  channelMemberships          ChannelMembership[]          @relation("ChannelMemberships")
+  messagesAuthored            Message[]                    @relation("MessageAuthor")
+  messageReactions            MessageReaction[]            @relation("MessageReactions")
+  messageReadReceipts         MessageReadReceipt[]         @relation("MessageReadReceipts")
+  documentsAuthored           Document[]                   @relation("DocumentAuthor")
+  documentRevisions           DocumentRevision[]           @relation("DocumentRevisionAuthor")
+  documentComments            DocumentComment[]            @relation("DocumentCommentAuthor")
+  calendarEventsCreated       CalendarEvent[]              @relation("EventCreatedBy")
+  formsCreated               Form[]                   @relation("FormCreatedBy")
+  formResponses              FormResponse[]           @relation("FormSubmitter")
+  calendarInvitations         EventInvitation[]            @relation("EventInvitations")
+  integrations                Integration[]                @relation("UserIntegrations")
+  automationsCreated          Automation[]                 @relation("AutomationCreatedBy")
+  meetingsCreated             Meeting[]                    @relation("MeetingCreatedBy")
+  meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
 
   @@index([status])
   @@index([createdAt])
+  @@index([status, scheduledDeletionAt])
+}
+
+model ExternalIdentity {
+  id                String   @id @default(uuid())
+  userId            String
+  provider          String
+  providerSubjectId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubjectId])
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model GoogleOAuthState {
+  id         String    @id @default(uuid())
+  stateHash  String    @unique
+  nonceHash  String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
+model GoogleOAuthLoginCode {
+  id         String    @id @default(uuid())
+  codeHash   String    @unique
+  userId     String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId, consumedAt])
 }
 
 model UserProfile {
-  id        String   @id @default(uuid())
-  userId    String   @unique
-  bio       String?
-  jobTitle  String?
-  avatarUrl String?
-  timeZone  String   @default("UTC")
-  locale    String   @default("en")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  bio              String?
+  jobTitle         String?
+  avatarUrl        String?
+  avatarStorageKey String?  @unique
+  timeZone         String   @default("UTC")
+  locale           String   @default("en")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TwoFactorRecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
 }
 
 model Session {
@@ -221,67 +438,408 @@ model AuthToken {
   @@index([expiresAt])
 }
 
+model AuthOneTimeCode {
+  id         String                 @id @default(uuid())
+  userId     String
+  purpose    AuthOneTimeCodePurpose
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int                    @default(0)
+  lastSentAt DateTime               @default(now())
+  consumedAt DateTime?
+  createdAt  DateTime               @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, consumedAt])
+  @@index([expiresAt])
+}
+
 // ---------------------------------------------------------------------------
 // Workspaces, teams, and membership
 // ---------------------------------------------------------------------------
 
 model Workspace {
-  id          String          @id @default(uuid())
-  name        String
-  slug        String          @unique
-  description String?
-  status      WorkspaceStatus @default(ACTIVE)
-  ownerId     String
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  deletedAt   DateTime?
+  id                  String              @id @default(uuid())
+  name                String
+  slug                String              @unique
+  description         String?
+  type                WorkspaceType       @default(COMPANY)
+  isPersonal          Boolean             @default(false)
+  visibility          WorkspaceVisibility @default(PRIVATE)
+  status              WorkspaceStatus     @default(ACTIVE)
+  deletionSuspendedAt DateTime?
+  ownerId             String
+  /// SHA-256 digest of the join code. The plaintext code is only returned
+  /// when an administrator generates or rotates it.
+  joinCodeHash        String?             @unique
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  deletedAt           DateTime?
 
-  owner       User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members     WorkspaceMembership[]
-  teams       Team[]
-  projects    Project[]
-  invitations Invitation[]
-  files       FileAttachment[]
-  auditLogs   AuditLog[]
+  owner               User                         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members             WorkspaceMembership[]
+  teams               Team[]
+  projects            Project[]
+  departments         Department[]
+  channels            Channel[]
+  companyProfile      CompanyProfile?
+  institutionProfile  InstitutionProfile?
+  institutionGroups   InstitutionGroup[]
+  invitations         Invitation[]
+  joinRequests        JoinRequest[]
+  files               FileAttachment[]
+  documents           Document[]
+  calendarEvents      CalendarEvent[]
+  forms              Form[]
+  integrations       Integration[]                @relation("WorkspaceIntegrations")
+  automations        Automation[]                 @relation("WorkspaceAutomations")
+  meetings            Meeting[]
+  auditLogs           AuditLog[]
+  subscription        Subscription?
+  billingPayments     BillingPayment[]
+  billingCheckouts    BillingCheckout[]
+  billingSeatSync     BillingSeatSync?
+  billingCancellation BillingCancellation?
+  ownershipTransfers  WorkspaceOwnershipTransfer[]
 
   @@index([ownerId])
   @@index([status])
+  @@index([type])
+  @@index([visibility])
+}
+
+model WorkspaceOwnershipTransfer {
+  id                  String        @id @default(uuid())
+  workspaceId         String
+  initiatedById       String
+  recipientUserId     String
+  previousOwnerRole   WorkspaceRole @default(MEMBER)
+  status              String        @default("PENDING")
+  expiresAt           DateTime?
+  acceptedAt          DateTime?
+  billingAcceptedAt   DateTime?
+  billingAcceptedById String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  initiatedBy       User      @relation("OwnershipTransferInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  recipient         User      @relation("OwnershipTransferRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
+  billingAcceptedBy User?     @relation("BillingResponsibilityAcceptor", fields: [billingAcceptedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([recipientUserId, status])
+  @@index([expiresAt])
+}
+
+model Subscription {
+  id                            String                @id @default(uuid())
+  workspaceId                   String                @unique
+  billingOwnerId                String?
+  plan                          SubscriptionPlanId
+  interval                      SubscriptionInterval
+  currency                      String                @default("USD")
+  status                        SubscriptionStatus    @default(PENDING)
+  billableSeats                 Int
+  providerCustomerCode          String?
+  providerSubscriptionCode      String?               @unique
+  providerManageTokenCiphertext String?
+  pendingSubscriptionCode       String?               @unique
+  pendingManageTokenCiphertext  String?
+  pendingPlan                   SubscriptionPlanId?
+  pendingInterval               SubscriptionInterval?
+  pendingBillableSeats          Int?
+  pendingEffectiveAt            DateTime?
+  currentPeriodStart            DateTime?
+  currentPeriodEnd              DateTime?
+  cancelAtPeriodEnd             Boolean               @default(false)
+  cancelledAt                   DateTime?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  billingOwner User?             @relation("SubscriptionBillingOwner", fields: [billingOwnerId], references: [id], onDelete: SetNull)
+  payments     BillingPayment[]
+  checkouts    BillingCheckout[]
+
+  @@index([status, currentPeriodEnd])
+}
+
+model PaystackPlan {
+  id               String               @id @default(uuid())
+  plan             SubscriptionPlanId
+  interval         SubscriptionInterval
+  billableSeats    Int
+  amountSubunit    Int
+  currency         String               @default("USD")
+  providerPlanCode String               @unique
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@unique([plan, interval, billableSeats])
+}
+
+model BillingCheckout {
+  id                            String                @id @default(uuid())
+  workspaceId                   String
+  subscriptionId                String?
+  createdByUserId               String
+  reference                     String                @unique
+  plan                          SubscriptionPlanId
+  interval                      SubscriptionInterval
+  billableSeats                 Int
+  amountSubunit                 Int
+  currency                      String                @default("USD")
+  status                        BillingCheckoutStatus @default(PENDING)
+  checkoutUrl                   String
+  providerCustomerCode          String?
+  providerPlanCode              String?
+  providerSubscriptionCode      String?
+  providerManageTokenCiphertext String?
+  providerAuthorizationReusable Boolean?
+  verifiedAt                    DateTime?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  subscription Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  payments     BillingPayment[]
+
+  @@index([workspaceId, createdAt])
+  @@index([status, createdAt])
+}
+
+model BillingPayment {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  subscriptionId    String?
+  checkoutId        String?
+  providerReference String    @unique
+  providerEventKey  String?   @unique
+  amountSubunit     Int
+  currency          String
+  status            String
+  paidAt            DateTime?
+  periodStart       DateTime?
+  periodEnd         DateTime?
+  createdAt         DateTime  @default(now())
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  subscription Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  checkout     BillingCheckout? @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([subscriptionId, createdAt])
+}
+
+model BillingWebhookEvent {
+  id          String   @id @default(uuid())
+  eventKey    String   @unique
+  eventType   String
+  processedAt DateTime @default(now())
+}
+
+/// Durable request to align a recurring subscription quantity with active seats.
+/// Provider operations are performed by the billing worker after membership
+/// changes commit, so a transient provider outage cannot roll back removal.
+model BillingSeatSync {
+  id                            String   @id @default(uuid())
+  workspaceId                   String   @unique
+  requestedSeats                Int
+  generation                    Int      @default(1)
+  status                        String   @default("PENDING")
+  attempts                      Int      @default(0)
+  nextAttemptAt                 DateTime @default(now())
+  lastError                     String?
+  providerSubscriptionCode      String?
+  providerManageTokenCiphertext String?
+  previousSubscriptionCode      String?
+  previousManageTokenCiphertext String?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+}
+
+/// Durable provider cancellation work created when account deletion stops renewal.
+model BillingCancellation {
+  id            String   @id @default(uuid())
+  workspaceId   String   @unique
+  status        String   @default("PENDING")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastError     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
 }
 
 model WorkspaceMembership {
-  id          String        @id @default(uuid())
-  workspaceId String
-  userId      String
-  role        WorkspaceRole @default(MEMBER)
-  joinedAt    DateTime      @default(now())
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id               String                    @id @default(uuid())
+  workspaceId      String
+  userId           String
+  role             WorkspaceRole             @default(MEMBER)
+  organizationRole OrganizationRole?
+  status           WorkspaceMembershipStatus @default(ACTIVE)
+  joinedAt         DateTime                  @default(now())
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace               Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user                    User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notificationPreferences NotificationPreference[]
 
   @@unique([workspaceId, userId])
   @@index([userId])
   @@index([workspaceId, role])
+  @@index([workspaceId, organizationRole])
+  @@index([workspaceId, status])
 }
 
-model Team {
-  id          String     @id @default(uuid())
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  workspaceId  String
+  userId       String
+  type         NotificationType
+  inAppEnabled Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  membership WorkspaceMembership @relation(fields: [workspaceId, userId], references: [workspaceId, userId], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, type])
+  @@index([userId, workspaceId])
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members   DepartmentMembership[]
+  teams     Team[]
+  projects  Project[]
+  channels  Channel[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model DepartmentMembership {
+  id           String                   @id @default(uuid())
+  departmentId String
+  userId       String
+  role         DepartmentMembershipRole @default(MEMBER)
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, userId])
+  @@index([userId])
+}
+
+model CompanyProfile {
+  id                 String   @id @default(uuid())
+  workspaceId        String   @unique
+  name               String
+  logoReference      String?
+  description        String?
+  industryCategory   String?
+  officialWebsite    String?
+  businessEmail      String?
+  contactInformation Json?
+  country            String?
+  location           String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model InstitutionProfile {
+  id                 String           @id @default(uuid())
+  workspaceId        String           @unique
+  name               String
+  logoReference      String?
+  description        String?
+  institutionType    InstitutionType?
+  officialWebsite    String?
+  institutionalEmail String?
+  contactInformation Json?
+  country            String?
+  location           String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model InstitutionGroup {
+  id          String                       @id @default(uuid())
   workspaceId String
   name        String
   description String?
   leadId      String?
-  status      TeamStatus @default(ACTIVE)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt   DateTime                     @default(now())
+  updatedAt   DateTime                     @updatedAt
   deletedAt   DateTime?
+  workspace   Workspace                    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lead        User?                        @relation("InstitutionGroupLead", fields: [leadId], references: [id], onDelete: SetNull)
+  members     InstitutionGroupMembership[]
 
-  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  lead      User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
-  members   TeamMembership[]
-  projects  Project[]
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([leadId])
+}
+
+model InstitutionGroupMembership {
+  id        String               @id @default(uuid())
+  groupId   String
+  userId    String
+  role      InstitutionGroupRole @default(MEMBER)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  group InstitutionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+model Team {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  departmentId String?
+  name         String
+  description  String?
+  leadId       String?
+  status       TeamStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  deletedAt    DateTime?
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department   Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  lead         User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
+  members      TeamMembership[]
+  projects     Project[]
+  channels     Channel[]
+  joinRequests JoinRequest[]
 
   @@index([workspaceId])
+  @@index([departmentId])
   @@index([leadId])
   @@index([workspaceId, status])
 }
@@ -306,34 +864,61 @@ model TeamMembership {
 // ---------------------------------------------------------------------------
 
 model Project {
-  id          String            @id @default(uuid())
-  workspaceId String
-  teamId      String?
-  name        String
-  key         String
-  description String?
-  status      ProjectStatus     @default(PLANNING)
-  visibility  ProjectVisibility @default(WORKSPACE)
-  startDate   DateTime?
-  dueDate     DateTime?
-  ownerId     String
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @default(now())
-  deletedAt   DateTime?
+  id           String            @id @default(uuid())
+  workspaceId  String
+  teamId       String?
+  departmentId String?
+  name         String
+  key          String
+  description  String?
+  category     String?
+  labels       String[]          @default([])
+  status       ProjectStatus     @default(PLANNING)
+  visibility   ProjectVisibility @default(WORKSPACE)
+  startDate    DateTime?
+  dueDate      DateTime?
+  ownerId      String
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @default(now())
+  deletedAt    DateTime?
 
-  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  team        Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  owner       User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members     ProjectMembership[]
-  tasks       Task[]
-  attachments FileAttachment[]
+  workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team           Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  department     Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  owner          User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members        ProjectMembership[]
+  milestones     ProjectMilestone[]
+  tasks          Task[]
+  channels       Channel[]
+  attachments    FileAttachment[]
+  documents      Document[]
+  calendarEvents CalendarEvent[]
+  meetings       Meeting[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
   @@index([workspaceId, status])
   @@index([teamId])
+  @@index([departmentId])
   @@index([ownerId])
   @@index([dueDate])
+}
+
+model ProjectMilestone {
+  id          String    @id @default(uuid())
+  projectId   String
+  name        String
+  description String?
+  dueDate     DateTime?
+  completedAt DateTime?
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, position])
+  @@index([projectId, dueDate])
 }
 
 model ProjectMembership {
@@ -360,13 +945,17 @@ model Task {
   description  String?
   status       TaskStatus   @default(ASSIGNED)
   priority     TaskPriority @default(MEDIUM)
+  category     String?
+  labels       String[]     @default([])
   startDate    DateTime?
   dueDate      DateTime?
+  completedAt  DateTime?
   position     Int          @default(0)
   parentTaskId String?
   creatorId    String
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @default(now())
+  archivedAt   DateTime?
   deletedAt    DateTime?
 
   project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -378,6 +967,7 @@ model Task {
   blockers     TaskDependency[] @relation("BlockingTask")
   comments     Comment[]
   attachments  FileAttachment[]
+  documents    Document[]
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -441,6 +1031,120 @@ model Comment {
 }
 
 // ---------------------------------------------------------------------------
+// Channels (Phase 7 access integration only; no messages yet)
+// ---------------------------------------------------------------------------
+
+model Channel {
+  id           String      @id @default(uuid())
+  workspaceId  String
+  type         ChannelType
+  name         String
+  description  String?
+  teamId       String?
+  departmentId String?
+  projectId    String?
+  createdById  String
+  archivedAt   DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team         Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  department   Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  project      Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy    User                 @relation("ChannelCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  memberships  ChannelMembership[]
+  messages     Message[]
+  readReceipts MessageReadReceipt[]
+
+  // A unique channel name per workspace among non-deleted channels cannot be
+  // expressed in Prisma. It is added as a partial unique index in the
+  // migration SQL (see the Phase 7 channel migration).
+  @@index([workspaceId, type])
+  @@index([workspaceId, archivedAt])
+  @@index([teamId])
+  @@index([departmentId])
+  @@index([projectId])
+  @@index([createdById])
+}
+
+model ChannelMembership {
+  id        String      @id @default(uuid())
+  channelId String
+  userId    String
+  role      ChannelRole @default(MEMBER)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation("ChannelMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Messaging (Phase 10)
+// ---------------------------------------------------------------------------
+
+model Message {
+  id        String    @id @default(uuid())
+  channelId String
+  authorId  String
+  body      String
+  parentId  String?
+  editedAt  DateTime?
+  pinnedAt  DateTime?
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  channel      Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  author       User                 @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  parent       Message?             @relation("MessageReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies      Message[]            @relation("MessageReplies")
+  reactions    MessageReaction[]
+  readReceipts MessageReadReceipt[]
+
+  @@index([channelId, createdAt])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([pinnedAt])
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation("MessageReactions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+}
+
+model MessageReadReceipt {
+  id        String   @id @default(uuid())
+  channelId String
+  userId    String
+  messageId String
+  readAt    DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation("MessageReadReceipts", fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([channelId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
 // Notifications, invitations, files, and audit
 // ---------------------------------------------------------------------------
 
@@ -464,23 +1168,25 @@ model Notification {
 }
 
 model Invitation {
-  id           String           @id @default(uuid())
-  workspaceId  String
-  teamId       String?
-  projectId    String?
-  email        String
-  role         WorkspaceRole    @default(MEMBER)
-  type         InvitationType   @default(WORKSPACE)
-  tokenHash    String           @unique
-  status       InvitationStatus @default(PENDING)
-  invitedById  String
-  forUserId    String?
-  expiresAt    DateTime
-  acceptedAt   DateTime?
-  acceptedById String?
-  revokedAt    DateTime?
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  id               String            @id @default(uuid())
+  workspaceId      String
+  teamId           String?
+  projectId        String?
+  email            String
+  role             WorkspaceRole     @default(MEMBER)
+  organizationRole OrganizationRole?
+  type             InvitationType    @default(WORKSPACE)
+  tokenHash        String            @unique
+  status           InvitationStatus  @default(PENDING)
+  invitedById      String
+  forUserId        String?
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  acceptedById     String?
+  revokedAt        DateTime?
+  declinedAt       DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   /// Set while the invitation is pending and cleared when it leaves that
   /// state. The unique index on this column is what stops a second pending
@@ -499,6 +1205,40 @@ model Invitation {
   @@index([status, expiresAt])
   @@index([invitedById])
   @@index([forUserId])
+}
+
+model JoinRequest {
+  id               String            @id @default(uuid())
+  workspaceId      String
+  userId           String
+  status           JoinRequestStatus @default(PENDING)
+  /// The role the applicant will receive if the request is approved.
+  role             WorkspaceRole     @default(MEMBER)
+  organizationRole OrganizationRole?
+  teamId           String?
+  message          String?
+  reviewedById     String?
+  reviewedAt       DateTime?
+  decisionNote     String?
+  expiresAt        DateTime
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  /// Set while the request is pending and cleared when it leaves that state,
+  /// so one applicant cannot hold two live requests for the same workspace
+  /// while a settled request never blocks a new one.
+  pendingKey String? @unique
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user       User      @relation("JoinRequestApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?     @relation("JoinRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  team       Team?     @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([userId, status])
+  @@index([status, expiresAt])
+  @@index([reviewedById])
+  @@index([teamId])
 }
 
 model FileAttachment {
@@ -530,6 +1270,403 @@ model FileAttachment {
   @@index([storageKey])
 }
 
+// ---------------------------------------------------------------------------
+// Documents (Phase 13)
+// ---------------------------------------------------------------------------
+
+model Document {
+  id          String    @id @default(uuid())
+  workspaceId String
+  projectId   String?
+  taskId      String?
+  title       String
+  content     String    @default("")
+  authorId    String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  task      Task?              @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  author    User               @relation("DocumentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  revisions DocumentRevision[]
+  comments  DocumentComment[]
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([taskId])
+  @@index([authorId])
+}
+
+model DocumentRevision {
+  id         String   @id @default(uuid())
+  documentId String
+  content    String
+  authorId   String
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  author   User     @relation("DocumentRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([documentId, createdAt])
+  @@index([authorId])
+}
+
+model DocumentComment {
+  id         String    @id @default(uuid())
+  documentId String
+  authorId   String
+  body       String
+  editedAt   DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  author   User     @relation("DocumentCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([documentId, createdAt])
+  @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Calendar and Scheduling (Phase 14)
+// ---------------------------------------------------------------------------
+
+enum CalendarEventStatus {
+  CONFIRMED
+  TENTATIVE
+  CANCELLED
+}
+
+enum EventInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  TENTATIVE
+}
+
+enum EventVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+model CalendarEvent {
+  id             String              @id @default(uuid())
+  workspaceId    String?
+  projectId      String?
+  createdById    String
+  title          String
+  description    String?
+  location       String?
+  startAt        DateTime
+  endAt          DateTime
+  allDay         Boolean             @default(false)
+  status         CalendarEventStatus @default(CONFIRMED)
+  visibility     EventVisibility     @default(PUBLIC)
+  recurrenceRule String?
+  externalId     String?
+  externalSource String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  deletedAt      DateTime?
+
+  workspace   Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project     Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy   User              @relation("EventCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  invitations EventInvitation[]
+  meetings    Meeting[]
+
+  @@index([workspaceId, startAt])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([startAt, endAt])
+}
+
+model EventInvitation {
+  id        String                @id @default(uuid())
+  eventId   String
+  userId    String
+  status    EventInvitationStatus @default(PENDING)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  event CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User          @relation("EventInvitations", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Meetings (Phase 15)
+// ---------------------------------------------------------------------------
+
+enum MeetingStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+enum MeetingParticipantStatus {
+  INVITED
+  JOINED
+  LEFT
+  DECLINED
+}
+
+model Meeting {
+  id          String        @id @default(uuid())
+  workspaceId String?
+  projectId   String?
+  calendarEventId String?
+  createdById String
+  title       String
+  description String?
+  providerMeetingId String?
+  providerHostToken String?
+  status      MeetingStatus  @default(SCHEDULED)
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  endedAt     DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+
+  workspace    Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project      Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  calendarEvent CalendarEvent?      @relation(fields: [calendarEventId], references: [id], onDelete: SetNull)
+  createdBy    User                 @relation("MeetingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  participants MeetingParticipant[]
+
+  @@index([workspaceId, status])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([status, scheduledAt])
+}
+
+model MeetingParticipant {
+  id        String                  @id @default(uuid())
+  meetingId String
+  userId    String
+  status    MeetingParticipantStatus @default(INVITED)
+  joinedAt  DateTime?
+  leftAt    DateTime?
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation("MeetingParticipants", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userId])
+  @@index([userId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Forms and Surveys (Phase 16)
+// ---------------------------------------------------------------------------
+
+enum FormStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  ARCHIVED
+}
+
+enum FormFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  EMAIL
+  SELECT
+  MULTISELECT
+  RADIO
+  CHECKBOX
+  DATE
+  RATING
+  SCALE
+}
+
+model Form {
+  id          String     @id @default(uuid())
+  workspaceId String
+  createdById String
+  title       String
+  description String?
+  status      FormStatus @default(DRAFT)
+  isPublic    Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  deletedAt   DateTime?
+
+  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy  User          @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  fields     FormField[]
+  responses  FormResponse[]
+
+  @@index([workspaceId, status])
+  @@index([createdById])
+}
+
+model FormField {
+  id          String        @id @default(uuid())
+  formId      String
+  label       String
+  type        FormFieldType
+  required    Boolean       @default(false)
+  options     String[]      @default([])
+  placeholder String?
+  position    Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  form      Form           @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers   FormAnswer[]
+
+  @@index([formId, position])
+}
+
+model FormResponse {
+  id          String   @id @default(uuid())
+  formId      String
+  submittedBy String
+  createdAt   DateTime @default(now())
+
+  form     Form          @relation(fields: [formId], references: [id], onDelete: Cascade)
+  submitter User          @relation("FormSubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  answers  FormAnswer[]
+
+  @@index([formId, createdAt])
+  @@index([submittedBy])
+}
+
+model FormAnswer {
+  id         String @id @default(uuid())
+  responseId String
+  fieldId    String
+  value      String
+
+  response FormResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  field    FormField    @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@index([responseId])
+  @@index([fieldId])
+}
+
+// ---------------------------------------------------------------------------
+// Integrations Framework (Phase 19)
+// ---------------------------------------------------------------------------
+
+enum IntegrationProvider {
+  GOOGLE_DRIVE
+  ONEDRIVE
+  DROPBOX
+  GMAIL
+  OUTLOOK
+  SLACK
+  GITHUB
+  GITLAB
+  GOOGLE_CALENDAR
+  OUTLOOK_CALENDAR
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+model Integration {
+  id          String              @id @default(uuid())
+  userId      String
+  workspaceId String?
+  provider    IntegrationProvider
+  status      IntegrationStatus   @default(ACTIVE)
+  accessTokenCiphertext  String
+  refreshTokenCiphertext String?
+  tokenExpiresAt DateTime?
+  scopes      String[]            @default([])
+  externalUserId String?
+  externalEmail  String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  user      User       @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, workspaceId])
+  @@index([userId, status])
+  @@index([workspaceId, provider])
+}
+
+// ---------------------------------------------------------------------------
+// Automation (Phase 20)
+// ---------------------------------------------------------------------------
+
+enum AutomationTrigger {
+  EVENT_TASK_CREATED
+  EVENT_TASK_COMPLETED
+  EVENT_MEMBER_JOINED
+  SCHEDULED_DAILY
+  SCHEDULED_WEEKLY
+}
+
+enum AutomationActionType {
+  SEND_NOTIFICATION
+  CREATE_TASK
+  SEND_WEBHOOK
+}
+
+enum AutomationRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+model Automation {
+  id          String            @id @default(uuid())
+  workspaceId String
+  createdById String
+  name        String
+  trigger     AutomationTrigger
+  condition   Json?
+  action      AutomationActionType
+  actionConfig Json
+  enabled     Boolean           @default(true)
+  maxRetries  Int               @default(3)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace      @relation("WorkspaceAutomations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("AutomationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  runs      AutomationRun[]
+
+  @@index([workspaceId, enabled])
+  @@index([createdById])
+}
+
+model AutomationRun {
+  id           String              @id @default(uuid())
+  automationId String
+  status       AutomationRunStatus @default(PENDING)
+  attempts     Int                 @default(0)
+  error        String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, status])
+  @@index([automationId, createdAt])
+}
+
 model AuditLog {
   id          String   @id @default(uuid())
   workspaceId String?
@@ -550,6 +1687,30 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@index([createdAt])
+}
+
+model PrivacyRequest {
+  id           String               @id @default(uuid())
+  userId       String
+  type         PrivacyRequestType
+  status       PrivacyRequestStatus @default(SUBMITTED)
+  description  String?
+  targetType   String?
+  targetId     String?
+  reviewedById String?
+  decisionNote String?
+  outcome      String?
+  decidedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  user     User  @relation("PrivacyRequestOwner", fields: [userId], references: [id], onDelete: Restrict)
+  reviewer User? @relation("PrivacyRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([reviewedById])
 }
 
 // ---------------------------------------------------------------------------
@@ -639,8 +1800,6 @@ model EmailWebhookEvent {
 //   Phase 12/13 — Realtime & messaging
 //     Conversation, ConversationMembership, Message, MessageReaction,
 //     MessageAttachment, MessageReadReceipt, PresenceRecord
-//   Phase 14 — Notifications (extension)
-//     NotificationPreference
 //   Phase 16 — Calendar & scheduling
 //     CalendarEvent, Reminder, RecurrenceRule
 //   Phase 17 — Meetings

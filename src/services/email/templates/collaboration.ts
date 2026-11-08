@@ -26,6 +26,28 @@ export interface InvitationEmailInput {
   expiresAt?: Date | undefined;
 }
 
+/**
+ * A team invitation names both the team and the workspace that contains it.
+ * The generic invitation input only knows a workspace name, so a team
+ * invitation has its own shape rather than overloading that field.
+ */
+export interface TeamInvitationEmailInput {
+  to: string;
+  name: string;
+  brand: EmailBrand;
+  idempotencyKey?: string | undefined;
+  inviterName: string;
+  teamName: string;
+  workspaceName: string;
+  acceptUrl: string;
+  role?: string | undefined;
+  expiresAt?: Date | undefined;
+}
+
+export interface ProjectInvitationEmailInput extends InvitationEmailInput {
+  projectName: string;
+}
+
 export interface TaskAssignmentEmailInput {
   to: string;
   name: string;
@@ -59,6 +81,8 @@ export interface MeetingInvitationEmailInput {
   durationMinutes?: number | undefined;
   joinUrl: string;
   location?: string | undefined;
+  workspaceName?: string | undefined;
+  projectName?: string | undefined;
 }
 
 function expirySentence(expiresAt: Date | undefined): string {
@@ -104,12 +128,17 @@ export function buildWorkspaceInvitationEmail(input: InvitationEmailInput): Emai
   };
 }
 
-export function buildTeamInvitationEmail(input: InvitationEmailInput): EmailMessage {
+export function buildTeamInvitationEmail(input: TeamInvitationEmailInput): EmailMessage {
   const { html, text } = renderEmailDocument(
     {
-      heading: `Join the ${input.workspaceName} team`,
+      heading: `Join ${input.teamName}`,
       preheader: `${input.inviterName} invited you to a team on ${input.brand.appName}.`,
-      paragraphs: inviteParagraphs(input, 'the team'),
+      paragraphs: [
+        `Hi ${input.name},`,
+        `${input.inviterName} invited you to join the team "${input.teamName}" in ${input.workspaceName} on ${input.brand.appName}.${expirySentence(input.expiresAt)}`,
+        input.role ? `You will join the team with the ${input.role} role.` : '',
+        'Accept the invitation to get started.',
+      ].filter(Boolean),
       action: { label: 'Accept invitation', url: input.acceptUrl },
       note: 'If you were not expecting this invitation, you can ignore this email.',
       footerNote: 'This is an automated message. Please do not reply to it.',
@@ -119,21 +148,30 @@ export function buildTeamInvitationEmail(input: InvitationEmailInput): EmailMess
 
   return {
     to: input.to,
-    subject: `${input.inviterName} invited you to a team in ${input.workspaceName}`,
+    subject: `${input.inviterName} invited you to join ${input.teamName} on ${input.brand.appName}`,
     template: 'team_invitation',
     text,
     html,
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    metadata: { workspaceName: input.workspaceName, role: input.role ?? null },
+    metadata: {
+      teamName: input.teamName,
+      workspaceName: input.workspaceName,
+      role: input.role ?? null,
+    },
   };
 }
 
-export function buildProjectInvitationEmail(input: InvitationEmailInput): EmailMessage {
+export function buildProjectInvitationEmail(input: ProjectInvitationEmailInput): EmailMessage {
   const { html, text } = renderEmailDocument(
     {
-      heading: `Join ${input.workspaceName}`,
-      preheader: `${input.inviterName} invited you to a project on ${input.brand.appName}.`,
-      paragraphs: inviteParagraphs(input, 'the project'),
+      heading: `Join the ${input.projectName} project`,
+      preheader: `${input.inviterName} invited you to a project in ${input.workspaceName}.`,
+      paragraphs: [
+        `Hi ${input.name},`,
+        `${input.inviterName} invited you to the project "${input.projectName}" in the ${input.workspaceName} workspace on ${input.brand.appName}.${expirySentence(input.expiresAt)}`,
+        input.role ? `You will join with the ${input.role} role.` : '',
+        'Accept the invitation to get started.',
+      ].filter(Boolean),
       action: { label: 'Accept invitation', url: input.acceptUrl },
       note: 'If you were not expecting this invitation, you can ignore this email.',
       footerNote: 'This is an automated message. Please do not reply to it.',
@@ -143,12 +181,16 @@ export function buildProjectInvitationEmail(input: InvitationEmailInput): EmailM
 
   return {
     to: input.to,
-    subject: `${input.inviterName} invited you to a project in ${input.workspaceName}`,
+    subject: `${input.inviterName} invited you to ${input.projectName} in ${input.workspaceName}`,
     template: 'project_invitation',
     text,
     html,
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    metadata: { workspaceName: input.workspaceName, role: input.role ?? null },
+    metadata: {
+      workspaceName: input.workspaceName,
+      projectName: input.projectName,
+      role: input.role ?? null,
+    },
   };
 }
 
@@ -212,6 +254,16 @@ export function buildMentionEmail(input: MentionEmailInput): EmailMessage {
 export function buildMeetingInvitationEmail(input: MeetingInvitationEmailInput): EmailMessage {
   const duration = input.durationMinutes ? ` (${input.durationMinutes} minutes)` : '';
   const location = input.location ? ` Location: ${input.location}.` : '';
+  const contextParts: string[] = [];
+
+  if (input.projectName) {
+    contextParts.push(`the ${input.projectName} project`);
+  }
+  if (input.workspaceName) {
+    contextParts.push(`the ${input.workspaceName} workspace`);
+  }
+
+  const context = contextParts.length > 0 ? ` in ${contextParts.join(' in ')}` : '';
 
   const { html, text } = renderEmailDocument(
     {
@@ -219,7 +271,7 @@ export function buildMeetingInvitationEmail(input: MeetingInvitationEmailInput):
       preheader: `${input.organizerName} invited you to a meeting.`,
       paragraphs: [
         `Hi ${input.name},`,
-        `${input.organizerName} invited you to "${input.meetingTitle}" on ${input.startsAt.toUTCString()}${duration}.${location}`,
+        `${input.organizerName} invited you to "${input.meetingTitle}" on ${input.startsAt.toUTCString()}${duration}${context}.${location}`,
         'Use the link below to join the meeting.',
       ],
       action: { label: 'Join meeting', url: input.joinUrl },
@@ -235,6 +287,11 @@ export function buildMeetingInvitationEmail(input: MeetingInvitationEmailInput):
     text,
     html,
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    metadata: { meetingTitle: input.meetingTitle, startsAt: input.startsAt.toISOString() },
+    metadata: {
+      meetingTitle: input.meetingTitle,
+      startsAt: input.startsAt.toISOString(),
+      workspaceName: input.workspaceName ?? null,
+      projectName: input.projectName ?? null,
+    },
   };
 }

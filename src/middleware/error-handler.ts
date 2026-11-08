@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import type { AppConfig } from '../config/env';
 import { AppError, ValidationError, isAppError } from '../utils/errors';
 import type { Logger } from '../utils/logger';
+import { redactSensitiveText } from '../utils/log-redaction';
 
 interface ParsedHttpError extends Error {
   status?: number;
@@ -67,13 +68,21 @@ export function createErrorHandler(
     }
 
     const normalized = normalizeError(error, config.isProduction);
+    const safeError =
+      error instanceof Error
+        ? {
+            name: error.name,
+            message: redactSensitiveText(error.message),
+            ...(error.stack ? { stack: redactSensitiveText(error.stack) } : {}),
+          }
+        : { message: redactSensitiveText(String(error)) };
     const context = {
       requestId: req.requestId,
       method: req.method,
-      path: req.originalUrl.split('?')[0],
+      path: redactSensitiveText(req.originalUrl.split('?')[0] ?? req.originalUrl),
       statusCode: normalized.statusCode,
       code: normalized.code,
-      error,
+      error: safeError,
     };
 
     if (normalized.statusCode >= 500) {

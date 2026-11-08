@@ -1,15 +1,59 @@
 ---
 name: nexus-testing-deployment
-description: Specialized instructions for testing, validating, securing, deploying, monitoring, and troubleshooting the Nexus backend, including Express APIs, PostgreSQL, Prisma, Redis, Socket.IO, CI/CD, and production releases.
+description: Specialized instructions for testing, validating, securing, deploying, monitoring, and troubleshooting the Nexus backend, including Express APIs, PostgreSQL, Prisma, Redis, real-time communication, the separate Python/FastAPI AI service, managed calling and payment providers, private object storage, CI/CD, and production releases across Individual, Company and Institution workspaces.
 ---
 
 # Nexus Testing and Deployment Skill
+
+## 0. Nexus Product Context and Non-Negotiable Rules
+
+Nexus is a general-purpose **Real-Time Workspace & Project Management Platform**, not a developer-only tool. It combines project and task management, team communication, collaborative documents, file management, scheduling, forms, global search, automation, billing, integrations and AI-assisted productivity.
+
+Nexus supports three workspace experiences on one shared backend:
+
+- **Individual** workspaces.
+- **Company** workspaces.
+- **Institution** workspaces.
+
+These are not separate applications. Shared services must adapt features, permissions and navigation to the workspace type while preserving strict isolation between users, workspaces and organisations.
+
+### Service boundaries
+
+- The main backend is **Node.js, Express.js and TypeScript**. It is authoritative for authentication, authorisation, business rules, database mutations, workspace context and application APIs.
+- The AI service is a separate, independently deployable **Python/FastAPI** service using managed AI APIs. It must not bypass Express authentication, permissions or business rules, and must not mutate application data directly.
+- Express authenticates the user, gathers only authorised context, calls the AI service, validates structured results, and rechecks permissions before executing any approved AI action.
+- Core Nexus functionality must continue operating when the AI service is unavailable.
+- Do not convert the Express backend to Python, move ordinary business logic into Python, or rewrite TypeScript as JavaScript.
+
+### Roles, ownership and isolation
+
+Company roles: Owner, Admin, Team Lead, Member, Guest. Institution roles: Owner, Institution Admin, Department Admin, Team/Group Lead, Member, Guest. Project roles (Project Owner, Project Manager, Contributor, Viewer, Guest) are separate from organisation roles.
+
+Only the Owner may remove or demote another administrator. An administrator cannot remove the Owner. Team Leads cannot remove organisation members unless explicitly authorised. Organisation membership never automatically grants access to private projects, private files or private meetings.
+
+Enforce authentication and authorisation server-side for every protected operation, including HTTP, real-time events, files, search and AI context. Verify workspace, resource ownership, membership, role, visibility and explicit grants. Never trust client-supplied user IDs, roles, workspace IDs, ownership claims or storage paths. Prevent insecure direct object references and privilege escalation: knowing a resource ID never grants access.
+
+### Messaging and notification separation
+
+Direct messages, group messages, channel messages, project conversations, announcements and message mentions belong in the **Messages** area. They must never be duplicated in the general notification bell. Message unread counts and general notification unread counts are independent and must not clear each other.
+
+**General notifications** cover task assignments, task comments and mentions, meeting invitations and changes, join-request decisions, workspace invitations, file-sharing events, security changes and AI action outcomes. Use one central notification service; do not build per-feature notification stores.
+
+### Git, phase and preservation rules
+
+- Never commit or push implementation work directly to `main`.
+- Work on a dedicated branch such as `feature/phase-N-description`, `fix/phase-N-description`, `refactor/description` or `docs/description`; commit and push that branch.
+- Never force-push, rewrite shared history, delete remote branches, or merge into `main` without explicit user authorisation.
+- Preserve uncommitted user changes and never include unrelated changes in a commit.
+- `PHASES.md` is the authoritative implementation tracker. Identify the current active phase, work only on that phase, check dependencies, and update the tracker only when the documented completion criteria are genuinely met. Mark blocked work as `BLOCKED`; never begin another phase without authorisation.
+- Never delete or overwrite `.env`, commit secrets, remove working features, replace the existing ORM or backend framework, convert TypeScript to JavaScript, or move the main backend to Python.
+- Prefer the smallest safe change. Do not implement future enhancements unless the active phase or the user explicitly authorises them.
 
 ## 1. Purpose
 
 This skill defines how testing, quality assurance, deployment, and production verification must be handled in the Nexus backend.
 
-Nexus is a real-time workspace and project management platform that combines project management, messaging, collaborative documentation, meetings, notifications, and AI-assisted workflows.
+Nexus is a general-purpose Real-Time Workspace & Project Management Platform serving Individual, Company, and Institution workspaces from one shared backend. It combines project and task management, team communication, collaborative documents, file management, scheduling, forms, global search, automation, billing, integrations, and AI-assisted workflows.
 
 The objective is to ensure that every feature is reliable, secure, maintainable, and deployable without damaging existing functionality or user data.
 
@@ -19,32 +63,38 @@ Follow this skill whenever implementing tests, fixing defects, preparing a relea
 
 Use the existing repository configuration as the source of truth.
 
-- Runtime: Node.js
+- Runtime: Node.js 20 or later
 - Language: TypeScript
 - Backend: Express.js
 - Database: PostgreSQL
 - ORM: Prisma
-- Real-time communication: Socket.IO
+- Validation: Zod
+- Real-time communication: the existing WebSocket/real-time implementation. Socket.IO is planned but not yet installed.
 - Cache and temporary coordination: Redis
-- Testing: Use the framework already configured in the project.
-- Version control: Git and GitHub.
-- Deployment: Use the hosting platform already configured for the repository.
+- Email: Nodemailer through the existing provider adapter
+- AI: a separate, independently deployable Python/FastAPI service using a managed AI API
+- Calling: a managed audio/video calling SDK
+- Payments: the approved payment provider with verified webhooks
+- Storage: private S3-compatible object storage behind an adapter
+- Testing: `node --test` with `tsx`; use the scripts in `package.json`
+- Version control: Git and GitHub
+- Deployment: use the hosting platform already configured for the repository
 
 Do not introduce new testing frameworks, deployment platforms, or infrastructure without a clear justification.
 
-Do not replace existing dependencies or deployment workflows merely to simplify a task.
+Do not replace existing dependencies or deployment workflows merely to simplify a task. Do not replace Prisma, Express, PostgreSQL or the TypeScript backend.
 
 ## 3. Inspect Before Testing or Deploying
 
 Before making testing or deployment changes:
 
-1. Read `agent.md` and `PHASES.md`.
+1. Read `AGENTS.md` and `PHASES.md`.
 2. Inspect `package.json` and the available scripts.
 3. Review the TypeScript configuration and build process.
 4. Inspect environment variable validation and configuration.
 5. Review the Prisma schema and migration history.
 6. Identify existing tests and testing conventions.
-7. Inspect Git status and the current branch.
+7. Inspect Git status, the current branch, and the remote. Never work directly on `main`.
 8. Review the current deployment configuration and CI/CD workflow.
 9. Identify the feature or implementation phase being verified.
 
@@ -65,13 +115,14 @@ Test individual functions and business rules independently.
 Examples include:
 
 - Input validation.
-- Permission checks.
-- Task progress calculations.
-- Meeting lifecycle transitions.
-- Notification preferences.
-- Message-processing rules.
+- Permission checks for Company and Institution roles, project roles, and guest access.
+- Task progress calculations and workflow transitions.
+- Meeting lifecycle and calendar conflict rules.
+- Notification preferences and message/general notification separation.
+- Message-processing rules and idempotency.
 - Email template rendering.
-- AI output validation.
+- AI output validation and AI action approval rules.
+- Billing entitlement and seat rules.
 - Utility functions.
 
 Unit tests should be fast, focused, deterministic, and independent of external infrastructure where possible.
@@ -86,9 +137,12 @@ Examples include:
 - Services and Prisma.
 - PostgreSQL relationships and constraints.
 - Redis-backed functionality.
-- Socket.IO event handling.
-- Email provider adapters.
-- AI provider integrations.
+- Real-time event handling, authorization, and reconnection.
+- Email provider adapters and webhook verification.
+- The Express-to-Python AI service contract, including structured output and failure handling.
+- Managed calling SDK and calendar provider adapters.
+- Payment provider webhooks and entitlement updates.
+- Private storage adapters and signed URL access.
 - Background jobs and persistence.
 
 Use test databases and mock or sandbox external providers as appropriate.
@@ -100,13 +154,15 @@ Verify important user-facing workflows across the backend.
 Examples include:
 
 - Registration, login, and authentication.
-- Creating a workspace and adding members.
+- Creating Individual, Company, and Institution workspaces and adding members.
+- Workspace invitations, join requests, approvals, and expiration.
 - Creating a project and assigning tasks.
 - Sending and retrieving messages.
-- Creating and updating meetings.
-- Generating meeting summaries.
-- Sending notifications.
+- Creating and updating meetings and calendar events.
+- Generating meeting summaries and approving AI actions.
+- Sending notifications, with message and general notification counts remaining independent.
 - Uploading and retrieving authorized files.
+- Billing plan changes and webhook-driven entitlements.
 
 Test only the workflows supported by the actual implementation.
 
@@ -165,18 +221,19 @@ Test:
 - Invalid credentials.
 - Expired or invalid authentication tokens.
 - Missing authentication.
-- Unauthorized role-based actions.
-- Workspace membership checks.
-- Project and task access restrictions.
-- Private conversation access.
-- Meeting and transcript access.
-- File and attachment permissions.
-- Invitation authorization.
-- Administrative operations.
+- Unauthorized role-based actions across Company and Institution roles.
+- Workspace membership checks, including multiple workspace memberships and workspace switching.
+- Project and task access restrictions, including private projects.
+- Private conversation, channel, and announcement access.
+- Meeting, calendar, transcript, and recording access.
+- File and attachment permissions, including Nexus Drive sharing.
+- Invitation, join-request, and ownership-transfer authorization.
+- Protection of the Owner's privileges and prevention of administrator removal by another administrator.
+- Administrative operations, including billing, integrations, and automation.
+- AI context access and AI action approval/revalidation.
+- Global search result filtering by permission.
 
-Verify that users cannot access another workspace's private resources by changing an identifier in a request.
-
-Test both permitted and forbidden operations.
+Verify that users cannot access another workspace's private resources by changing an identifier in a request. Test both permitted and forbidden operations, including attempts to escalate roles or access private resources through a valid workspace membership.
 
 Do not treat a successful HTTP response as proof that the correct authorization rules are enforced.
 
@@ -239,7 +296,7 @@ For production releases, apply migrations through a controlled deployment proced
 
 If a migration is destructive or irreversible, explain the risks and obtain explicit approval before proceeding.
 
-## 10. Redis and Socket.IO Testing
+## 10. Redis and Real-Time Testing
 
 ### Redis
 
@@ -255,12 +312,12 @@ Test relevant behavior such as:
 
 Verify that Redis failure does not silently compromise authorization or durable business data.
 
-### Socket.IO
+### Real-time communication
 
-Test:
+Test, where the transport is implemented:
 
 - Authentication during connection.
-- Authorization before joining private rooms.
+- Authorization before joining private rooms or conversations.
 - Event payload validation.
 - Authorized event delivery.
 - Rejection of unauthorized events.
@@ -268,10 +325,11 @@ Test:
 - Message persistence before successful broadcast.
 - Duplicate event handling.
 - Multi-instance delivery where configured.
+- Message notifications remaining separate from general notifications.
 
-Do not assume that starting the Socket.IO server proves that real-time functionality works correctly.
+Do not assume that starting a real-time server proves that real-time functionality works correctly. Socket.IO is planned but not installed; test the transport that actually exists.
 
-## 11. Email and AI Provider Testing
+## 11. Email, Payment, AI, and Provider Testing
 
 Use mocks, sandbox environments, or provider test modes whenever possible.
 
@@ -285,22 +343,40 @@ Verify:
 - Failure handling.
 - Retry behavior.
 - Duplicate prevention.
-- Verification and password-reset token behavior.
+- Verification, password-reset, and invitation token behavior.
+- Join-request and billing notices.
+- Message emails remaining separate from general notification emails.
 
 Do not send unintended real emails during automated tests.
 
-### AI integrations
+### Payments and calling
 
 Verify:
 
-- Successful provider responses.
-- Timeouts and rate limits.
-- Invalid or incomplete AI output.
-- Input limits.
-- Retry behavior.
-- Data authorization before AI processing.
-- Safe handling of generated content.
-- Correct persistence of processing results.
+- Webhook signature verification.
+- Idempotent webhook processing and duplicate-event rejection.
+- Trial, plan, seat, and entitlement updates.
+- Failed-payment and renewal behavior.
+- Short-lived calling credentials and meeting-room authorization.
+- Calendar sync conflict and duplicate prevention.
+- No provider secret is exposed to clients or logs.
+
+### AI service integration
+
+Verify:
+
+- Successful structured responses from the Python/FastAPI service.
+- Timeouts, rate limits, and AI service unavailability.
+- Core application behaviour degrading gracefully when AI is unavailable.
+- Invalid or incomplete structured output.
+- Input limits and authorised context boundaries.
+- Retry behavior and duplicate job handling.
+- Express authorizing data before sending it to the AI service.
+- Python not bypassing Express permissions or mutating application data directly.
+- Safe handling and sanitisation of generated content.
+- Correct persistence of processing results and action proposals.
+- Explicit user approval and Express permission revalidation before AI actions execute.
+- Nexus Write suggestions never silently replacing user content.
 
 Do not claim that an AI feature works end to end when only the provider call or database model has been tested.
 
@@ -344,7 +420,10 @@ Typical configuration may include:
 - Redis connection configuration.
 - Authentication secrets.
 - Email provider credentials.
-- AI provider credentials.
+- AI service URL and AI provider credentials.
+- Payment provider credentials and webhook secrets.
+- Calling provider credentials.
+- Calendar integration credentials.
 - Frontend or application URLs.
 - File-storage configuration.
 - Logging configuration.
@@ -409,8 +488,20 @@ Requirements:
 - Separate validation jobs from production deployment jobs.
 - Prevent unintended deployments from untrusted branches.
 - Do not disable failing workflows without understanding the cause.
+- Never configure a workflow to commit or push development changes directly to `main`.
+- Require pull requests and passing checks before merging to `main`; merging requires explicit human authorisation.
 
 Do not replace a working deployment workflow unless the change is necessary and appropriately reviewed.
+
+### Git workflow for verified changes
+
+- Confirm the current branch before testing or committing. Never work directly on `main`.
+- Use a dedicated branch such as `feature/phase-N-description`, `fix/phase-N-description`, `refactor/description` or `docs/description`.
+- Preserve uncommitted user changes and stage only files related to the task.
+- Run the relevant checks, review the complete diff, and commit to the feature branch.
+- Push the feature branch and verify the push succeeded.
+- Never force-push, rewrite shared history, delete remote branches, or merge into `main` without explicit authorisation.
+- If a push fails, preserve the local commit and report the exact error.
 
 ## 16. Deployment Strategy
 
@@ -419,7 +510,7 @@ Deploy using the platform already configured for Nexus.
 Before deploying:
 
 1. Inspect the deployment configuration.
-2. Verify the target environment and Git branch.
+2. Verify the target environment and Git branch, and confirm the release came from an authorised feature branch rather than direct work on `main`.
 3. Confirm that required environment variables are configured.
 4. Ensure tests and build checks have passed.
 5. Review database migration impact.
@@ -462,9 +553,9 @@ Record useful operational information such as:
 - Database connectivity issues.
 - Failed migrations.
 - Redis connection problems.
-- Socket.IO connection and delivery errors.
+- Real-time connection and delivery errors.
 - Background job failures.
-- Email or AI provider failures.
+- Email, AI, calling, calendar, or payment provider failures.
 - Application startup and shutdown events.
 
 Requirements:
@@ -493,9 +584,9 @@ Depending on the affected feature, inspect:
 - Repeated background jobs.
 - Connection pool exhaustion.
 - Redis dependency failures.
-- Socket.IO reconnection behavior.
+- Real-time reconnection behavior.
 - Long-running requests.
-- Provider timeouts and rate limits.
+- Provider timeouts and rate limits, including the Python AI service.
 
 Do not optimize blindly. Use logs, tests, metrics, query plans, or profiling to establish the actual problem.
 
@@ -507,17 +598,20 @@ Security checks are part of the release process.
 
 Verify:
 
-- Authentication and authorization.
+- Authentication and authorization across Company and Institution roles.
 - Input validation.
-- Workspace isolation.
+- Workspace isolation and private project access.
+- Protection against privilege escalation and insecure direct object references.
 - Secure environment configuration.
 - Rate limiting.
 - Dependency security.
-- File-upload validation where applicable.
+- File-upload validation and private storage access where applicable.
 - Safe error handling.
 - CORS and other relevant HTTP security configuration.
 - Database permissions and migration safety.
-- Protection of private messages, meeting data, and AI-generated content.
+- Payment and integration webhook signature verification and replay protection.
+- Protection of private messages, meeting data, calendars, and AI-generated content.
+- AI action approval and permission revalidation before mutations.
 
 Do not disable security controls to make a failing test or deployment pass.
 
@@ -579,10 +673,14 @@ A testing or deployment task is complete when all applicable requirements are sa
 - Failures and incomplete checks are reported honestly.
 - No unrelated local work or production data has been damaged.
 - Documentation reflects the actual implementation.
+- `PHASES.md` is updated only when the phase's documented criteria are genuinely met.
+- Changes are committed and pushed to the correct feature branch, not `main`.
 
 ## 24. Required Agent Behavior
 
 Always inspect the repository and current Git state before making testing or deployment changes.
+
+Never work directly on `main`. Use a dedicated feature branch, preserve uncommitted user changes, and never force-push or merge without explicit authorisation.
 
 Preserve existing functionality, configuration, and user changes.
 
@@ -599,4 +697,5 @@ After completing a task, report:
 - Which checks passed and failed.
 - Any environment or migration requirements.
 - Whether deployment occurred and how it was verified.
+- The Git branch, commit hash, and push status.
 - Any unresolved risks or recommended follow-up work.

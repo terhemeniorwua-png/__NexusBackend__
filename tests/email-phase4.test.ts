@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { PrismaClient } from '@prisma/client';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import {
   buildEmailBrand,
@@ -9,10 +10,13 @@ import {
   buildMentionEmail,
   buildPasswordChangedEmail,
   buildPasswordResetEmail,
+  buildProjectInvitationEmail,
   buildSecurityNotificationEmail,
   buildTaskAssignmentEmail,
+  buildTeamInvitationEmail,
   buildVerificationEmail,
   buildWorkspaceInvitationEmail,
+  createLoggingEmailSender,
   deliveryIdFromMessageId,
   deriveIdempotencyKey,
   normalizeMessageId,
@@ -20,6 +24,20 @@ import {
   verifyWebhookToken,
   type EmailMessage,
 } from '../src/services/email';
+import { redactEmailAddresses, summarizeErrorForLog } from '../src/services/email/log-privacy';
+import {
+  buildTaskAssignmentUrl,
+  createTaskAssignmentNotifier,
+  taskAssignmentIdempotencyKey,
+} from '../src/services/task-assignment-notifier';
+import {
+  buildMentionUrl,
+  createMentionEmailNotifier,
+  mentionEmailIdempotencyKey,
+} from '../src/services/mention-email-notifier';
+import { Logger } from '../src/utils/logger';
+import { createConsoleTransport, createEmailTransport } from '../src/services/providers/email';
+import { captureLogs } from './helpers/test-logger';
 import {
   mapProviderEvent,
   normalizeEventType,
@@ -59,17 +77,18 @@ test('the verification template renders both an HTML and a plain text version', 
     to: 'ada@example.com',
     name: 'Ada Lovelace',
     brand,
-    verificationUrl: 'http://localhost:3000/verify-email?token=abc123',
+    code: '012345',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
 
   assert.equal(email.template, 'account_verification');
   assert.ok(email.html);
   assert.match(email.html as string, /^<!doctype html>/);
-  assert.match(email.html as string, /Verify email address/);
-  assert.match(email.text, /token=abc123/);
+  assert.match(email.html as string, /font-size:34px/);
+  assert.match(email.text, /012345/);
   assert.match(email.text, /expires in 60 minutes/);
-  assert.ok(email.text.includes('http://localhost:3000/verify-email?token=abc123'));
+  assert.doesNotMatch(email.text, /token=/);
+  assert.match(email.text, /If you didn't request this, ignore this email/);
 });
 
 test('templates escape user supplied values in the HTML version', () => {
@@ -77,7 +96,7 @@ test('templates escape user supplied values in the HTML version', () => {
     to: 'ada@example.com',
     name: '<script>alert("x")</script>',
     brand,
-    verificationUrl: 'http://localhost:3000/verify-email?token=abc123',
+    code: '012345',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
 
@@ -92,7 +111,7 @@ test('templates never put a single use link in the subject line', () => {
     to: 'ada@example.com',
     name: 'Ada Lovelace',
     brand,
-    verificationUrl: 'http://localhost:3000/verify-email?token=super-secret-token',
+    code: '654321',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
 
@@ -105,12 +124,13 @@ test('the account templates cover the whole account lifecycle', () => {
     to: 'ada@example.com',
     name: 'Ada Lovelace',
     brand,
-    resetUrl: 'http://localhost:3000/reset-password?token=reset123',
+    code: '123456',
     expiresAt: new Date(Date.now() + 30 * 60 * 1000),
   });
 
   assert.equal(reset.template, 'password_reset');
-  assert.match(reset.text, /token=reset123/);
+  assert.match(reset.text, /123456/);
+  assert.doesNotMatch(reset.text, /token=/);
 
   const changed = buildPasswordChangedEmail({
     to: 'ada@example.com',
@@ -162,6 +182,44 @@ test('the collaboration templates cover invitations, assignments, mentions and m
   assert.match(invitation.text, /token=invite123/);
   assert.match(invitation.text, /Analytical Engines/);
 
+  const team = buildTeamInvitationEmail({
+    to: 'grace@example.com',
+    name: 'Grace Hopper',
+    brand,
+    inviterName: 'Ada Lovelace',
+    workspaceName: 'Analytical Engines',
+    teamName: 'Runtime',
+    acceptUrl: 'http://localhost:3000/teams/invitations/accept?token=team123',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
+  assert.equal(team.template, 'team_invitation');
+  assert.match(team.text, /invited you to join the team "Runtime"/);
+  assert.match(team.text, /token=team123/);
+
+  const project = buildProjectInvitationEmail({
+    to: 'grace@example.com',
+    name: 'Grace Hopper',
+    brand,
+    inviterName: 'Ada Lovelace',
+    projectName: 'Compiler Runtime',
+    workspaceName: 'Analytical Engines',
+    acceptUrl: 'http://localhost:3000/projects/invitations/accept?token=project123',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
+  assert.equal(project.template, 'project_invitation');
+  assert.match(project.subject, /Compiler Runtime/);
+  assert.match(project.text, /the project "Compiler Runtime"/);
+  assert.match(project.text, /the Analytical Engines workspace/);
+  assert.match(project.text, /token=project123/);
+  assert.match(project.text, /This invitation expires in/);
+  assert.deepEqual(project.metadata, {
+    workspaceName: 'Analytical Engines',
+    projectName: 'Compiler Runtime',
+    role: null,
+  });
+
   const task = buildTaskAssignmentEmail({
     to: 'grace@example.com',
     name: 'Grace Hopper',
@@ -169,11 +227,19 @@ test('the collaboration templates cover invitations, assignments, mentions and m
     taskTitle: 'Write the compiler',
     projectName: 'ENGINES',
     assignedByName: 'Ada Lovelace',
+    dueAt: new Date('2026-12-01T10:00:00.000Z'),
     taskUrl: 'http://localhost:3000/tasks/42',
+    idempotencyKey: 'task-assignment:42:grace',
   });
 
   assert.equal(task.template, 'task_assignment');
   assert.match(task.text, /Write the compiler/);
+  assert.match(task.text, /ENGINES/);
+  assert.match(task.text, /Ada Lovelace/);
+  assert.match(task.text, /due on Tue, 01 Dec 2026 10:00:00 GMT/);
+  assert.match(task.text, /http:\/\/localhost:3000\/tasks\/42/);
+  assert.equal(task.idempotencyKey, 'task-assignment:42:grace');
+  assert.deepEqual(task.metadata, { taskTitle: 'Write the compiler', projectName: 'ENGINES' });
 
   const mention = buildMentionEmail({
     to: 'grace@example.com',
@@ -200,6 +266,125 @@ test('the collaboration templates cover invitations, assignments, mentions and m
 
   assert.equal(meeting.template, 'meeting_invitation');
   assert.match(meeting.text, /join/i);
+});
+
+test('task assignment links use the configured public URL and task path', () => {
+  const appConfig = parseEnv({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://nexus:nexus@localhost:5432/nexus_test',
+    REDIS_URL: 'redis://localhost:6379/15',
+    JWT_ACCESS_SECRET: 'phase4-unit-test-access-secret-value-that-is-long',
+    EMAIL_APP_URL: 'https://app.example.com/',
+    TASK_ASSIGNMENT_LINK_PATH: '/projects/:projectId/tasks/:taskId',
+  });
+
+  const url = buildTaskAssignmentUrl(appConfig, {
+    projectId: 'project/with space',
+    taskId: 'task 42',
+  });
+
+  assert.equal(url, 'https://app.example.com/projects/project%2Fwith%20space/tasks/task%2042');
+});
+
+test('the task assignment key is stable per event and changes for a new assignment', () => {
+  const assignedAt = new Date('2026-11-01T10:00:00.000Z');
+  const first = taskAssignmentIdempotencyKey({
+    taskId: 'task-1',
+    assigneeId: 'user-1',
+    assignedAt,
+  });
+  const duplicate = taskAssignmentIdempotencyKey({
+    taskId: 'task-1',
+    assigneeId: 'user-1',
+    assignedAt: new Date(assignedAt),
+  });
+  const nextAssignment = taskAssignmentIdempotencyKey({
+    taskId: 'task-1',
+    assigneeId: 'user-1',
+    assignedAt: new Date('2026-11-02T10:00:00.000Z'),
+  });
+
+  assert.equal(first, duplicate);
+  assert.notEqual(first, nextAssignment);
+  assert.equal(first, 'task-assignment:task-1:user-1:2026-11-01T10:00:00.000Z');
+});
+
+test('mention links use the configured public URL and comment fragment', () => {
+  const appConfig = parseEnv({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://nexus:nexus@localhost:5432/nexus_test',
+    REDIS_URL: 'redis://localhost:6379/15',
+    JWT_ACCESS_SECRET: 'phase4-unit-test-access-secret-value-that-is-long',
+    EMAIL_APP_URL: 'https://app.example.com/',
+    COMMENT_MENTION_LINK_PATH: '/projects/:projectId/tasks/:taskId#comment-:commentId',
+  });
+
+  const url = buildMentionUrl(appConfig, {
+    projectId: 'project/with space',
+    taskId: 'task 42',
+    commentId: 'comment 7',
+  });
+
+  assert.equal(
+    url,
+    'https://app.example.com/projects/project%2Fwith%20space/tasks/task%2042#comment-comment%207',
+  );
+});
+
+test('the mention key is stable per comment and recipient', () => {
+  assert.equal(
+    mentionEmailIdempotencyKey('comment-1', 'user-1'),
+    mentionEmailIdempotencyKey('comment-1', 'user-1'),
+  );
+  assert.notEqual(
+    mentionEmailIdempotencyKey('comment-1', 'user-1'),
+    mentionEmailIdempotencyKey('comment-1', 'user-2'),
+  );
+  assert.equal(mentionEmailIdempotencyKey('comment-1', 'user-1'), 'mention:comment-1:user-1');
+});
+
+test('notifier lookup failures are reported without throwing', async () => {
+  const appConfig = parseEnv({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://nexus:nexus@localhost:5432/nexus_test',
+    REDIS_URL: 'redis://localhost:6379/15',
+    JWT_ACCESS_SECRET: 'phase4-unit-test-access-secret-value-that-is-long',
+  });
+  const failingClient = {
+    taskAssignee: {
+      findUnique: async () => {
+        throw new Error('Database unavailable');
+      },
+    },
+    comment: {
+      findUnique: async () => {
+        throw new Error('Database unavailable');
+      },
+    },
+  } as unknown as PrismaClient;
+  const send = async () => ({ accepted: true });
+
+  const taskNotifier = createTaskAssignmentNotifier(appConfig, {
+    prisma: failingClient,
+    logger: new Logger('silent'),
+    send,
+  });
+  const mentionNotifier = createMentionEmailNotifier(appConfig, {
+    prisma: failingClient,
+    logger: new Logger('silent'),
+    send,
+  });
+
+  const taskResult = await taskNotifier.notify({ taskId: 'task-1', assigneeId: 'user-1' });
+  const mentionResult = await mentionNotifier.notify({
+    commentId: 'comment-1',
+    mentionedUserId: 'user-1',
+  });
+
+  assert.equal(taskResult.status, 'failed');
+  assert.equal(taskResult.accepted, false);
+  assert.equal(mentionResult.status, 'failed');
+  assert.equal(mentionResult.accepted, false);
 });
 
 test('an idempotency key is stable for the same message and differs for another one', () => {
@@ -395,6 +580,62 @@ test('provider payloads are mapped onto one event shape', () => {
   assert.ok(withoutId);
   assert.match(withoutId?.eventId ?? '', /^[a-f0-9]{64}$/);
   assert.equal(withoutId?.eventId, mapProviderEvent({ type: 'email.delivered' })?.eventId);
+});
+
+test('email addresses are removed from error text before it is logged', () => {
+  const redacted = redactEmailAddresses('Rejected ada@example.com and grace.hopper@example.co.uk');
+
+  assert.equal(redacted, 'Rejected [REDACTED_EMAIL] and [REDACTED_EMAIL]');
+
+  const summary = summarizeErrorForLog(
+    Object.assign(new Error('SMTP rejected ada@example.com'), { code: 'EENVELOPE' }),
+  );
+
+  assert.equal(JSON.stringify(summary).includes('ada@example.com'), false);
+  assert.equal(summary.name, 'Error');
+  assert.equal(summary.code, 'EENVELOPE');
+  assert.match(summary.message as string, /\[REDACTED_EMAIL\]/);
+  assert.match(summary.stack as string, /\[REDACTED_EMAIL\]/);
+});
+
+test('development transports log delivery metadata without the recipient address', async () => {
+  const email = 'private.recipient@example.com';
+  const request = {
+    deliveryId: 'eml_privacy',
+    to: email,
+    from: 'Nexus <no-reply@example.com>',
+    subject: `A message for ${email}`,
+    text: 'Body',
+  };
+
+  const { logs } = await captureLogs(async () => {
+    await createLoggingEmailSender().send(message({ to: email, subject: request.subject }));
+    await createConsoleTransport().send(request);
+    await createEmailTransport({ ...config, emailProvider: 'disabled' }).send(request);
+  });
+
+  assert.equal(logs.output.includes(email), false);
+
+  const entries = logs.output
+    .split('\n')
+    .filter((line) => line.startsWith('{'))
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  const logging = entries.find((entry) => entry.message === 'email_queued');
+  const console = entries.find((entry) => entry.message === 'email_delivery_console');
+  const disabled = entries.find((entry) => entry.message === 'email_delivery_disabled');
+
+  assert.ok(logging);
+  assert.equal(logging.template, 'account_verification');
+  assert.equal('to' in logging, false);
+
+  assert.ok(console);
+  assert.equal(console.deliveryId, request.deliveryId);
+  assert.equal('to' in console, false);
+
+  assert.ok(disabled);
+  assert.equal(disabled.deliveryId, request.deliveryId);
+  assert.equal('to' in disabled, false);
 });
 
 test('provider errors are classified as permanent or transient', () => {

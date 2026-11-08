@@ -9,6 +9,7 @@ import type {
 } from '../providers/email';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
+import { decryptOtpBody, encryptOtpBody } from './otp-body-encryption';
 
 /**
  * Transactional email outbox.
@@ -88,6 +89,10 @@ interface ClaimedDelivery {
   updatedAt: Date;
 }
 
+function isOtpTemplate(template: string): boolean {
+  return template === 'account_verification' || template === 'password_reset';
+}
+
 /**
  * Builds a deterministic idempotency key for a message that did not carry
  * one. Two identical messages collapse into a single delivery.
@@ -152,8 +157,14 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
           fromAddress,
           template: message.template,
           subject: message.subject,
-          textBody: message.text,
-          htmlBody: message.html ?? null,
+          textBody: isOtpTemplate(message.template)
+            ? encryptOtpBody(message.text, deps.config.otpHmacSecret)
+            : message.text,
+          htmlBody: message.html
+            ? isOtpTemplate(message.template)
+              ? encryptOtpBody(message.html, deps.config.otpHmacSecret)
+              : message.html
+            : null,
           headers: { 'X-Nexus-Delivery-Id': deliveryId },
           ...(message.metadata ? { metadata: message.metadata as Prisma.InputJsonValue } : {}),
           provider: transport.provider,
@@ -185,7 +196,6 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
     log.info('email_delivery_queued', {
       deliveryId,
       template: message.template,
-      to: message.to,
     });
 
     return { accepted: true, providerMessageId: deliveryId };
@@ -410,7 +420,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
         template: delivery.template,
         attempt: delivery.attempts,
         maxAttempts: delivery.maxAttempts,
-        errorCode,
+        errorCode: redactEmailAddresses(errorCode),
       });
 
       return 'failed';
@@ -425,7 +435,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       attempt: delivery.attempts,
       maxAttempts: delivery.maxAttempts,
       retryInMs: delay,
-      errorCode,
+      errorCode: redactEmailAddresses(errorCode),
     });
 
     return 'retried';
@@ -498,7 +508,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       deliveryId: delivery.id,
       template: delivery.template,
       attempt: delivery.attempts,
-      errorCode,
+      errorCode: redactEmailAddresses(errorCode),
     });
 
     return 'failed';
@@ -548,7 +558,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
         // same bounded policy as a transient provider failure.
         log.error('email_delivery_unexpected_error', {
           deliveryId: delivery.id,
-          error,
+          error: summarizeErrorForLog(error),
         });
 
         const message =
@@ -567,7 +577,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
           // number of times. The next pass reports the persistence failure.
           log.error('email_delivery_retry_persistence_failed', {
             deliveryId: delivery.id,
-            error: persistenceError,
+            error: summarizeErrorForLog(persistenceError),
           });
         }
       }

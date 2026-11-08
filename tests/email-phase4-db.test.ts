@@ -5,6 +5,7 @@ import type { Express } from 'express';
 import { createApp } from '../src/app';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { getPrismaClient } from '../src/db/prisma';
+import { connectRedis, disconnectRedis } from '../src/db/redis';
 import {
   createEmailDeliveryService,
   getEmailDeliveryService,
@@ -13,6 +14,7 @@ import {
   resetEmailServices,
   type EmailMessage,
 } from '../src/services/email';
+import { Logger } from '../src/utils/logger';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { captureLogs } from './helpers/test-logger';
 import { startSmtpServer, type TestSmtpServer } from './helpers/smtp-server';
@@ -43,19 +45,36 @@ try {
     skipReason = '';
   }
 } catch (error) {
+  if (process.env.RUN_PHASE4_DB_TESTS === 'true') throw error;
   skipReason = error instanceof Error ? error.message : 'The test database could not be resolved';
 }
 
 let uniqueCounter = 0;
+const fixtureEmails = new Set<string>();
+const fixtureUserIds = new Set<string>();
+const fixtureWebhookEventIds = new Set<string>();
 
 function uniqueEmail(prefix = 'mail'): string {
   uniqueCounter += 1;
-
-  return `${prefix}.${process.pid}.${uniqueCounter}.${Date.now()}@example.com`;
+  const email = `${prefix}.${process.pid}.${uniqueCounter}.${Date.now()}@example.com`;
+  fixtureEmails.add(email);
+  return email;
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createCapturingLogger(): {
+  logger: Logger;
+  entries: Record<string, unknown>[];
+} {
+  const entries: Record<string, unknown>[] = [];
+  const logger = new Logger('info', {}, (line) => {
+    entries.push(JSON.parse(line) as Record<string, unknown>);
+  });
+
+  return { logger, entries };
 }
 
 /**
@@ -177,6 +196,8 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     prisma = getPrismaClient(database.url);
 
+    await connectRedis({ redisUrl: 'redis://localhost:6379/15' });
+
     // A previous run can leave queued rows behind. They would be claimed by
     // the next run and break the counters of the delivery tests.
     await clearTestDeliveries();
@@ -198,6 +219,11 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     // The delivery rows of this suite are disposable.
     await clearTestDeliveries();
+    if (fixtureUserIds.size) {
+      await prisma?.auditLog.deleteMany({ where: { actorId: { in: [...fixtureUserIds] } } });
+      await prisma?.user.deleteMany({ where: { id: { in: [...fixtureUserIds] } } });
+    }
+    await disconnectRedis();
     await prisma?.$disconnect();
   });
 
@@ -206,11 +232,16 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
       return;
     }
 
-    await prisma.emailDelivery.deleteMany({
-      where: { toAddress: { endsWith: '@example.com' } },
-    });
-    await prisma.emailWebhookEvent.deleteMany({});
-    await prisma.emailSuppression.deleteMany({});
+    if (fixtureEmails.size) {
+      const emails = [...fixtureEmails];
+      await prisma.emailDelivery.deleteMany({ where: { toAddress: { in: emails } } });
+      await prisma.emailSuppression.deleteMany({ where: { emailAddress: { in: emails } } });
+    }
+    if (fixtureWebhookEventIds.size) {
+      await prisma.emailWebhookEvent.deleteMany({
+        where: { providerEventId: { in: [...fixtureWebhookEventIds] } },
+      });
+    }
   }
 
   function deliveryService() {
@@ -224,6 +255,8 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     });
 
     assert.equal(response.status, 201, JSON.stringify(response.body));
+    const user = await prisma.user.findUniqueOrThrow({ where: { email }, select: { id: true } });
+    fixtureUserIds.add(user.id);
   }
 
   test('a registration email is queued, delivered and recorded', async () => {
@@ -252,7 +285,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.ok(captured);
     assert.equal(captured.to[0], email);
     assert.match(captured.from, /no-reply@example\.com/);
-    assert.match(captured.body, /token=/);
+    assert.match(plainTextOf(captured.body), /\b\d{6}\b/, 'Expected a six-digit code in the verification email');
     assert.match(captured.body, /<!doctype html>/i);
 
     const delivered = await prisma.emailDelivery.findUnique({ where: { id: queued.id } });
@@ -781,6 +814,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
         reason: 'The recipient does not exist',
       },
     });
+    fixtureWebhookEventIds.add(`evt_${email}`);
 
     const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
 
@@ -855,6 +889,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
       type: 'email.delivered',
       data: { email_id: delivered?.providerMessageId, to: [email] },
     });
+    fixtureWebhookEventIds.add(`evt_duplicate_${email}`);
 
     const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
 
@@ -1054,10 +1089,162 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     assert.ok(captured);
 
-    const token = /token=([A-Za-z0-9_-]+)/.exec(captured.body)?.[1];
+    const code = /\b(\d{6})\b/.exec(plainTextOf(captured.body))?.[1];
 
-    assert.ok(token, 'Expected the email to contain a single use token');
-    assert.equal(logs.output.includes(token as string), false);
-    assert.equal(logs.output.includes('token='), false);
+    assert.ok(code, 'Expected the email to contain a six-digit code');
+    assert.equal(logs.output.includes(code), false);
+  });
+
+  test('the delivery lifecycle logs never expose the recipient address', async () => {
+    smtp.reset();
+    const email = uniqueEmail('privacy');
+    const { logger, entries } = createCapturingLogger();
+    const service = createEmailDeliveryService({
+      prisma,
+      transport: getEmailTransport(config),
+      config,
+      logger,
+    });
+
+    const queuedResult = await service.enqueue({
+      to: email,
+      subject: 'A private message',
+      template: 'security_notification',
+      text: 'A private message',
+    });
+    const pass = await service.processPending(10);
+
+    assert.equal(queuedResult.accepted, true);
+    assert.equal(pass.sent, 1);
+    assert.equal(
+      entries.some((entry) => JSON.stringify(entry).includes(email)),
+      false,
+    );
+
+    const queued = entries.find((entry) => entry.message === 'email_delivery_queued');
+    const sent = entries.find((entry) => entry.message === 'email_delivery_sent');
+
+    assert.ok(queued);
+    assert.equal(queued.deliveryId, queuedResult.providerMessageId);
+    assert.equal(queued.template, 'security_notification');
+    assert.equal('to' in queued, false);
+    assert.equal(JSON.stringify(queued).includes('@'), false);
+
+    assert.ok(sent);
+    assert.equal(sent.deliveryId, queuedResult.providerMessageId);
+    assert.equal(sent.template, 'security_notification');
+    assert.equal(sent.provider, 'smtp');
+    assert.equal(JSON.stringify(sent).includes('@'), false);
+
+    const row = await prisma.emailDelivery.findUnique({
+      where: { id: queuedResult.providerMessageId },
+    });
+
+    assert.equal(row?.status, 'ACCEPTED');
+  });
+
+  test('a provider error response does not put the recipient address in the log', async () => {
+    const email = uniqueEmail('privacy-provider');
+    const { logger, entries } = createCapturingLogger();
+    const transport: EmailTransport = {
+      provider: 'rejecting',
+      async send() {
+        return {
+          accepted: false,
+          retryable: false,
+          errorCode: 'SMTP_550',
+          error: `The server rejected ${email}`,
+        };
+      },
+      async verify() {},
+      async close() {},
+    };
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport,
+      config: buildConfig({ EMAIL_MAX_ATTEMPTS: '1' }),
+      logger,
+    });
+
+    const queued = await limited.enqueue({
+      to: email,
+      subject: 'Rejected',
+      template: 'security_notification',
+      text: 'Rejected',
+    });
+    const pass = await limited.processPending(10);
+
+    assert.equal(pass.failed, 1);
+    assert.equal(
+      entries.some((entry) => JSON.stringify(entry).includes(email)),
+      false,
+    );
+
+    const failed = entries.find((entry) => entry.message === 'email_delivery_failed');
+
+    assert.ok(failed);
+    assert.equal(failed.deliveryId, queued.providerMessageId);
+    assert.equal(failed.errorCode, 'SMTP_550');
+    assert.equal(failed.attempt, 1);
+
+    const row = await prisma.emailDelivery.findUnique({
+      where: { id: queued.providerMessageId },
+    });
+
+    assert.equal(row?.status, 'FAILED');
+  });
+
+  test('an unexpected worker error is logged without the recipient address', async () => {
+    const email = uniqueEmail('privacy-unexpected');
+    const { logger, entries } = createCapturingLogger();
+    const transport: EmailTransport = {
+      provider: 'throwing',
+      async send() {
+        throw new Error(`SMTP conversation failed for ${email}`);
+      },
+      async verify() {},
+      async close() {},
+    };
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport,
+      config: buildConfig({ EMAIL_MAX_ATTEMPTS: '1' }),
+      logger,
+    });
+
+    const queued = await limited.enqueue({
+      to: email,
+      subject: 'Unexpected failure',
+      template: 'security_notification',
+      text: 'Unexpected failure',
+    });
+    const pass = await limited.processPending(10);
+
+    assert.equal(pass.failed, 1);
+    assert.equal(
+      entries.some((entry) => JSON.stringify(entry).includes(email)),
+      false,
+    );
+
+    const unexpected = entries.find((entry) => entry.message === 'email_delivery_unexpected_error');
+    const failed = entries.find((entry) => entry.message === 'email_delivery_failed');
+
+    assert.ok(unexpected);
+    assert.equal(unexpected.deliveryId, queued.providerMessageId);
+    assert.match(JSON.stringify(unexpected), /\[REDACTED_EMAIL\]/);
+
+    assert.ok(failed);
+    assert.equal(failed.errorCode, 'UNEXPECTED');
+    assert.equal(failed.attempt, 1);
   });
 });
+
+function plainTextOf(raw: string): string {
+  const decoded = raw
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-F]{2})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  const htmlAt = decoded.search(/Content-Type: text\/html/i);
+  const textPart = htmlAt === -1 ? decoded : decoded.slice(0, htmlAt);
+  const bodyStart = textPart.indexOf('\r\n\r\n');
+  return bodyStart === -1 ? textPart : textPart.slice(bodyStart + 4);
+}

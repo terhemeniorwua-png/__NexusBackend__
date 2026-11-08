@@ -64,6 +64,23 @@ export function createInvitationRouter({
     sendSuccess(res, invitations);
   });
 
+  // The public preview answers "is this link valid?" but not "may the
+  // signed-in account use it?". The verification endpoint adds the viewer
+  // context and never accepts the invitation as a side effect.
+  router.get(
+    '/:token/verify',
+    requireAuth,
+    requireActiveAccount,
+    previewLimit,
+    validate({ params: invitationTokenParamsSchema }),
+    async (req, res) => {
+      const { token } = req.validated?.params as { token: string };
+      const verification = await service.verify({ userId: requireUser(req), token });
+
+      sendSuccess(res, verification);
+    },
+  );
+
   router.get(
     '/:token',
     previewLimit,
@@ -84,6 +101,19 @@ export function createInvitationRouter({
     async (req, res) => {
       const { token } = req.validated?.params as { token: string };
       const invitation = await service.accept({ userId: requireUser(req), token }, context(req));
+
+      sendSuccess(res, invitation);
+    },
+  );
+
+  router.post(
+    '/:token/decline',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: invitationTokenParamsSchema }),
+    async (req, res) => {
+      const { token } = req.validated?.params as { token: string };
+      const invitation = await service.decline({ userId: requireUser(req), token }, context(req));
 
       sendSuccess(res, invitation);
     },

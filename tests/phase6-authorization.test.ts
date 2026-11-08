@@ -17,6 +17,12 @@ import {
   TeamCapability,
 } from '../src/modules/authorization/team.policy';
 import { transferOwnershipSchema } from '../src/modules/workspaces/workspace.schemas';
+import {
+  assertCanAssignOrganizationRole,
+  assertMayManageOrganizationMember,
+  effectiveWorkspaceRole,
+  isOrganizationRoleForWorkspace,
+} from '../src/modules/authorization/organization-role';
 
 /**
  * Phase 6 unit tests — authorization policies.
@@ -392,5 +398,110 @@ describe('Phase 6 team policy', () => {
       assert.equal(teamRoleCan('MEMBER', TeamCapability.ArchiveTeam), false);
       assert.equal(teamRoleCan('MEMBER', TeamCapability.DeleteTeam), false);
     });
+  });
+});
+
+describe('Phase 6 organization role mapping', () => {
+  test('Company roles are workspace-scoped and map to conservative shared policy tiers', () => {
+    assert.equal(effectiveWorkspaceRole('COMPANY', 'VIEWER', 'COMPANY_OWNER'), 'OWNER');
+    assert.equal(effectiveWorkspaceRole('COMPANY', 'VIEWER', 'COMPANY_ADMIN'), 'PROJECT_MANAGER');
+    assert.equal(
+      effectiveWorkspaceRole('COMPANY', 'OWNER', 'COMPANY_PROJECT_MANAGER'),
+      'COLLABORATOR',
+    );
+    assert.equal(effectiveWorkspaceRole('COMPANY', 'OWNER', 'COMPANY_MEMBER'), 'COLLABORATOR');
+    assert.equal(
+      effectiveWorkspaceRole('COMPANY', 'OWNER', 'COMPANY_COLLABORATOR'),
+      'COLLABORATOR',
+    );
+    assert.equal(effectiveWorkspaceRole('COMPANY', 'OWNER', 'COMPANY_VIEWER'), 'VIEWER');
+    assert.equal(isOrganizationRoleForWorkspace('INSTITUTION', 'COMPANY_ADMIN'), false);
+  });
+
+  test('Institution roles retain institution-specific names and scoped access tiers', () => {
+    assert.equal(effectiveWorkspaceRole('INSTITUTION', 'VIEWER', 'INSTITUTION_OWNER'), 'OWNER');
+    assert.equal(
+      effectiveWorkspaceRole('INSTITUTION', 'VIEWER', 'INSTITUTION_ADMIN'),
+      'PROJECT_MANAGER',
+    );
+    assert.equal(
+      effectiveWorkspaceRole('INSTITUTION', 'OWNER', 'INSTITUTION_DEPARTMENT_HEAD'),
+      'COLLABORATOR',
+    );
+    assert.equal(
+      effectiveWorkspaceRole('INSTITUTION', 'OWNER', 'INSTITUTION_LECTURER_STAFF'),
+      'COLLABORATOR',
+    );
+    assert.equal(
+      effectiveWorkspaceRole('INSTITUTION', 'OWNER', 'INSTITUTION_STUDENT'),
+      'COLLABORATOR',
+    );
+    assert.equal(
+      effectiveWorkspaceRole('INSTITUTION', 'OWNER', 'INSTITUTION_COLLABORATOR'),
+      'COLLABORATOR',
+    );
+    assert.equal(effectiveWorkspaceRole('INSTITUTION', 'OWNER', 'INSTITUTION_VIEWER'), 'VIEWER');
+  });
+
+  test('only organization owners can assign owner roles; admins may assign non-owner roles', () => {
+    assert.throws(
+      () =>
+        assertCanAssignOrganizationRole({
+          workspaceType: 'COMPANY',
+          actorLegacyRole: 'PROJECT_MANAGER',
+          actorOrganizationRole: 'COMPANY_ADMIN',
+          requestedRole: 'COMPANY_OWNER',
+        }),
+      /Only an organization owner/i,
+    );
+    assert.doesNotThrow(() =>
+      assertCanAssignOrganizationRole({
+        workspaceType: 'COMPANY',
+        actorLegacyRole: 'PROJECT_MANAGER',
+        actorOrganizationRole: 'COMPANY_ADMIN',
+        requestedRole: 'COMPANY_MEMBER',
+      }),
+    );
+    assert.throws(
+      () =>
+        assertCanAssignOrganizationRole({
+          workspaceType: 'COMPANY',
+          actorLegacyRole: 'OWNER',
+          actorOrganizationRole: 'COMPANY_OWNER',
+          requestedRole: 'INSTITUTION_ADMIN',
+        }),
+      /cannot be assigned in this workspace type/i,
+    );
+  });
+
+  test('administrators cannot manage another administrator or owner', () => {
+    assert.throws(
+      () =>
+        assertMayManageOrganizationMember({
+          actorLegacyRole: 'PROJECT_MANAGER',
+          actorOrganizationRole: 'COMPANY_ADMIN',
+          targetOrganizationRole: 'COMPANY_ADMIN',
+          targetLegacyRole: 'PROJECT_MANAGER',
+          targetIsPrimaryOwner: false,
+        }),
+      /Only an organization owner/i,
+    );
+    assert.throws(
+      () =>
+        assertMayManageOrganizationMember({
+          actorLegacyRole: 'PROJECT_MANAGER',
+          actorOrganizationRole: 'COMPANY_ADMIN',
+          targetOrganizationRole: 'COMPANY_OWNER',
+          targetLegacyRole: 'OWNER',
+          targetIsPrimaryOwner: true,
+        }),
+      /Only an organization owner/i,
+    );
+  });
+
+  test('legacy role behavior remains unchanged when no organization role is stored', () => {
+    assert.equal(effectiveWorkspaceRole('COMPANY', 'PROJECT_MANAGER', null), 'PROJECT_MANAGER');
+    assert.equal(effectiveWorkspaceRole('INDIVIDUAL', 'OWNER', null), 'OWNER');
+    assert.equal(effectiveWorkspaceRole('COMPANY', 'VIEWER', 'INSTITUTION_ADMIN'), 'VIEWER');
   });
 });

@@ -30,6 +30,7 @@ export {
   workspaceRoleCan,
   requireWorkspaceAccess,
   assertMayManageMember,
+  assertMayAssignRole,
   assertOwnershipSafe,
 } from './workspace.policy';
 export type { WorkspaceCapabilityValue, WorkspaceAccess } from './workspace.policy';
@@ -40,8 +41,14 @@ export {
   workspaceRoleCanOnProject,
   projectRoleCan,
   requireProjectAccess,
+  maximumProjectRoleForOrganizationRole,
+  organizationRoleCanOwnProjects,
 } from './project.policy';
 export type { ProjectCapabilityValue, ProjectAccess } from './project.policy';
+
+// Channel
+export { ChannelCapability, requireChannelAccess } from './channel.policy';
+export type { ChannelCapabilityValue, ChannelAccess } from './channel.policy';
 
 // Team
 export {
@@ -54,3 +61,17 @@ export type { TeamCapabilityValue, TeamAccess } from './team.policy';
 
 // Shared types
 export type { ScopeKind, AuthorizationFailure } from './types';
+
+// Organization roles and scoped department access
+export { DepartmentCapability, requireDepartmentAccess } from './department.policy';
+export type { DepartmentAccess, DepartmentCapabilityValue } from './department.policy';
+export {
+  assertCanAssignOrganizationRole,
+  assertMayManageOrganizationMember,
+  effectiveWorkspaceRole,
+  isOrganizationAdminRole,
+  isOrganizationOwnerRole,
+  isOrganizationRoleForWorkspace,
+  ownerOrganizationRole,
+  requireOrganizationRoleForWorkspace,
+} from './organization-role';
