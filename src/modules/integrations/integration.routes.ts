@@ -26,6 +26,10 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
 
   router.post('/', requireAuth, requireActive, validate({ body: connectIntegrationSchema }), async (req, res) => {
     const body = req.validated!.body as ConnectIntegrationInput;
+    // Slack tokens may only arrive through the OAuth callback, never from a client-supplied body.
+    if (body.provider === 'SLACK') {
+      throw new AppError(400, 'USE_SLACK_OAUTH', 'Connect Slack through the Slack authorization flow');
+    }
     sendSuccess(res, await service.connect({ userId: userId(req), ...body }), 201);
   });
 
