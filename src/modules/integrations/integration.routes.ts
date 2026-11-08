@@ -12,6 +12,7 @@ import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/autho
 import { buildSlackAuthorizeUrl, exchangeSlackCode, isSlackDefaultConnectEnabled, slackAuthorizeQuerySchema, slackCallbackQuerySchema, slackDefaultConnection, slackResultUrl, verifySlackState } from './slack.oauth';
 import { buildDriveAuthorizeUrl, driveAuthorizeQuerySchema, driveCallbackQuerySchema, driveResultUrl, exchangeDriveCode, verifyDriveState } from './google-drive.oauth';
 import { buildDropboxAuthorizeUrl, dropboxAuthorizeQuerySchema, dropboxCallbackQuerySchema, dropboxResultUrl, exchangeDropboxCode, verifyDropboxState } from './dropbox.oauth';
+import { buildGmailAuthorizeUrl, exchangeGmailCode, gmailAuthorizeQuerySchema, gmailCallbackQuerySchema, gmailResultUrl, verifyGmailState } from './gmail.oauth';
 
 
 export interface IntegrationRouterOptions { config: AppConfig; service?: ReturnType<typeof createIntegrationService> }
@@ -41,6 +42,9 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
     if (body.provider === 'DROPBOX') {
   throw new AppError(400, 'USE_DROPBOX_OAUTH', 'Connect Dropbox through the Dropbox authorization flow');
 } 
+    if (body.provider === 'GMAIL') {
+      throw new AppError(400, 'USE_GMAIL_OAUTH', 'Connect Gmail through the Google authorization flow');
+    }
     sendSuccess(res, await service.connect({ userId: userId(req), ...body }), 201);
   });
 
@@ -140,6 +144,30 @@ router.get('/dropbox/callback', async (req, res) => {
     return done('error');
   }
 });
+
+  // Gmail is a personal connection (workspaceId null): any signed-in user can connect their own mailbox.
+  router.get('/gmail/authorize', requireAuth, requireActive, validate({ query: gmailAuthorizeQuerySchema }), async (req, res) => {
+    sendSuccess(res, { url: await buildGmailAuthorizeUrl({ userId: userId(req) }) });
+  });
+
+  router.get('/gmail/callback', async (req, res) => {
+    const done = (status: 'connected' | 'denied' | 'error') => res.redirect(302, gmailResultUrl(status));
+    const parsed = gmailCallbackQuerySchema.safeParse(req.query);
+    if (!parsed.success) return done('error');
+    const { code, state, error } = parsed.data;
+    if (error) return done('denied');
+    if (!code) return done('error');
+    try {
+      const claims = await verifyGmailState(state);
+      const token = await exchangeGmailCode(code);
+      await service.connect({ userId: claims.userId, provider: 'GMAIL', workspaceId: null, ...token });
+      return done('connected');
+    } catch (err) {
+      logger.warn('gmail_oauth_failed', { error: err });
+      return done('error');
+    }
+  });
+
 
   return router;
 }
