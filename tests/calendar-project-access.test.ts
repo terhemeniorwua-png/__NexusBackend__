@@ -210,4 +210,72 @@ function runTests(rawDbUrl: string): void {
     assert.equal(res.status, 200);
     assert.ok(JSON.stringify(res.body).includes('owner-edit'));
   });
+
+  // ---- creator / admin / bystander permissions (plain events, no project) ----
+  const mkEvent = async (user: TestUser, title: string): Promise<string> => {
+    const r = await createEvent(user, { title, startAt: S, endAt: E });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return (r.body.data as { id: string }).id;
+  };
+  const isOk = (res: { status: number }, what: string) =>
+    assert.ok(res.status >= 200 && res.status < 300, `${what}: expected 2xx, got ${res.status}`);
+  const ownerView = (id: string) =>
+    jsonRequest(`${eventsUrl()}/${id}`, { headers: auth(owner), jar: owner.jar });
+
+  test('creator (plain MEMBER) can PATCH their own event', async () => {
+    const id = await mkEvent(member, `own-patch ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}`, { method: 'PATCH', headers: auth(member), body: JSON.stringify({ title: 'member-edit' }), jar: member.jar });
+    isOk(res, 'creator patch');
+    assert.ok(JSON.stringify(res.body).includes('member-edit'));
+  });
+
+  test('creator (plain MEMBER) can cancel their own event', async () => {
+    const id = await mkEvent(member, `own-cancel ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}/cancel`, { method: 'POST', headers: auth(member), jar: member.jar });
+    isOk(res, 'creator cancel');
+  });
+
+  test('creator (plain MEMBER) can delete their own event', async () => {
+    const id = await mkEvent(member, `own-delete ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}`, { method: 'DELETE', headers: auth(member), jar: member.jar });
+    isOk(res, 'creator delete');
+  });
+
+  test("member cannot PATCH someone else's event", async () => {
+    const id = await mkEvent(owner, `victim-patch ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}`, { method: 'PATCH', headers: auth(member), body: JSON.stringify({ title: 'hacked2' }), jar: member.jar });
+    assert.equal(res.status, 403, `leaked: expected 403, got ${res.status}`);
+    const view = await ownerView(id);
+    assert.equal(view.status, 200);
+    assert.ok(!JSON.stringify(view.body).includes('hacked2'), 'title changed by non-creator');
+  });
+
+  test("member cannot cancel someone else's event", async () => {
+    const id = await mkEvent(owner, `victim-cancel ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}/cancel`, { method: 'POST', headers: auth(member), jar: member.jar });
+    assert.equal(res.status, 403, `leaked: expected 403, got ${res.status}`);
+    const view = await ownerView(id);
+    assert.equal(view.status, 200);
+    assert.ok(!JSON.stringify(view.body).includes('CANCELLED'), 'event cancelled by non-creator');
+  });
+
+  test("member cannot delete someone else's event", async () => {
+    const id = await mkEvent(owner, `victim-delete ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}`, { method: 'DELETE', headers: auth(member), jar: member.jar });
+    assert.equal(res.status, 403, `leaked: expected 403, got ${res.status}`);
+    const view = await ownerView(id);
+    assert.equal(view.status, 200, 'event deleted by non-creator');
+  });
+
+  test("control: owner can cancel a member's event", async () => {
+    const id = await mkEvent(member, `admin-cancel ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}/cancel`, { method: 'POST', headers: auth(owner), jar: owner.jar });
+    isOk(res, 'owner cancel');
+  });
+
+  test("control: owner can delete a member's event", async () => {
+    const id = await mkEvent(member, `admin-delete ${tag}`);
+    const res = await jsonRequest(`${eventsUrl()}/${id}`, { method: 'DELETE', headers: auth(owner), jar: owner.jar });
+    isOk(res, 'owner delete');
+  });
 }
