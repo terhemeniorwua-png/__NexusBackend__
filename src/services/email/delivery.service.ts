@@ -10,7 +10,7 @@ import type {
 import { redactEmailAddresses, summarizeErrorForLog } from './log-privacy';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
-import { decryptOtpBody, encryptOtpBody } from './otp-body-encryption';
+import { encryptOtpBody } from './otp-body-encryption';
 
 /**
  * Transactional email outbox.

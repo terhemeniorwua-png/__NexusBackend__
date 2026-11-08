@@ -48,7 +48,222 @@ tags:
     description: Workspace-scoped projects, visibility, project membership, activity, and milestones
   - name: Billing
     description: Workspace subscription and payment management
+  - name: Integrations
+    description: Personal and workspace integration connections
 paths:
+  /integrations:
+    get:
+      tags: [Integrations]
+      operationId: listIntegrations
+      summary: List integrations visible to the caller
+      description: Without workspaceId, returns the caller's personal connections. With workspaceId, also returns workspace connections visible to that caller. Disconnected integrations are omitted.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Visible integration connections. Tokens are never returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationListResponse' }
+        '401': { description: Authentication is required. }
+        '404': { description: Workspace is unavailable to the caller. }
+    post:
+      tags: [Integrations]
+      operationId: createIntegrationConnection
+      summary: Save a connection for a provider without a dedicated OAuth flow
+      description: Slack, Google Drive, Dropbox, and Gmail must use their dedicated OAuth endpoints. Tokens are encrypted before persistence and never returned.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateIntegrationRequest' }
+      responses:
+        '201':
+          description: Integration connection saved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationResponse' }
+        '400': { description: Invalid request or a dedicated OAuth flow is required. }
+        '401': { description: Authentication is required. }
+        '404': { description: Workspace is unavailable to the caller. }
+  /integrations/{integrationId}:
+    delete:
+      tags: [Integrations]
+      operationId: disconnectIntegration
+      summary: Disconnect an integration
+      description: Personal connections can be disconnected only by their owner. Workspace Slack connections require workspace update permission. Provider-side token revocation is not currently implemented.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Integration marked disconnected. }
+        '401': { description: Authentication is required. }
+        '404': { description: Integration is unavailable to the caller. }
+  /integrations/gmail/authorize:
+    get:
+      tags: [Integrations]
+      operationId: authorizeGmail
+      summary: Start a personal Gmail OAuth flow
+      description: workspaceId is accepted for frontend compatibility but ignored; the resulting connection belongs only to the signed-in user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Google consent URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailAuthorizeResponse' }
+        '401': { description: Authentication is required. }
+        '503': { description: Gmail OAuth is not configured. }
+  /integrations/gmail/callback:
+    get:
+      tags: [Integrations]
+      operationId: gmailOAuthCallback
+      summary: Complete a personal Gmail OAuth flow
+      description: Public Google redirect endpoint. Valid state and code are required to save the caller-bound personal connection. Redirects to the frontend integrations page with a status; tokens are not returned.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema: { type: string, maxLength: 2000 }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string, maxLength: 2000 }
+        - name: error
+          in: query
+          required: false
+          schema: { type: string, maxLength: 200 }
+      responses:
+        '302': { description: Redirect to the configured frontend with connected, denied, or error status. }
+  /integrations/google-drive/authorize:
+    get:
+      tags: [Integrations]
+      operationId: authorizeGoogleDrive
+      summary: Start a workspace Google Drive OAuth flow
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Google consent URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailAuthorizeResponse' }
+        '401': { description: Authentication is required. }
+        '404': { description: Workspace is unavailable to the caller. }
+  /integrations/google-drive/callback:
+    get:
+      tags: [Integrations]
+      operationId: googleDriveOAuthCallback
+      summary: Complete a workspace Google Drive OAuth flow
+      security: []
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string, maxLength: 2000 } }
+        - { name: state, in: query, required: true, schema: { type: string, maxLength: 2000 } }
+        - { name: error, in: query, required: false, schema: { type: string, maxLength: 200 } }
+      responses:
+        '302': { description: Redirect to the configured frontend with connected, denied, or error status. }
+  /integrations/dropbox/authorize:
+    get:
+      tags: [Integrations]
+      operationId: authorizeDropbox
+      summary: Start a workspace Dropbox OAuth flow
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Dropbox consent URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailAuthorizeResponse' }
+        '401': { description: Authentication is required. }
+        '404': { description: Workspace is unavailable to the caller. }
+  /integrations/dropbox/callback:
+    get:
+      tags: [Integrations]
+      operationId: dropboxOAuthCallback
+      summary: Complete a workspace Dropbox OAuth flow
+      security: []
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string, maxLength: 2000 } }
+        - { name: state, in: query, required: true, schema: { type: string, maxLength: 2000 } }
+        - { name: error, in: query, required: false, schema: { type: string, maxLength: 200 } }
+      responses:
+        '302': { description: Redirect to the configured frontend with connected, denied, or error status. }
+  /integrations/slack/authorize:
+    get:
+      tags: [Integrations]
+      operationId: authorizeSlack
+      summary: Start a workspace Slack OAuth flow
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Slack consent or configured default-connect URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GmailAuthorizeResponse' }
+        '401': { description: Authentication is required. }
+        '404': { description: Workspace is unavailable to the caller. }
+  /integrations/slack/callback:
+    get:
+      tags: [Integrations]
+      operationId: slackOAuthCallback
+      summary: Complete a workspace Slack OAuth flow
+      security: []
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string, maxLength: 500 } }
+        - { name: state, in: query, required: true, schema: { type: string, maxLength: 2000 } }
+        - { name: error, in: query, required: false, schema: { type: string, maxLength: 200 } }
+      responses:
+        '302': { description: Redirect to the configured frontend with connected, denied, or error status. }
+  /integrations/slack/default-callback:
+    get:
+      tags: [Integrations]
+      operationId: slackDefaultConnectCallback
+      summary: Complete the optional workspace Slack default-connect flow
+      description: Available only when SLACK_DEFAULT_CONNECT=true and SLACK_BOT_TOKEN is configured.
+      security: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema: { type: string, maxLength: 2000 }
+      responses:
+        '302': { description: Redirect to the configured frontend with connected or error status. }
+
   /billing/plans:
     get:
       tags: [Billing]
@@ -7077,6 +7292,61 @@ components:
           properties:
             items: { type: array, items: { $ref: '#/components/schemas/ProjectSummary' } }
             nextCursor: { type: [string, 'null'], format: uuid }
+    IntegrationProvider:
+      type: string
+      enum: [GOOGLE_DRIVE, ONEDRIVE, DROPBOX, GMAIL, OUTLOOK, SLACK, GITHUB, GITLAB, GOOGLE_CALENDAR, OUTLOOK_CALENDAR]
+    IntegrationConnection:
+      type: object
+      required: [id, provider, status, workspaceId, externalEmail, scopes, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        provider: { $ref: '#/components/schemas/IntegrationProvider' }
+        status: { type: string, enum: [ACTIVE, ERROR, DISCONNECTED] }
+        workspaceId: { type: [string, 'null'], format: uuid }
+        externalEmail: { type: [string, 'null'], format: email }
+        scopes:
+          type: array
+          items: { type: string }
+        createdAt: { type: string, format: date-time }
+    IntegrationListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/IntegrationConnection' }
+    IntegrationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/IntegrationConnection' }
+    GmailAuthorizeResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [url]
+          properties:
+            url: { type: string, format: uri }
+    CreateIntegrationRequest:
+      type: object
+      required: [provider, accessToken]
+      additionalProperties: false
+      properties:
+        provider: { $ref: '#/components/schemas/IntegrationProvider' }
+        workspaceId: { type: [string, 'null'], format: uuid }
+        accessToken: { type: string, minLength: 1, maxLength: 4000 }
+        refreshToken: { type: [string, 'null'], maxLength: 4000 }
+        tokenExpiresAt: { type: [string, 'null'], format: date-time }
+        scopes:
+          type: array
+          items: { type: string }
+        externalUserId: { type: [string, 'null'], maxLength: 200 }
+        externalEmail: { type: [string, 'null'], format: email, maxLength: 200 }
     EmailWebhookResponse:
       type: object
       required: [success, data]
