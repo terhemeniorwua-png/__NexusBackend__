@@ -147,5 +147,5 @@ export function dropboxResultUrl(status: 'connected' | 'denied' | 'error'): stri
   } catch {
     /* keep default */
   }
-  return `${origin}/app?integration=dropbox&status=${status}`;
+  return `${origin}/app/integrations?integration=dropbox&status=${status}`;
 }

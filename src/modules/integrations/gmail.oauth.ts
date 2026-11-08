@@ -167,5 +167,5 @@ export function gmailResultUrl(status: 'connected' | 'denied' | 'error'): string
   } catch {
     /* keep default */
   }
-  return `${origin}/app?integration=gmail&status=${status}`;
+  return `${origin}/app/integrations?integration=gmail&status=${status}`;
 }

@@ -147,5 +147,5 @@ export function slackResultUrl(status: 'connected' | 'denied' | 'error'): string
   } catch {
     /* keep default */
   }
-  return `${origin}/app?integration=slack&status=${status}`;
+  return `${origin}/app/integrations?integration=slack&status=${status}`;
 }
