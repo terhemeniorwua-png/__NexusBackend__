@@ -10,7 +10,7 @@ import type {
 import { redactEmailAddresses, summarizeErrorForLog } from './log-privacy';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
-import { encryptOtpBody } from './otp-body-encryption';
+import { decryptOtpBody, encryptOtpBody } from './otp-body-encryption';
 
 /**
  * Transactional email outbox.
@@ -467,8 +467,14 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
         from: delivery.fromAddress,
         replyTo: deps.config.emailReplyToAddress || undefined,
         subject: delivery.subject,
-        text: delivery.textBody,
-        html: delivery.htmlBody ?? undefined,
+        text: isOtpTemplate(delivery.template)
+        ? decryptOtpBody(delivery.textBody, deps.config.otpHmacSecret)
+        : delivery.textBody,
+        html: delivery.htmlBody
+        ? isOtpTemplate(delivery.template)
+          ? decryptOtpBody(delivery.htmlBody, deps.config.otpHmacSecret)
+          : delivery.htmlBody
+        : undefined,
         headers: toHeaderRecord(delivery.headers),
       });
     } catch (error) {
