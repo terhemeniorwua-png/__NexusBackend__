@@ -302,6 +302,66 @@ test('Google start sets the signed browser binding as an HttpOnly ten-minute coo
   assert.ok(cookies[0]!.value.includes('.'));
 });
 
+test('Google exchange returns the standard auth payload and refresh/CSRF cookies', async () => {
+  const context = setup();
+  const payload = {
+    user: { id: 'user-1', email: 'ada@example.com' },
+    accessToken: 'access-token-test',
+    tokenType: 'Bearer' as const,
+    expiresIn: 900,
+    csrfToken: 'csrf-token-test',
+    refreshToken: 'refresh-token-test',
+    session: { id: 'session-1', expiresAt: new Date('2030-01-01T00:00:00Z') },
+  };
+  const googleOAuth = {
+    ...context.service,
+    exchange: async () => payload,
+  } as GoogleOAuthService;
+  const controller = createAuthController({
+    config: context.config,
+    service: {} as AuthService,
+    googleOAuth,
+  });
+  const cookies: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
+  let body: unknown;
+  const response = {
+    locals: {},
+    cookie: (name: string, value: string, options: Record<string, unknown>) =>
+      cookies.push({ name, value, options }),
+    status() {
+      return this;
+    },
+    json(value: unknown) {
+      body = value;
+      return this;
+    },
+  } as unknown as Response;
+  const request = {
+    validated: { body: { code: 'one-time-login-code' } },
+    ip: '127.0.0.1',
+    header: () => undefined,
+  } as unknown as Request;
+  await controller.googleExchange(request, response);
+
+  assert.equal(cookies.length, 2);
+  assert.equal(cookies[0]!.name, 'nexus_rt');
+  assert.equal(cookies[0]!.value, 'refresh-token-test');
+  assert.equal(cookies[0]!.options.httpOnly, true);
+  assert.equal(cookies[1]!.name, 'nexus_csrf');
+  assert.equal(cookies[1]!.options.httpOnly, false);
+  assert.deepEqual(body, {
+    success: true,
+    data: {
+      user: payload.user,
+      accessToken: payload.accessToken,
+      tokenType: payload.tokenType,
+      expiresIn: payload.expiresIn,
+      csrfToken: payload.csrfToken,
+      session: payload.session,
+    },
+  });
+});
+
 test('Google callback rejects a missing, forged, or mismatched browser binding and audits failure', async () => {
   const context = setup();
   const { authorization, browserBinding } = await start(context);
