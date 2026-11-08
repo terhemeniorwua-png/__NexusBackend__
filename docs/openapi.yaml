@@ -4209,6 +4209,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /invitations/{token}/verify:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: The single-use token of the invitation link.
+        schema:
+          type: string
+    get:
+      tags: [Invitations]
+      operationId: verifyInvitation
+      summary: Verify the invitation for the signed-in account
+      description: |
+        Answers whether the signed-in account is the intended recipient and
+        whether it may accept or decline the invitation. It never accepts the
+        invitation and never changes membership.
+
+        Terminal invitation states are reported with HTTP 200 and their real
+        status, so the frontend can render "already accepted", "declined",
+        "revoked", "expired", "wrong account" or "already a member" without
+        treating them as server errors.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The invitation and the viewer's eligibility.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationVerificationResponse'
+        '401':
+          description: Authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The account has not verified its email address yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The token is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too many verification requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /invitations/{token}/accept:
     parameters:
       - name: token
@@ -5724,6 +5778,108 @@ components:
               example: p***@example.com
             boundToAccount:
               type: boolean
+    InvitationViewer:
+      type: object
+      required:
+        - userId
+        - email
+        - emailMatches
+        - alreadyMember
+        - membershipRole
+        - canAccept
+        - canDecline
+        - reason
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        emailMatches:
+          type: boolean
+          description: True when the signed-in account is the intended recipient.
+        alreadyMember:
+          type: boolean
+          description: True when the account already belongs to the workspace.
+        membershipRole:
+          oneOf:
+            - $ref: '#/components/schemas/WorkspaceRole'
+            - type: 'null'
+        canAccept:
+          type: boolean
+        canDecline:
+          type: boolean
+        reason:
+          oneOf:
+            - type: 'null'
+            - type: string
+              enum:
+                - EMAIL_MISMATCH
+                - ALREADY_ACCEPTED
+                - DECLINED
+                - REVOKED
+                - EXPIRED
+                - WORKSPACE_UNAVAILABLE
+                - ALREADY_A_MEMBER
+    InvitationVerificationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+            - workspace
+            - invitedBy
+            - role
+            - status
+            - expiresAt
+            - maskedEmail
+            - boundToAccount
+            - viewer
+          properties:
+            workspace:
+              type: object
+              required: [id, name, slug]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                slug:
+                  type: string
+            invitedBy:
+              type: object
+              required: [id, name]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+            role:
+              $ref: '#/components/schemas/WorkspaceRole'
+            organizationRole:
+              oneOf:
+                - $ref: '#/components/schemas/OrganizationRole'
+                - type: 'null'
+            status:
+              type: string
+              enum: [PENDING, ACCEPTED, DECLINED, REVOKED, EXPIRED]
+            expiresAt:
+              type: string
+              format: date-time
+            maskedEmail:
+              type: string
+              example: p***@example.com
+            boundToAccount:
+              type: boolean
+            viewer:
+              $ref: '#/components/schemas/InvitationViewer'
     DiscoveredWorkspace:
       type: object
       required: [id, name, slug, description, type, memberCount]

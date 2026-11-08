@@ -278,9 +278,49 @@ selected types. These preferences do not affect email or message unread state.
 | POST   | `/workspaces/{workspaceId}/invitations/{invitationId}/resend` | Workspace member with permission, rate limited | Resend a pending invitation.                     |
 | DELETE | `/workspaces/{workspaceId}/invitations/{invitationId}`        | Workspace member with permission               | Revoke an invitation.                            |
 | GET    | `/invitations`                                                | Authenticated, active account                  | List invitations addressed to the caller.        |
-| GET    | `/invitations/{token}`                                        | Public, rate limited                           | Preview an invitation.                           |
+| GET    | `/invitations/{token}`                                        | Public, rate limited                           | Preview an invitation without accepting it.      |
+| GET    | `/invitations/{token}/verify`                                 | Authenticated, active account, rate limited    | Verify the invitation for the signed-in account. |
 | POST   | `/invitations/{token}/accept`                                 | Authenticated, active account                  | Accept an invitation addressed to the caller.    |
 | POST   | `/invitations/{token}/decline`                                | Authenticated, active account                  | Decline an invitation addressed to the caller.   |
+
+### Workspace invitation acceptance contract
+
+The invitation link is a frontend route built from `FRONTEND_URL` and
+`WORKSPACE_INVITATION_LINK_PATH` with the raw token appended as `?token=...`.
+The raw token is never stored; the database keeps only its SHA-256 digest.
+
+Opening the link must call `GET /invitations/{token}` first. That endpoint is
+public, validates the token, returns the invited workspace, inviter, role,
+expiry and masked recipient address, and never creates membership or changes
+the invitation status. It returns `404 INVITATION_NOT_FOUND` for an unknown
+token and `410` for an expired, revoked, accepted or unavailable invitation.
+
+When a user is signed in, the frontend must call
+`GET /invitations/{token}/verify` before showing the accept or decline action.
+The response adds a `viewer` object with `emailMatches`, `alreadyMember`,
+`membershipRole`, `canAccept`, `canDecline` and a `reason`. A terminal
+invitation is reported with HTTP 200 and its real status, so the frontend can
+render "already accepted", "declined", "revoked", "expired", "wrong account"
+or "already a member" without treating those states as server errors.
+
+Accepting requires the signed-in account to be the intended recipient: the
+invitation is either bound to that account or addressed to its verified email.
+The service rechecks workspace availability, the token digest, the pending
+state and the deadline inside one transaction, creates the membership and marks
+the invitation `ACCEPTED` atomically, and records the audit event and inviter
+notification. A second or concurrent acceptance receives `409
+INVITATION_ALREADY_ACCEPTED` and never creates a second membership. Declining
+requires the same recipient check, moves a pending invitation to `DECLINED`
+without creating or deleting membership, and clears the pending-invitation
+slot so the address can be invited again.
+
+Invitation statuses are `PENDING`, `ACCEPTED`, `DECLINED`, `REVOKED` and
+`EXPIRED`. Only `PENDING` is actionable. Expiry is enforced on every read and
+write, and the stored status is updated to `EXPIRED` when the deadline passes.
+
+The complete frontend contract, including request/response examples and
+redirect behavior, is maintained in
+[`frontend-workspace-invitation-contract.md`](./frontend-workspace-invitation-contract.md).
 
 ## Workspace discovery and join requests
 

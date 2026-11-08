@@ -395,11 +395,18 @@ Nexus supports organisational discovery and membership workflows.
 
 ## Direct invitations
 
-- Direct invitations expire after 48 hours.
-- Expiration is enforced server-side.
-- Expired invitations cannot be accepted.
-- Administrators can resend invitations with a new expiry.
+- Direct invitations expire after 48 hours by default.
+- Expiration is enforced server-side on every read and write.
+- Opening the invitation link validates and previews it without accepting it.
+- A signed-in user can verify whether their account is the intended recipient
+  and whether the invitation can be accepted or declined.
+- Acceptance requires the intended recipient and creates workspace membership
+  transactionally; a token can be accepted only once.
+- Declining does not create membership and releases the pending invitation slot.
+- Administrators can resend invitations with a new expiry and token.
 - Invitations can be revoked.
+- The frontend contract is documented in
+  [`docs/frontend-workspace-invitation-contract.md`](./docs/frontend-workspace-invitation-contract.md).
 
 ## Membership statuses
 
@@ -876,8 +883,8 @@ updates cannot set that field; new uploads replace legacy values.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `WORKSPACE_INVITATION_TTL_SECONDS` | `604800` | Lifetime of an invitation link |
-| `WORKSPACE_INVITATION_LINK_PATH` | `/workspaces/invitations/accept` | Frontend route that receives the acceptance link |
+| `WORKSPACE_INVITATION_TTL_SECONDS` | `172800` | Lifetime of an invitation link (48 hours) |
+| `WORKSPACE_INVITATION_LINK_PATH` | `/workspaces/invitations/accept` | Frontend route that receives the acceptance link and `?token=...` |
 | `TASK_ASSIGNMENT_LINK_PATH` | `/projects/:projectId/tasks/:taskId` | Frontend route for an assigned task. `:projectId` and `:taskId` are replaced with encoded identifiers |
 | `COMMENT_MENTION_LINK_PATH` | `/projects/:projectId/tasks/:taskId#comment-:commentId` | Frontend route for a comment mention. Route parameters are replaced with encoded identifiers |
 | `MEETING_INVITATION_LINK_PATH` | `/meetings/:meetingId` | Frontend route for a meeting invitation. `:meetingId` is replaced with an encoded identifier |

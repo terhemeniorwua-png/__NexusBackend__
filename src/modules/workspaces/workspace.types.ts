@@ -101,6 +101,49 @@ export interface InvitationPreview {
   boundToAccount: boolean;
 }
 
+/**
+ * Why an invitation cannot be accepted or declined by the signed-in account.
+ *
+ * The public preview only describes the invitation. The authenticated
+ * verification endpoint adds the viewer context, because whether an invitation
+ * is actionable depends on the account that is signed in.
+ */
+export type InvitationVerificationReason =
+  | 'EMAIL_MISMATCH'
+  | 'ALREADY_ACCEPTED'
+  | 'DECLINED'
+  | 'REVOKED'
+  | 'EXPIRED'
+  | 'WORKSPACE_UNAVAILABLE'
+  | 'ALREADY_A_MEMBER';
+
+export interface InvitationViewer {
+  userId: string;
+  email: string;
+  /** True when the signed-in account is the intended recipient. */
+  emailMatches: boolean;
+  /** True when the signed-in account already belongs to the workspace. */
+  alreadyMember: boolean;
+  /** The caller's current role when they already belong to the workspace. */
+  membershipRole: WorkspaceRole | null;
+  /** True only when accepting would create access the caller does not have. */
+  canAccept: boolean;
+  canDecline: boolean;
+  /** Null when the invitation is actionable. */
+  reason: InvitationVerificationReason | null;
+}
+
+/**
+ * The authenticated view of an invitation.
+ *
+ * It carries the same safe preview as the public endpoint plus the caller's
+ * eligibility, so the frontend never has to infer whether the signed-in
+ * account is the intended recipient.
+ */
+export interface InvitationVerification extends InvitationPreview {
+  viewer: InvitationViewer;
+}
+
 export interface InvitationResult {
   invitation: InvitationSummary;
   /** False when the invitation could not be handed to the mail provider. */
