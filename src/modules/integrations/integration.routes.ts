@@ -13,6 +13,7 @@ import { buildSlackAuthorizeUrl, exchangeSlackCode, isSlackDefaultConnectEnabled
 import { buildDriveAuthorizeUrl, driveAuthorizeQuerySchema, driveCallbackQuerySchema, driveResultUrl, exchangeDriveCode, verifyDriveState } from './google-drive.oauth';
 import { buildDropboxAuthorizeUrl, dropboxAuthorizeQuerySchema, dropboxCallbackQuerySchema, dropboxResultUrl, exchangeDropboxCode, verifyDropboxState } from './dropbox.oauth';
 import { buildGmailAuthorizeUrl, exchangeGmailCode, gmailAuthorizeQuerySchema, gmailCallbackQuerySchema, gmailResultUrl, verifyGmailState } from './gmail.oauth';
+import { buildGithubAuthorizeUrl, exchangeGithubCode, githubAuthorizeQuerySchema, githubCallbackQuerySchema, githubResultUrl, verifyGithubState } from './github.oauth';
 
 
 export interface IntegrationRouterOptions { config: AppConfig; service?: ReturnType<typeof createIntegrationService> }
@@ -42,6 +43,9 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
     if (body.provider === 'DROPBOX') {
   throw new AppError(400, 'USE_DROPBOX_OAUTH', 'Connect Dropbox through the Dropbox authorization flow');
 } 
+    if (body.provider === 'GITHUB') {
+      throw new AppError(400, 'USE_GITHUB_OAUTH', 'Connect GitHub through the GitHub authorization flow');
+    }
     if (body.provider === 'GMAIL') {
       throw new AppError(400, 'USE_GMAIL_OAUTH', 'Connect Gmail through the Google authorization flow');
     }
@@ -168,6 +172,29 @@ router.get('/dropbox/callback', async (req, res) => {
     }
   });
 
+
+  // GitHub is a personal connection (workspaceId null).
+  router.get('/github/authorize', requireAuth, requireActive, validate({ query: githubAuthorizeQuerySchema }), async (req, res) => {
+    sendSuccess(res, { url: await buildGithubAuthorizeUrl({ userId: userId(req) }) });
+  });
+
+  router.get('/github/callback', async (req, res) => {
+    const done = (status: 'connected' | 'denied' | 'error') => res.redirect(302, githubResultUrl(status));
+    const parsed = githubCallbackQuerySchema.safeParse(req.query);
+    if (!parsed.success) return done('error');
+    const { code, state, error } = parsed.data;
+    if (error) return done('denied');
+    if (!code) return done('error');
+    try {
+      const claims = await verifyGithubState(state);
+      const token = await exchangeGithubCode(code);
+      await service.connect({ userId: claims.userId, provider: 'GITHUB', workspaceId: null, ...token });
+      return done('connected');
+    } catch (err) {
+      logger.warn('github_oauth_failed', { error: err });
+      return done('error');
+    }
+  });
 
   return router;
 }
