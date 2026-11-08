@@ -1337,9 +1337,7 @@ Do not log sensitive information such as passwords, access tokens, or unnecessar
 - **Retries and deduplication** — transient provider failures, provider timeouts and unexpected worker errors are retried with exponential backoff and jitter only while `EMAIL_MAX_ATTEMPTS` remains. Permanent failures stop immediately, and an exhausted delivery moves to the terminal `FAILED` state instead of returning to the queue. A unique idempotency key per logical send prevents duplicate rows and duplicate sends.
 - **Interrupted deliveries** — if a worker crashes after claiming a row, the row is left in `SENDING`. Every delivery pass recovers rows older than `EMAIL_SENDING_STALE_MS`: an attempt that still has budget returns to `QUEUED` with the normal backoff and an intact attempt counter, while an exhausted attempt becomes terminal `FAILED`. Recovery is conditional on the row still being stale and `SENDING`, so two workers cannot recover it twice.
 - **Provider webhooks** — `POST /api/v1/webhooks/email` verifies an HMAC signature over the raw payload, then applies delivery, bounce and complaint events. Providers that do not sign their events, Brevo among them, are verified with the token in the webhook URL. Repeated events are applied once.
-- **Task assignment notifier** — `src/services/task-assignment-notifier.ts` turns a persisted `TaskAssignee` row into the existing `task_assignment` email. It validates the active workspace and project membership, uses suppression rules, builds the task link from `EMAIL_APP_URL` and `TASK_ASSIGNMENT_LINK_PATH`, and derives its idempotency key from the assignment timestamp. The Phase 9 task service will call it after committing an assignment; delivery failure is reported without changing task data.
-- **Collaboration email notifier** — `src/services/collaboration-email-notifier.ts` provides post-commit handlers for persisted comment mentions, pending meeting invitations, persisted team invitations and persisted project invitations. Mention recipients are looked up from active users with workspace membership and the comment author is excluded. Meeting invitations are sent only for a `PENDING` invitation, include the organizer, time, location and optional workspace/project context, and link to the configured meeting route. Team invitations load a persisted `TEAM` invitation, require an active workspace, team and inviter, verify the raw token against the stored digest, and build the acceptance link from `EMAIL_APP_URL` plus `TEAM_INVITATION_LINK_PATH`. Project invitations load a persisted `PROJECT` invitation, require an active workspace, a live (non-archived) project and an active inviter, and include the project name, workspace name, inviter, expiration and a configured `PROJECT_INVITATION_LINK_PATH` link. All handlers use the transactional outbox, address suppression, stable idempotency keys and links rooted at `EMAIL_APP_URL`. Team and project idempotency use the invitation and token digest, so re-processing one token sends once while a resend with a new token sends once. The raw invitation token is never logged, written to outbox metadata or embedded in an idempotency key. The repository currently has no mention parser, meeting model, or team/project invitation workflow, so these handlers do not create mention events or create, revoke, expire or accept invitations; their owning workflows must call them after commit and supply the persisted context. Notification preferences are not modeled yet; the existing suppression list is enforced.
-- **Logging** — verification tokens, reset links and message bodies are never written to the application log. Delivery logs carry the delivery ID, template, provider, attempt and failure category, but not the recipient email address; provider and worker error text is redacted before it is logged.
+- **Logging** — verification tokens, reset links and message bodies are never written to the application log. Delivery logs carry the delivery ID, template, provider, attempt and failure category, but not the recipient email address; provider and worker error text is redacted before it is logged. HTTP request and error logs also redact invitation and email-webhook URL tokens, authentication query tokens and email addresses.
 
 ---
 
@@ -1851,24 +1849,7 @@ All coding agents must follow:
 
 ### Mandatory rules
 
-1. Read documentation before coding.
-2. Inspect existing implementation.
-3. Work only on the assigned phase.
-4. Preserve existing functionality.
-5. Use TypeScript for the main backend.
-6. Keep Python limited to the separate AI service.
-7. Do not invent APIs.
-8. Do not bypass service-level authorisation.
-9. Preserve workspace isolation.
-10. Do not expose secrets.
-11. Never delete or overwrite `.env`.
-12. Do not replace existing architecture without approval.
-13. Run relevant tests and checks.
-14. Update `phases.md`.
-15. Commit changes to a dedicated feature branch.
-16. Never commit directly to `main`.
-17. Never force-push.
-18. Never merge without explicit approval.
+The Phase 4 suite covers template rendering in HTML and plain text, configuration validation, transport error classification, outbox enqueue and claiming, idempotent sends, transient retries, permanent failures, the attempt limit, bounded retry of unexpected worker errors, recovery after a temporary worker failure, repair of exhausted queued rows, concurrent claim safety, address suppression, webhook verification and idempotency, that verification tokens never reach the application log, that queued, sent and failure events do not expose recipient addresses, and that HTTP request and error logs redact invitation, webhook and authentication tokens. The integration tests talk to a local SMTP capture server, so no provider credentials and no outbound mail are required.
 
 ---
 

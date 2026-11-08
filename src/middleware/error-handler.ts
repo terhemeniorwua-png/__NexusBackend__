@@ -74,6 +74,12 @@ export function createErrorHandler(
             name: error.name,
             message: redactSensitiveText(error.message),
             ...(error.stack ? { stack: redactSensitiveText(error.stack) } : {}),
+            ...(typeof (error as Error & { code?: unknown }).code === 'string' ||
+            typeof (error as Error & { code?: unknown }).code === 'number'
+              ? {
+                  code: redactSensitiveText(String((error as Error & { code?: unknown }).code)),
+                }
+              : {}),
           }
         : { message: redactSensitiveText(String(error)) };
     const context = {
