@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { z } from 'zod';
 import { AppError } from '../../utils/errors';
 
-const SLACK_SCOPES = ['chat:write', 'channels:read', 'users:read', 'users:read.email'];
+const SLACK_SCOPES = ['chat:write', 'channels:read', 'app_mentions:read'];
 const STATE_TTL_MS = 10 * 60 * 1000;
 
 export const slackAuthorizeQuerySchema = z.object({ workspaceId: z.string().uuid() });
