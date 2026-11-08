@@ -42,8 +42,8 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
   // Slack step 1 (authenticated): the frontend asks for the Slack consent URL.
   router.get('/slack/authorize', requireAuth, requireActive, validate({ query: slackAuthorizeQuerySchema }), async (req, res) => {
     const { workspaceId } = req.validated!.query as { workspaceId: string };
-    await requireWorkspaceAccess(getPrismaClient(), { userId: userId(req), workspaceId, capability: WorkspaceCapability.ViewWorkspace });
-    sendSuccess(res, { url: buildSlackAuthorizeUrl({ userId: userId(req), workspaceId }) });
+    await requireWorkspaceAccess(getPrismaClient(), { userId: userId(req), workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+    sendSuccess(res, { url: await buildSlackAuthorizeUrl({ userId: userId(req), workspaceId }) });
   });
 
   // Slack step 2 (public): Slack redirects the browser here. Identity comes from the signed state.
@@ -55,7 +55,7 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
     if (error) return done('denied');
     if (!code) return done('error');
     try {
-      const claims = verifySlackState(state);
+      const claims = await verifySlackState(state);
       const token = await exchangeSlackCode(code);
       await service.connect({ userId: claims.userId, provider: 'SLACK', workspaceId: claims.workspaceId, ...token });
       return done('connected');

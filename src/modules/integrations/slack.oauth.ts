@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import { getRedisClient } from '../../db/redis';
 import { AppError } from '../../utils/errors';
 
 const SLACK_SCOPES = ['chat:write', 'channels:read', 'app_mentions:read'];
@@ -32,10 +33,12 @@ function sign(body: string): string {
   return createHmac('sha256', stateKey()).update(body).digest('base64url');
 }
 
-export function buildSlackAuthorizeUrl(input: { userId: string; workspaceId: string }): string {
+export async function buildSlackAuthorizeUrl(input: { userId: string; workspaceId: string }): Promise<string> {
   const { clientId, redirectUri } = slackConfig();
+  const nonce = randomBytes(16).toString('hex');
+  await getRedisClient().set(`slack:oauth:state:${nonce}`, input.userId, { EX: STATE_TTL_MS / 1000 });
   const body = Buffer.from(
-    JSON.stringify({ u: input.userId, w: input.workspaceId, n: randomBytes(8).toString('hex'), e: Date.now() + STATE_TTL_MS }),
+    JSON.stringify({ u: input.userId, w: input.workspaceId, n: nonce, e: Date.now() + STATE_TTL_MS }),
   ).toString('base64url');
   const url = new URL('https://slack.com/oauth/v2/authorize');
   url.searchParams.set('client_id', clientId);
@@ -45,14 +48,14 @@ export function buildSlackAuthorizeUrl(input: { userId: string; workspaceId: str
   return url.toString();
 }
 
-export function verifySlackState(state: string): { userId: string; workspaceId: string } {
+export async function verifySlackState(state: string): Promise<{ userId: string; workspaceId: string }> {
   const [body, sig, extra] = state.split('.');
   const bad = () => new AppError(400, 'SLACK_STATE_INVALID', 'The Slack authorization link is invalid or expired');
   if (!body || !sig || extra !== undefined) throw bad();
   const expected = Buffer.from(sign(body));
   const given = Buffer.from(sig);
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) throw bad();
-  let claims: { u?: unknown; w?: unknown; e?: unknown };
+  let claims: { u?: unknown; w?: unknown; e?: unknown; n?: unknown };
   try {
     claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
   } catch {
@@ -61,6 +64,10 @@ export function verifySlackState(state: string): { userId: string; workspaceId: 
   if (typeof claims.u !== 'string' || typeof claims.w !== 'string' || typeof claims.e !== 'number' || claims.e < Date.now()) {
     throw bad();
   }
+  if (typeof claims.n !== 'string' || !/^[0-9a-f]{32}$/.test(claims.n)) throw bad();
+  // One-time use: DEL returns 1 only for the first caller; a replayed state gets 0.
+  const consumed = await getRedisClient().del(`slack:oauth:state:${claims.n}`);
+  if (consumed !== 1) throw bad();
   return { userId: claims.u, workspaceId: claims.w };
 }
 
