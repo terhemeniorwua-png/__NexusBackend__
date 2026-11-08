@@ -131,12 +131,12 @@ function runTests(rawDbUrl: string): void {
     await db.prisma.$disconnect();
   });
 
-  test('control: member can create a event with no project', async () => {
+  test('control: member can create an event with no project', async () => {
     const res = await createEvent(member, { title: 'No project', startAt: S, endAt: E });
     assert.equal(res.status, 201, JSON.stringify(res.body));
   });
 
-  test('control: member can create a event on a WORKSPACE project', async () => {
+  test('control: member can create an event on a WORKSPACE project', async () => {
     const res = await createEvent(member, { title: 'Open project', startAt: S, endAt: E, projectId: openProjectId });
     assert.equal(res.status, 201, JSON.stringify(res.body));
   });
@@ -145,7 +145,7 @@ function runTests(rawDbUrl: string): void {
     assert.ok((await listIds(owner)).includes(privateEventId));
   });
 
-  test('member cannot create a event on a PRIVATE project', async () => {
+  test('member cannot create an event on a PRIVATE project', async () => {
     const res = await createEvent(member, { title: 'Sneaky', startAt: S, endAt: E, projectId: privateProjectId });
     assert.ok([403, 404].includes(res.status), `leaked: expected 403/404, got ${res.status}`);
   });
@@ -162,5 +162,52 @@ function runTests(rawDbUrl: string): void {
   test('member cannot get a PRIVATE project event by id', async () => {
     const res = await jsonRequest(`${eventsUrl()}/${privateEventId}`, { headers: auth(member), jar: member.jar });
     assert.ok([403, 404].includes(res.status), `leaked: expected 403/404, got ${res.status}`);
+  });
+
+  const blockedCal = (res: { status: number }, what: string) =>
+    assert.ok([403, 404].includes(res.status), `leaked: ${what} expected 403/404, got ${res.status}`);
+
+  test('member cannot PATCH a PRIVATE project event', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}`, { method: 'PATCH', headers: auth(member), body: JSON.stringify({ title: 'hacked' }), jar: member.jar });
+    blockedCal(res, 'patch');
+  });
+
+  test('member cannot cancel a PRIVATE project event', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}/cancel`, { method: 'POST', headers: auth(member), jar: member.jar });
+    blockedCal(res, 'cancel');
+  });
+
+  test('member cannot delete a PRIVATE project event', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}`, { method: 'DELETE', headers: auth(member), jar: member.jar });
+    blockedCal(res, 'delete');
+  });
+
+  test('member cannot list invitations of a PRIVATE project event', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}/invitations`, { headers: auth(member), jar: member.jar });
+    blockedCal(res, 'listInvitations');
+  });
+
+  test('member cannot add an invitee to a PRIVATE project event', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}/invitations`, { method: 'POST', headers: auth(member), body: JSON.stringify({ userId: owner.id }), jar: member.jar });
+    blockedCal(res, 'addInvitee');
+  });
+
+  test('member cannot remove an invitee from a PRIVATE project event', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}/invitations/${owner.id}`, { method: 'DELETE', headers: auth(member), jar: member.jar });
+    blockedCal(res, 'removeInvitee');
+  });
+
+  test('blocked member writes changed nothing (owner view)', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}`, { headers: auth(owner), jar: owner.jar });
+    assert.equal(res.status, 200, 'event must still exist');
+    const text = JSON.stringify(res.body);
+    assert.ok(!text.includes('hacked'), 'title was modified by blocked member');
+    assert.ok(!text.includes('CANCELLED'), 'event was cancelled by blocked member');
+  });
+
+  test('control: owner can still PATCH the PRIVATE project event', async () => {
+    const res = await jsonRequest(`${eventsUrl()}/${privateEventId}`, { method: 'PATCH', headers: auth(owner), body: JSON.stringify({ title: 'owner-edit' }), jar: owner.jar });
+    assert.equal(res.status, 200);
+    assert.ok(JSON.stringify(res.body).includes('owner-edit'));
   });
 }

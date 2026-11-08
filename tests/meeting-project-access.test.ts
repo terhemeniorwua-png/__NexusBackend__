@@ -170,4 +170,44 @@ function runTests(rawDbUrl: string): void {
     const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}/participants`, { headers: auth(member), jar: member.jar });
     assert.ok([403, 404].includes(res.status), `leaked: expected 403/404, got ${res.status}`);
   });
+
+  const blockedMeet = (res: { status: number }, what: string) =>
+    assert.ok([403, 404].includes(res.status), `leaked: ${what} expected 403/404, got ${res.status}`);
+
+  test('member cannot PATCH a PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}`, { method: 'PATCH', headers: auth(member), body: JSON.stringify({ title: 'hacked' }), jar: member.jar });
+    blockedMeet(res, 'patch');
+  });
+
+  test('member cannot delete a PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}`, { method: 'DELETE', headers: auth(member), jar: member.jar });
+    blockedMeet(res, 'delete');
+  });
+
+  test('member cannot add a participant to a PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}/participants`, { method: 'POST', headers: auth(member), body: JSON.stringify({ userId: owner.id }), jar: member.jar });
+    blockedMeet(res, 'addParticipant');
+  });
+
+  test('member cannot remove a participant from a PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}/participants/${owner.id}`, { method: 'DELETE', headers: auth(member), jar: member.jar });
+    blockedMeet(res, 'removeParticipant');
+  });
+
+  test('member cannot leave a PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}/leave`, { method: 'POST', headers: auth(member), jar: member.jar });
+    blockedMeet(res, 'leave');
+  });
+
+  test('blocked member writes changed nothing (owner view of meeting)', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}`, { headers: auth(owner), jar: owner.jar });
+    assert.equal(res.status, 200, 'meeting must still exist');
+    assert.ok(!JSON.stringify(res.body).includes('hacked'), 'title was modified by blocked member');
+  });
+
+  test('control: owner can still PATCH the PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}`, { method: 'PATCH', headers: auth(owner), body: JSON.stringify({ title: 'owner-edit' }), jar: owner.jar });
+    assert.equal(res.status, 200);
+    assert.ok(JSON.stringify(res.body).includes('owner-edit'));
+  });
 }
