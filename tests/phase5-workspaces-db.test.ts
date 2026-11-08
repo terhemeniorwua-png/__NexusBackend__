@@ -440,6 +440,181 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.ok(audit, 'The acceptance has to be recorded');
   });
 
+  test('authenticated verification explains whether the caller can accept or decline', async () => {
+    const ownerEmail = uniqueEmail('verify-owner');
+    const inviteeEmail = uniqueEmail('verify-invitee');
+    const strangerEmail = uniqueEmail('verify-stranger');
+    await createUser('Verify Owner', ownerEmail);
+    const invitee = await createUser('Verify Invitee', inviteeEmail);
+    await createUser('Verify Stranger', strangerEmail);
+
+    const ownerToken = await login(ownerEmail);
+    const inviteeToken = await login(inviteeEmail);
+    const strangerToken = await login(strangerEmail);
+    const workspace = await createWorkspace(ownerToken);
+    sent = [];
+
+    const created = await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail, role: 'MEMBER' },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+
+    const token = tokenFromEmail(lastInvitationEmail());
+
+    type VerificationData = {
+      workspace: { id: string; name: string; slug: string };
+      status: string;
+      maskedEmail: string;
+      boundToAccount: boolean;
+      viewer: {
+        userId: string;
+        email: string;
+        emailMatches: boolean;
+        alreadyMember: boolean;
+        membershipRole: string | null;
+        canAccept: boolean;
+        canDecline: boolean;
+        reason: string | null;
+      };
+    };
+
+    // Reading the public link validates it but must not accept it.
+    const preview = await api(`/invitations/${token}`);
+    assert.equal(preview.status, 200, JSON.stringify(preview.body));
+
+    const stored = await prisma.invitation.findFirst({ where: { email: inviteeEmail } });
+    assert.equal(stored?.status, 'PENDING');
+    assert.equal(stored?.acceptedAt, null);
+
+    // Verification is an authenticated operation.
+    const anonymous = await api(`/invitations/${token}/verify`);
+    assert.equal(anonymous.status, 401);
+    assert.equal(anonymous.body.error?.code, 'AUTHENTICATION_REQUIRED');
+
+    // A different signed-in account learns that it is not the recipient.
+    const stranger = await api<VerificationData>(`/invitations/${token}/verify`, {
+      token: strangerToken,
+    });
+    assert.equal(stranger.status, 200, JSON.stringify(stranger.body));
+    const strangerData = stranger.body.data as VerificationData;
+    assert.equal(strangerData.workspace.id, workspace.id);
+    assert.equal(strangerData.viewer.emailMatches, false);
+    assert.equal(strangerData.viewer.canAccept, false);
+    assert.equal(strangerData.viewer.canDecline, false);
+    assert.equal(strangerData.viewer.reason, 'EMAIL_MISMATCH');
+
+    // The intended recipient can act on it.
+    const intended = await api<VerificationData>(`/invitations/${token}/verify`, {
+      token: inviteeToken,
+    });
+    assert.equal(intended.status, 200, JSON.stringify(intended.body));
+    const intendedData = intended.body.data as VerificationData;
+    assert.equal(intendedData.workspace.id, workspace.id);
+    assert.equal(intendedData.status, 'PENDING');
+    assert.equal(intendedData.viewer.userId, invitee.id);
+    assert.equal(intendedData.viewer.email, inviteeEmail);
+    assert.equal(intendedData.viewer.emailMatches, true);
+    assert.equal(intendedData.viewer.alreadyMember, false);
+    assert.equal(intendedData.viewer.membershipRole, null);
+    assert.equal(intendedData.viewer.canAccept, true);
+    assert.equal(intendedData.viewer.canDecline, true);
+    assert.equal(intendedData.viewer.reason, null);
+
+    // Verification does not consume the invitation.
+    const accepted = await api(`/invitations/${token}/accept`, {
+      method: 'POST',
+      token: inviteeToken,
+    });
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+
+    // A spent invitation is reported, not hidden behind an error.
+    const after = await api<VerificationData>(`/invitations/${token}/verify`, {
+      token: inviteeToken,
+    });
+    assert.equal(after.status, 200, JSON.stringify(after.body));
+    const afterData = after.body.data as VerificationData;
+    assert.equal(afterData.status, 'ACCEPTED');
+    assert.equal(afterData.viewer.alreadyMember, true);
+    assert.equal(afterData.viewer.membershipRole, 'MEMBER');
+    assert.equal(afterData.viewer.canAccept, false);
+    assert.equal(afterData.viewer.canDecline, false);
+    assert.equal(afterData.viewer.reason, 'ALREADY_ACCEPTED');
+  });
+
+  test('verification tells an existing member to open the workspace instead of accepting', async () => {
+    const ownerEmail = uniqueEmail('verify-member-owner');
+    const inviteeEmail = uniqueEmail('verify-member-invitee');
+    await createUser('Verify Member Owner', ownerEmail);
+    const invitee = await createUser('Verify Member Invitee', inviteeEmail);
+
+    const ownerToken = await login(ownerEmail);
+    const inviteeToken = await login(inviteeEmail);
+    const workspace = await createWorkspace(ownerToken);
+    sent = [];
+
+    await api(`/workspaces/${workspace.id}/invitations`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail },
+    });
+    const token = tokenFromEmail(lastInvitationEmail());
+
+    // The account joins through another path while the invitation is pending.
+    const added = await api(`/workspaces/${workspace.id}/members`, {
+      method: 'POST',
+      token: ownerToken,
+      body: { email: inviteeEmail, role: 'MEMBER' },
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+
+    type VerificationData = {
+      status: string;
+      viewer: {
+        alreadyMember: boolean;
+        membershipRole: string | null;
+        canAccept: boolean;
+        canDecline: boolean;
+        reason: string | null;
+      };
+    };
+
+    const verification = await api<VerificationData>(`/invitations/${token}/verify`, {
+      token: inviteeToken,
+    });
+    assert.equal(verification.status, 200, JSON.stringify(verification.body));
+    const data = verification.body.data as VerificationData;
+    assert.equal(data.status, 'PENDING');
+    assert.equal(data.viewer.alreadyMember, true);
+    assert.equal(data.viewer.membershipRole, 'MEMBER');
+    assert.equal(data.viewer.canAccept, false);
+    assert.equal(data.viewer.canDecline, true);
+    assert.equal(data.viewer.reason, 'ALREADY_A_MEMBER');
+
+    // Declining clears the pending invitation without touching membership.
+    const declined = await api(`/invitations/${token}/decline`, {
+      method: 'POST',
+      token: inviteeToken,
+    });
+    assert.equal(declined.status, 200, JSON.stringify(declined.body));
+
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: { workspaceId_userId: { workspaceId: workspace.id, userId: invitee.id } },
+    });
+    assert.equal(membership?.role, 'MEMBER');
+
+    const after = await api<VerificationData>(`/invitations/${token}/verify`, {
+      token: inviteeToken,
+    });
+    assert.equal(after.status, 200, JSON.stringify(after.body));
+    const afterData = after.body.data as VerificationData;
+    assert.equal(afterData.status, 'DECLINED');
+    assert.equal(afterData.viewer.canAccept, false);
+    assert.equal(afterData.viewer.canDecline, false);
+    assert.equal(afterData.viewer.reason, 'DECLINED');
+  });
+
   test('the invited person can decline once without receiving membership', async () => {
     const ownerEmail = uniqueEmail('decline-owner');
     const inviteeEmail = uniqueEmail('decline-invitee');
@@ -563,6 +738,20 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
 
     const inviteeToken = await login(inviteeEmail);
 
+    const verification = await api<{
+      status: string;
+      viewer: { canAccept: boolean; canDecline: boolean; reason: string | null };
+    }>(`/invitations/${token}/verify`, { token: inviteeToken });
+    assert.equal(verification.status, 200, JSON.stringify(verification.body));
+    const verificationData = verification.body.data as {
+      status: string;
+      viewer: { canAccept: boolean; canDecline: boolean; reason: string | null };
+    };
+    assert.equal(verificationData.status, 'EXPIRED');
+    assert.equal(verificationData.viewer.canAccept, false);
+    assert.equal(verificationData.viewer.canDecline, false);
+    assert.equal(verificationData.viewer.reason, 'EXPIRED');
+
     const response = await api(`/invitations/${token}/accept`, {
       method: 'POST',
       token: inviteeToken,
@@ -608,6 +797,20 @@ describe('Phase 5 workspaces, memberships and invitations', { skip: skipReason |
     assert.equal((revoked.body.data as { status: string }).status, 'REVOKED');
 
     const inviteeToken = await login(inviteeEmail);
+
+    const verification = await api<{
+      status: string;
+      viewer: { canAccept: boolean; canDecline: boolean; reason: string | null };
+    }>(`/invitations/${token}/verify`, { token: inviteeToken });
+    assert.equal(verification.status, 200, JSON.stringify(verification.body));
+    const verificationData = verification.body.data as {
+      status: string;
+      viewer: { canAccept: boolean; canDecline: boolean; reason: string | null };
+    };
+    assert.equal(verificationData.status, 'REVOKED');
+    assert.equal(verificationData.viewer.canAccept, false);
+    assert.equal(verificationData.viewer.canDecline, false);
+    assert.equal(verificationData.viewer.reason, 'REVOKED');
 
     const response = await api(`/invitations/${token}/accept`, {
       method: 'POST',

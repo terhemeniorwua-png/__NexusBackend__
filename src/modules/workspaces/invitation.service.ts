@@ -20,7 +20,13 @@ import {
   effectiveWorkspaceRole,
 } from '../authorization/organization-role';
 import type { CreateInvitationInput } from './workspace.schemas';
-import type { InvitationPreview, InvitationResult, InvitationSummary } from './workspace.types';
+import type {
+  InvitationPreview,
+  InvitationResult,
+  InvitationSummary,
+  InvitationVerification,
+  InvitationVerificationReason,
+} from './workspace.types';
 import { assertWorkspaceSeatCapacity } from '../billing/membership-billing';
 
 /**
@@ -63,6 +69,7 @@ export interface InvitationService {
     invitationId: string;
   }): Promise<InvitationSummary>;
   preview(token: string): Promise<InvitationPreview>;
+  verify(input: { userId: string; token: string }): Promise<InvitationVerification>;
   accept(input: { userId: string; token: string }, ctx: RequestContext): Promise<InvitationSummary>;
   decline(
     input: { userId: string; token: string },
@@ -87,6 +94,22 @@ export function maskInvitationEmail(email: string): string {
   }
 
   return `${local.slice(0, 1)}***@${domain}`;
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function isInvitationRecipient(
+  invitation: Pick<Invitation, 'email' | 'forUserId'>,
+  user: { id: string; email: string },
+): boolean {
+  // A bound invitation belongs to one account, even if that account later
+  // changes its address. An unbound invitation belongs to the address it was
+  // sent to.
+  return invitation.forUserId !== null
+    ? invitation.forUserId === user.id
+    : normalizeEmail(invitation.email) === normalizeEmail(user.email);
 }
 
 function pendingKeyFor(workspaceId: string, email: string): string {
@@ -658,6 +681,114 @@ export function createInvitationService(
       };
     },
 
+    /**
+     * Verifies the invitation for the signed-in account without changing it.
+     *
+     * The public preview cannot answer whether the current account may act on
+     * the invitation, because it has no viewer. This method does, and it
+     * deliberately reports terminal states instead of throwing so the
+     * frontend can render "already accepted", "revoked", "expired" or "wrong
+     * account" without guessing from an error.
+     */
+    async verify(input): Promise<InvitationVerification> {
+      const invitation = await client.invitation.findUnique({
+        where: { tokenHash: hashSecret(input.token) },
+        include: {
+          workspace: {
+            select: { id: true, name: true, slug: true, status: true, deletedAt: true },
+          },
+          invitedBy: { select: { id: true, name: true } },
+        },
+      });
+
+      if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
+      }
+
+      const user = await client.user.findUnique({
+        where: { id: input.userId },
+        select: { id: true, email: true, deletedAt: true },
+      });
+
+      if (!user || user.deletedAt) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      }
+
+      let status = invitation.status;
+
+      // Keep the stored state honest, exactly like the public preview does.
+      if (status === 'PENDING' && invitation.expiresAt.getTime() <= Date.now()) {
+        await client.invitation.updateMany({
+          where: { id: invitation.id, status: 'PENDING', expiresAt: { lte: new Date() } },
+          data: { status: 'EXPIRED', pendingKey: null },
+        });
+        status = 'EXPIRED';
+      }
+
+      const workspaceAvailable =
+        invitation.workspace.status === 'ACTIVE' && !invitation.workspace.deletedAt;
+      const emailMatches = isInvitationRecipient(invitation, user);
+
+      // Only ask about membership when the viewer is the recipient. A
+      // stranger must not learn anything about the recipient's memberships.
+      const membership = emailMatches
+        ? await client.workspaceMembership.findUnique({
+            where: {
+              workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id },
+            },
+            select: { role: true },
+          })
+        : null;
+      const alreadyMember = Boolean(membership);
+
+      let reason: InvitationVerificationReason | null = null;
+
+      if (!emailMatches) {
+        reason = 'EMAIL_MISMATCH';
+      } else if (!workspaceAvailable) {
+        reason = 'WORKSPACE_UNAVAILABLE';
+      } else if (status === 'ACCEPTED') {
+        reason = 'ALREADY_ACCEPTED';
+      } else if (status === 'DECLINED') {
+        reason = 'DECLINED';
+      } else if (status === 'REVOKED') {
+        reason = 'REVOKED';
+      } else if (status === 'EXPIRED') {
+        reason = 'EXPIRED';
+      } else if (alreadyMember) {
+        reason = 'ALREADY_A_MEMBER';
+      }
+
+      const actionable = emailMatches && workspaceAvailable && status === 'PENDING';
+
+      return {
+        workspace: {
+          id: invitation.workspace.id,
+          name: invitation.workspace.name,
+          slug: invitation.workspace.slug,
+        },
+        invitedBy: invitation.invitedBy,
+        role: invitation.role,
+        organizationRole: invitation.organizationRole,
+        status,
+        expiresAt: invitation.expiresAt,
+        maskedEmail: maskInvitationEmail(invitation.email),
+        boundToAccount: Boolean(invitation.forUserId),
+        viewer: {
+          userId: user.id,
+          email: user.email,
+          emailMatches,
+          alreadyMember,
+          membershipRole: membership?.role ?? null,
+          // Accepting when already a member would not create access, so the
+          // frontend should send that person to the workspace instead.
+          canAccept: actionable && !alreadyMember,
+          canDecline: actionable,
+          reason,
+        },
+      };
+    },
+
     async accept(input, ctx): Promise<InvitationSummary> {
       const invitation = await client.invitation.findUnique({
         where: { tokenHash: hashSecret(input.token) },
@@ -719,10 +850,7 @@ export function createInvitationService(
 
       // The invitation is meant for one recipient. A bound invitation belongs
       // to one account, an unbound one to the address it was sent to.
-      const boundToOtherAccount = invitation.forUserId !== null && invitation.forUserId !== user.id;
-      const addressDoesNotMatch = invitation.forUserId === null && invitation.email !== user.email;
-
-      if (boundToOtherAccount || addressDoesNotMatch) {
+      if (!isInvitationRecipient(invitation, user)) {
         throw new AppError(
           403,
           'INVITATION_FOR_OTHER_USER',
@@ -842,9 +970,7 @@ export function createInvitationService(
         throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
       }
 
-      const boundToOtherAccount = invitation.forUserId !== null && invitation.forUserId !== user.id;
-      const addressDoesNotMatch = invitation.forUserId === null && invitation.email !== user.email;
-      if (boundToOtherAccount || addressDoesNotMatch) {
+      if (!isInvitationRecipient(invitation, user)) {
         throw new AppError(
           403,
           'INVITATION_FOR_OTHER_USER',
