@@ -38,6 +38,8 @@ export const SecurityAction = {
   TwoFactorFailed: 'auth.two_factor_failed',
   TwoFactorRecoveryCodesRegenerated: 'auth.two_factor_recovery_codes_regenerated',
   TwoFactorChallengeIssued: 'auth.two_factor_challenge_issued',
+  ProfileAvatarUploaded: 'auth.profile_avatar_uploaded',
+  ProfileAvatarDeleted: 'auth.profile_avatar_deleted',
 } as const;
 
 export type SecurityActionValue = (typeof SecurityAction)[keyof typeof SecurityAction];

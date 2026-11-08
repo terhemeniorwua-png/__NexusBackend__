@@ -1144,7 +1144,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     const path = `${baseUrl}/api/v1/users/me/avatar`;
     const upload = async (body: Buffer, type: string, filename = 'image.bin') => {
       const form = new FormData();
-      form.append('avatar', new Blob([body], { type }), filename);
+      form.append('file', new Blob([body], { type }), filename);
       return fetch(path, { method: 'POST', headers: authorization, body: form });
     };
 
@@ -1183,7 +1183,7 @@ describe('Phase 3 account lifecycle', { skip: skipReason || false }, () => {
     });
     assert.match(
       firstProfile.avatarStorageKey ?? '',
-      new RegExp(`^avatars/${session.userId}/[0-9a-f-]+\\.png$`),
+      new RegExp(`^avatars/${session.userId}/[0-9a-f-]+\\.webp$`),
     );
     assert.equal(firstProfile.avatarUrl, null);
 
