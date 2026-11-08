@@ -24,6 +24,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRISMA="$ROOT/node_modules/.bin/prisma"
+EXPECTED_MIGRATION_COUNT="$(find "$ROOT/prisma/migrations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')"
 
 : "${DATABASE_URL:?Set DATABASE_URL to a disposable PostgreSQL database whose name contains \"test\"}"
 : "${SHADOW_DATABASE_URL:?Set SHADOW_DATABASE_URL to a disposable PostgreSQL shadow database}"
@@ -129,7 +130,7 @@ restore_backup
 assert_eq "$(psql_scalar "SELECT count(*) FROM \"User\" WHERE id = '$PROBE_USER_ID';")" "1" "restored User sentinel is missing"
 assert_eq "$(psql_scalar "SELECT count(*) FROM \"Workspace\" WHERE id = '$PROBE_WORKSPACE_ID';")" "1" "restored Workspace sentinel is missing"
 assert_eq "$(psql_scalar "SELECT count(*) FROM \"WorkspaceMembership\" WHERE id = '$PROBE_MEMBERSHIP_ID';")" "1" "restored WorkspaceMembership sentinel is missing"
-assert_eq "$(psql_scalar 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;')" "6" "restored migration history is incomplete"
+assert_eq "$(psql_scalar 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;')" "$EXPECTED_MIGRATION_COUNT" "restored migration history is incomplete"
 
 echo "4/6 Simulating a failed migration and Prisma recovery"
 copy_migrations "$TMP_DIR/failure"
@@ -168,7 +169,7 @@ assert_eq "$(psql_scalar "SELECT count(*) FROM \"User\" WHERE id = '$PROBE_USER_
 
 echo "6/6 Restoring the known-good state"
 restore_backup
-assert_eq "$(psql_scalar 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;')" "6" "known-good migration history was not restored"
+assert_eq "$(psql_scalar 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;')" "$EXPECTED_MIGRATION_COUNT" "known-good migration history was not restored"
 assert_eq "$(psql_scalar "SELECT count(*) FROM \"User\" WHERE id = '$PROBE_USER_ID';")" "1" "sentinel data is missing after final restore"
 run_prisma migrate status
 run_prisma migrate diff \

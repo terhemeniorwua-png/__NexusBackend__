@@ -52,6 +52,22 @@ export const workspaceRoleSchema = z.enum([
   'VIEWER',
 ]);
 
+export const organizationRoleSchema = z.enum([
+  'COMPANY_OWNER',
+  'COMPANY_ADMIN',
+  'COMPANY_PROJECT_MANAGER',
+  'COMPANY_MEMBER',
+  'COMPANY_COLLABORATOR',
+  'COMPANY_VIEWER',
+  'INSTITUTION_OWNER',
+  'INSTITUTION_ADMIN',
+  'INSTITUTION_DEPARTMENT_HEAD',
+  'INSTITUTION_LECTURER_STAFF',
+  'INSTITUTION_STUDENT',
+  'INSTITUTION_COLLABORATOR',
+  'INSTITUTION_VIEWER',
+]);
+
 export const workspaceIdParamsSchema = z.object({
   workspaceId: z.string().trim().uuid('The workspace id is not valid'),
 });
@@ -66,15 +82,43 @@ export const invitationParamsSchema = z.object({
   invitationId: z.string().trim().uuid('The invitation id is not valid'),
 });
 
+export const departmentParamsSchema = z.object({
+  workspaceId: z.string().trim().uuid('The workspace id is not valid'),
+  departmentId: z.string().trim().uuid('The department id is not valid'),
+});
+
+export const departmentMemberParamsSchema = departmentParamsSchema.extend({
+  targetUserId: z.string().trim().uuid('The user id is not valid'),
+});
+
+export const createDepartmentSchema = z.object({ name: nameSchema }).strict();
+export const updateDepartmentSchema = z.object({ name: nameSchema }).strict();
+
+export const departmentMemberSchema = z
+  .object({
+    targetUserId: z.string().trim().uuid('The user id is not valid'),
+    role: z.enum(['HEAD', 'MEMBER']).default('MEMBER'),
+  })
+  .strict();
+
+export type CreateDepartmentInput = z.infer<typeof createDepartmentSchema>;
+export type UpdateDepartmentInput = z.infer<typeof updateDepartmentSchema>;
+export type DepartmentMemberInput = z.infer<typeof departmentMemberSchema>;
+
 export const invitationTokenParamsSchema = z.object({
   token: z.string().trim().min(20, 'The invitation token is not valid').max(200),
 });
+
+const workspaceTypeSchema = z.enum(['INDIVIDUAL', 'COMPANY', 'INSTITUTION']);
+const workspaceVisibilitySchema = z.enum(['PRIVATE', 'PUBLIC']);
 
 export const createWorkspaceSchema = z
   .object({
     name: nameSchema,
     description: descriptionSchema.optional(),
     slug: slugSchema.optional(),
+    type: workspaceTypeSchema.default('COMPANY'),
+    visibility: workspaceVisibilitySchema.default('PRIVATE'),
   })
   .strict();
 
@@ -82,6 +126,7 @@ export const updateWorkspaceSchema = z
   .object({
     name: nameSchema.optional(),
     description: descriptionSchema.optional(),
+    visibility: workspaceVisibilitySchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
@@ -91,25 +136,50 @@ export const updateWorkspaceSchema = z
 export const addMemberSchema = z
   .object({
     email: emailSchema,
-    role: assignableRoleSchema.default('MEMBER'),
+    role: assignableRoleSchema.optional(),
+    organizationRole: organizationRoleSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !(value.role !== undefined && value.organizationRole !== undefined), {
+    message: 'Provide either a workspace role or an organization role, not both',
+  })
+  .transform((value) => ({ ...value, role: value.role ?? ('MEMBER' as const) }));
 
 export const updateMemberRoleSchema = z
   .object({
-    role: assignableRoleSchema,
+    role: assignableRoleSchema.optional(),
+    organizationRole: organizationRoleSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => Boolean(value.role) !== Boolean(value.organizationRole), {
+    message: 'Provide exactly one role field',
+  });
+
+export const removeWorkspaceMemberSchema = z
+  .object({
+    reassignTasksToUserId: z
+      .string()
+      .trim()
+      .uuid('The replacement user id is not valid')
+      .optional(),
+  })
+  .strict()
+  .default({});
 
 export const createInvitationSchema = z
   .object({
     email: emailSchema,
-    role: assignableRoleSchema.default('MEMBER'),
+    role: assignableRoleSchema.optional(),
+    organizationRole: organizationRoleSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !(value.role !== undefined && value.organizationRole !== undefined), {
+    message: 'Provide either a workspace role or an organization role, not both',
+  })
+  .transform((value) => ({ ...value, role: value.role ?? ('MEMBER' as const) }));
 
 export const listInvitationsQuerySchema = z.object({
-  status: z.enum(['PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
+  status: z.enum(['PENDING', 'ACCEPTED', 'DECLINED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
 });
 
 /**
@@ -129,11 +199,90 @@ export const transferOwnershipSchema = z
   })
   .strict();
 
+export const ownershipTransferParamsSchema = z.object({
+  workspaceId: z.string().uuid(),
+  transferId: z.string().uuid(),
+}).strict();
+
+export const incomingOwnershipTransfersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+}).strict();
+
+export const adminOwnerAssignmentParamsSchema = z.object({
+  workspaceId: z.string().uuid(),
+  userId: z.string().uuid(),
+}).strict();
+
+export const discoverWorkspacesQuerySchema = z.object({
+  search: z.string().trim().min(1).max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const createJoinRequestSchema = z
+  .object({
+    message: z
+      .string()
+      .trim()
+      .max(500, 'Message must be at most 500 characters')
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export const joinByCodeSchema = z
+  .object({
+    code: z.string().trim().min(20, 'The join code is not valid').max(200),
+    message: z
+      .string()
+      .trim()
+      .max(500, 'Message must be at most 500 characters')
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export const listJoinRequestsQuerySchema = z.object({
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN', 'EXPIRED', 'ALL']).default('ALL'),
+});
+
+export const approveJoinRequestSchema = z
+  .object({
+    role: assignableRoleSchema.optional(),
+    organizationRole: organizationRoleSchema.optional(),
+    teamId: z.string().trim().uuid('The team id is not valid').nullable().optional(),
+  })
+  .strict();
+
+export const rejectJoinRequestSchema = z
+  .object({
+    note: z.string().trim().max(500, 'Note must be at most 500 characters').nullable().optional(),
+  })
+  .strict();
+
+export const joinRequestParamsSchema = z.object({
+  workspaceId: z.string().trim().uuid('The workspace id is not valid'),
+  requestId: z.string().trim().uuid('The join request id is not valid'),
+});
+
+export const joinRequestIdParamsSchema = z.object({
+  requestId: z.string().trim().uuid('The join request id is not valid'),
+});
+
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceSchema>;
 export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceSchema>;
 export type AddMemberInput = z.infer<typeof addMemberSchema>;
 export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
+export type RemoveWorkspaceMemberInput = z.infer<typeof removeWorkspaceMemberSchema>;
 export type CreateInvitationInput = z.infer<typeof createInvitationSchema>;
 export type ListInvitationsQuery = z.infer<typeof listInvitationsQuerySchema>;
 export type AssignableRole = z.infer<typeof assignableRoleSchema>;
+export type OrganizationRoleInput = z.infer<typeof organizationRoleSchema>;
 export type TransferOwnershipInput = z.infer<typeof transferOwnershipSchema>;
+export type DiscoverWorkspacesQuery = z.infer<typeof discoverWorkspacesQuerySchema>;
+export type CreateJoinRequestInput = z.infer<typeof createJoinRequestSchema>;
+export type JoinByCodeInput = z.infer<typeof joinByCodeSchema>;
+export type ListJoinRequestsQuery = z.infer<typeof listJoinRequestsQuerySchema>;
+export type ApproveJoinRequestInput = z.infer<typeof approveJoinRequestSchema>;
+export type RejectJoinRequestInput = z.infer<typeof rejectJoinRequestSchema>;

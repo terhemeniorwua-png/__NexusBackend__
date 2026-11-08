@@ -3,6 +3,7 @@ import type { AppConfig } from '../../../config/env';
 import { redactEmailAddresses } from '../../email/log-privacy';
 import { createConsoleTransport } from './console-transport';
 import { createSmtpTransport } from './smtp-transport';
+import { createBrevoApiTransport } from './brevo-api-transport';
 import type { EmailTransport, EmailTransportRequest, EmailTransportResult } from './types';
 
 /**
@@ -43,18 +44,15 @@ export function createDisabledTransport(): EmailTransport {
  * Builds the transport described by the configuration.
  */
 export function createEmailTransport(config: AppConfig): EmailTransport {
-  if (config.emailProvider === 'smtp') {
-    return createSmtpTransport(config);
-  }
-
-  if (config.emailProvider === 'disabled') {
-    return createDisabledTransport();
-  }
-
+  if (config.emailProvider === 'smtp') return createSmtpTransport(config);
+  if (config.emailProvider === 'brevo-api') return createBrevoApiTransport(config);
+  if (config.emailProvider === 'disabled') return createDisabledTransport();
   return createConsoleTransport();
 }
+
 
 export * from './types';
 export { classifyTransportError, type ClassifiedTransportError } from './error-classification';
 export { createConsoleTransport } from './console-transport';
 export { createSmtpTransport } from './smtp-transport';
+export { createBrevoApiTransport } from './brevo-api-transport';

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { createApp } from './app';
 import { loadEnv, type AppConfig } from './config/env';
-import { connectDatabase, disconnectDatabase } from './db/prisma';
+import { connectDatabase, disconnectDatabase, getPrismaClient } from './db/prisma';
 import { connectRedis, disconnectRedis } from './db/redis';
 import {
   createEmailWorker,
@@ -9,6 +9,11 @@ import {
   installOutboxEmailSender,
 } from './services/email';
 import { logger as baseLogger, type Logger } from './utils/logger';
+import { createAccountDeletionWorker } from './modules/auth/account-deletion.service';
+import { createBillingService } from './modules/billing/billing.service';
+import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
+import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
+import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
 export interface RunningServer {
   server: Server;
@@ -64,6 +69,16 @@ export async function startServer(): Promise<RunningServer> {
   const app = createApp({ config, logger });
   const server = createServer(app);
 
+  // Realtime (Socket.IO) shares the HTTP server. A failure here must not stop
+  // the REST API from serving requests.
+  let socketServer: SocketServer | null = null;
+  try {
+    socketServer = await createSocketServer(server, config);
+    logger.info('socket_server_started');
+  } catch (error) {
+    logger.error('socket_server_failed', { error });
+  }
+
   // Every transactional email is written to the outbox before the provider is
   // contacted, and the worker delivers the queued messages.
   installOutboxEmailSender(config);
@@ -78,11 +93,37 @@ export async function startServer(): Promise<RunningServer> {
     emailWorker.start();
   }
 
+  const accountDeletionWorker = createAccountDeletionWorker({
+    prisma: getPrismaClient(),
+    logger,
+    bcryptSaltRounds: config.bcryptSaltRounds,
+    storage: createS3CompatibleObjectStorage({
+      endpoint: config.objectStorageEndpoint,
+      bucket: config.objectStorageBucket,
+      region: config.objectStorageRegion,
+      accessKeyId: config.objectStorageAccessKeyId,
+      secretAccessKey: config.objectStorageSecretAccessKey,
+      requestTimeoutMs: config.objectStorageRequestTimeoutMs,
+    }),
+  });
+  accountDeletionWorker.start();
+
+  const billingSeatSyncWorker = createBillingSeatSyncWorker({
+    prisma: getPrismaClient(),
+    service: createBillingService(config, { prisma: getPrismaClient() }),
+    logger,
+  });
+  billingSeatSyncWorker.start();
+
   try {
     await listen(server, config.port);
   } catch (error) {
     logger.error('server_listen_failed', { error, port: config.port });
-    await emailWorker.stop();
+    await Promise.all([
+      emailWorker.stop(),
+      accountDeletionWorker.stop(),
+      billingSeatSyncWorker.stop(),
+    ]);
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
   }
@@ -106,9 +147,11 @@ export async function startServer(): Promise<RunningServer> {
 
     timeout.unref();
 
+    await socketServer?.close().catch(() => undefined);
+
     const closeServer = new Promise<void>((resolve, reject) => {
       server.close((error) => {
-        if (error) {
+        if (error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') {
           reject(error);
           return;
         }
@@ -122,6 +165,8 @@ export async function startServer(): Promise<RunningServer> {
     const results = await Promise.allSettled([
       closeServer,
       emailWorker.stop(),
+      accountDeletionWorker.stop(),
+      billingSeatSyncWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);

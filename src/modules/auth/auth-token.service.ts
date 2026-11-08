@@ -1,4 +1,4 @@
-import type { AuthToken, AuthTokenPurpose, PrismaClient } from '@prisma/client';
+import type { AuthToken, AuthTokenPurpose, Prisma, PrismaClient } from '@prisma/client';
 import { AppError } from '../../utils/errors';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 
@@ -62,7 +62,7 @@ export async function issueAuthToken(
  * the frontend can explain what happened.
  */
 export async function consumeAuthToken(
-  prisma: PrismaClient,
+  prisma: Pick<PrismaClient, 'authToken'> | Pick<Prisma.TransactionClient, 'authToken'>,
   input: { token: string; purpose: AuthTokenPurpose },
 ): Promise<AuthToken> {
   const tokenHash = hashSecret(input.token);

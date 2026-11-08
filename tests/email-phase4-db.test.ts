@@ -45,15 +45,20 @@ try {
     skipReason = '';
   }
 } catch (error) {
+  if (process.env.RUN_PHASE4_DB_TESTS === 'true') throw error;
   skipReason = error instanceof Error ? error.message : 'The test database could not be resolved';
 }
 
 let uniqueCounter = 0;
+const fixtureEmails = new Set<string>();
+const fixtureUserIds = new Set<string>();
+const fixtureWebhookEventIds = new Set<string>();
 
 function uniqueEmail(prefix = 'mail'): string {
   uniqueCounter += 1;
-
-  return `${prefix}.${process.pid}.${uniqueCounter}.${Date.now()}@example.com`;
+  const email = `${prefix}.${process.pid}.${uniqueCounter}.${Date.now()}@example.com`;
+  fixtureEmails.add(email);
+  return email;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -102,6 +107,37 @@ function createThrowingTransport(failuresBeforeSuccess: number): EmailTransport 
         providerMessageId: `throwing-${request.deliveryId}`,
         retryable: false,
       };
+    },
+
+    async verify(): Promise<void> {
+      // Nothing to verify.
+    },
+
+    async close(): Promise<void> {
+      // Nothing to close.
+    },
+  };
+}
+
+/**
+ * A transport that never settles. It exercises the delivery worker's own
+ * provider timeout, which must bound the attempt even when an adapter ignores
+ * its socket timeouts.
+ */
+function createHangingTransport(): EmailTransport & { readonly calls: number } {
+  let calls = 0;
+
+  return {
+    provider: 'hanging',
+
+    get calls(): number {
+      return calls;
+    },
+
+    async send() {
+      calls += 1;
+
+      return new Promise<never>(() => {});
     },
 
     async verify(): Promise<void> {
@@ -183,6 +219,10 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     // The delivery rows of this suite are disposable.
     await clearTestDeliveries();
+    if (fixtureUserIds.size) {
+      await prisma?.auditLog.deleteMany({ where: { actorId: { in: [...fixtureUserIds] } } });
+      await prisma?.user.deleteMany({ where: { id: { in: [...fixtureUserIds] } } });
+    }
     await disconnectRedis();
     await prisma?.$disconnect();
   });
@@ -192,11 +232,16 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
       return;
     }
 
-    await prisma.emailDelivery.deleteMany({
-      where: { toAddress: { endsWith: '@example.com' } },
-    });
-    await prisma.emailWebhookEvent.deleteMany({});
-    await prisma.emailSuppression.deleteMany({});
+    if (fixtureEmails.size) {
+      const emails = [...fixtureEmails];
+      await prisma.emailDelivery.deleteMany({ where: { toAddress: { in: emails } } });
+      await prisma.emailSuppression.deleteMany({ where: { emailAddress: { in: emails } } });
+    }
+    if (fixtureWebhookEventIds.size) {
+      await prisma.emailWebhookEvent.deleteMany({
+        where: { providerEventId: { in: [...fixtureWebhookEventIds] } },
+      });
+    }
   }
 
   function deliveryService() {
@@ -210,6 +255,8 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     });
 
     assert.equal(response.status, 201, JSON.stringify(response.body));
+    const user = await prisma.user.findUniqueOrThrow({ where: { email }, select: { id: true } });
+    fixtureUserIds.add(user.id);
   }
 
   test('a registration email is queued, delivered and recorded', async () => {
@@ -238,7 +285,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.ok(captured);
     assert.equal(captured.to[0], email);
     assert.match(captured.from, /no-reply@example\.com/);
-    assert.match(captured.body, /token=/);
+    assert.match(plainTextOf(captured.body), /\b\d{6}\b/, 'Expected a six-digit code in the verification email');
     assert.match(captured.body, /<!doctype html>/i);
 
     const delivered = await prisma.emailDelivery.findUnique({ where: { id: queued.id } });
@@ -563,6 +610,160 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     await transport.close();
   });
 
+  test('a provider timeout is retried and then fails at the attempt limit', async () => {
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '2',
+      EMAIL_RETRY_BASE_DELAY_MS: '10',
+      EMAIL_RETRY_MAX_DELAY_MS: '20',
+      EMAIL_REQUEST_TIMEOUT_MS: '20',
+    });
+    const transport = createHangingTransport();
+    const limited = createEmailDeliveryService({ prisma, transport, config: limitedConfig });
+
+    const email = uniqueEmail('timeout');
+    const deliveryId = await limited.enqueue({
+      to: email,
+      subject: 'The provider never answers',
+      template: 'security_notification',
+      text: 'The provider never answers',
+      idempotencyKey: `test:timeout:${email}`,
+    });
+    const id = deliveryId.providerMessageId as string;
+
+    const first = await limited.processPending(10);
+    const afterFirst = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(first.retried, 1);
+    assert.equal(afterFirst?.status, 'QUEUED');
+    assert.equal(afterFirst?.attempts, 1);
+    assert.equal(afterFirst?.lastErrorCode, 'PROVIDER_TIMEOUT');
+
+    await sleep(60);
+
+    const second = await limited.processPending(10);
+    const afterSecond = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(second.failed, 1);
+    assert.equal(second.retried, 0);
+    assert.equal(afterSecond?.status, 'FAILED');
+    assert.equal(afterSecond?.attempts, 2);
+    assert.equal(afterSecond?.lastErrorCode, 'PROVIDER_TIMEOUT');
+    assert.ok(afterSecond?.failedAt);
+
+    const afterLimit = await limited.processPending(10);
+
+    assert.equal(afterLimit.claimed, 0);
+    assert.equal(transport.calls, 2);
+
+    await transport.close();
+  });
+
+  test('a delivery left in SENDING by an interrupted worker is recovered and delivered', async () => {
+    smtp.reset();
+
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '3',
+      EMAIL_RETRY_BASE_DELAY_MS: '200',
+      EMAIL_RETRY_MAX_DELAY_MS: '200',
+      EMAIL_REQUEST_TIMEOUT_MS: '1000',
+      EMAIL_SENDING_STALE_MS: '2000',
+    });
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport: getEmailTransport(config),
+      config: limitedConfig,
+    });
+
+    const email = uniqueEmail('interrupted-recover');
+    const id = `eml_interrupted_${process.pid}_${Date.now()}`;
+
+    await prisma.emailDelivery.create({
+      data: {
+        id,
+        toAddress: email,
+        fromAddress: 'Nexus <no-reply@example.com>',
+        template: 'security_notification',
+        subject: 'Recover an interrupted delivery',
+        textBody: 'Recover an interrupted delivery',
+        provider: 'smtp',
+        idempotencyKey: `test:interrupted-recover:${email}`,
+        status: 'SENDING',
+        attempts: 1,
+        maxAttempts: 3,
+        nextAttemptAt: new Date(Date.now() - 10_000),
+        updatedAt: new Date(Date.now() - 10_000),
+      },
+    });
+
+    const recoveryPass = await limited.processPending(10);
+    const recovered = await prisma.emailDelivery.findUnique({ where: { id } });
+
+    assert.equal(recoveryPass.retried, 1);
+    assert.equal(recoveryPass.sent, 0);
+    assert.equal(recovered?.status, 'QUEUED');
+    assert.equal(recovered?.attempts, 1);
+    assert.equal(recovered?.lastErrorCode, 'SENDING_INTERRUPTED');
+
+    await sleep(300);
+
+    const deliveryPass = await limited.processPending(10);
+    const delivered = await prisma.emailDelivery.findUnique({ where: { id } });
+    const sentToAddress = smtp.messages.filter((message) => message.to.includes(email));
+
+    assert.equal(deliveryPass.sent, 1);
+    assert.equal(delivered?.status, 'ACCEPTED');
+    assert.equal(delivered?.attempts, 2);
+    assert.equal(sentToAddress.length, 1);
+  });
+
+  test('a stale SENDING row at the attempt limit becomes terminal without sending', async () => {
+    smtp.reset();
+
+    const limitedConfig = buildConfig({
+      EMAIL_MAX_ATTEMPTS: '2',
+      EMAIL_REQUEST_TIMEOUT_MS: '10',
+      EMAIL_SENDING_STALE_MS: '20',
+    });
+    const limited = createEmailDeliveryService({
+      prisma,
+      transport: getEmailTransport(config),
+      config: limitedConfig,
+    });
+
+    const email = uniqueEmail('interrupted-exhausted');
+    const id = `eml_interrupted_exhausted_${process.pid}_${Date.now()}`;
+
+    await prisma.emailDelivery.create({
+      data: {
+        id,
+        toAddress: email,
+        fromAddress: 'Nexus <no-reply@example.com>',
+        template: 'security_notification',
+        subject: 'Already exhausted by an interrupted worker',
+        textBody: 'Already exhausted by an interrupted worker',
+        provider: 'smtp',
+        idempotencyKey: `test:interrupted-exhausted:${email}`,
+        status: 'SENDING',
+        attempts: 2,
+        maxAttempts: 2,
+        nextAttemptAt: new Date(Date.now() - 1_000),
+        updatedAt: new Date(Date.now() - 1_000),
+      },
+    });
+
+    const result = await limited.processPending(10);
+    const failed = await prisma.emailDelivery.findUnique({ where: { id } });
+    const sentToAddress = smtp.messages.filter((message) => message.to.includes(email));
+
+    assert.equal(result.failed, 1);
+    assert.equal(result.sent, 0);
+    assert.equal(failed?.status, 'FAILED');
+    assert.equal(failed?.attempts, 2);
+    assert.equal(failed?.lastErrorCode, 'MAX_ATTEMPTS_EXHAUSTED');
+    assert.ok(failed?.failedAt);
+    assert.equal(sentToAddress.length, 0);
+  });
+
   test('concurrent delivery passes never claim or send a row twice', async () => {
     smtp.reset();
 
@@ -613,6 +814,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
         reason: 'The recipient does not exist',
       },
     });
+    fixtureWebhookEventIds.add(`evt_${email}`);
 
     const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
 
@@ -687,6 +889,7 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
       type: 'email.delivered',
       data: { email_id: delivered?.providerMessageId, to: [email] },
     });
+    fixtureWebhookEventIds.add(`evt_duplicate_${email}`);
 
     const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
 
@@ -886,11 +1089,10 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
 
     assert.ok(captured);
 
-    const token = /token=([A-Za-z0-9_-]+)/.exec(captured.body)?.[1];
+    const code = /\b(\d{6})\b/.exec(plainTextOf(captured.body))?.[1];
 
-    assert.ok(token, 'Expected the email to contain a single use token');
-    assert.equal(logs.output.includes(token as string), false);
-    assert.equal(logs.output.includes('token='), false);
+    assert.ok(code, 'Expected the email to contain a six-digit code');
+    assert.equal(logs.output.includes(code), false);
   });
 
   test('the delivery lifecycle logs never expose the recipient address', async () => {
@@ -1036,3 +1238,13 @@ describe('Phase 4 transactional email', { skip: skipReason || false }, () => {
     assert.equal(failed.attempt, 1);
   });
 });
+
+function plainTextOf(raw: string): string {
+  const decoded = raw
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-F]{2})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  const htmlAt = decoded.search(/Content-Type: text\/html/i);
+  const textPart = htmlAt === -1 ? decoded : decoded.slice(0, htmlAt);
+  const bodyStart = textPart.indexOf('\r\n\r\n');
+  return bodyStart === -1 ? textPart : textPart.slice(bodyStart + 4);
+}

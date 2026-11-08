@@ -78,3 +78,7 @@ export function accountKeyGenerator(req: Request): string {
 
   return `${ip}:${account}`;
 }
+
+export function emailKeyGenerator(req: Request): string {
+  return hashSecret(readEmail(req));
+}

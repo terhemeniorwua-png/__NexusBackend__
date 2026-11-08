@@ -38,6 +38,10 @@ All committed migrations are forward-only. None has a Prisma down path.
 | `20261021120000_phase4_transactional_email` | Creates 2 enums, 3 tables and indexes. | Dropping the objects destroys delivery, suppression and webhook history. | Restore a backup. Dropping is acceptable only in an empty disposable database. |
 | `20261021130000_email_webhook_event_provider_scope` | Replaces the unique `providerEventId` index with a unique `(provider, providerEventId)` index. | Recreating the old index can fail if the same provider event id exists for multiple providers. | Forward corrective migration after deduplication, or restore a backup. |
 | `20261021140000_phase5_workspace_invitations` | Drops the unique `(workspaceId, email)` index, adds nullable `pendingKey`, adds its unique index and the `acceptedById` foreign key. | Dropping `pendingKey` loses pending-invitation data. Recreating the old unique index can fail when an address has settled invitations. | Forward corrective migration after resolving duplicates, or restore a backup. |
+| `20261104130000_phase7_notification_preferences` | Creates workspace-membership-scoped notification preferences with one row per notification type; preferences cascade when membership is removed. | Dropping the table loses member preference choices. | Restore from a verified backup or recreate defaults (all notification types enabled) after review. |
+| `20261105120000_phase3_avatar_storage` | Adds nullable `UserProfile.avatarStorageKey` and a unique index. | Dropping the column loses the mapping to stored avatar objects. No existing values are rewritten. | Forward corrective migration; restore a backup if prior key data must be recovered. |
+| `20261105121000_phase3_totp` | Adds TOTP fields to `User` and creates the recovery-code table, indexes and cascading foreign key. Existing users receive the `false` default for `twoFactorEnabled`; no secret or recovery rows are rewritten. | Dropping the fields/table loses enrolled TOTP configuration and recovery-code history. | Forward corrective migration; restore a backup if enrolled configuration must be recovered. |
+| `20261106230000_google_oauth` | Adds external identity, OAuth state and one-time login-code tables, uniqueness constraints, indexes and user foreign keys. | Removing `ExternalIdentity` loses Google-to-Nexus account links; transient state and login codes expire and contain only hashes. | Roll back application code first. If identity links must be removed, use a reviewed forward corrective migration after exporting/confirming all linked accounts; restore a verified backup if those links must be retained. |
 
 The migrations contain no table or column renames, no column type changes, no data transformations and no table or column drops. They do contain data-dependent constraint changes and one `NOT NULL` relaxation, so schema restoration alone is not sufficient evidence of data recovery.
 
@@ -110,7 +114,7 @@ SHADOW_DATABASE_URL="postgresql://<test-user>:<test-password>@<host>:<port>/<sha
 
 The script:
 
-1. Applies the six committed migrations, checks `prisma migrate status`, and verifies there is no schema drift.
+1. Applies all committed migrations, checks `prisma migrate status`, and verifies there is no schema drift.
 2. Inserts sentinel user, workspace and membership rows, takes a `pg_dump` backup, deletes the rows, restores the backup and verifies the rows return.
 3. Adds a temporary failing migration to a copy of the migration directory, confirms Prisma records the failure, marks it rolled back, restores the backup and verifies the failed migration is gone.
 4. Adds a temporary column through a forward migration, verifies existing data survives, then removes it through a second corrective migration and verifies the data still survives.
@@ -135,6 +139,21 @@ Verified on 2026-11-01 against a disposable PostgreSQL 16.15 container:
 - Type checking, linting, formatting and the application build pass.
 
 The full database-enabled test suite still reports the pre-existing Phase 6 ownership-transfer failures documented in `PHASES.md`. Those failures are unrelated to migration recovery.
+
+### Phase 7 notification preferences — 2026-11-04
+
+Migration `20261104130000_phase7_notification_preferences` was applied as
+part of the Phase 7 HTTP/database suite against a disposable PostgreSQL 16
+database. Schema validation and Prisma client generation pass. No shared or
+production database was used for this migration verification.
+
+The complete `scripts/verify-migration-recovery.sh` procedure also passed
+against a fresh disposable PostgreSQL 16 database after updating its expected
+migration count to derive from `prisma/migrations`. It applied all 14 current
+migrations, verified no schema drift, restored its sentinel backup, recovered
+from an intentionally failed temporary migration, and verified data across a
+temporary forward/corrective migration pair. The disposable database was
+stopped after verification.
 
 ## Remaining limitations
 

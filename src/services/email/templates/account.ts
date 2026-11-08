@@ -24,12 +24,12 @@ export interface AccountEmailInput {
 }
 
 export interface VerificationEmailInput extends AccountEmailInput {
-  verificationUrl: string;
+  code: string;
   expiresAt: Date;
 }
 
 export interface PasswordResetEmailInput extends AccountEmailInput {
-  resetUrl: string;
+  code: string;
   expiresAt: Date;
 }
 
@@ -42,6 +42,10 @@ export interface EmailChangeEmailInput extends AccountEmailInput {
   verificationUrl: string;
   expiresAt: Date;
   newEmail: string;
+}
+
+export interface AccountDeletionScheduledEmailInput extends AccountEmailInput {
+  scheduledDeletionAt: Date;
 }
 
 export interface SecurityNotificationEmailInput extends AccountEmailInput {
@@ -63,10 +67,10 @@ export function buildVerificationEmail(input: VerificationEmailInput): EmailMess
       preheader: `Confirm your email address to activate your ${input.brand.appName} account.`,
       paragraphs: [
         `Hi ${input.name},`,
-        `Confirm your email address to activate your ${input.brand.appName} account. This link expires in ${minutes} minutes and can only be used once.`,
+        `Confirm your email address using this 6-digit code. It expires in ${minutes} minutes and can only be used once.`,
+        "If you didn't request this, ignore this email.",
       ],
-      action: { label: 'Verify email address', url: input.verificationUrl },
-      note: 'If you did not create an account, you can safely ignore this email.',
+      code: input.code,
       footerNote: 'This is an automated message. Please do not reply to it.',
     },
     input.brand,
@@ -74,7 +78,7 @@ export function buildVerificationEmail(input: VerificationEmailInput): EmailMess
 
   return {
     to: input.to,
-    subject: `Verify your ${input.brand.appName} email address`,
+    subject: `Your ${input.brand.appName} email verification code`,
     template: 'account_verification',
     text,
     html,
@@ -91,11 +95,11 @@ export function buildPasswordResetEmail(input: PasswordResetEmailInput): EmailMe
       preheader: 'A password reset was requested for your account.',
       paragraphs: [
         `Hi ${input.name},`,
-        'We received a request to reset the password on your account. This link expires in ' +
-          `${minutes} minutes and can only be used once.`,
-        'If you did not request a password reset, no action is needed and your password will stay unchanged.',
+        'We received a request to reset the password on your account.',
+        `Your 6-digit reset code expires in ${minutes} minutes and can only be used once.`,
+        "If you didn't request this, ignore this email.",
       ],
-      action: { label: 'Reset password', url: input.resetUrl },
+      code: input.code,
       footerNote: 'This is an automated message. Please do not reply to it.',
     },
     input.brand,
@@ -103,7 +107,7 @@ export function buildPasswordResetEmail(input: PasswordResetEmailInput): EmailMe
 
   return {
     to: input.to,
-    subject: `Reset your ${input.brand.appName} password`,
+    subject: `Your ${input.brand.appName} password reset code`,
     template: 'password_reset',
     text,
     html,
@@ -164,6 +168,36 @@ export function buildEmailChangeEmail(input: EmailChangeEmailInput): EmailMessag
     html,
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
     metadata: { expiresAt: input.expiresAt.toISOString(), newEmail: input.newEmail },
+  };
+}
+
+export function buildAccountDeletionScheduledEmail(
+  input: AccountDeletionScheduledEmailInput,
+): EmailMessage {
+  const { html, text } = renderEmailDocument(
+    {
+      heading: 'Your account deletion is scheduled',
+      preheader: 'Your account is signed out and can be recovered for 30 days.',
+      paragraphs: [
+        `Hi ${input.name},`,
+        `Your ${input.brand.appName} account is scheduled for deletion on ${input.scheduledDeletionAt.toISOString()}. Your sessions were signed out immediately. You can recover your account before that deadline by verifying your identity through the account recovery flow.`,
+        'Owned workspaces without an accepted ownership transfer are suspended, while shared files and collaboration history are retained. Subscription cancellation is scheduled for the deletion deadline. Outstanding invoices remain payable.',
+        'After final deletion, personal profile identity is anonymized. Financial records are retained as required; applicable retention periods are subject to legal and accounting review.',
+        'If you did not request this, contact Nexus support.',
+      ],
+      footerNote: 'This is an automated message. Please do not reply to it.',
+    },
+    input.brand,
+  );
+
+  return {
+    to: input.to,
+    subject: `Your ${input.brand.appName} account deletion is scheduled`,
+    template: 'account_deletion_scheduled',
+    text,
+    html,
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    metadata: { scheduledDeletionAt: input.scheduledDeletionAt.toISOString() },
   };
 }
 

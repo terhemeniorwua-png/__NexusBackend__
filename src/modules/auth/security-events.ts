@@ -30,7 +30,14 @@ export const SecurityAction = {
   AccountDeactivated: 'auth.account_deactivated',
   AccountReactivated: 'auth.account_reactivated',
   AccountReactivationFailed: 'auth.account_reactivation_failed',
+  AccountDeletionRequested: 'auth.account_deletion_requested',
+  AccountDeletionCancelled: 'auth.account_deletion_cancelled',
   AccountDeleted: 'auth.account_deleted',
+  TwoFactorEnabled: 'auth.two_factor_enabled',
+  TwoFactorDisabled: 'auth.two_factor_disabled',
+  TwoFactorFailed: 'auth.two_factor_failed',
+  TwoFactorRecoveryCodesRegenerated: 'auth.two_factor_recovery_codes_regenerated',
+  TwoFactorChallengeIssued: 'auth.two_factor_challenge_issued',
 } as const;
 
 export type SecurityActionValue = (typeof SecurityAction)[keyof typeof SecurityAction];

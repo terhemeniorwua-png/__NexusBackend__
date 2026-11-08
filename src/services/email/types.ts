@@ -15,6 +15,7 @@ export type EmailTemplate =
   | 'password_reset'
   | 'password_changed'
   | 'email_change_verification'
+  | 'account_deletion_scheduled'
   | 'security_notification'
   | 'workspace_invitation'
   | 'team_invitation'
