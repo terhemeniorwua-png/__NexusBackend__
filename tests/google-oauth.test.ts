@@ -316,7 +316,7 @@ test('Google exchange returns the standard auth payload and refresh/CSRF cookies
   const googleOAuth = {
     ...context.service,
     exchange: async () => payload,
-  } as unknown as GoogleOAuthService;
+  } as GoogleOAuthService;
   const controller = createAuthController({
     config: context.config,
     service: {} as AuthService,
