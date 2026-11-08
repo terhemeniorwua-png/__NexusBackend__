@@ -1217,12 +1217,14 @@ paths:
       security: []
       responses:
         '302':
-          description: Redirects the browser to Google with state and nonce.
+          description: Sets a short-lived HttpOnly browser-binding cookie and redirects to Google with state and nonce.
           headers:
             Location:
               schema:
                 type: string
                 format: uri
+            Set-Cookie:
+              schema: { type: string }
         '429':
           description: Too many sign-in attempts.
           content:
@@ -1250,14 +1252,16 @@ paths:
             type: string
       responses:
         '302':
-          description: Redirects to the configured frontend callback path with a short-lived exchange code or an error code.
+          description: Requires the matching browser-binding cookie and single-use state. Redirects to the fixed configured frontend callback with a short-lived exchange code, or with a stable generic error code (including when code or state is missing).
           headers:
             Location:
               schema:
                 type: string
                 format: uri
-        '400':
-          description: Invalid, expired, or replayed state.
+            Set-Cookie:
+              schema: { type: string }
+        '429':
+          description: Too many Google sign-in attempts.
           content:
             application/json:
               schema:

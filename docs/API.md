@@ -61,8 +61,12 @@ case-sensitive `redirect_URL` value as the Google callback URL.
 `GOOGLE_CALLBACK_URL` is only a fallback when `redirect_URL` is absent; its
 current dotenv value points to the frontend and is not the backend callback.
 The initiation endpoint is a browser navigation (`GET /api/v1/auth/google`),
-not a fetch request. It requests only `openid`, `email`, and `profile`; the
-backend stores a hashed, single-use state and nonce before redirecting to Google.
+not a fetch request. Start it at the Render backend origin so its short-lived,
+HttpOnly `nexus_google_oauth_state` cookie is scoped to the same host that
+receives Google's callback. The backend requests only `openid`, `email`, and
+`profile`; it stores a hashed, single-use state and nonce and signs the state
+into that cookie before redirecting to Google. The callback requires both the
+database state and its matching browser cookie; state expires after ten minutes.
 
 With the current deployment URLs, register this exact Google Authorized
 redirect URI: `https://nexusbackend-1-0ffo.onrender.com/api/auth/google/callback`.
@@ -75,9 +79,12 @@ Google returns to the configured backend callback path with `code` and `state`
 (or an OAuth `error`). The backend exchanges and verifies the ID token, then
 redirects to the fixed frontend path `/auth/google/callback` on the first origin
 in `FRONTEND_URL`. Success appends a short-lived, single-use `code` query
-parameter; cancellation/failure appends an `error` code. The frontend must
-immediately POST `{ "code": "..." }` to
-`POST /api/v1/auth/google/exchange` with `credentials: "include"`. The response
+parameter; cancellation and failures append a stable, generic `error` code to
+that same allowlisted frontend URL. The callback never accepts a redirect URL
+from the request. The frontend must immediately POST `{ "code": "..." }` to
+`POST /api/v1/auth/google/exchange` with `credentials: "include"`. Prefer the
+Vercel same-origin `/api/backend/...` proxy for this exchange; the browser then
+stores the returned host-only session cookies for the frontend origin. The response
 uses the normal auth success envelope and contains `user`, `accessToken`,
 `tokenType`, `expiresIn`, `csrfToken`, and `session`; it sets the existing
 httpOnly `nexus_rt` and readable `nexus_csrf` cookies. The frontend should
@@ -85,26 +92,37 @@ remove the one-time code from browser history after exchange. If 2FA is enabled,
 exchange returns the existing `twoFactorRequired` challenge and the regular
 `POST /api/v1/auth/2fa/challenge` flow completes login.
 
-Errors use the standard `{ "success": false, "error": { "code": string,
+Errors on the frontend callback use stable codes including
+`OAUTH_CANCELLED`, `OAUTH_STATE_INVALID`, `GOOGLE_CALLBACK_INVALID`,
+`GOOGLE_TOKEN_INVALID`, and `GOOGLE_SIGN_IN_FAILED`. They do not reveal whether
+an email already belongs to a Nexus account. API exchange validation errors use
+the standard `{ "success": false, "error": { "code": string,
 "message": string } }` shape. OAuth-specific codes include
-`GOOGLE_AUTH_UNAVAILABLE`, `OAUTH_STATE_INVALID`, `GOOGLE_TOKEN_INVALID`,
-`GOOGLE_ACCOUNT_LINK_REQUIRED`, `OAUTH_CODE_INVALID`, and `OAUTH_CANCELLED`.
-An existing Nexus email is never linked automatically; the user must first
-authenticate normally and use a future authenticated linking flow. Verified
+`GOOGLE_AUTH_UNAVAILABLE` and `OAUTH_CODE_INVALID`. An existing Nexus email is
+never linked automatically; the user must first authenticate normally and use
+a future authenticated linking flow. This avoids taking over an account based
+on an email match. Verified
 Google email activates the account but creates only the private personal
 workspace. Company/institution workspace choice and setup remain the normal
 onboarding steps and are not inferred from Google profile data.
 
-For separate deployed origins, configure `CORS_ORIGINS`/`FRONTEND_URL` to
-include the exact frontend origin and enable `CORS_CREDENTIALS=true`. Since the
-frontend and Render API are cross-site, set `AUTH_COOKIE_SAME_SITE=none` and
-`AUTH_COOKIE_SECURE=true`; the existing parser rejects `SameSite=None` without
-Secure. The frontend must send `credentials: "include"` and send the readable
-`nexus_csrf` value in `X-CSRF-Token` on cookie-authenticated refresh/logout
-requests. The current dotenv has `CORS_CREDENTIALS=false` and
-`AUTH_COOKIE_SAME_SITE=lax`; keep those local values unchanged and apply the
-cross-site settings in the Render environment before enabling browser cookie
-authentication.
+The Vercel page and Render API are different sites. Requests sent through the
+Vercel `/api/backend/*` proxy are same-origin from the browser; direct browser
+requests to Render are cross-site. The OAuth start must still navigate directly
+to Render so the state cookie is returned to the Render callback. Use the Vercel
+proxy for the exchange and later cookie-authenticated calls, and verify that the
+proxy forwards both `Set-Cookie` headers without adding a `Domain` attribute.
+With this proxy path, keep session cookies `Secure` in production,
+`SameSite=Lax`, and host-only (`AUTH_COOKIE_DOMAIN` empty). If the frontend calls
+Render directly instead, configure the exact frontend origin in
+`CORS_ORIGINS`/`FRONTEND_URL`, set `CORS_CREDENTIALS=true`,
+`AUTH_COOKIE_SAME_SITE=none`, and `AUTH_COOKIE_SECURE=true`, and send
+`credentials: "include"`. Never set a cookie domain shared by Vercel and
+Render; they do not share a parent domain. Cookie-authenticated refresh/logout
+requests must send the readable `nexus_csrf` value in `X-CSRF-Token`. Render
+must also set `TRUST_PROXY=true` so Express derives the rate-limit client IP
+from the trusted hosting proxy; verify the deployed setting and forwarded-IP
+behavior before relying on per-IP OAuth limits.
 
 ### Account deletion request and frontend behavior
 
