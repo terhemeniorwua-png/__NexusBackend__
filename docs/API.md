@@ -347,6 +347,40 @@ events using the configured signature or webhook token, not a user session.
 | POST   | `/webhooks/email`         | Provider verification required    | Receive an email delivery event.                               |
 | POST   | `/webhooks/email/{token}` | Configured webhook token required | Receive an email event from providers without signed payloads. |
 
+## Integrations (Phase 19 — in progress)
+
+Integration routes are mounted at `/api/v1/integrations`. Connection records
+never return access or refresh tokens. The common connect endpoint currently
+supports providers that do not have a dedicated OAuth flow; Slack, Google
+Drive, Dropbox, and Gmail tokens are rejected there and must use their OAuth
+routes. Gmail connections are personal (`workspaceId: null`); a supplied
+`workspaceId` query parameter is accepted for frontend compatibility but does
+not make the Gmail connection workspace-shared.
+
+| Method | Path | Access | Purpose |
+| ------ | ---- | ------ | ------- |
+| GET | `/integrations` | Authenticated, active account | List the caller's personal connections and, when `workspaceId` is supplied, visible workspace connections. Disconnected rows are omitted. |
+| POST | `/integrations` | Authenticated, active account | Save a connection for providers without a dedicated OAuth flow. Workspace-scoped connections require workspace access. |
+| DELETE | `/integrations/{integrationId}` | Connection owner; workspace manager for Slack | Disconnect an integration. Personal records are hidden from other users. |
+| GET | `/integrations/gmail/authorize` | Authenticated, active account | Return a Google consent URL for the caller's personal Gmail account. |
+| GET | `/integrations/gmail/callback` | Public OAuth callback | Consume the single-use state, exchange the Google code, persist encrypted credentials, then redirect to the frontend with `integration=gmail` and a status. |
+| GET | `/integrations/google-drive/authorize` | Workspace manager | Return a Google Drive consent URL for the selected workspace. |
+| GET | `/integrations/google-drive/callback` | Public OAuth callback | Consume state, exchange the Google code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/dropbox/authorize` | Authenticated workspace member | Return a Dropbox consent URL for the selected workspace. |
+| GET | `/integrations/dropbox/callback` | Public OAuth callback | Consume state, exchange the Dropbox code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/slack/authorize` | Workspace manager | Return a Slack OAuth URL for the selected workspace. |
+| GET | `/integrations/slack/callback` | Public OAuth callback | Consume state, exchange the Slack code, persist encrypted credentials, and redirect with status. |
+
+OAuth state is signed and single use, with a ten-minute lifetime. Integration
+tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY`. Gmail currently
+requests `gmail.readonly`, `gmail.send`, `gmail.compose`, and `gmail.modify`,
+plus `openid` and `email`; Google must have these Gmail scopes enabled for the
+OAuth client. The callback redirects to the frontend integrations page and
+does not expose credentials in the redirect. Gmail OAuth, token refresh,
+provider revocation, and provider-backed database lifecycle tests remain
+unverified/incomplete; Phase 19 must not be considered complete on the basis
+of the registered routes alone.
+
 ## Billing
 
 Billing routes are mounted below `/api/v1/billing`. Read routes require an
@@ -418,7 +452,7 @@ events return `{ "success": true, "data": { "received": true } }`.
 
 The current application router does not expose tasks, messaging,
 general notifications, files, documents, calendar, meetings, forms, search,
-integrations, automation, or AI endpoints. Department routes cover listing,
+automation, or AI endpoints. Department routes cover listing,
 creation, renaming, and member assignment or removal; department deletion and
 department-settings routes are not registered.
 Do not document planned behavior as live API functionality.

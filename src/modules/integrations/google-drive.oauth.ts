@@ -125,5 +125,5 @@ export function driveResultUrl(status: 'connected' | 'denied' | 'error'): string
   } catch {
     /* keep default */
   }
-  return `${origin}/app?integration=google_drive&status=${status}`;
+  return `${origin}/app/integrations?integration=google_drive&status=${status}`;
 }

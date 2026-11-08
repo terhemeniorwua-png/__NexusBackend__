@@ -25,7 +25,7 @@ Re-run the DB suites after PRs #42 and #43 before relying on this.
 | 11 | REST done | The record lists 7 REST endpoints but no real-time notification push. Confirm Socket.IO notification events exist (frontend is waiting on this). |
 | 12 | Implemented, no tests | Deferred: folders, versioning, share links. |
 | 13, 14 | Implemented, no tests | Phase 14 deferred: Google/Microsoft sync, recurrence, reminders, aggregation. |
-| 15, 16, 18, 19, 20 | Code on `main`, doc not updated | Marked IN PROGRESS with no implementation notes. Add them and add tests. |
+| 15, 16, 18, 19, 20 | In progress | Modules exist for these areas; verify full workflows and add phase-specific evidence. Phase 19 now has provider routes and is documented below; Gmail-specific and provider-revocation verification remain outstanding. |
 | 17 Billing | In progress | Release blockers and external dependencies as recorded in Phase 17. |
 | 21 to 26 | Code on `main`, unconfirmed | Verify AI, automation and audit modules against their completion criteria. |
 | 27 Reporting | Not found | No module seen. |
@@ -1511,6 +1511,24 @@ Create a reusable integrations architecture.
 - Tokens are protected.
 - Personal and workspace connections remain isolated.
 - Disconnect and revocation work correctly.
+
+**Audit update — 2026-11-08:** The repository contains a Prisma-backed
+integration registry, AES-256-GCM token encryption, audit records, personal
+connections, workspace-scoped Slack connections, and OAuth routes for Slack,
+Google Drive, Dropbox, and personal Gmail. The Gmail flow binds a signed,
+single-use, ten-minute state to the initiating user, checks the requested Gmail
+scopes, encrypts tokens through the shared integration service, and never
+returns credentials from list/connect responses. The Gmail `workspaceId` query
+parameter is ignored so a personal mailbox cannot become a shared workspace
+connection. Source inspection confirms that `DELETE /integrations/:id` only
+marks local records disconnected; provider-side revocation is not implemented.
+No Gmail-specific tests exist, and the OAuth flow has not been exercised
+against configured Google credentials in this audit. The standard test suite
+passes 310 tests with two opt-in database suites skipped; typecheck and build
+pass. Phase 19 remains **IN PROGRESS** pending provider lifecycle/revocation
+work, Gmail regression and database tests, and verification of token refresh,
+connection isolation, and external provider behavior. `docs/API.md` and
+`docs/openapi.yaml` now describe the actually registered integration endpoints.
 
 ---
 

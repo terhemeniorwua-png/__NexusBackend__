@@ -58,11 +58,25 @@ export function createIntegrationService(prisma: PrismaClient = getPrismaClient(
         return row;
       };
 
+      const connectPersonal = async (tx: Prisma.TransactionClient): Promise<Integration> => {
+        const existing = await tx.integration.findFirst({
+          where: { userId: input.userId, provider: input.provider, workspaceId: null },
+          orderBy: { createdAt: 'desc' },
+        });
+        return existing
+          ? tx.integration.update({ where: { id: existing.id }, data: tokenData })
+          : tx.integration.create({
+              data: { userId: input.userId, workspaceId: null, provider: input.provider, ...tokenData },
+            });
+      };
+
       const integration = await prisma.$transaction(async (tx) => {
         const created =
           input.provider === 'SLACK' && input.workspaceId
             ? await connectWorkspaceSlack(tx, input.workspaceId)
-            : await tx.integration.upsert({
+            : !input.workspaceId
+              ? await connectPersonal(tx)
+              : await tx.integration.upsert({
                 where: {
                   userId_provider_workspaceId: {
                     userId: input.userId,
@@ -130,9 +144,18 @@ export function createIntegrationService(prisma: PrismaClient = getPrismaClient(
       }
 
       const integrations = await prisma.integration.findMany({
-        where: input.workspaceId
-          ? { workspaceId: input.workspaceId, OR: [{ userId: input.userId }, { provider: 'SLACK' }] }
-          : { userId: input.userId },
+        where: {
+          status: { not: 'DISCONNECTED' },
+          ...(input.workspaceId
+            ? {
+                OR: [
+                  { workspaceId: input.workspaceId, userId: input.userId },
+                  { workspaceId: input.workspaceId, provider: 'SLACK' as const },
+                  { workspaceId: null, userId: input.userId },
+                ],
+              }
+            : { userId: input.userId }),
+        },
         orderBy: [{ provider: 'asc' }, { createdAt: 'desc' }],
       });
 
