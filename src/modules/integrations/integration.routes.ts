@@ -10,6 +10,9 @@ import { getPrismaClient } from '../../db/prisma';
 import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { buildSlackAuthorizeUrl, exchangeSlackCode, isSlackDefaultConnectEnabled, slackAuthorizeQuerySchema, slackCallbackQuerySchema, slackDefaultConnection, slackResultUrl, verifySlackState } from './slack.oauth';
+import { buildDriveAuthorizeUrl, driveAuthorizeQuerySchema, driveCallbackQuerySchema, driveResultUrl, exchangeDriveCode, verifyDriveState } from './google-drive.oauth';
+
+
 
 export interface IntegrationRouterOptions { config: AppConfig; service?: ReturnType<typeof createIntegrationService> }
 function userId(req: Request): string { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth.userId; }
@@ -29,6 +32,10 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
     // Slack tokens may only arrive through the OAuth callback, never from a client-supplied body.
     if (body.provider === 'SLACK') {
       throw new AppError(400, 'USE_SLACK_OAUTH', 'Connect Slack through the Slack authorization flow');
+    }
+    // Same rule for Google Drive: tokens only come from the OAuth callback.
+    if (body.provider === 'GOOGLE_DRIVE') {
+      throw new AppError(400, 'USE_GOOGLE_DRIVE_OAUTH', 'Connect Google Drive through the Google authorization flow');
     }
     sendSuccess(res, await service.connect({ userId: userId(req), ...body }), 201);
   });
@@ -81,6 +88,30 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
       return done('error');
     }
   });
+
+  router.get('/google-drive/authorize', requireAuth, requireActive, validate({ query: driveAuthorizeQuerySchema }), async (req, res) => {
+  const { workspaceId } = req.validated!.query as { workspaceId: string };
+  await requireWorkspaceAccess(getPrismaClient(), { userId: userId(req), workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+  sendSuccess(res, { url: await buildDriveAuthorizeUrl({ userId: userId(req), workspaceId }) });
+});
+
+router.get('/google-drive/callback', async (req, res) => {
+  const done = (status: 'connected' | 'denied' | 'error') => res.redirect(302, driveResultUrl(status));
+  const parsed = driveCallbackQuerySchema.safeParse(req.query);
+  if (!parsed.success) return done('error');
+  const { code, state, error } = parsed.data;
+  if (error) return done('denied');
+  if (!code) return done('error');
+  try {
+    const claims = await verifyDriveState(state);
+    const token = await exchangeDriveCode(code);
+    await service.connect({ userId: claims.userId, provider: 'GOOGLE_DRIVE', workspaceId: claims.workspaceId, ...token });
+    return done('connected');
+  } catch (err) {
+    logger.warn('google_drive_oauth_failed', { error: err });
+    return done('error');
+  }
+});
 
   return router;
 }
