@@ -16,6 +16,19 @@ function meetingVisibility(userId: string, unrestricted: boolean): Prisma.Meetin
 const isUnrestricted = (ws: { effectiveRole: string; membership: { organizationRole: unknown } }) =>
   (ws.effectiveRole === 'OWNER' || ws.effectiveRole === 'PROJECT_MANAGER') && !ws.membership.organizationRole;
 
+async function meetingScopeFor(prisma: PrismaClient, input: { userId: string; workspaceId: string }): Promise<Prisma.MeetingWhereInput> {
+  const ws = await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+  return meetingVisibility(input.userId, isUnrestricted(ws));
+}
+
+async function assertMeetingVisible(prisma: PrismaClient, input: { userId: string; workspaceId: string; meetingId: string }): Promise<void> {
+  const found = await prisma.meeting.findFirst({
+    where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null, ...(await meetingScopeFor(prisma, input)) },
+    select: { id: true },
+  });
+  if (!found) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
+}
+
 export interface MeetingSummary {
   id: string; workspaceId: string | null; projectId: string | null;
   createdById: string; title: string; description: string | null;
@@ -167,7 +180,7 @@ export function createMeetingService(
 
     async update(input: Input & { meetingId: string; title?: string; description?: string | null; scheduledAt?: string | null; status?: string }): Promise<MeetingSummary> {
       const ws = await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
-      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null } });
+      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null, ...(await meetingScopeFor(prisma, input)) } });
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
       const isAdmin = ws.effectiveRole === 'OWNER' || ws.effectiveRole === 'PROJECT_MANAGER';
       if (m.createdById !== input.userId && !isAdmin) throw new AppError(403, 'MEETING_EDIT_FORBIDDEN', 'Only the creator or a manager can edit');
@@ -193,7 +206,7 @@ export function createMeetingService(
 
     async delete(input: Input & { meetingId: string }): Promise<void> {
       const ws = await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
-      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null } });
+      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null, ...(await meetingScopeFor(prisma, input)) } });
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
       if (m.createdById !== input.userId && ws.effectiveRole !== 'OWNER' && ws.effectiveRole !== 'PROJECT_MANAGER') throw new AppError(403, 'MEETING_DELETE_FORBIDDEN', 'Only the creator or a manager can delete');
       await prisma.$transaction(async (tx) => {
@@ -204,7 +217,7 @@ export function createMeetingService(
 
     async addParticipant(input: Input & { meetingId: string; targetUserId: string }): Promise<void> {
       await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
-      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null } });
+      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null, ...(await meetingScopeFor(prisma, input)) } });
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
       await prisma.meetingParticipant.upsert({ where: { meetingId_userId: { meetingId: input.meetingId, userId: input.targetUserId } }, create: { meetingId: input.meetingId, userId: input.targetUserId }, update: {} });
       await createNotification(prisma, { userId: input.targetUserId, type: 'MEETING_INVITE', title: `Meeting invitation: ${m.title}`, data: { workspaceId: input.workspaceId, meetingId: m.id } });
@@ -213,12 +226,13 @@ export function createMeetingService(
 
     async removeParticipant(input: Input & { meetingId: string; targetUserId: string }): Promise<void> {
       await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      await assertMeetingVisible(prisma, input);
       await prisma.meetingParticipant.deleteMany({ where: { meetingId: input.meetingId, userId: input.targetUserId } });
     },
 
     async join(input: Input & { meetingId: string }): Promise<void> {
       await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
-      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null } });
+      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null, ...(await meetingScopeFor(prisma, input)) } });
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
       if (m.status === 'CANCELLED') throw new AppError(409, 'MEETING_CANCELLED', 'This meeting has been cancelled');
       await prisma.meetingParticipant.upsert({
@@ -230,11 +244,13 @@ export function createMeetingService(
 
     async leave(input: Input & { meetingId: string }): Promise<void> {
       await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      await assertMeetingVisible(prisma, input);
       await prisma.meetingParticipant.updateMany({ where: { meetingId: input.meetingId, userId: input.userId }, data: { status: 'LEFT', leftAt: new Date() } });
     },
 
     async listParticipants(input: Input & { meetingId: string }): Promise<Array<{ userId: string; status: string; joinedAt: string | null; leftAt: string | null }>> {
       await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      await assertMeetingVisible(prisma, input);
       const participants = await prisma.meetingParticipant.findMany({ where: { meetingId: input.meetingId }, include: { user: { select: { id: true, name: true } } }, orderBy: { joinedAt: 'asc' } });
       return participants.map((p) => ({ userId: p.user.id, status: p.status as string, joinedAt: p.joinedAt?.toISOString() ?? null, leftAt: p.leftAt?.toISOString() ?? null }));
     },

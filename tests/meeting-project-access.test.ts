@@ -160,4 +160,14 @@ function runTests(rawDbUrl: string): void {
     const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}`, { headers: auth(member), jar: member.jar });
     assert.ok([403, 404].includes(res.status), `leaked: expected 403/404, got ${res.status}`);
   });
+
+  test('member cannot join a PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}/join`, { method: 'POST', headers: auth(member), jar: member.jar });
+    assert.ok([403, 404].includes(res.status), `leaked: expected 403/404, got ${res.status}`);
+  });
+
+  test('member cannot list participants of a PRIVATE project meeting', async () => {
+    const res = await jsonRequest(`${meetingsUrl()}/${privateMeetingId}/participants`, { headers: auth(member), jar: member.jar });
+    assert.ok([403, 404].includes(res.status), `leaked: expected 403/404, got ${res.status}`);
+  });
 }
