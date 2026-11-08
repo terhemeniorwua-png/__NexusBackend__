@@ -1,10 +1,20 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import type { CollaborationEmailNotifier } from '../../services/collaboration-email-notifier';
 import { AppError } from '../../utils/errors';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { ProjectCapability, requireProjectAccess } from '../authorization/project.policy';
+import { projectVisibleToUser } from '../projects/project-visibility';
+
+/** Meetings on projects the caller cannot see are hidden. Unrestricted legacy managers bypass, as in the project list. */
+function meetingVisibility(userId: string, unrestricted: boolean): Prisma.MeetingWhereInput {
+  if (unrestricted) return {};
+  return { AND: [{ OR: [{ projectId: null }, { project: { is: projectVisibleToUser(userId) } }] }] };
+}
+const isUnrestricted = (ws: { effectiveRole: string; membership: { organizationRole: unknown } }) =>
+  (ws.effectiveRole === 'OWNER' || ws.effectiveRole === 'PROJECT_MANAGER') && !ws.membership.organizationRole;
 
 export interface MeetingSummary {
   id: string; workspaceId: string | null; projectId: string | null;
@@ -103,7 +113,13 @@ export function createMeetingService(
       title: string; description?: string | null; scheduledAt?: string | null;
       projectId?: string | null; calendarEventId?: string | null; participantIds?: string[];
     }): Promise<MeetingSummary> {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      const ws = await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      if (input.projectId) {
+        await requireProjectAccess(prisma, {
+          userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId,
+          workspaceRole: ws.effectiveRole, capability: ProjectCapability.ViewProject,
+        });
+      }
 
       const meeting = await prisma.$transaction(async (tx) => {
         const created = await tx.meeting.create({
@@ -132,16 +148,16 @@ export function createMeetingService(
     },
 
     async get(input: Input & { meetingId: string }): Promise<MeetingSummary> {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
-      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null }, include });
+      const ws = await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      const m = await prisma.meeting.findFirst({ where: { id: input.meetingId, workspaceId: input.workspaceId, deletedAt: null, ...meetingVisibility(input.userId, isUnrestricted(ws)) }, include });
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
       return toSummary(m);
     },
 
     async list(input: Input & { cursor?: string; limit: number; status?: string; projectId?: string }): Promise<{ items: MeetingSummary[]; nextCursor: string | null }> {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      const ws = await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
       const meetings = await prisma.meeting.findMany({
-        where: { workspaceId: input.workspaceId, deletedAt: null, ...(input.status ? { status: input.status as 'SCHEDULED' | 'LIVE' | 'ENDED' | 'CANCELLED' } : {}), ...(input.projectId ? { projectId: input.projectId } : {}) },
+        where: { workspaceId: input.workspaceId, deletedAt: null, ...meetingVisibility(input.userId, isUnrestricted(ws)), ...(input.status ? { status: input.status as 'SCHEDULED' | 'LIVE' | 'ENDED' | 'CANCELLED' } : {}), ...(input.projectId ? { projectId: input.projectId } : {}) },
         orderBy: [{ scheduledAt: 'asc' }, { createdAt: 'desc' }], take: input.limit + 1, ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}), include,
       });
       const hasMore = meetings.length > input.limit;
