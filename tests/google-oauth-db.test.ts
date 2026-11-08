@@ -136,6 +136,34 @@ describe('Google OAuth account lifecycle database tests', { skip: skipReason || 
     );
   });
 
+  test('refuses suspended, pending-deletion and deleted accounts with Google identities', async () => {
+    for (const status of ['SUSPENDED', 'PENDING_DELETION'] as const) {
+      const address = email();
+      const subject = `subject-${address}`;
+      const account = await auth.ensureGoogleAccount({ subject, email: address, name: 'User' });
+      userIds.add(account.id);
+      await prisma.user.update({ where: { id: account.id }, data: { status } });
+      const expected = status === 'SUSPENDED' ? 'ACCOUNT_SUSPENDED' : 'ACCOUNT_PENDING_DELETION';
+      await assert.rejects(
+        auth.ensureGoogleAccount({ subject, email: address, name: 'User' }),
+        (error: { code?: string }) => error.code === expected,
+      );
+    }
+
+    const address = email();
+    const subject = `subject-${address}`;
+    const account = await auth.ensureGoogleAccount({ subject, email: address, name: 'Deleted' });
+    userIds.add(account.id);
+    await prisma.user.update({
+      where: { id: account.id },
+      data: { status: 'DEACTIVATED', deletedAt: new Date() },
+    });
+    await assert.rejects(
+      auth.ensureGoogleAccount({ subject, email: address, name: 'Deleted' }),
+      (error: { code?: string }) => error.code === 'ACCOUNT_DEACTIVATED',
+    );
+  });
+
   test('concurrent first sign-ins for one Google subject produce one account and identity', async () => {
     const address = email();
     const subject = `subject-${address}`;
