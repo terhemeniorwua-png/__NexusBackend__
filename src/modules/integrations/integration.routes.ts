@@ -9,7 +9,7 @@ import { createIntegrationService } from './integration.service';
 import { getPrismaClient } from '../../db/prisma';
 import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
-import { buildSlackAuthorizeUrl, exchangeSlackCode, slackAuthorizeQuerySchema, slackCallbackQuerySchema, slackResultUrl, verifySlackState } from './slack.oauth';
+import { buildSlackAuthorizeUrl, exchangeSlackCode, isSlackDefaultConnectEnabled, slackAuthorizeQuerySchema, slackCallbackQuerySchema, slackDefaultConnection, slackResultUrl, verifySlackState } from './slack.oauth';
 
 export interface IntegrationRouterOptions { config: AppConfig; service?: ReturnType<typeof createIntegrationService> }
 function userId(req: Request): string { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth.userId; }
@@ -61,6 +61,23 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
       return done('connected');
     } catch (err) {
       logger.warn('slack_oauth_failed', { error: err });
+      return done('error');
+    }
+  });
+
+  // Slack "default connect" (opt-in via SLACK_DEFAULT_CONNECT=true and SLACK_BOT_TOKEN): no Slack page.
+  // The signed, single-use state proves an OWNER / PROJECT_MANAGER started it; connect() re-checks the role.
+  router.get('/slack/default-callback', async (req, res) => {
+    const done = (status: 'connected' | 'denied' | 'error') => res.redirect(302, slackResultUrl(status));
+    const parsed = slackCallbackQuerySchema.safeParse(req.query);
+    if (!parsed.success) return done('error');
+    try {
+      if (!isSlackDefaultConnectEnabled()) return done('error');
+      const claims = await verifySlackState(parsed.data.state);
+      await service.connect({ userId: claims.userId, provider: 'SLACK', workspaceId: claims.workspaceId, ...slackDefaultConnection() });
+      return done('connected');
+    } catch (err) {
+      logger.warn('slack_default_connect_failed', { error: err });
       return done('error');
     }
   });

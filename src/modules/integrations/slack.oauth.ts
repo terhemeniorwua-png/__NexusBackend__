@@ -23,6 +23,41 @@ function slackConfig() {
   return { clientId, clientSecret, redirectUri };
 }
 
+/**
+ * Opt-in "default connect": instead of sending the user to Slack, the backend stores its own
+ * bot token (SLACK_BOT_TOKEN) for the workspace. Intended for internal tools and demos, because
+ * every connected workspace then posts into the Slack workspace that owns the token.
+ */
+export function isSlackDefaultConnectEnabled(): boolean {
+  return process.env.SLACK_DEFAULT_CONNECT === 'true' && Boolean(process.env.SLACK_BOT_TOKEN);
+}
+
+export function slackDefaultConnection() {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!isSlackDefaultConnectEnabled() || !token) {
+    throw new AppError(404, 'SLACK_DEFAULT_CONNECT_DISABLED', 'Slack default connect is not enabled');
+  }
+  return {
+    accessToken: token,
+    refreshToken: null as string | null,
+    tokenExpiresAt: null as string | null,
+    scopes: [...SLACK_SCOPES],
+    externalUserId: null as string | null,
+  };
+}
+
+function defaultCallbackUrl(): URL {
+  const redirectUri = process.env.SLACK_REDIRECT_URI;
+  if (!redirectUri) throw new AppError(503, 'SLACK_NOT_CONFIGURED', 'The Slack integration is not configured');
+  const url = new URL(redirectUri);
+  if (!/\/callback$/.test(url.pathname)) {
+    throw new AppError(503, 'SLACK_NOT_CONFIGURED', 'SLACK_REDIRECT_URI must end with /callback');
+  }
+  url.pathname = url.pathname.replace(/\/callback$/, '/default-callback');
+  url.search = '';
+  return url;
+}
+
 function stateKey(): Buffer {
   const secret = process.env.JWT_ACCESS_SECRET;
   if (!secret) throw new AppError(503, 'SLACK_NOT_CONFIGURED', 'The Slack integration is not configured');
@@ -34,17 +69,27 @@ function sign(body: string): string {
 }
 
 export async function buildSlackAuthorizeUrl(input: { userId: string; workspaceId: string }): Promise<string> {
-  const { clientId, redirectUri } = slackConfig();
+  const defaultMode = isSlackDefaultConnectEnabled();
+  const oauth = defaultMode ? null : slackConfig();
+  const target = defaultMode ? defaultCallbackUrl() : null;
   const nonce = randomBytes(16).toString('hex');
   await getRedisClient().set(`slack:oauth:state:${nonce}`, input.userId, { EX: STATE_TTL_MS / 1000 });
   const body = Buffer.from(
     JSON.stringify({ u: input.userId, w: input.workspaceId, n: nonce, e: Date.now() + STATE_TTL_MS }),
   ).toString('base64url');
+  const state = `${body}.${sign(body)}`;
+
+  if (target) {
+    target.searchParams.set('state', state);
+    return target.toString();
+  }
+
+  const { clientId, redirectUri } = oauth!;
   const url = new URL('https://slack.com/oauth/v2/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('scope', SLACK_SCOPES.join(','));
   url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('state', `${body}.${sign(body)}`);
+  url.searchParams.set('state', state);
   return url.toString();
 }
 
