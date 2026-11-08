@@ -21,7 +21,9 @@ export function createIntegrationService(prisma: PrismaClient = getPrismaClient(
       externalUserId?: string | null; externalEmail?: string | null;
     }) {
       if (input.workspaceId) {
-        await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+        // Slack is a workspace-level connection, so it needs the same role the authorize step required.
+        const capability = input.provider === 'SLACK' ? WorkspaceCapability.UpdateWorkspace : WorkspaceCapability.ViewWorkspace;
+        await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability });
       }
 
       const accessTokenCiphertext = encryptToken(input.accessToken);
