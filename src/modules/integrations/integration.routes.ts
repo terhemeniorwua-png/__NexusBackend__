@@ -11,7 +11,7 @@ import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { buildSlackAuthorizeUrl, exchangeSlackCode, isSlackDefaultConnectEnabled, slackAuthorizeQuerySchema, slackCallbackQuerySchema, slackDefaultConnection, slackResultUrl, verifySlackState } from './slack.oauth';
 import { buildDriveAuthorizeUrl, driveAuthorizeQuerySchema, driveCallbackQuerySchema, driveResultUrl, exchangeDriveCode, verifyDriveState } from './google-drive.oauth';
-
+import { buildDropboxAuthorizeUrl, dropboxAuthorizeQuerySchema, dropboxCallbackQuerySchema, dropboxResultUrl, exchangeDropboxCode, verifyDropboxState } from './dropbox.oauth';
 
 
 export interface IntegrationRouterOptions { config: AppConfig; service?: ReturnType<typeof createIntegrationService> }
@@ -37,6 +37,10 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
     if (body.provider === 'GOOGLE_DRIVE') {
       throw new AppError(400, 'USE_GOOGLE_DRIVE_OAUTH', 'Connect Google Drive through the Google authorization flow');
     }
+
+    if (body.provider === 'DROPBOX') {
+  throw new AppError(400, 'USE_DROPBOX_OAUTH', 'Connect Dropbox through the Dropbox authorization flow');
+} 
     sendSuccess(res, await service.connect({ userId: userId(req), ...body }), 201);
   });
 
@@ -109,6 +113,30 @@ router.get('/google-drive/callback', async (req, res) => {
     return done('connected');
   } catch (err) {
     logger.warn('google_drive_oauth_failed', { error: err });
+    return done('error');
+  }
+});
+
+router.get('/dropbox/authorize', requireAuth, requireActive, validate({ query: dropboxAuthorizeQuerySchema }), async (req, res) => {
+  const { workspaceId } = req.validated!.query as { workspaceId: string };
+  await requireWorkspaceAccess(getPrismaClient(), { userId: userId(req), workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+  sendSuccess(res, { url: await buildDropboxAuthorizeUrl({ userId: userId(req), workspaceId }) });
+});
+
+router.get('/dropbox/callback', async (req, res) => {
+  const done = (status: 'connected' | 'denied' | 'error') => res.redirect(302, dropboxResultUrl(status));
+  const parsed = dropboxCallbackQuerySchema.safeParse(req.query);
+  if (!parsed.success) return done('error');
+  const { code, state, error } = parsed.data;
+  if (error) return done('denied');
+  if (!code) return done('error');
+  try {
+    const claims = await verifyDropboxState(state);
+    const token = await exchangeDropboxCode(code);
+    await service.connect({ userId: claims.userId, provider: 'DROPBOX', workspaceId: claims.workspaceId, ...token });
+    return done('connected');
+  } catch (err) {
+    logger.warn('dropbox_oauth_failed', { error: err });
     return done('error');
   }
 });
