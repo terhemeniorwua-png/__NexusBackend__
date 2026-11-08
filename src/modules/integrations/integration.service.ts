@@ -3,6 +3,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { encryptIntegrationToken } from './token-crypto';
 
 // NOTE: In production, access/refresh tokens should be encrypted with AES-256
 // before storage. This implementation stores the ciphertext field but performs
@@ -13,7 +14,7 @@ type Input = { userId: string };
 
 export function createIntegrationService(prisma: PrismaClient = getPrismaClient()) {
   // Placeholder identity functions — replace with real AES-256-GCM cipher before production
-  const encryptToken = (t: string) => t;
+  const encryptToken = encryptIntegrationToken;
 
   return {
     async connect(input: Input & {
