@@ -177,8 +177,14 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
           ...(await eventScope(prisma, input)),
           ...(input.projectId ? { projectId: input.projectId } : {}),
           ...(input.status ? { status: input.status as 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED' } : {}),
-          ...(input.startAfter ? { startAt: { gte: new Date(input.startAfter) } } : {}),
-          ...(input.startBefore ? { startAt: { lte: new Date(input.startBefore) } } : {}),
+          ...(input.startAfter || input.startBefore
+            ? {
+                startAt: {
+                  ...(input.startAfter ? { gte: new Date(input.startAfter) } : {}),
+                  ...(input.startBefore ? { lte: new Date(input.startBefore) } : {}),
+                },
+              }
+            : {}),
         },
         orderBy: [{ startAt: 'asc' }, { id: 'asc' }],
         take: input.limit + 1,

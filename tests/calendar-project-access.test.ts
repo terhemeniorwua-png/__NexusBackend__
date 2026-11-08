@@ -278,4 +278,30 @@ function runTests(rawDbUrl: string): void {
     const res = await jsonRequest(`${eventsUrl()}/${id}`, { method: 'DELETE', headers: auth(owner), jar: owner.jar });
     isOk(res, 'owner delete');
   });
+
+  test('list with startAfter AND startBefore returns only events inside the date-range window', async () => {
+    const mk = async (title: string, startAt: string, endAt: string): Promise<string> => {
+      const r = await createEvent(owner, { title: `${title} ${tag}`, startAt, endAt });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      return (r.body.data as { id: string }).id;
+    };
+    const before = await mk('range-before', '2031-03-01T10:00:00.000Z', '2031-03-01T11:00:00.000Z');
+    const inside = await mk('range-inside', '2031-03-10T10:00:00.000Z', '2031-03-10T11:00:00.000Z');
+    const after = await mk('range-after', '2031-03-20T10:00:00.000Z', '2031-03-20T11:00:00.000Z');
+    const q = `?startAfter=${encodeURIComponent('2031-03-05T00:00:00.000Z')}&startBefore=${encodeURIComponent('2031-03-15T00:00:00.000Z')}`;
+    const ids = await listIds(owner, q);
+    assert.ok(ids.includes(inside), 'event inside the window is missing');
+    assert.ok(!ids.includes(before), 'leaked: event before startAfter was returned');
+    assert.ok(!ids.includes(after), 'leaked: event after startBefore was returned');
+  });
+
+  test('list with only startAfter excludes earlier events', async () => {
+    const r1 = await createEvent(owner, { title: `only-after-early ${tag}`, startAt: '2032-03-01T10:00:00.000Z', endAt: '2032-03-01T11:00:00.000Z' });
+    const r2 = await createEvent(owner, { title: `only-after-late ${tag}`, startAt: '2032-03-20T10:00:00.000Z', endAt: '2032-03-20T11:00:00.000Z' });
+    const early = (r1.body.data as { id: string }).id;
+    const late = (r2.body.data as { id: string }).id;
+    const ids = await listIds(owner, `?startAfter=${encodeURIComponent('2032-03-10T00:00:00.000Z')}`);
+    assert.ok(ids.includes(late), 'late event missing');
+    assert.ok(!ids.includes(early), 'leaked: early event returned');
+  });
 }
