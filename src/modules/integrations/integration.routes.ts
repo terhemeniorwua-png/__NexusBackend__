@@ -26,6 +26,10 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
 
   router.post('/', requireAuth, requireActive, validate({ body: connectIntegrationSchema }), async (req, res) => {
     const body = req.validated!.body as ConnectIntegrationInput;
+    // Slack tokens may only arrive through the OAuth callback, never from a client-supplied body.
+    if (body.provider === 'SLACK') {
+      throw new AppError(400, 'USE_SLACK_OAUTH', 'Connect Slack through the Slack authorization flow');
+    }
     sendSuccess(res, await service.connect({ userId: userId(req), ...body }), 201);
   });
 
@@ -38,8 +42,8 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
   // Slack step 1 (authenticated): the frontend asks for the Slack consent URL.
   router.get('/slack/authorize', requireAuth, requireActive, validate({ query: slackAuthorizeQuerySchema }), async (req, res) => {
     const { workspaceId } = req.validated!.query as { workspaceId: string };
-    await requireWorkspaceAccess(getPrismaClient(), { userId: userId(req), workspaceId, capability: WorkspaceCapability.ViewWorkspace });
-    sendSuccess(res, { url: buildSlackAuthorizeUrl({ userId: userId(req), workspaceId }) });
+    await requireWorkspaceAccess(getPrismaClient(), { userId: userId(req), workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+    sendSuccess(res, { url: await buildSlackAuthorizeUrl({ userId: userId(req), workspaceId }) });
   });
 
   // Slack step 2 (public): Slack redirects the browser here. Identity comes from the signed state.
@@ -51,7 +55,7 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
     if (error) return done('denied');
     if (!code) return done('error');
     try {
-      const claims = verifySlackState(state);
+      const claims = await verifySlackState(state);
       const token = await exchangeSlackCode(code);
       await service.connect({ userId: claims.userId, provider: 'SLACK', workspaceId: claims.workspaceId, ...token });
       return done('connected');
