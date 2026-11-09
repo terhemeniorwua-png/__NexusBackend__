@@ -489,6 +489,15 @@ request and response fields. Paths below are relative to `/api/v1`.
 | AI | `/ai/analyze`, `/ai/query`, `/ai/actions/approve` | Placeholder endpoints; they do not invoke the AI service or execute approved mutations. |
 | Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. |
 
+Task comment creation accepts `{ body, parentId?, mentionedUserIds? }`.
+`mentionedUserIds` is an optional array of up to 50 distinct user IDs. Each
+recipient must be an active workspace member with access to the task's
+project; invalid or inaccessible recipients receive the generic
+`INVALID_MENTION_RECIPIENT` error. The author is silently excluded from
+mentions. Valid mentions are persisted with the comment and create a general
+`MENTION` notification. A post-commit email is attempted through the existing
+idempotent email outbox and cannot roll back the comment.
+
 Department routes cover listing, creation, renaming, and member assignment or
 removal; department deletion and department-settings routes are not
 registered. The OpenAPI document does not yet describe all these registered

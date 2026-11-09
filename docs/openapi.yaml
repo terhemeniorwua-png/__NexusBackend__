@@ -51,6 +51,55 @@ tags:
   - name: Integrations
     description: Personal and workspace integration connections
 paths:
+  /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/comments:
+    post:
+      tags: [Tasks]
+      summary: Create a task comment or reply
+      description: |
+        Mention recipients must be active workspace members who can access the
+        task's project. Invalid or inaccessible recipients receive a generic
+        INVALID_MENTION_RECIPIENT error. Mentions are persisted and create an
+        in-app notification; email is attempted after commit through the
+        idempotent email outbox.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 10000 }
+                parentId: { type: [string, 'null'], format: uuid }
+                mentionedUserIds:
+                  type: array
+                  maxItems: 50
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Comment created with its persisted mention recipients
+        '400':
+          description: Invalid input or an inaccessible mention recipient
+        '401': { description: Authentication required }
+        '403': { description: Project access denied }
+        '404': { description: Task or parent comment not found }
   /integrations:
     get:
       tags: [Integrations]
