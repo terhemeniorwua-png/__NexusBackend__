@@ -466,14 +466,33 @@ server-only `PAYSTACK_WEBHOOK_SECRET` (`whsec_...`). During secret rotation,
 when the timestamped header is absent. Events are deduplicated and accepted
 events return `{ "success": true, "data": { "received": true } }`.
 
-## Other APIs not exposed
+## Additional registered APIs
 
-The current application router does not expose tasks, messaging,
-general notifications, files, documents, calendar, meetings, forms, search,
-automation, or AI endpoints. Department routes cover listing,
-creation, renaming, and member assignment or removal; department deletion and
-department-settings routes are not registered.
-Do not document planned behavior as live API functionality.
+The following routers are mounted by the current application router. They
+require authentication and an active account unless noted otherwise. These
+are route-family summaries; consult route schemas and handlers for exact
+request and response fields. Paths below are relative to `/api/v1`.
+
+| Area | Registered path | Supported operations |
+| --- | --- | --- |
+| Tasks | `/workspaces/{workspaceId}/projects/{projectId}/tasks` | List/create/get/update/delete tasks; manage assignees, dependencies, comments, and activity. |
+| Channels and messages | `/workspaces/{workspaceId}/channels` and `/workspaces/{workspaceId}/channels/{channelId}/messages` | Manage channels and membership; create/list/update/delete messages, replies, reactions, pins, and read state. |
+| Notifications | `/notifications` | List notifications and unread counts; mark read; read activity and manage workspace notification preferences. |
+| Files | `/workspaces/{workspaceId}/files` | List/upload files, obtain authorized download access, and delete files. Storage configuration is required for uploads. |
+| Documents | `/workspaces/{workspaceId}/documents` | Create/list/get/update/delete documents; read revisions and comments; add or remove comments. Project-bound documents inherit project visibility. |
+| Calendar | `/workspaces/{workspaceId}/events` | Create/list/get/update/cancel/delete events; manage invitations and responses. |
+| Meetings | `/workspaces/{workspaceId}/meetings` | Create/list/get/update/delete meetings; join/leave and manage participants. This API stores meeting state but does not provide a calling SDK. |
+| Forms | `/workspaces/{workspaceId}/forms` | Create/list/get/update/delete forms; manage fields and submit/list responses. All current routes require an authenticated active account. |
+| Search | `/search` | Search supported workspace content by query, category, and optional workspace scope; results are filtered by caller access. |
+| Integrations | `/integrations` | List/manage user integrations and provider OAuth connections. Live connections require provider credentials and callback configuration. |
+| Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; trigger execution is not implemented. |
+| AI | `/ai/analyze`, `/ai/query`, `/ai/actions/approve` | Placeholder endpoints; they do not invoke the AI service or execute approved mutations. |
+| Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. |
+
+Department routes cover listing, creation, renaming, and member assignment or
+removal; department deletion and department-settings routes are not
+registered. The OpenAPI document does not yet describe all these registered
+route families and is incomplete relative to the running router.
 
 ## Projects and project visibility (Phase 8 — in progress)
 

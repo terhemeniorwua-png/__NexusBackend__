@@ -31,6 +31,8 @@ function runTests(rawDbUrl: string): void {
   let privateProjectId: string;
   let openProjectId: string;
   let privateFileId: string;
+  let privateDocumentId: string;
+  let privateChannelId: string;
   const userIds: string[] = [];
   const workspaceIds: string[] = [];
   const tag = `${process.pid}-${Date.now()}`;
@@ -143,6 +145,22 @@ function runTests(rawDbUrl: string): void {
       visibility: 'WORKSPACE',
     });
 
+    const privateDocument = await jsonRequest(`${baseUrl}/api/v1/workspaces/${workspaceId}/documents`, {
+      method: 'POST', headers: auth(owner),
+      body: JSON.stringify({ title: `Private document ${needle}`, content: `Private body ${needle}`, projectId: privateProjectId }),
+      jar: owner.jar,
+    });
+    assert.equal(privateDocument.status, 201, JSON.stringify(privateDocument.body));
+    privateDocumentId = (privateDocument.body.data as { id: string }).id;
+
+    const privateChannel = await jsonRequest(`${baseUrl}/api/v1/workspaces/${workspaceId}/channels`, {
+      method: 'POST', headers: auth(owner),
+      body: JSON.stringify({ type: 'PRIVATE', name: `Secret channel ${needle}` }),
+      jar: owner.jar,
+    });
+    assert.equal(privateChannel.status, 201, JSON.stringify(privateChannel.body));
+    privateChannelId = (privateChannel.body.data as { id: string }).id;
+
     const fdb = await connectTestDatabase(rawDbUrl);
     const file = await fdb.prisma.fileAttachment.create({
       data: {
@@ -177,6 +195,8 @@ function runTests(rawDbUrl: string): void {
   test('control: owner finds the private project and its file', async () => {
     assert.ok((await search(owner, 'projects')).some((r) => r.id === privateProjectId));
     assert.ok((await search(owner, 'files')).some((r) => r.id === privateFileId));
+    assert.ok((await search(owner, 'documents')).some((r) => r.id === privateDocumentId));
+    assert.ok((await search(owner, 'channels')).some((r) => r.id === privateChannelId));
   });
 
   test('member cannot find a PRIVATE project via search', async () => {
@@ -187,5 +207,28 @@ function runTests(rawDbUrl: string): void {
   test('member cannot find files attached to a PRIVATE project', async () => {
     const ids = (await search(member, 'files')).map((r) => r.id);
     assert.ok(!ids.includes(privateFileId), 'private project file leaked into search');
+  });
+
+  test('member cannot find documents attached to a PRIVATE project', async () => {
+    const ids = (await search(member, 'documents')).map((r) => r.id);
+    assert.ok(!ids.includes(privateDocumentId), 'private project document leaked into search');
+  });
+
+  test('member cannot read or list documents attached to a PRIVATE project', async () => {
+    const read = await jsonRequest(`${baseUrl}/api/v1/workspaces/${workspaceId}/documents/${privateDocumentId}`, {
+      headers: auth(member), jar: member.jar,
+    });
+    assert.equal(read.status, 404);
+    const list = await jsonRequest(`${baseUrl}/api/v1/workspaces/${workspaceId}/documents`, {
+      headers: auth(member), jar: member.jar,
+    });
+    assert.equal(list.status, 200);
+    const items = (list.body.data as { items: { id: string }[] }).items;
+    assert.ok(!items.some((item) => item.id === privateDocumentId));
+  });
+
+  test('member cannot discover a private channel by searching its name', async () => {
+    const ids = (await search(member, 'channels')).map((r) => r.id);
+    assert.ok(!ids.includes(privateChannelId), 'private channel leaked into search');
   });
 }

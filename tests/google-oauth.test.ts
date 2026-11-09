@@ -305,7 +305,10 @@ test('Google start sets the signed browser binding as an HttpOnly ten-minute coo
 test('Google exchange returns the standard auth payload and refresh/CSRF cookies', async () => {
   const context = setup();
   const payload = {
-    user: { id: 'user-1', email: 'ada@example.com' },
+    user: {
+      id: 'user-1', email: 'ada@example.com', name: 'Ada Lovelace', status: 'ACTIVE',
+      emailVerifiedAt: new Date('2030-01-01T00:00:00Z'), createdAt: new Date('2030-01-01T00:00:00Z'),
+    },
     accessToken: 'access-token-test',
     tokenType: 'Bearer' as const,
     expiresIn: 900,

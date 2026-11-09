@@ -1,9 +1,10 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireProjectAccess, ProjectCapability } from '../authorization/project.policy';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { projectVisibleToUser } from '../projects/project-visibility';
 
 export interface DocumentSummary {
   id: string;
@@ -37,6 +38,46 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
     author: { select: { name: true } },
     _count: { select: { revisions: true, comments: true } },
   } as const;
+  type IncludedDocument = Prisma.DocumentGetPayload<{ include: typeof include }>;
+
+  function documentVisibilityWhere(input: { userId: string; workspaceId: string; organizationRole: string | null }) {
+    const visible = projectVisibleToUser(input.userId);
+    const scopedVisible = input.organizationRole
+      ? visible
+      : { OR: [{ workspaceId: input.workspaceId }, visible] };
+    const sameWorkspaceVisible = { workspaceId: input.workspaceId, ...scopedVisible };
+    return { AND: [
+      { OR: [{ projectId: null }, { project: { is: sameWorkspaceVisible } }] },
+      { OR: [{ taskId: null }, { task: { is: { project: { is: sameWorkspaceVisible } } } }] },
+    ] };
+  }
+
+  async function documentProjectIds(input: {
+    userId: string; workspaceId: string; projectId: string | null; taskId: string | null;
+    workspaceRole: Parameters<typeof requireProjectAccess>[1]['workspaceRole'];
+    capability: typeof ProjectCapability.ViewFiles | typeof ProjectCapability.ManageFiles;
+  }): Promise<string[]> {
+    const projectIds = new Set<string>();
+    if (input.projectId) projectIds.add(input.projectId);
+    if (input.taskId) {
+      const task = await prisma.task.findFirst({
+        where: { id: input.taskId, deletedAt: null, project: { is: { workspaceId: input.workspaceId, deletedAt: null } } },
+        select: { projectId: true },
+      });
+      if (!task) throw new AppError(404, 'DOCUMENT_NOT_FOUND', 'That document does not exist');
+      if (input.projectId && input.projectId !== task.projectId) {
+        throw new AppError(409, 'DOCUMENT_TARGET_MISMATCH', 'The document project and task must match');
+      }
+      projectIds.add(task.projectId);
+    }
+    for (const projectId of projectIds) {
+      await requireProjectAccess(prisma, {
+        userId: input.userId, workspaceId: input.workspaceId, projectId,
+        workspaceRole: input.workspaceRole, capability: input.capability,
+      });
+    }
+    return [...projectIds];
+  }
 
   function toSummary(row: {
     id: string; workspaceId: string; projectId: string | null; taskId: string | null;
@@ -63,19 +104,17 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
         capability: WorkspaceCapability.ViewWorkspace,
       });
 
-      if (input.projectId) {
-        await requireProjectAccess(prisma, {
-          userId: input.userId, workspaceId: input.workspaceId,
-          projectId: input.projectId, workspaceRole: workspace.effectiveRole,
-          capability: ProjectCapability.ManageFiles,
-        });
-      }
+      const projectIds = await documentProjectIds({
+        userId: input.userId, workspaceId: input.workspaceId,
+        projectId: input.projectId ?? null, taskId: input.taskId ?? null,
+        workspaceRole: workspace.effectiveRole, capability: ProjectCapability.ManageFiles,
+      });
 
       const doc = await prisma.$transaction(async (tx) => {
         const created = await tx.document.create({
           data: {
             workspaceId: input.workspaceId,
-            projectId: input.projectId ?? null,
+            projectId: projectIds[0] ?? null,
             taskId: input.taskId ?? null,
             title: input.title,
             content: input.content ?? '',
@@ -86,7 +125,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId, actorId: input.userId,
           action: 'document.created', targetType: 'Document', targetId: created.id,
-          metadata: { title: input.title, projectId: input.projectId ?? null },
+          metadata: { title: input.title, projectId: projectIds[0] ?? null },
         });
         return created;
       });
@@ -100,18 +139,20 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       });
 
       const doc = await prisma.document.findFirst({
-        where: { id: input.documentId, workspaceId: input.workspaceId, deletedAt: null },
+        where: {
+          id: input.documentId, workspaceId: input.workspaceId, deletedAt: null,
+          ...documentVisibilityWhere({ userId: input.userId, workspaceId: input.workspaceId,
+            organizationRole: workspace.membership.organizationRole }),
+        },
         include,
       });
       if (!doc) throw new AppError(404, 'DOCUMENT_NOT_FOUND', 'That document does not exist');
 
-      if (doc.projectId) {
-        await requireProjectAccess(prisma, {
-          userId: input.userId, workspaceId: input.workspaceId,
-          projectId: doc.projectId, workspaceRole: workspace.effectiveRole,
-          capability: ProjectCapability.ViewFiles,
-        });
-      }
+      await documentProjectIds({
+        userId: input.userId, workspaceId: input.workspaceId, projectId: doc.projectId,
+        taskId: doc.taskId, workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ViewFiles,
+      });
       return toSummary(doc);
     },
 
@@ -131,21 +172,49 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
         });
       }
 
-      const docs = await prisma.document.findMany({
-        where: {
-          workspaceId: input.workspaceId, deletedAt: null,
-          ...(input.projectId ? { projectId: input.projectId } : {}),
-          ...(input.taskId ? { taskId: input.taskId } : {}),
-          ...(input.search ? { title: { contains: input.search, mode: 'insensitive' } } : {}),
-        },
-        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-        take: input.limit + 1,
-        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
-        include,
-      });
+      if (input.taskId) {
+        const task = await prisma.task.findFirst({
+          where: { id: input.taskId, deletedAt: null, project: { is: { workspaceId: input.workspaceId, deletedAt: null } } },
+          select: { projectId: true },
+        });
+        if (!task || (input.projectId && input.projectId !== task.projectId))
+          throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist in this workspace');
+        await requireProjectAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId,
+          projectId: task.projectId, workspaceRole: workspace.effectiveRole,
+          capability: ProjectCapability.ViewFiles });
+      }
 
-      const hasMore = docs.length > input.limit;
-      const items = (hasMore ? docs.slice(0, input.limit) : docs).map(toSummary);
+      const where = { workspaceId: input.workspaceId, deletedAt: null,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.taskId ? { taskId: input.taskId } : {}),
+        ...(input.search ? { title: { contains: input.search, mode: 'insensitive' as const } } : {}),
+      };
+      const visibleDocs: IncludedDocument[] = [];
+      let scanCursor = input.cursor;
+      let exhausted = false;
+      const scanSize = Math.min(Math.max(input.limit * 2, 25), 100);
+      while (visibleDocs.length <= input.limit && !exhausted) {
+        const candidates = await prisma.document.findMany({ where,
+          orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }], take: scanSize,
+          ...(scanCursor ? { cursor: { id: scanCursor }, skip: 1 } : {}), include });
+        if (!candidates.length) break;
+        scanCursor = candidates[candidates.length - 1]!.id;
+        exhausted = candidates.length < scanSize;
+        for (const candidate of candidates) {
+          try {
+            await documentProjectIds({ userId: input.userId, workspaceId: input.workspaceId,
+              projectId: candidate.projectId, taskId: candidate.taskId,
+              workspaceRole: workspace.effectiveRole, capability: ProjectCapability.ViewFiles });
+            visibleDocs.push(candidate);
+          } catch (error) {
+            if (error instanceof AppError && (error.statusCode === 403 || error.statusCode === 404)) continue;
+            throw error;
+          }
+          if (visibleDocs.length > input.limit) break;
+        }
+      }
+      const hasMore = visibleDocs.length > input.limit;
+      const items = (hasMore ? visibleDocs.slice(0, input.limit) : visibleDocs).map(toSummary);
       const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
       return { items, nextCursor };
     },
@@ -163,13 +232,10 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       });
       if (!doc) throw new AppError(404, 'DOCUMENT_NOT_FOUND', 'That document does not exist');
 
-      if (doc.projectId) {
-        await requireProjectAccess(prisma, {
-          userId: input.userId, workspaceId: input.workspaceId,
-          projectId: doc.projectId, workspaceRole: workspace.effectiveRole,
-          capability: ProjectCapability.ManageFiles,
-        });
-      } else {
+      const projectIds = await documentProjectIds({ userId: input.userId, workspaceId: input.workspaceId,
+        projectId: doc.projectId, taskId: doc.taskId, workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ManageFiles });
+      if (projectIds.length === 0) {
         const isOwner = doc.authorId === input.userId;
         const isAdmin = workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
         if (!isOwner && !isAdmin) {
@@ -213,9 +279,13 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       });
       if (!doc) throw new AppError(404, 'DOCUMENT_NOT_FOUND', 'That document does not exist');
 
+      const projectIds = await documentProjectIds({ userId: input.userId, workspaceId: input.workspaceId,
+        projectId: doc.projectId, taskId: doc.taskId, workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ManageFiles });
+
       const isOwner = doc.authorId === input.userId;
       const isAdmin = workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
-      if (!isOwner && !isAdmin) {
+      if (projectIds.length === 0 && !isOwner && !isAdmin) {
         throw new AppError(403, 'DOCUMENT_DELETE_FORBIDDEN', 'You can only delete your own documents');
       }
 
@@ -290,6 +360,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
     async deleteComment(
       input: Input & { documentId: string; commentId: string },
     ): Promise<void> {
+      await this.get(input);
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,

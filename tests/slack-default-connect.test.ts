@@ -204,8 +204,7 @@ function runTests(rawDbUrl: string): void {
     const res = await jsonRequest(`${integrationsUrl()}/${before[0]!.id}`, { method: 'DELETE', headers: auth(manager), jar: manager.jar });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     const { rows } = await slackRows(owner, workspaceId);
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0]!.status, 'DISCONNECTED');
+    assert.equal(rows.length, 0, 'disconnected workspace connections are omitted from the list');
   });
 
   test('reconnecting after a disconnect leaves exactly one ACTIVE Slack connection', async () => {
