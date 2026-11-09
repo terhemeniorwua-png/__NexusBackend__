@@ -14,6 +14,7 @@ import { buildDriveAuthorizeUrl, driveAuthorizeQuerySchema, driveCallbackQuerySc
 import { buildDropboxAuthorizeUrl, dropboxAuthorizeQuerySchema, dropboxCallbackQuerySchema, dropboxResultUrl, exchangeDropboxCode, verifyDropboxState } from './dropbox.oauth';
 import { buildGmailAuthorizeUrl, exchangeGmailCode, gmailAuthorizeQuerySchema, gmailCallbackQuerySchema, gmailResultUrl, verifyGmailState } from './gmail.oauth';
 import { buildGithubAuthorizeUrl, exchangeGithubCode, githubAuthorizeQuerySchema, githubCallbackQuerySchema, githubResultUrl, verifyGithubState } from './github.oauth';
+import { buildCalendarAuthorizeUrl, calendarAuthorizeQuerySchema, calendarCallbackQuerySchema, calendarResultUrl, exchangeCalendarCode, verifyCalendarState } from './google-calendar.oauth';
 
 
 export interface IntegrationRouterOptions { config: AppConfig; service?: ReturnType<typeof createIntegrationService> }
@@ -45,6 +46,9 @@ export function createIntegrationRouter({ config, service = createIntegrationSer
 } 
     if (body.provider === 'GITHUB') {
       throw new AppError(400, 'USE_GITHUB_OAUTH', 'Connect GitHub through the GitHub authorization flow');
+    }
+    if (body.provider === 'GOOGLE_CALENDAR') {
+      throw new AppError(400, 'USE_GOOGLE_CALENDAR_OAUTH', 'Connect Google Calendar through the Google authorization flow');
     }
     if (body.provider === 'GMAIL') {
       throw new AppError(400, 'USE_GMAIL_OAUTH', 'Connect Gmail through the Google authorization flow');
@@ -192,6 +196,29 @@ router.get('/dropbox/callback', async (req, res) => {
       return done('connected');
     } catch (err) {
       logger.warn('github_oauth_failed', { error: err });
+      return done('error');
+    }
+  });
+
+  // Google Calendar is a personal connection (workspaceId null).
+  router.get('/google-calendar/authorize', requireAuth, requireActive, validate({ query: calendarAuthorizeQuerySchema }), async (req, res) => {
+    sendSuccess(res, { url: await buildCalendarAuthorizeUrl({ userId: userId(req) }) });
+  });
+
+  router.get('/google-calendar/callback', async (req, res) => {
+    const done = (status: 'connected' | 'denied' | 'error') => res.redirect(302, calendarResultUrl(status));
+    const parsed = calendarCallbackQuerySchema.safeParse(req.query);
+    if (!parsed.success) return done('error');
+    const { code, state, error } = parsed.data;
+    if (error) return done('denied');
+    if (!code) return done('error');
+    try {
+      const claims = await verifyCalendarState(state);
+      const token = await exchangeCalendarCode(code);
+      await service.connect({ userId: claims.userId, provider: 'GOOGLE_CALENDAR', workspaceId: null, ...token });
+      return done('connected');
+    } catch (err) {
+      logger.warn('google_calendar_oauth_failed', { error: err });
       return done('error');
     }
   });
