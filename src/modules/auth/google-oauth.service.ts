@@ -231,7 +231,7 @@ export function createGoogleOAuthService(
               : reason === 'GOOGLE_TOKEN_INVALID'
                 ? 'GOOGLE_TOKEN_INVALID'
                 : 'GOOGLE_SIGN_IN_FAILED';
-        return errorRedirect(publicCode);
+        return errorRedirect(reason === 'GOOGLE_ACCOUNT_LINK_REQUIRED' ? reason : publicCode);
       }
     },
 
