@@ -4,7 +4,7 @@
 
 ---
 
-## Progress Dashboard (updated 2026-11-07)
+## Progress Dashboard (updated 2026-11-09)
 
 Evidence: `main` was verified at `7b0b88d` (tsc, lint, build, 302/304 tests, plus all
 database-backed suites passing against a clean PostgreSQL). The Render deploy of `main` is green.
@@ -19,7 +19,7 @@ Re-run the DB suites after PRs #42 and #43 before relying on this.
 | 4.3 to 4.6 | In progress | Tasks, messaging, teams and projects now exist. Check each notifier has a production caller (grep for `notifyTaskAssignment`, `notifyMention`, `notifyTeamInvitation`, `notifyProjectInvitation`, meeting equivalent). |
 | 5 | Ready to close | The three Phase 5 DB suites were the missing evidence and have now passed. |
 | 6, 7 | Complete | DB suites pass. |
-| 8 | In progress | Re-run on current `main`. Audit that every project-scoped route (files, documents, calendar, meetings, forms, search) calls the shared project-access helper. |
+| 8 | In progress | Search and Document visibility gaps were fixed on `feature/backend-phase-audit-remediation`; disposable DB regressions pass. Continue route audit for files, calendar, meetings and forms. |
 | 9 | Implemented | Message-to-task and task attachments were deferred; Phases 10 and 12 now exist, so they are unblocked. |
 | 10 | Implemented | Deferred: @mention parsing, attachments, search, saved messages, message-to-task. |
 | 11 | REST done | The record lists 7 REST endpoints but no real-time notification push. Confirm Socket.IO notification events exist (frontend is waiting on this). |
@@ -34,6 +34,53 @@ Re-run the DB suites after PRs #42 and #43 before relying on this.
 | 30 to 32 | Not started | |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
+
+### Repository-wide audit — 2026-11-09
+
+Audit evidence is based on the current `origin/main` source, tests, route
+registrations and the disposable-database verification below. Historical
+completion labels and the existence of a module are not sufficient proof.
+
+| Phase | Audit classification | Evidence / remaining work |
+|---|---|---|
+| 1, 1.2, 1.3 | VERIFIED COMPLETE (historical evidence) | Foundation, configuration and Redis rate limiting are implemented; required current checks found no regression. |
+| 2, 2.1, 2.2 | VERIFIED COMPLETE | Prisma schema/migration recovery docs and migration tests exist; `npx prisma validate` passes. No schema change was required. |
+| 3, 3.1–3.5 | VERIFIED COMPLETE | Auth/account lifecycle suites exist and passed; corrected an OAuth response fixture type mismatch. |
+| 3.6 | PARTIALLY COMPLETE / externally blocked | Source, unit and disposable DB coverage pass. Render callback registration and the Vercel-to-Render browser cookie flow require production configuration and human verification. Do not close. |
+| 3.7 | PARTIALLY COMPLETE | DB implementation is recorded as passing; real Brevo delivery remains unverified. |
+| 4, 4.3–4.6 | PARTIALLY COMPLETE | Email infrastructure exists; production DNS/webhook and notifier delivery/callers remain outstanding per phase evidence. |
+| Legacy Phase 4 — Workspace creation/management | PARTIALLY COMPLETE | This duplicate legacy section has distinct acceptance criteria; preserve its separate status and reconcile tracker numbering. |
+| 5 | VERIFIED COMPLETE | Opt-in Phase 5 database suites passed in the full disposable-DB run. |
+| 6 | VERIFIED COMPLETE | Authorization implementation and database suites passed. |
+| 7 | PARTIALLY COMPLETE | Teams/departments are implemented and tested; tracker retains notification preference, department settings and lifecycle gaps. |
+| 8 | PARTIALLY COMPLETE | Search and document visibility regressions pass; files/calendar/meetings/forms and remaining project policy cases still need route-by-route audit. |
+| 9 | PARTIALLY COMPLETE | Core task APIs/database tests pass; attachments and message-to-task conversion remain deferred. |
+| 10 | PARTIALLY COMPLETE | Messaging/channel APIs and DB tests pass; mentions, attachments, saved messages and other tracker deferrals remain. |
+| 11 | PARTIALLY COMPLETE | REST notifications exist; reliable Socket.IO notification push remains unverified. |
+| 12 | PARTIALLY COMPLETE | File APIs exist; folders/versioning/share links are deferred and storage-backed uploads were not verified here. |
+| 13 | PARTIALLY COMPLETE | Direct document get/list visibility was fixed and DB regression passes; other revision/comment criteria need a wider audit. |
+| 14 | PARTIALLY COMPLETE | Calendar routes and DB tests pass; provider sync, recurrence, reminders and aggregation remain deferred. |
+| 15 | PARTIALLY COMPLETE | Meeting CRUD/participants exist; no calling-provider integration was found. |
+| 16 | PARTIALLY COMPLETE | Form APIs exist; publication/public submission and full lifecycle criteria need review. Current response routes require authentication. |
+| 17 | PARTIALLY COMPLETE | Billing DB tests pass; release/provider and operational criteria recorded in Phase 17 remain. |
+| 18 | PARTIALLY COMPLETE | Search DB tests pass and private project documents/private channels are filtered; full indexing/content criteria remain. |
+| 19 | PARTIALLY COMPLETE | Provider routes and mocked/DB tests exist; refresh, revocation, isolation and Gmail provider verification remain. Gmail code was not changed. |
+| 20 | PARTIALLY COMPLETE | Automation CRUD exists; no trigger execution/worker path was found. |
+| 21–23 | NOT IMPLEMENTED | AI routes are placeholders; action approval reports `executed: false`; no Express-to-Python workflow was found. |
+| 24 | PARTIALLY COMPLETE | Email/deletion/billing workers exist; generalized queue/job requirements need more audit. |
+| 25 | PARTIALLY COMPLETE | Notification/email components exist; preference, delivery and caller coverage remain. |
+| 26 | PARTIALLY COMPLETE | Audit read route and writes exist; retention, monitoring and complete event coverage are unverified. |
+| 27 | NOT IMPLEMENTED | No reporting module or route was found. |
+| 28 | PARTIALLY COMPLETE | Corrected API.md's false assertion that mounted routes were absent; OpenAPI still omits registered route families. |
+| 29 | NOT DEFINED | No requirements section exists; no scope inferred. |
+| 30–32 | NOT STARTED | No later-phase work was started. |
+
+The final serial database-enabled test run against disposable local PostgreSQL
+and Redis passed 665/665 tests across 58 suites, with no skips. The combined
+focused run passed 16/16: Search/Document visibility 7/7 and Slack 9/9. Serial execution is
+required for the opt-in suites because concurrent suites collide when sharing
+one test schema. Phase 3.6 remains open pending production callback and browser
+checks.
 
 **Roadmap numbering reconciliation (2026-11-05):** The file contains a legacy 24-phase dashboard and milestone summary, duplicate legacy/canonical sections for Phase 7, and canonical phase headers through Phase 32. The canonical numbered definitions total 30 because Phases 6 and 29 have no canonical section. Existing phase scopes and numbering are preserved. The earlier summary list's use of Phases 5–7 for different scopes is historical and does not supersede the canonical phase sections below. Phase 7 completion and Phase 8 activation are recorded in the latest phase updates.
 
