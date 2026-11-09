@@ -1,4 +1,5 @@
 import type { TaskAssignmentNotifier } from '../../services/task-assignment-notifier';
+import type { MentionEmailNotifier } from '../../services/mention-email-notifier';
 import type { Prisma, PrismaClient, TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
@@ -150,6 +151,7 @@ async function wouldCreateCycle(
 
 export interface TaskServiceDependencies {
   assignmentNotifier?: TaskAssignmentNotifier;
+  mentionNotifier?: MentionEmailNotifier;
 }
 
 export function createTaskService(
@@ -1011,6 +1013,34 @@ export function createTaskService(
       });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
 
+      const mentionedUserIds = [...new Set(input.mentionedUserIds ?? [])]
+        .filter((mentionedUserId) => mentionedUserId !== input.userId);
+      for (const mentionedUserId of mentionedUserIds) {
+        try {
+          const mentionedWorkspace = await requireWorkspaceAccess(prisma, {
+            userId: mentionedUserId,
+            workspaceId: input.workspaceId,
+            capability: WorkspaceCapability.ViewWorkspace,
+          });
+          await requireProjectAccess(prisma, {
+            userId: mentionedUserId,
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            workspaceRole: mentionedWorkspace.effectiveRole,
+            capability: ProjectCapability.ViewTasks,
+          });
+        } catch (error) {
+          if (error instanceof AppError && error.statusCode < 500) {
+            throw new AppError(
+              400,
+              'INVALID_MENTION_RECIPIENT',
+              'One or more mentioned users cannot access this task',
+            );
+          }
+          throw error;
+        }
+      }
+
       // Verify parent comment if this is a reply.
       if (input.parentId) {
         const parent = await prisma.comment.findFirst({
@@ -1025,7 +1055,7 @@ export function createTaskService(
           throw new AppError(404, 'COMMENT_NOT_FOUND', 'The parent comment does not exist');
       }
 
-      return prisma.$transaction(async (tx) => {
+      const comment = await prisma.$transaction(async (tx) => {
         const comment = await tx.comment.create({
           data: {
             taskId: task.id,
@@ -1055,8 +1085,36 @@ export function createTaskService(
           },
           ...context,
         });
-        return comment;
+        if (mentionedUserIds.length) {
+          await tx.commentMention.createMany({
+            data: mentionedUserIds.map((userId) => ({ commentId: comment.id, userId })),
+          });
+          for (const mentionedUserId of mentionedUserIds) {
+            await createNotification(tx, {
+              userId: mentionedUserId,
+              type: 'MENTION',
+              title: `${comment.author.name} mentioned you in a task comment`,
+              data: {
+                workspaceId: input.workspaceId,
+                projectId: access.project.id,
+                taskId: task.id,
+                commentId: comment.id,
+              },
+            });
+          }
+        }
+        return { ...comment, mentions: mentionedUserIds.map((userId) => ({ userId })) };
       });
+      if (deps.mentionNotifier) {
+        for (const mentionedUserId of mentionedUserIds) {
+          try {
+            await deps.mentionNotifier.notify({ commentId: comment.id, mentionedUserId });
+          } catch {
+            // Email is post-commit and must not roll back the persisted comment.
+          }
+        }
+      }
+      return comment;
     },
 
     async updateComment(

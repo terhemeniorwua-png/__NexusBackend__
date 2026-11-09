@@ -43,6 +43,30 @@ does not perform browser redirects for invitations.
 The invitation endpoints accept no request body. Send no `Content-Type` body
 for `GET`, `accept` or `decline`.
 
+## Team invitations
+
+Team invitations are distinct from workspace invitations. A team manager can
+invite only an already active member of that workspace; accepting adds explicit
+team membership and never creates or changes workspace membership.
+
+| Method | Path | Authentication | Purpose |
+| ------ | ---- | -------------- | ------- |
+| `GET` | `/workspaces/{workspaceId}/teams/{teamId}/invitations?status=PENDING` | Team manager | List invitations for this team. |
+| `POST` | `/workspaces/{workspaceId}/teams/{teamId}/invitations` | Team manager, rate limited | Create an invitation with `{ targetUserId }`. |
+| `DELETE` | `/workspaces/{workspaceId}/teams/{teamId}/invitations/{invitationId}` | Team manager | Revoke an unaccepted invitation. |
+
+Team invitees use the same token preview, verification, accept and decline
+endpoints above. A team preview includes `team: { id, name }`. Verification
+reports `alreadyMember` for workspace membership, `alreadyTeamMember` for team
+membership, and permits acceptance only for the intended account while both
+memberships and the team remain eligible. Acceptance creates only the team
+membership and consumes the invitation in one transaction.
+
+The team email link uses `EMAIL_APP_URL` and `TEAM_INVITATION_LINK_PATH` (default
+`/teams/invitations/accept`). Workspace invitation management lists, resends
+and revokes only `WORKSPACE` invitation records; team invitation management is
+scoped to the team manager.
+
 ### Authentication
 
 Protected endpoints use the normal Nexus bearer access token:

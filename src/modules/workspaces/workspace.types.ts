@@ -71,6 +71,8 @@ export interface InvitationSummary {
   role: WorkspaceRole;
   organizationRole: OrganizationRole | null;
   type: InvitationType;
+  teamId?: string;
+  teamName?: string;
   status: InvitationStatus;
   invitedBy: { id: string; name: string };
   expiresAt: Date;
@@ -93,6 +95,7 @@ export interface InvitationPreview {
   invitedBy: { id: string; name: string };
   role: WorkspaceRole;
   organizationRole: OrganizationRole | null;
+  team?: { id: string; name: string };
   status: InvitationStatus;
   expiresAt: Date;
   /** The address the invitation was sent to, with the local part masked. */
@@ -115,7 +118,10 @@ export type InvitationVerificationReason =
   | 'REVOKED'
   | 'EXPIRED'
   | 'WORKSPACE_UNAVAILABLE'
-  | 'ALREADY_A_MEMBER';
+  | 'TEAM_UNAVAILABLE'
+  | 'ALREADY_A_MEMBER'
+  | 'ALREADY_A_TEAM_MEMBER'
+  | 'WORKSPACE_MEMBERSHIP_REQUIRED';
 
 export interface InvitationViewer {
   userId: string;
@@ -126,6 +132,8 @@ export interface InvitationViewer {
   alreadyMember: boolean;
   /** The caller's current role when they already belong to the workspace. */
   membershipRole: WorkspaceRole | null;
+  /** True if the caller already has explicit membership in the invited team. */
+  alreadyTeamMember?: boolean;
   /** True only when accepting would create access the caller does not have. */
   canAccept: boolean;
   canDecline: boolean;

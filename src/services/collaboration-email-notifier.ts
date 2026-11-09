@@ -410,6 +410,19 @@ export function createCollaborationEmailNotifier(
           }
 
           inviteeName = boundUser.name;
+
+          const workspaceMembership = await client.workspaceMembership.findUnique({
+            where: {
+              workspaceId_userId: {
+                workspaceId: invitation.workspaceId,
+                userId: invitation.forUserId,
+              },
+            },
+            select: { status: true },
+          });
+          if (workspaceMembership?.status !== 'ACTIVE') {
+            return { status: 'ineligible', accepted: false };
+          }
         }
 
         const team = await client.team.findFirst({

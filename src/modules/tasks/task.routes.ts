@@ -27,6 +27,7 @@ import {
   type UpdateTaskInput,
 } from './task.schemas';
 import { createTaskAssignmentNotifier } from '../../services/task-assignment-notifier';
+import { createMentionEmailNotifier } from '../../services/mention-email-notifier';
 import { createTaskService } from './task.service';
 
 export interface TaskRouterOptions {
@@ -48,6 +49,7 @@ export function createTaskRouter({
   config,
   service = createTaskService(undefined, {
     assignmentNotifier: createTaskAssignmentNotifier(config),
+    mentionNotifier: createMentionEmailNotifier(config),
   }),
 }: TaskRouterOptions): Router {
   const router = Router({ mergeParams: true });

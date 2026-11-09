@@ -291,6 +291,7 @@ model User {
   createdTasks                Task[]                       @relation("TaskCreator")
   assignedTasks               TaskAssignee[]
   authoredComments            Comment[]
+  commentMentions             CommentMention[]
   notifications               Notification[]
   uploadedFiles               FileAttachment[]
   auditLogs                   AuditLog[]
@@ -834,6 +835,7 @@ model Team {
   department   Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   lead         User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
   members      TeamMembership[]
+  invitations  Invitation[]
   projects     Project[]
   channels     Channel[]
   joinRequests JoinRequest[]
@@ -1024,10 +1026,24 @@ model Comment {
   parent      Comment?         @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies     Comment[]        @relation("CommentReplies")
   attachments FileAttachment[]
+  mentions    CommentMention[]
 
   @@index([taskId, createdAt])
   @@index([authorId])
   @@index([parentId])
+}
+
+model CommentMention {
+  id        String   @id @default(uuid())
+  commentId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+  @@index([userId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -1196,6 +1212,7 @@ model Invitation {
   pendingKey String? @unique
 
   workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team       Team?     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   invitedBy  User      @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
   forUser    User?     @relation("InvitedUser", fields: [forUserId], references: [id], onDelete: SetNull)
   acceptedBy User?     @relation("AcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
