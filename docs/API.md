@@ -233,9 +233,21 @@ by the team service; knowing a team or user ID does not grant access.
 | DELETE | `/workspaces/{workspaceId}/teams/{teamId}`                  | Authorized team manager                            | Soft-delete a team.                                                       |
 | GET    | `/workspaces/{workspaceId}/teams/{teamId}/members`          | Authorized team member                             | List team members.                                                        |
 | POST   | `/workspaces/{workspaceId}/teams/{teamId}/members`          | Authorized team manager                            | Add a workspace member to the team.                                       |
+| GET    | `/workspaces/{workspaceId}/teams/{teamId}/invitations?status=PENDING` | Team manager | List invitations for that team. |
+| POST   | `/workspaces/{workspaceId}/teams/{teamId}/invitations`       | Team manager, rate limited                         | Invite an existing active workspace member by `{ targetUserId }`.         |
+| DELETE | `/workspaces/{workspaceId}/teams/{teamId}/invitations/{invitationId}` | Team manager | Revoke a team invitation. |
 | PATCH  | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager                            | Change a team member's role.                                              |
 | DELETE | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager                            | Remove a member from the team.                                            |
 | PATCH  | `/workspaces/{workspaceId}/teams/{teamId}/lead`             | Authorized team manager                            | Assign or clear the team lead.                                            |
+
+Team invitation acceptance uses the shared `/invitations/{token}` preview,
+verification and accept/decline routes. Only an already active workspace
+member can receive a team invitation. Accepting adds `TeamMembership` only;
+it does not create, change or reactivate workspace membership. Invitations
+expire according to `WORKSPACE_INVITATION_TTL_SECONDS`, are single use, and
+are audited. The raw token is sent through the existing team-invitation email
+template and stored only as a hash. Workspace invitation management routes list,
+resend and revoke only `WORKSPACE` invitation records.
 
 Project organizational access is a Phase 7 integration only; project CRUD remains
 outside the registered API.

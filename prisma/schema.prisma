@@ -835,6 +835,7 @@ model Team {
   department   Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   lead         User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
   members      TeamMembership[]
+  invitations  Invitation[]
   projects     Project[]
   channels     Channel[]
   joinRequests JoinRequest[]
@@ -1211,6 +1212,7 @@ model Invitation {
   pendingKey String? @unique
 
   workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team       Team?     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   invitedBy  User      @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
   forUser    User?     @relation("InvitedUser", fields: [forUserId], references: [id], onDelete: SetNull)
   acceptedBy User?     @relation("AcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)

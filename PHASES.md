@@ -17,7 +17,8 @@ Re-run the DB suites after PRs #42 and #43 before relying on this.
 | 3.7 One-time codes | Ready to close | Migration applied locally and on Aiven; DB suites passed. Confirm a real code email arrives via Brevo. |
 | 4 | In progress | SPF/DKIM/DMARC and Brevo webhook still external. |
 | 4.3 | Complete | Task assignment and task-comment mention flows call their post-commit notifiers; disposable PostgreSQL/outbox tests pass. |
-| 4.4 to 4.6 | In progress | Meeting mail has a runtime caller; team/project invitation mail still depends on authoritative invitation workflows. |
+| 4.4 | Complete | Mention, meeting, and team invitation callers are covered by the Phase 4 disposable-database suites. |
+| 4.5 to 4.6 | In progress | Project invitation workflow and final email audit remain. |
 | 5 | Ready to close | The three Phase 5 DB suites were the missing evidence and have now passed. |
 | 6, 7 | Complete | DB suites pass. |
 | 8 | In progress | Search and Document visibility gaps were fixed on `feature/backend-phase-audit-remediation`; disposable DB regressions pass. Continue route audit for files, calendar, meetings and forms. |
@@ -593,7 +594,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 
 ---
 
-#### Phase 4.4 — Mention, meeting and team-invitation email integration `[/]`
+#### Phase 4.4 — Mention, meeting and team-invitation email integration `[x]`
 
 **Objective:** Connect the existing mention, meeting-invitation and team-invitation templates to their authoritative collaboration workflows without duplicating event parsing, invitation creation or notification state.
 
@@ -618,7 +619,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 - Existing reschedule/cancellation behavior is preserved
 - Relevant tests, type checks, lint and build pass
 
-**Blockers / Notes:** Partially implemented. `src/services/collaboration-email-notifier.ts` remains the post-commit boundary. Meeting creation and participant-add workflows call it for pending invitations; the meeting database suite verifies creation, missing start time, organizer exclusion and duplicate participant handling. Task comment creation now persists mention recipients and calls the separate mention notifier after commit; the 10-test mention notifier database suite covers delivery, duplicate processing, edits, self-mentions, invalid recipients, suppression and failure isolation. Team invitation email is not connected: repository search finds no team invitation creation/acceptance workflow (the Phase 7 team service only adds existing workspace members), and `Invitation.teamId` remains a schema placeholder without a relation. The notifier itself checks persisted type/status/expiry, validates the token digest, and never changes invitation state, but this does not satisfy the runtime-caller criterion. Notification preferences remain in-app only; the email suppression list is the existing email preference control. Team invitation workflow is therefore the remaining Phase 7 dependency, so Phase 4.4 stays in progress.
+**Blockers / Notes:** Completed on 2026-11-09. Existing mention and meeting invitation workflows call the collaboration notifier after persistence; their PostgreSQL suites verify valid-recipient selection, duplicate handling and delivery failure isolation. Implemented the missing team invitation lifecycle: team managers can invite an existing active workspace member, list and revoke team invitations; the persisted `TEAM` invitation stores only the token digest and references its team. The shared preview, verification, acceptance and decline token endpoints recognize team invitations. Acceptance atomically consumes the single-use invitation and adds only `TeamMembership`; it requires the invitee to remain an active workspace member and does not change workspace membership or role. The email notifier is called after the invitation transaction commits and remains non-fatal. Added disposable-DB HTTP coverage for creation, duplicate prevention, preview, recipient verification, concurrent single-use acceptance, workspace-membership preservation, replay rejection, and an outsider rejection. Schema change: `Invitation.teamId` is now a nullable relation to `Team`, with cascade deletion, in migration `20261109105842_phase4_team_invitation_relation`. Notification preferences remain in-app only; the existing email suppression list is the email preference control. Verification: full `npm test` with `RUN_PHASE4_DB_TESTS=true`, `RUN_PHASE7_DB_TESTS=true` and a fresh local disposable PostgreSQL database passes 432 tests, 0 failures, 2 opt-in suites skipped; `npm run typecheck`, `npm run lint`, `npm run build`, `npx prisma validate`, OpenAPI YAML parsing and `git diff --check` pass. No production database was used.
 
 ---
 
