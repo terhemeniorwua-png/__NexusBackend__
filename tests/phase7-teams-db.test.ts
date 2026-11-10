@@ -167,8 +167,7 @@ function runTests(rawDbUrl: string): void {
     // the app so the test cannot read from an implicit development URL.
     const { getPrismaClient } = await import('../src/db/prisma');
     getPrismaClient(db.url);
-    const config = (await import('../src/config/env')).loadEnv({
-      ...process.env,
+    const config = (await import('./helpers/test-config')).loadTestConfig({
       RATE_LIMIT_NAMESPACE: `phase7-db-${process.pid}-${Date.now()}`,
       RATE_LIMIT_MAX: '100000',
       AUTH_REGISTER_RATE_LIMIT_MAX: '1000',
