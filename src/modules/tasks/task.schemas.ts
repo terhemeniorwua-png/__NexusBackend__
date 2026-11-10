@@ -185,6 +185,10 @@ export const createCommentSchema = z
   .object({
     body: z.string().trim().min(1).max(10000),
     parentId: uuid.optional().nullable(),
+    mentionedUserIds: z.array(uuid).max(50).optional().default([]).refine(
+      (ids) => new Set(ids).size === ids.length,
+      'Mentioned users must be unique',
+    ),
   })
   .strict();
 

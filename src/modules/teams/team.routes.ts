@@ -2,14 +2,18 @@ import { Router, type Request } from 'express';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
+import { createRateLimiter } from '../../middleware/rate-limit';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
   addTeamMemberSchema,
   changeTeamLeadSchema,
+  createTeamInvitationSchema,
   createTeamSchema,
   listTeamsQuerySchema,
+  listTeamInvitationsQuerySchema,
   teamMemberParamsSchema,
+  teamInvitationParamsSchema,
   teamParamsSchema,
   updateTeamMemberRoleSchema,
   updateTeamSchema,
@@ -22,6 +26,7 @@ import {
   type UpdateTeamMemberRoleInput,
 } from './team.schemas';
 import { createTeamService, type TeamService } from './team.service';
+import { createInvitationService, type InvitationService } from '../workspaces/invitation.service';
 import type { TeamRole } from '@prisma/client';
 
 /**
@@ -49,6 +54,7 @@ import type { TeamRole } from '@prisma/client';
 export interface TeamRouterOptions {
   config: AppConfig;
   service?: TeamService;
+  invitationService?: InvitationService;
 }
 
 function context(req: Request) {
@@ -71,14 +77,72 @@ function requireUser(req: Request): string {
 export function createTeamRouter({
   config,
   service = createTeamService(),
+  invitationService = createInvitationService(config),
 }: TeamRouterOptions): Router {
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);
   const requireActiveAccount = createRequireActiveAccount();
+  const invitationLimit = createRateLimiter({
+    namespace: `${config.rateLimitNamespace}:teams:invitations`,
+    windowMs: config.authRateLimitWindowMs,
+    limit: 30,
+    code: 'RATE_LIMITED',
+    message: 'Too many invitations. Please try again later.',
+  });
 
   // -------------------------------------------------------------------------
   // Team CRUD
   // -------------------------------------------------------------------------
+
+  router.get(
+    '/:teamId/invitations',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: teamParamsSchema, query: listTeamInvitationsQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, teamId } = req.validated?.params as { workspaceId: string; teamId: string };
+      const { status } = req.validated?.query as { status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REVOKED' | 'EXPIRED' | 'ALL' };
+      sendSuccess(res, await invitationService.listTeam({ userId: requireUser(req), workspaceId, teamId, status }));
+    },
+  );
+
+  router.post(
+    '/:teamId/invitations',
+    requireAuth,
+    requireActiveAccount,
+    invitationLimit,
+    validate({ params: teamParamsSchema, body: createTeamInvitationSchema }),
+    async (req, res) => {
+      const { workspaceId, teamId } = req.validated?.params as { workspaceId: string; teamId: string };
+      const { targetUserId } = req.validated?.body as { targetUserId: string };
+      const result = await invitationService.createTeam(
+        { userId: requireUser(req), workspaceId, teamId, targetUserId },
+        context(req),
+      );
+      sendSuccess(res, result, 201);
+    },
+  );
+
+  router.delete(
+    '/:teamId/invitations/:invitationId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: teamInvitationParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, teamId, invitationId } = req.validated?.params as {
+        workspaceId: string;
+        teamId: string;
+        invitationId: string;
+      };
+      const invitation = await invitationService.revokeTeam({
+        userId: requireUser(req),
+        workspaceId,
+        teamId,
+        invitationId,
+      });
+      sendSuccess(res, invitation);
+    },
+  );
 
   router.get(
     '/',

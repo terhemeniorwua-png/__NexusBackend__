@@ -233,9 +233,21 @@ by the team service; knowing a team or user ID does not grant access.
 | DELETE | `/workspaces/{workspaceId}/teams/{teamId}`                  | Authorized team manager                            | Soft-delete a team.                                                       |
 | GET    | `/workspaces/{workspaceId}/teams/{teamId}/members`          | Authorized team member                             | List team members.                                                        |
 | POST   | `/workspaces/{workspaceId}/teams/{teamId}/members`          | Authorized team manager                            | Add a workspace member to the team.                                       |
+| GET    | `/workspaces/{workspaceId}/teams/{teamId}/invitations?status=PENDING` | Team manager | List invitations for that team. |
+| POST   | `/workspaces/{workspaceId}/teams/{teamId}/invitations`       | Team manager, rate limited                         | Invite an existing active workspace member by `{ targetUserId }`.         |
+| DELETE | `/workspaces/{workspaceId}/teams/{teamId}/invitations/{invitationId}` | Team manager | Revoke a team invitation. |
 | PATCH  | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager                            | Change a team member's role.                                              |
 | DELETE | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager                            | Remove a member from the team.                                            |
 | PATCH  | `/workspaces/{workspaceId}/teams/{teamId}/lead`             | Authorized team manager                            | Assign or clear the team lead.                                            |
+
+Team invitation acceptance uses the shared `/invitations/{token}` preview,
+verification and accept/decline routes. Only an already active workspace
+member can receive a team invitation. Accepting adds `TeamMembership` only;
+it does not create, change or reactivate workspace membership. Invitations
+expire according to `WORKSPACE_INVITATION_TTL_SECONDS`, are single use, and
+are audited. The raw token is sent through the existing team-invitation email
+template and stored only as a hash. Workspace invitation management routes list,
+resend and revoke only `WORKSPACE` invitation records.
 
 Project organizational access is a Phase 7 integration only; project CRUD remains
 outside the registered API.
@@ -549,6 +561,15 @@ request and response fields. Paths below are relative to `/api/v1`.
 | Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; read execution history; retry a failed run. Event triggers (task created, task completed, member joined) and daily/weekly schedules are executed by the background automation worker with conditions, bounded retries, idempotency, and workspace-scoped permissions. |
 | AI | `/ai/analyze`, `/ai/query`, `/ai/actions/approve` | Placeholder endpoints; they do not invoke the AI service or execute approved mutations. |
 | Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. |
+
+Task comment creation accepts `{ body, parentId?, mentionedUserIds? }`.
+`mentionedUserIds` is an optional array of up to 50 distinct user IDs. Each
+recipient must be an active workspace member with access to the task's
+project; invalid or inaccessible recipients receive the generic
+`INVALID_MENTION_RECIPIENT` error. The author is silently excluded from
+mentions. Valid mentions are persisted with the comment and create a general
+`MENTION` notification. A post-commit email is attempted through the existing
+idempotent email outbox and cannot roll back the comment.
 
 Department routes cover listing, creation, renaming, and member assignment or
 removal; department deletion and department-settings routes are not

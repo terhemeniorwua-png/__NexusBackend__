@@ -124,7 +124,10 @@ export function createApiRouter({
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
-  router.use('/workspaces/:workspaceId/teams', createTeamRouter({ config, service: teamService }));
+  router.use(
+    '/workspaces/:workspaceId/teams',
+    createTeamRouter({ config, service: teamService, invitationService }),
+  );
 
   return router;
 }
