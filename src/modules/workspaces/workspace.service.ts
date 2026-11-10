@@ -16,6 +16,7 @@ import type { RequestContext } from '../auth/auth.types';
 import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { createTaskAssignmentNotifier } from '../../services/task-assignment-notifier';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { AppError } from '../../utils/errors';
 import {
   assertMayManageMember,
@@ -1151,6 +1152,20 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         });
 
         return created;
+      });
+
+      await enqueueAutomationRunsSafely({
+        workspaceId: access.workspace.id,
+        trigger: 'EVENT_MEMBER_JOINED',
+        eventKey: `member.joined:membership:${membership.id}`,
+        payload: {
+          workspaceId: access.workspace.id,
+          userId: membership.userId,
+          membershipId: membership.id,
+          role: assignedRole,
+          organizationRole: input.organizationRole ?? null,
+          source: 'direct_add',
+        },
       });
 
       return toMember(membership, access.workspace.ownerId);

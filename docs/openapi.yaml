@@ -50,56 +50,148 @@ tags:
     description: Workspace subscription and payment management
   - name: Integrations
     description: Personal and workspace integration connections
+  - name: Search
+    description: Unified permission-filtered global search
+  - name: Outbound webhooks
+    description: Workspace webhook subscriptions and durable deliveries
 paths:
-  /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/comments:
-    post:
-      tags: [Tasks]
-      summary: Create a task comment or reply
-      description: |
-        Mention recipients must be active workspace members who can access the
-        task's project. Invalid or inaccessible recipients receive a generic
-        INVALID_MENTION_RECIPIENT error. Mentions are persisted and create an
-        in-app notification; email is attempted after commit through the
-        idempotent email outbox.
+  /search:
+    get:
+      tags: [Search]
+      operationId: globalSearch
+      summary: Search authorised workspace content
+      description: Searches people, workspaces, teams, departments, projects, tasks, messages, conversations, files, documents, meetings, and channels across workspaces the caller can access. Results are filtered by current permissions. `data` is an array and pagination metadata is returned in `meta`.
       security:
         - bearerAuth: []
       parameters:
-        - in: path
-          name: workspaceId
+        - name: q
+          in: query
           required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, people, workspaces, teams, departments, projects, tasks, messages, conversations, files, documents, meetings, channels, announcements]
+            default: all
+        - name: workspaceId
+          in: query
+          required: false
           schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: taskId
-          required: true
-          schema: { type: string, format: uuid }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [body]
-              properties:
-                body: { type: string, minLength: 1, maxLength: 10000 }
-                parentId: { type: [string, 'null'], format: uuid }
-                mentionedUserIds:
-                  type: array
-                  maxItems: 50
-                  uniqueItems: true
-                  items: { type: string, format: uuid }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 1 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 25 }
+        - name: sort
+          in: query
+          required: false
+          schema: { type: string, enum: [relevance, recent], default: relevance }
       responses:
-        '201':
-          description: Comment created with its persisted mention recipients
-        '400':
-          description: Invalid input or an inaccessible mention recipient
-        '401': { description: Authentication required }
-        '403': { description: Project access denied }
-        '404': { description: Task or parent comment not found }
+        '200':
+          description: Permission-filtered results with pagination metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SearchResult' }
+                  meta:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      page: { type: integer }
+                      limit: { type: integer }
+                      hasMore: { type: boolean }
+                      category: { type: string }
+        '401': { description: Authentication is required. }
+  /search/suggestions:
+    get:
+      tags: [Search]
+      operationId: searchSuggestions
+      summary: Return lightweight search suggestions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: workspaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Up to eight ranked suggestions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SearchSuggestion' }
+        '401': { description: Authentication is required. }
+  /search/recent:
+    get:
+      tags: [Search]
+      operationId: listRecentSearches
+      summary: List the caller's recent searches
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The caller's recent search history. History is private to the caller.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RecentSearch' }
+        '401': { description: Authentication is required. }
+    delete:
+      tags: [Search]
+      operationId: clearRecentSearches
+      summary: Clear the caller's recent searches
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Number of cleared history entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      deleted: { type: integer }
+        '401': { description: Authentication is required. }
   /integrations:
     get:
       tags: [Integrations]
@@ -143,11 +235,42 @@ paths:
         '401': { description: Authentication is required. }
         '404': { description: Workspace is unavailable to the caller. }
   /integrations/{integrationId}:
+    patch:
+      tags: [Integrations]
+      operationId: updateIntegration
+      summary: Enable or disable an integration
+      description: Personal connections can be changed only by their owner. Workspace connections require workspace update permission. Disabling pauses sync without deleting the connection.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: Updated integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationResponse' }
+        '401': { description: Authentication is required. }
+        '404': { description: Integration is unavailable to the caller. }
+        '409': { description: A disconnected integration cannot be re-enabled without reconnecting. }
     delete:
       tags: [Integrations]
       operationId: disconnectIntegration
       summary: Disconnect an integration
-      description: Personal connections can be disconnected only by their owner. Workspace Slack connections require workspace update permission. Provider-side token revocation is not currently implemented.
+      description: Personal connections can be disconnected only by their owner. Workspace Slack connections require workspace update permission. The provider token is revoked when the provider supports revocation; provider-side data is never deleted.
       security:
         - bearerAuth: []
       parameters:
@@ -156,9 +279,125 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '200': { description: Integration marked disconnected. }
+        '200':
+          description: Integration marked disconnected.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    properties:
+                      ok: { type: boolean }
+                      providerRevoked: { type: boolean }
         '401': { description: Authentication is required. }
         '404': { description: Integration is unavailable to the caller. }
+  /integrations/{integrationId}/refresh:
+    post:
+      tags: [Integrations]
+      operationId: refreshIntegration
+      summary: Refresh an integration access token
+      description: Uses the provider refresh flow when one exists and records lastRefreshedAt. A provider failure marks the integration ERROR and returns the provider error.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Refreshed integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationResponse' }
+        '400': { description: The provider has no refresh flow or the connection has no refresh token. }
+        '401': { description: Authentication is required. }
+        '404': { description: Integration is unavailable to the caller. }
+        '409': { description: The integration is disconnected. }
+        '502': { description: The provider rejected the refresh. }
+  /integrations/{integrationId}/sync:
+    post:
+      tags: [Integrations]
+      operationId: queueIntegrationSync
+      summary: Queue a durable sync job
+      description: Creates a PostgreSQL-backed IntegrationSyncJob. The sync worker processes it asynchronously and retries provider failures with bounded backoff.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '202':
+          description: Sync job queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationSyncJobResponse' }
+        '401': { description: Authentication is required. }
+        '404': { description: Integration is unavailable to the caller. }
+        '409': { description: The integration is disabled or disconnected. }
+  /integrations/{integrationId}/sync-jobs:
+    get:
+      tags: [Integrations]
+      operationId: listIntegrationSyncJobs
+      summary: List sync job history
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        '200':
+          description: Sync job history, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/IntegrationSyncJob' }
+        '401': { description: Authentication is required. }
+        '404': { description: Integration is unavailable to the caller. }
+  /integrations/{integrationId}/sync-jobs/{jobId}/retry:
+    post:
+      tags: [Integrations]
+      operationId: retryIntegrationSyncJob
+      summary: Retry a failed sync job
+      description: Resets a failed or completed sync job to PENDING with zero attempts. A running job returns 409.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Sync job reset to pending.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationSyncJobResponse' }
+        '401': { description: Authentication is required. }
+        '404': { description: Integration or sync job is unavailable to the caller. }
+        '409': { description: The sync job is already running. }
   /integrations/gmail/authorize:
     get:
       tags: [Integrations]
@@ -312,6 +551,165 @@ paths:
           schema: { type: string, maxLength: 2000 }
       responses:
         '302': { description: Redirect to the configured frontend with connected or error status. }
+
+  /workspaces/{workspaceId}/webhooks:
+    get:
+      tags: [Outbound webhooks]
+      operationId: listWebhooks
+      summary: List workspace webhook subscriptions
+      description: Any active workspace member may list subscriptions. Signing secrets are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace webhook subscriptions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebhookSubscription' }
+        '401': { description: Authentication is required. }
+        '403': { description: The caller is not an active workspace member. }
+        '404': { description: Workspace is unavailable to the caller. }
+    post:
+      tags: [Outbound webhooks]
+      operationId: createWebhook
+      summary: Create a workspace webhook subscription
+      description: Requires workspace update permission. The signing secret is returned once, either as generated or as supplied.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWebhookRequest' }
+      responses:
+        '201':
+          description: Subscription created. The plaintext signing secret is included once.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookSubscriptionWithSecretResponse' }
+        '400': { description: Invalid URL, events, or request body. }
+        '401': { description: Authentication is required. }
+        '403': { description: The caller lacks workspace update permission. }
+  /workspaces/{workspaceId}/webhooks/{webhookId}:
+    patch:
+      tags: [Outbound webhooks]
+      operationId: updateWebhook
+      summary: Update a workspace webhook subscription
+      description: Requires workspace update permission. Supplying secret rotates the signing secret and returns it once.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - name: webhookId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateWebhookRequest' }
+      responses:
+        '200':
+          description: Updated subscription. The plaintext secret is included only when rotated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookSubscriptionWithSecretResponse' }
+        '400': { description: Invalid URL, events, or request body. }
+        '401': { description: Authentication is required. }
+        '403': { description: The caller lacks workspace update permission. }
+        '404': { description: Webhook is unavailable to the caller. }
+    delete:
+      tags: [Outbound webhooks]
+      operationId: deleteWebhook
+      summary: Delete a workspace webhook subscription
+      description: Requires workspace update permission. Delivery history is deleted with the subscription.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - name: webhookId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Subscription deleted. }
+        '401': { description: Authentication is required. }
+        '403': { description: The caller lacks workspace update permission. }
+        '404': { description: Webhook is unavailable to the caller. }
+  /workspaces/{workspaceId}/webhooks/{webhookId}/deliveries:
+    get:
+      tags: [Outbound webhooks]
+      operationId: listWebhookDeliveries
+      summary: List webhook delivery attempts
+      description: Any active workspace member may inspect delivery history.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - name: webhookId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        '200':
+          description: Delivery history, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebhookDelivery' }
+        '401': { description: Authentication is required. }
+        '403': { description: The caller is not an active workspace member. }
+        '404': { description: Webhook is unavailable to the caller. }
+  /workspaces/{workspaceId}/webhooks/{webhookId}/deliveries/{deliveryId}/retry:
+    post:
+      tags: [Outbound webhooks]
+      operationId: retryWebhookDelivery
+      summary: Retry a webhook delivery
+      description: Requires workspace update permission. Resets a failed or completed delivery to PENDING with zero attempts.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - name: webhookId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: deliveryId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Delivery reset to pending.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookDeliveryResponse' }
+        '401': { description: Authentication is required. }
+        '403': { description: The caller lacks workspace update permission. }
+        '404': { description: Webhook or delivery is unavailable to the caller. }
+        '409': { description: The delivery is already running. }
 
   /billing/plans:
     get:
@@ -5166,6 +5564,120 @@ paths:
         '200': { description: Milestone deleted. }
         '404': { description: Project or milestone is missing, archived, or inaccessible. }
 
+  /workspaces/{workspaceId}/automations:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Automations]
+      operationId: listAutomations
+      summary: List automation definitions in a workspace
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Automation definitions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationListResponse' }
+        '401': { description: Authentication is required. }
+        '403': { description: Workspace view permission is required. }
+    post:
+      tags: [Automations]
+      operationId: createAutomation
+      summary: Create an automation definition
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAutomationRequest' }
+      responses:
+        '201':
+          description: Automation created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationResponse' }
+        '400': { description: Invalid trigger, action, condition, or actionConfig. }
+        '403': { description: Workspace update permission is required. }
+  /workspaces/{workspaceId}/automations/{automationId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - { name: automationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Automations]
+      operationId: getAutomation
+      summary: Read an automation definition and its recent runs
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Automation definition with recent runs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationResponse' }
+        '404': { description: Automation does not exist in this workspace. }
+    patch:
+      tags: [Automations]
+      operationId: updateAutomation
+      summary: Rename or enable/disable an automation
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateAutomationRequest' }
+      responses:
+        '200':
+          description: Updated automation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationResponse' }
+        '403': { description: Workspace update permission is required. }
+        '404': { description: Automation does not exist in this workspace. }
+    delete:
+      tags: [Automations]
+      operationId: deleteAutomation
+      summary: Soft-delete an automation
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Automation deleted. }
+        '403': { description: Workspace update permission is required. }
+        '404': { description: Automation does not exist in this workspace. }
+  /workspaces/{workspaceId}/automations/{automationId}/runs:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - { name: automationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    get:
+      tags: [Automations]
+      operationId: listAutomationRuns
+      summary: Read automation execution history
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Runs ordered newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationRunListResponse' }
+        '404': { description: Automation does not exist in this workspace. }
+  /workspaces/{workspaceId}/automations/{automationId}/runs/{runId}/retry:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - { name: automationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: runId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Automations]
+      operationId: retryAutomationRun
+      summary: Reset a failed run for another execution attempt
+      description: Only FAILED runs can be retried. The automation owner's permissions are re-checked when the worker executes the run.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Run reset to PENDING.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationRunResponse' }
+        '403': { description: Workspace update permission is required. }
+        '404': { description: Automation or failed run does not exist. }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -7488,17 +8000,155 @@ components:
       enum: [GOOGLE_DRIVE, ONEDRIVE, DROPBOX, GMAIL, OUTLOOK, SLACK, GITHUB, GITLAB, GOOGLE_CALENDAR, OUTLOOK_CALENDAR]
     IntegrationConnection:
       type: object
-      required: [id, provider, status, workspaceId, externalEmail, scopes, createdAt]
+      required: [id, provider, status, enabled, workspaceId, externalEmail, scopes, createdAt]
       properties:
         id: { type: string, format: uuid }
         provider: { $ref: '#/components/schemas/IntegrationProvider' }
         status: { type: string, enum: [ACTIVE, ERROR, DISCONNECTED] }
+        enabled: { type: boolean }
         workspaceId: { type: [string, 'null'], format: uuid }
         externalEmail: { type: [string, 'null'], format: email }
         scopes:
           type: array
           items: { type: string }
+        lastError: { type: [string, 'null'] }
+        lastRefreshedAt: { type: [string, 'null'], format: date-time }
+        lastSyncedAt: { type: [string, 'null'], format: date-time }
         createdAt: { type: string, format: date-time }
+    SearchResult:
+      type: object
+      required: [id, type, title, workspaceId, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        type:
+          type: string
+          enum: [person, workspace, team, department, project, task, message, conversation, file, document, meeting, channel, announcement]
+        title: { type: string }
+        description: { type: [string, 'null'] }
+        workspaceId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        score: { type: number }
+        metadata: { type: object, additionalProperties: true }
+    SearchSuggestion:
+      type: object
+      required: [id, type, title, workspaceId]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        title: { type: string }
+        workspaceId: { type: string, format: uuid }
+    RecentSearch:
+      type: object
+      required: [id, query, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        query: { type: string }
+        category: { type: [string, 'null'] }
+        workspaceId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+    IntegrationSyncStatus:
+      type: string
+      enum: [PENDING, RUNNING, SUCCEEDED, FAILED]
+    IntegrationSyncJob:
+      type: object
+      required: [id, integrationId, status, attempts, maxRetries, nextAttemptAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        integrationId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/IntegrationSyncStatus' }
+        attempts: { type: integer }
+        maxRetries: { type: integer }
+        lastError: { type: [string, 'null'] }
+        nextAttemptAt: { type: string, format: date-time }
+        startedAt: { type: [string, 'null'], format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+    IntegrationSyncJobResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/IntegrationSyncJob' }
+    WebhookSubscription:
+      type: object
+      required: [id, workspaceId, url, events, enabled, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        events:
+          type: array
+          items: { type: string }
+        description: { type: [string, 'null'] }
+        enabled: { type: boolean }
+        lastDeliveryAt: { type: [string, 'null'], format: date-time }
+        lastError: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    WebhookSubscriptionWithSecretResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          allOf:
+            - $ref: '#/components/schemas/WebhookSubscription'
+            - type: object
+              properties:
+                secret:
+                  type: string
+                  description: Plaintext signing secret. Returned only on creation and secret rotation.
+    WebhookDeliveryStatus:
+      type: string
+      enum: [PENDING, RUNNING, SUCCEEDED, FAILED]
+    WebhookDelivery:
+      type: object
+      required: [id, subscriptionId, event, status, attempts, maxRetries, nextAttemptAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        event: { type: string }
+        status: { $ref: '#/components/schemas/WebhookDeliveryStatus' }
+        attempts: { type: integer }
+        maxRetries: { type: integer }
+        responseStatus: { type: [integer, 'null'] }
+        lastError: { type: [string, 'null'] }
+        nextAttemptAt: { type: string, format: date-time }
+        deliveredAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+    WebhookDeliveryResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/WebhookDelivery' }
+    CreateWebhookRequest:
+      type: object
+      required: [url, events]
+      additionalProperties: false
+      properties:
+        url: { type: string, format: uri, maxLength: 2000 }
+        events:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 500 }
+        enabled: { type: boolean, default: true }
+        secret: { type: string, minLength: 16, maxLength: 200 }
+    UpdateWebhookRequest:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        url: { type: string, format: uri, maxLength: 2000 }
+        events:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 500 }
+        enabled: { type: boolean }
+        secret: { type: string, minLength: 16, maxLength: 200 }
     IntegrationListResponse:
       type: object
       required: [success, data]
@@ -7561,3 +8211,105 @@ components:
                 - `ignored` — the event carries no known action.
                 - `unmatched` — the event refers to an unknown message.
               enum: [processed, duplicate, ignored, unmatched]
+    AutomationTrigger:
+      type: string
+      enum: [EVENT_TASK_CREATED, EVENT_TASK_COMPLETED, EVENT_MEMBER_JOINED, SCHEDULED_DAILY, SCHEDULED_WEEKLY]
+    AutomationAction:
+      type: string
+      enum: [SEND_NOTIFICATION, CREATE_TASK, SEND_WEBHOOK]
+    AutomationRunStatus:
+      type: string
+      enum: [PENDING, RUNNING, SUCCEEDED, FAILED, SKIPPED]
+    Automation:
+      type: object
+      required: [id, workspaceId, createdById, name, trigger, action, actionConfig, enabled, maxRetries, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        createdById: { type: string, format: uuid }
+        name: { type: string }
+        trigger: { $ref: '#/components/schemas/AutomationTrigger' }
+        condition:
+          type: [object, 'null']
+          additionalProperties: { type: string }
+        action: { $ref: '#/components/schemas/AutomationAction' }
+        actionConfig:
+          type: object
+          additionalProperties: { type: string }
+        enabled: { type: boolean }
+        maxRetries: { type: integer, minimum: 0, maximum: 10 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: [string, 'null'], format: date-time }
+    AutomationRun:
+      type: object
+      required: [id, automationId, status, attempts, nextAttemptAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        automationId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/AutomationRunStatus' }
+        attempts: { type: integer, minimum: 0 }
+        error: { type: [string, 'null'] }
+        eventKey: { type: [string, 'null'] }
+        payload:
+          type: [object, 'null']
+        nextAttemptAt: { type: string, format: date-time }
+        startedAt: { type: [string, 'null'], format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateAutomationRequest:
+      type: object
+      required: [name, trigger, action, actionConfig]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        trigger: { $ref: '#/components/schemas/AutomationTrigger' }
+        condition:
+          type: [object, 'null']
+          additionalProperties: { type: string }
+        action: { $ref: '#/components/schemas/AutomationAction' }
+        actionConfig:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            SEND_NOTIFICATION: userIds (comma-separated) or userId, title, optional body/link.
+            CREATE_TASK: projectId, title, optional description/priority/assigneeIds.
+            SEND_WEBHOOK: https url, optional secret used for the x-nexus-signature HMAC.
+        enabled: { type: boolean, default: true }
+        maxRetries: { type: integer, minimum: 0, maximum: 10, default: 3 }
+    UpdateAutomationRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        enabled: { type: boolean }
+    AutomationListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Automation' }
+    AutomationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/Automation' }
+    AutomationRunListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/AutomationRun' }
+    AutomationRunResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/AutomationRun' }

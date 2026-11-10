@@ -327,6 +327,13 @@ model User {
   automationsCreated          Automation[]                 @relation("AutomationCreatedBy")
   meetingsCreated             Meeting[]                    @relation("MeetingCreatedBy")
   meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
+  searchHistory               SearchHistory[]
+  webhookSubscriptions        WebhookSubscription[]        @relation("WebhookSubscriptionCreatedBy")
+  aiConversations             AiConversation[]             @relation("AiConversationOwner")
+  aiUsageRecords              AiUsageRecord[]              @relation("AiUsageRecordOwner")
+  aiActionProposals           AiActionProposal[]           @relation("AiActionProposalOwner")
+  aiActionApprovals           AiActionApproval[]           @relation("AiActionApprovalActor")
+  aiWritingSessions           AiWritingSession[]           @relation("AiWritingSessionOwner")
 
   @@index([status])
   @@index([createdAt])
@@ -503,6 +510,12 @@ model Workspace {
   billingSeatSync     BillingSeatSync?
   billingCancellation BillingCancellation?
   ownershipTransfers  WorkspaceOwnershipTransfer[]
+  searchHistory       SearchHistory[]
+  webhookSubscriptions WebhookSubscription[]
+  aiConversations     AiConversation[]
+  aiUsageRecords      AiUsageRecord[]
+  aiActionProposals   AiActionProposal[]
+  aiWritingSessions   AiWritingSession[]
 
   @@index([ownerId])
   @@index([status])
@@ -1269,6 +1282,11 @@ model FileAttachment {
   mimeType     String
   sizeBytes    Int
   storageKey   String    @unique
+  /// Best-effort plain text extracted at upload time for search. Supports text
+  /// formats, DOCX and PDF content streams; legacy binary and image-only files
+  /// are not parsed. Extraction failure never fails the upload.
+  extractedText String?
+  textExtractedAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
@@ -1601,21 +1619,54 @@ model Integration {
   workspaceId String?
   provider    IntegrationProvider
   status      IntegrationStatus   @default(ACTIVE)
+  enabled     Boolean             @default(true)
   accessTokenCiphertext  String
   refreshTokenCiphertext String?
   tokenExpiresAt DateTime?
   scopes      String[]            @default([])
   externalUserId String?
   externalEmail  String?
+  lastError   String?
+  lastRefreshedAt DateTime?
+  lastSyncedAt DateTime?
+  revokedAt   DateTime?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
   user      User       @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
   workspace Workspace? @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  syncJobs  IntegrationSyncJob[]
 
   @@unique([userId, provider, workspaceId])
   @@index([userId, status])
   @@index([workspaceId, provider])
+  @@index([enabled, status])
+}
+
+enum IntegrationSyncStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model IntegrationSyncJob {
+  id            String                @id @default(uuid())
+  integrationId String
+  status        IntegrationSyncStatus @default(PENDING)
+  attempts      Int                   @default(0)
+  maxRetries    Int                   @default(5)
+  nextAttemptAt DateTime              @default(now())
+  lastError     String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([integrationId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,20 +1719,28 @@ model Automation {
 }
 
 model AutomationRun {
-  id           String              @id @default(uuid())
-  automationId String
-  status       AutomationRunStatus @default(PENDING)
-  attempts     Int                 @default(0)
-  error        String?
-  startedAt    DateTime?
-  completedAt  DateTime?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  id            String              @id @default(uuid())
+  automationId  String
+  status        AutomationRunStatus @default(PENDING)
+  attempts      Int                 @default(0)
+  error         String?
+  eventKey      String?
+  payload       Json?
+  nextAttemptAt DateTime            @default(now())
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 
+  // eventKey makes an event-triggered run idempotent: a replayed event cannot
+  // create a second run for the same automation. NULL keys (manual runs) are
+  // not constrained by PostgreSQL unique indexes.
+  @@unique([automationId, eventKey])
   @@index([automationId, status])
   @@index([automationId, createdAt])
+  @@index([status, nextAttemptAt])
 }
 
 model AuditLog {
@@ -1808,25 +1867,284 @@ model EmailWebhookEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Global search (Phase 18)
+// ---------------------------------------------------------------------------
+
+model SearchHistory {
+  id          String   @id @default(uuid())
+  userId      String
+  workspaceId String?
+  query       String
+  category    String?
+  createdAt   DateTime @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, query])
+  @@index([workspaceId])
+}
+
+// ---------------------------------------------------------------------------
+// Outbound webhook subscriptions (Phase 19 / Phase 20 automation)
+// ---------------------------------------------------------------------------
+
+enum WebhookDeliveryStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model WebhookSubscription {
+  id          String   @id @default(uuid())
+  workspaceId String
+  createdById String
+  url         String
+  /// AES-256-GCM encrypted signing secret. Never returned by the API.
+  secretCiphertext String
+  events      String[] @default([])
+  description String?
+  enabled     Boolean  @default(true)
+  lastDeliveryAt DateTime?
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("WebhookSubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  deliveries WebhookDelivery[]
+
+  @@index([workspaceId, enabled])
+  @@index([createdById])
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid())
+  subscriptionId String
+  event          String
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  maxRetries     Int                   @default(5)
+  nextAttemptAt  DateTime              @default(now())
+  responseStatus Int?
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([subscriptionId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// AI service (Phases 21-23)
+// ---------------------------------------------------------------------------
+
+enum AiConversationStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AiMessageStatus {
+  COMPLETED
+  FAILED
+}
+
+enum AiUsageStatus {
+  SUCCESS
+  FAILURE
+}
+
+enum AiActionType {
+  CREATE_TASK
+  ADD_TASK_COMMENT
+  COMPLETE_TASK
+  CREATE_DOCUMENT
+  SEND_NOTIFICATION
+}
+
+enum AiActionStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  EXECUTING
+  EXECUTED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum AiWritingStatus {
+  ACTIVE
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+}
+
+model AiConversation {
+  id            String               @id @default(uuid())
+  userId        String
+  workspaceId   String?
+  title         String
+  status        AiConversationStatus @default(ACTIVE)
+  contextType   String?
+  contextId     String?
+  lastMessageAt DateTime             @default(now())
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  user           User               @relation("AiConversationOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace      Workspace?         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages       AiMessage[]
+  actionProposals AiActionProposal[]
+
+  @@index([userId, updatedAt])
+  @@index([workspaceId, updatedAt])
+  @@index([status])
+}
+
+model AiMessage {
+  id             String          @id @default(uuid())
+  conversationId String
+  role           AiMessageRole
+  content        String
+  status         AiMessageStatus @default(COMPLETED)
+  model          String?
+  tokenCount     Int?
+  references     Json?
+  metadata       Json?
+  createdAt      DateTime        @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model AiUsageRecord {
+  id               String        @id @default(uuid())
+  userId           String
+  workspaceId      String?
+  conversationId   String?
+  operation        String
+  model            String?
+  promptTokens     Int           @default(0)
+  completionTokens Int           @default(0)
+  totalTokens      Int           @default(0)
+  latencyMs        Int?
+  status           AiUsageStatus
+  errorCode        String?
+  createdAt        DateTime      @default(now())
+
+  user      User       @relation("AiUsageRecordOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([operation, createdAt])
+  @@index([status, createdAt])
+}
+
+model AiActionProposal {
+  id               String         @id @default(uuid())
+  workspaceId      String
+  userId           String
+  conversationId   String?
+  actionType       AiActionType
+  status           AiActionStatus @default(PROPOSED)
+  title            String
+  summary          String?
+  payload          Json
+  sourceReferences Json?
+  idempotencyKey   String         @unique
+  expiresAt        DateTime
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  executedAt       DateTime?
+  executionResult  Json?
+  failureReason    String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user         User               @relation("AiActionProposalOwner", fields: [userId], references: [id], onDelete: Cascade)
+  conversation AiConversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  approvals    AiActionApproval[]
+
+  @@index([workspaceId, status])
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+}
+
+model AiActionApproval {
+  id         String   @id @default(uuid())
+  proposalId String
+  userId     String
+  decision   String
+  note       String?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  proposal AiActionProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  user     User             @relation("AiActionApprovalActor", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([proposalId, createdAt])
+  @@index([userId])
+}
+
+model AiWritingSession {
+  id                    String          @id @default(uuid())
+  userId                String
+  workspaceId           String?
+  status                AiWritingStatus @default(ACTIVE)
+  originalText          String
+  suggestions           Json
+  detectedTone          String?
+  summary               String?
+  acceptedSuggestionIds Json?
+  dismissedAt           DateTime?
+  acceptedAt            DateTime?
+  expiresAt             DateTime
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  user      User       @relation("AiWritingSessionOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+}
+
+// ---------------------------------------------------------------------------
 // Planned models — intentionally NOT created yet.
 //
 // These belong to later roadmap phases and must be designed when their
 // requirements and relationships are fully understood (see the database skill,
 // section 5). Creating empty tables now would force premature migration churn.
 //
-//   Phase 12/13 — Realtime & messaging
-//     Conversation, ConversationMembership, Message, MessageReaction,
-//     MessageAttachment, MessageReadReceipt, PresenceRecord
-//   Phase 16 — Calendar & scheduling
-//     CalendarEvent, Reminder, RecurrenceRule
-//   Phase 17 — Meetings
-//     Meeting, MeetingParticipant, MeetingInvitation, CallRecord
-//   Phase 18 — AI
-//     AiConversation, AiMessage, AiUsageRecord, AiArtifact
-//   Phase 19 — Automation & jobs
-//     AutomationRule, BackgroundJob, JobRun
-//   Phase 20 — Integrations
-//     Integration, IntegrationCredential, WebhookSubscription, WebhookDelivery
+//   Phase 21 — Python AI service
+//     AiArtifact (planned; conversations, messages, usage, actions and
+//     writing sessions are implemented above)
+//
+// Implemented models are no longer listed here:
+//   Phase 10 — Messaging (Channel, Message, MessageReaction, MessageReadReceipt)
+//   Phase 14 — Calendar (CalendarEvent, EventInvitation)
+//   Phase 15 — Meetings (Meeting, MeetingParticipant)
+//   Phase 18 — Search (SearchHistory)
+//   Phase 19 — Integrations (Integration, IntegrationSyncJob, WebhookSubscription,
+//              WebhookDelivery)
+//   Phase 20 — Automation (Automation, AutomationRun)
 //
 // Documented field-level stubs live in docs/planned-models.md.
 // ---------------------------------------------------------------------------

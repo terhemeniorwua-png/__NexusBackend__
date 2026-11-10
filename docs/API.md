@@ -377,39 +377,99 @@ events using the configured signature or webhook token, not a user session.
 | POST   | `/webhooks/email`         | Provider verification required    | Receive an email delivery event.                               |
 | POST   | `/webhooks/email/{token}` | Configured webhook token required | Receive an email event from providers without signed payloads. |
 
-## Integrations (Phase 19 — in progress)
+## Global search (Phase 18)
+
+Search routes are mounted at `/api/v1/search` and are user-scoped. Every query
+is filtered by the caller's current workspace membership and resource
+visibility before results are returned. `data` is an array; pagination
+metadata is returned in `meta`.
+
+| Method | Path | Access | Purpose |
+| ------ | ---- | ------ | ------- |
+| GET | `/search` | Authenticated, active account | Search authorised content. Supports `q`, `category`, `workspaceId`, `page`, `limit`, and `sort` (`relevance` or `recent`). |
+| GET | `/search/suggestions` | Authenticated, active account | Return up to eight lightweight ranked suggestions for `q`. |
+| GET | `/search/recent` | Authenticated, active account | List the caller's recent search history. History is private and deduplicated. |
+| DELETE | `/search/recent` | Authenticated, active account | Clear the caller's recent search history, optionally scoped to a workspace. |
+
+Categories are `all`, `people`, `workspaces`, `teams`, `departments`,
+`projects`, `tasks`, `messages`, `conversations`, `files`, `documents`,
+`meetings`, `channels`, and `announcements`. The `announcements` category
+returns no results until an announcement model exists. Search runs at query
+time, so permission and content changes take effect immediately. Uploaded text,
+DOCX, and PDF content is extracted into `FileAttachment.extractedText` and is
+searchable; legacy binary `.doc` and scanned image-only PDFs are not parsed.
+
+## Integrations (Phase 19)
 
 Integration routes are mounted at `/api/v1/integrations`. Connection records
 never return access or refresh tokens. The common connect endpoint currently
 supports providers that do not have a dedicated OAuth flow; Slack, Google
-Drive, Dropbox, and Gmail tokens are rejected there and must use their OAuth
-routes. Gmail connections are personal (`workspaceId: null`); a supplied
-`workspaceId` query parameter is accepted for frontend compatibility but does
-not make the Gmail connection workspace-shared.
+Drive, Dropbox, GitHub, Google Calendar, and Gmail tokens are rejected there
+and must use their OAuth routes. Gmail, GitHub, and Google Calendar connections
+are personal (`workspaceId: null`); a supplied `workspaceId` query parameter is
+accepted for frontend compatibility but does not make them workspace-shared.
 
 | Method | Path | Access | Purpose |
 | ------ | ---- | ------ | ------- |
 | GET | `/integrations` | Authenticated, active account | List the caller's personal connections and, when `workspaceId` is supplied, visible workspace connections. Disconnected rows are omitted. |
 | POST | `/integrations` | Authenticated, active account | Save a connection for providers without a dedicated OAuth flow. Workspace-scoped connections require workspace access. |
-| DELETE | `/integrations/{integrationId}` | Connection owner; workspace manager for Slack | Disconnect an integration. Personal records are hidden from other users. |
+| PATCH | `/integrations/{integrationId}` | Connection owner; workspace manager for workspace connections | Enable or disable an integration without deleting it. |
+| DELETE | `/integrations/{integrationId}` | Connection owner; workspace manager for Slack | Disconnect an integration. The provider token is revoked when the provider supports revocation; provider-side data is never deleted. |
+| POST | `/integrations/{integrationId}/refresh` | Connection owner; workspace manager for workspace connections | Refresh an expiring access token through the provider adapter and record `lastRefreshedAt`. |
+| POST | `/integrations/{integrationId}/sync` | Connection owner; workspace manager for workspace connections | Queue a durable sync job for the integration. |
+| GET | `/integrations/{integrationId}/sync-jobs` | Connection owner; workspace manager for workspace connections | List sync job history. |
+| POST | `/integrations/{integrationId}/sync-jobs/{jobId}/retry` | Connection owner; workspace manager for workspace connections | Reset a failed sync job to pending. |
 | GET | `/integrations/gmail/authorize` | Authenticated, active account | Return a Google consent URL for the caller's personal Gmail account. |
 | GET | `/integrations/gmail/callback` | Public OAuth callback | Consume the single-use state, exchange the Google code, persist encrypted credentials, then redirect to the frontend with `integration=gmail` and a status. |
 | GET | `/integrations/google-drive/authorize` | Workspace manager | Return a Google Drive consent URL for the selected workspace. |
 | GET | `/integrations/google-drive/callback` | Public OAuth callback | Consume state, exchange the Google code, persist encrypted credentials, and redirect with status. |
 | GET | `/integrations/dropbox/authorize` | Authenticated workspace member | Return a Dropbox consent URL for the selected workspace. |
 | GET | `/integrations/dropbox/callback` | Public OAuth callback | Consume state, exchange the Dropbox code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/github/authorize` | Authenticated, active account | Return a GitHub App consent URL for the caller. |
+| GET | `/integrations/github/callback` | Public OAuth callback | Consume state, exchange the GitHub code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/google-calendar/authorize` | Authenticated, active account | Return a Google Calendar consent URL for the caller. |
+| GET | `/integrations/google-calendar/callback` | Public OAuth callback | Consume state, exchange the Google code, persist encrypted credentials, and redirect with status. |
 | GET | `/integrations/slack/authorize` | Workspace manager | Return a Slack OAuth URL for the selected workspace. |
 | GET | `/integrations/slack/callback` | Public OAuth callback | Consume state, exchange the Slack code, persist encrypted credentials, and redirect with status. |
 
 OAuth state is signed and single use, with a ten-minute lifetime. Integration
-tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY`. Gmail currently
-requests `gmail.readonly`, `gmail.send`, `gmail.compose`, and `gmail.modify`,
-plus `openid` and `email`; Google must have these Gmail scopes enabled for the
-OAuth client. The callback redirects to the frontend integrations page and
-does not expose credentials in the redirect. Gmail OAuth, token refresh,
-provider revocation, and provider-backed database lifecycle tests remain
-unverified/incomplete; Phase 19 must not be considered complete on the basis
-of the registered routes alone.
+tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY`. Gmail requests
+`gmail.readonly`, `gmail.send`, `gmail.compose`, and `gmail.modify`, plus
+`openid` and `email`; Google must have these Gmail scopes enabled for the OAuth
+client. The callback redirects to the frontend integrations page and does not
+expose credentials in the redirect.
+
+Phase 19 also adds `enabled`, `lastError`, `lastRefreshedAt`, `lastSyncedAt`,
+and `revokedAt` to `Integration`, plus the durable `IntegrationSyncJob` queue.
+The sync worker refreshes an expiring token when a refresh token exists and
+records `lastSyncedAt`; provider-specific data import remains a later
+integration stage. Live OAuth and revocation still require provider
+credentials and callback configuration, so external provider verification is
+environment-dependent.
+
+## Outbound webhooks
+
+Workspace webhook subscriptions are mounted at
+`/api/v1/workspaces/{workspaceId}/webhooks`. Only workspace OWNER /
+PROJECT_MANAGER roles may create, update, delete, or retry a delivery; any
+active workspace member may list subscriptions and delivery history. The
+signing secret is returned only when a subscription is created or its secret is
+rotated.
+
+| Method | Path | Access | Purpose |
+| ------ | ---- | ------ | ------- |
+| GET | `/workspaces/{workspaceId}/webhooks` | Active workspace member | List webhook subscriptions. Secrets are never returned. |
+| POST | `/workspaces/{workspaceId}/webhooks` | Workspace manager | Create a subscription. Returns the generated or supplied signing secret once. |
+| PATCH | `/workspaces/{workspaceId}/webhooks/{webhookId}` | Workspace manager | Update the URL, event list, description, enabled flag, or rotate the secret. |
+| DELETE | `/workspaces/{workspaceId}/webhooks/{webhookId}` | Workspace manager | Delete a subscription and its delivery history. |
+| GET | `/workspaces/{workspaceId}/webhooks/{webhookId}/deliveries` | Active workspace member | List delivery attempts and outcomes. |
+| POST | `/workspaces/{workspaceId}/webhooks/{webhookId}/deliveries/{deliveryId}/retry` | Workspace manager | Reset a failed delivery to pending. |
+
+Deliveries are written to PostgreSQL before the network call, signed with
+HMAC-SHA256 in `x-nexus-signature`, sent only to HTTPS endpoints that pass the
+SSRF guard, and retried with bounded exponential backoff. Supported event names
+are `task.created`, `task.completed`, `member.joined`, and `*` for every
+workspace event.
 
 ## Billing
 
@@ -495,9 +555,10 @@ request and response fields. Paths below are relative to `/api/v1`.
 | Calendar | `/workspaces/{workspaceId}/events` | Create/list/get/update/cancel/delete events; manage invitations and responses. |
 | Meetings | `/workspaces/{workspaceId}/meetings` | Create/list/get/update/delete meetings; join/leave and manage participants. This API stores meeting state but does not provide a calling SDK. |
 | Forms | `/workspaces/{workspaceId}/forms` | Create/list/get/update/delete forms; manage fields and submit/list responses. All current routes require an authenticated active account. |
-| Search | `/search` | Search supported workspace content by query, category, and optional workspace scope; results are filtered by caller access. |
-| Integrations | `/integrations` | List/manage user integrations and provider OAuth connections. Live connections require provider credentials and callback configuration. |
-| Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; trigger execution is not implemented. |
+| Search | `/search` | Unified search across people, workspaces, teams, departments, projects, tasks, messages, conversations, files, documents, meetings, and channels. Supports category, workspace, page/limit, and relevance/recent filters, suggestions, and per-user recent-search history. Every result is permission-filtered. |
+| Integrations | `/integrations` | List/manage personal and workspace integrations, OAuth connections, enable/disable, token refresh, provider revocation on disconnect, and durable sync jobs. Live connections require provider credentials and callback configuration. |
+| Outbound webhooks | `/workspaces/{workspaceId}/webhooks` | Manage workspace webhook subscriptions and inspect/retry durable HMAC-signed deliveries. |
+| Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; read execution history; retry a failed run. Event triggers (task created, task completed, member joined) and daily/weekly schedules are executed by the background automation worker with conditions, bounded retries, idempotency, and workspace-scoped permissions. |
 | AI | `/ai/analyze`, `/ai/query`, `/ai/actions/approve` | Placeholder endpoints; they do not invoke the AI service or execute approved mutations. |
 | Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. |
 

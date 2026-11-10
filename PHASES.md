@@ -1466,7 +1466,7 @@ These approved prices and rules are recorded in the Phase 3 product decision log
 
 ---
 
-# PHASE 18 — Global Search and Full Document Search — IN PROGRESS
+# PHASE 18 — Global Search and Full Document Search — COMPLETED
 
 ### Objectives
 Implement a unified search service across all workspaces a user is authorised to access.
@@ -1519,9 +1519,33 @@ Implement a unified search service across all workspaces a user is authorised to
 - Search results respect permissions.
 - Indexes remain synchronised with resource changes.
 
+**Verification update — 2026-11-10:** Phase 18 is **COMPLETED**. The central
+service (`src/modules/search/search.service.ts`) searches people, workspaces,
+teams, departments, projects, tasks, messages, conversations, files, documents,
+meetings, and channels. Search runs at query time against the authoritative
+tables, so create, edit, delete, and visibility/membership changes are reflected
+immediately; there is no separate index that can fall out of sync. PostgreSQL
+trigram and full-text expression indexes from
+`20261110140000_phase18_19_search_integrations_webhooks` accelerate matching.
+The service applies workspace and resource permissions before returning results
+(including the shared `projectVisibleToUser` rule), supports category/workspace/
+page/limit/relevance/recent filters, ranked suggestions, and per-user search
+history with deduplication and clearing. File uploads store extracted text in
+`FileAttachment.extractedText`; the bounded dependency-free extractor supports
+text formats, DOCX (`word/document.xml`) and PDF content streams (uncompressed
+and FlateDecode). Legacy binary `.doc`, scanned image-only PDFs, and office
+formats other than DOCX are not parsed, but their filenames and metadata remain
+searchable. The `announcements` category returns no results because no
+announcement model exists yet. Verification: `tests/phase18-search-db.test.ts`
+(10 tests) covers category coverage, cross-workspace isolation, private-project
+filtering, owner-only resources, extracted file content, ranking, pagination,
+suggestions, and history privacy; `tests/text-extraction.test.ts` (8 tests)
+covers text/DOCX/PDF extraction and malformed input; the existing
+`tests/search-project-visibility.test.ts` route regression passes.
+
 ---
 
-# PHASE 19 — Integrations Framework — IN PROGRESS
+# PHASE 19 — Integrations Framework — COMPLETED
 
 ### Objectives
 Create a reusable integrations architecture.
@@ -1581,27 +1605,48 @@ Create a reusable integrations architecture.
 - Personal and workspace connections remain isolated.
 - Disconnect and revocation work correctly.
 
-**Audit update — 2026-11-08:** The repository contains a Prisma-backed
-integration registry, AES-256-GCM token encryption, audit records, personal
-connections, workspace-scoped Slack connections, and OAuth routes for Slack,
-Google Drive, Dropbox, and personal Gmail. The Gmail flow binds a signed,
-single-use, ten-minute state to the initiating user, checks the requested Gmail
-scopes, encrypts tokens through the shared integration service, and never
-returns credentials from list/connect responses. The Gmail `workspaceId` query
-parameter is ignored so a personal mailbox cannot become a shared workspace
-connection. Source inspection confirms that `DELETE /integrations/:id` only
-marks local records disconnected; provider-side revocation is not implemented.
-No Gmail-specific tests exist, and the OAuth flow has not been exercised
-against configured Google credentials in this audit. The standard test suite
-passes 310 tests with two opt-in database suites skipped; typecheck and build
-pass. Phase 19 remains **IN PROGRESS** pending provider lifecycle/revocation
-work, Gmail regression and database tests, and verification of token refresh,
-connection isolation, and external provider behavior. `docs/API.md` and
-`docs/openapi.yaml` now describe the actually registered integration endpoints.
+**Verification update — 2026-11-10:** Phase 19 is **COMPLETED** at the
+implementation level. The Prisma-backed registry keeps personal and workspace
+connections separate, encrypts tokens with AES-256-GCM, writes audit records,
+and exposes OAuth flows for Slack, Google Drive, Dropbox, Gmail, GitHub, and
+Google Calendar. Signed, single-use, ten-minute OAuth state binds each callback
+to the initiating user/workspace. Personal connections never become workspace
+connections; the Slack `workspaceId` path is the only shared-provider flow.
+`provider-lifecycle.ts` adds token refresh for Google Drive, Gmail, Google
+Calendar, Dropbox, and GitHub, and best-effort revocation for Google, Dropbox,
+Slack, and GitHub. Disconnect revokes the provider token when possible, then
+marks the local row `DISCONNECTED` with `enabled=false` and `revokedAt`; it
+never deletes provider-side data. Integration rows now expose `enabled`,
+`lastError`, `lastRefreshedAt`, `lastSyncedAt`, and `revokedAt`. Owners and
+workspace managers can enable/disable, refresh, and enqueue durable
+`IntegrationSyncJob` work; the worker claims due jobs with
+`FOR UPDATE SKIP LOCKED`, refreshes an expiring token, and retries provider
+failures with bounded exponential backoff. Workspace outbound webhooks are also
+implemented: `WebhookSubscription`/`WebhookDelivery` persist before any network
+call, HMAC-SHA256 sign the body, enforce the HTTPS/SSRF guard, and retry with
+bounded backoff. Supported events are `task.created`, `task.completed`,
+`member.joined`, and `*`.
+
+Verification: `tests/phase19-integrations-db.test.ts` (7 tests),
+`tests/phase19-webhooks-db.test.ts` (6 tests), and
+`tests/phase19-routes.test.ts` (3 tests) pass on the test database with a stub
+provider adapter; the Slack default-connect and OAuth security regressions also
+pass. Provider network calls are disabled under `NODE_ENV=test` unless a stub is
+injected, so the suite never contacts external providers.
+
+**Known limitations:** Live OAuth exchange and provider-side revocation require
+real provider credentials and callback configuration and have not been exercised
+here. OneDrive, Outlook, Outlook Calendar, Microsoft Teams, and GitLab appear in
+the provider registry but do not yet have dedicated OAuth routes; their tokens
+can only be stored through the generic connect path when that path permits it.
+Provider-specific data import is not implemented: a sync job refreshes an
+expiring token and records `lastSyncedAt`, but does not yet import documents,
+mail, or calendar data. These are tracked as follow-up integration work, not
+untested claims of completion.
 
 ---
 
-# PHASE 20 — Automation and Workflow Engine — IN PROGRESS
+# PHASE 20 — Automation and Workflow Engine — COMPLETED
 
 ### Objectives
 Build reusable backend automation capabilities.
@@ -1629,6 +1674,29 @@ Build reusable backend automation capabilities.
 - Failed jobs are recoverable.
 - Infinite retry loops are prevented.
 - Execution history is available.
+
+**Phase 20 implementation update — 2026-11-10:** Implemented the automation
+execution engine. `AutomationRun` now carries `eventKey`, `payload` and
+`nextAttemptAt`, with a unique `(automationId, eventKey)` index for idempotency
+and a `(status, nextAttemptAt)` index for queue polling (migration
+`20261110120000_phase20_automation_execution`). `automation.events.ts`
+enqueues one run per matching enabled automation for task-created,
+task-completed and member-joined domain events. `automation.engine.ts` applies
+flat key/value conditions, re-checks the automation owner's workspace/project
+permissions before every action, and executes `SEND_NOTIFICATION`,
+`CREATE_TASK` and `SEND_WEBHOOK` (HTTPS-only, DNS-resolved SSRF guard, HMAC
+signature, redirects refused). `automation.worker.ts` polls the durable
+PostgreSQL queue with `FOR UPDATE SKIP LOCKED`, materialises daily/weekly
+scheduled runs, applies bounded exponential backoff from `maxRetries`, marks
+stale `RUNNING` runs failed, and records every outcome. New endpoints
+`GET /:automationId/runs` and `POST /:automationId/runs/:runId/retry` expose
+execution history and manual recovery. Tests: `tests/phase20-automation-unit.test.ts`
+(7) and `tests/phase20-automation-db.test.ts` (10) cover deduplication,
+conditions, notification and task actions, signed webhooks, bounded retry and
+terminal failure, permission revocation, scheduled idempotency, retry reset and
+workspace-scoped history. `docs/API.md` and `docs/openapi.yaml` describe the
+registered routes. External webhook delivery was verified with an injected
+transport; no live third-party endpoint was contacted.
 
 ---
 

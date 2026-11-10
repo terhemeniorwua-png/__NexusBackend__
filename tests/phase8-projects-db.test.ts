@@ -111,8 +111,7 @@ function runTests(rawDbUrl: string): void {
     const db = await connectTestDatabase(rawDbUrl);
     const { getPrismaClient } = await import('../src/db/prisma');
     getPrismaClient(db.url);
-    const config = (await import('../src/config/env')).loadEnv({
-      ...process.env,
+    const config = (await import('./helpers/test-config')).loadTestConfig({
       RATE_LIMIT_NAMESPACE: `phase8-db-${tag}`,
       RATE_LIMIT_MAX: '100000',
       AUTH_REGISTER_RATE_LIMIT_MAX: '1000',

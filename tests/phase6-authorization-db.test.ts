@@ -171,8 +171,7 @@ function runTests(dbUrl: string): void {
 
   before(async () => {
     const db = await connectTestDatabase(dbUrl);
-    const config = (await import('../src/config/env')).loadEnv({
-      ...process.env,
+    const config = (await import('./helpers/test-config')).loadTestConfig({
       RATE_LIMIT_NAMESPACE: `phase6-db-${process.pid}-${Date.now()}`,
       RATE_LIMIT_MAX: '100000',
       AUTH_REGISTER_RATE_LIMIT_MAX: '1000',

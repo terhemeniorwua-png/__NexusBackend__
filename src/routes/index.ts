@@ -41,6 +41,7 @@ import { createFormRouter } from '../modules/forms/form.routes';
 import { createSearchRouter } from '../modules/search/search.routes';
 import { createIntegrationRouter } from '../modules/integrations/integration.routes';
 import { createAutomationRouter } from '../modules/automation/automation.routes';
+import { createWebhookRouter } from '../modules/webhooks/webhook.routes';
 import { createAiRouter } from '../modules/ai/ai.routes';
 import { createAuditRouter } from '../modules/audit/audit.routes';
 
@@ -90,10 +91,7 @@ export function createApiRouter({
   // Tasks are nested under projects:
   // /workspaces/:workspaceId/projects/:projectId/tasks/…
   // The task router uses mergeParams to access workspaceId and projectId.
-  router.use(
-    '/workspaces/:workspaceId/projects/:projectId/tasks',
-    createTaskRouter({ config }),
-  );
+  router.use('/workspaces/:workspaceId/projects/:projectId/tasks', createTaskRouter({ config }));
   router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
   // Messages are nested under channels:
   // /workspaces/:workspaceId/channels/:channelId/messages/…
@@ -107,6 +105,8 @@ export function createApiRouter({
   router.use('/integrations', createIntegrationRouter({ config }));
   // Automations are workspace-scoped
   router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));
+  // Outbound webhook subscriptions are workspace-scoped
+  router.use('/workspaces/:workspaceId/webhooks', createWebhookRouter({ config }));
   // AI service proxy (Phases 21-23)
   router.use('/ai', createAiRouter({ config }));
   // Workspace audit log API (Phase 26)
