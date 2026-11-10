@@ -7,6 +7,7 @@ import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { requireProjectAccess, ProjectCapability } from '../authorization/project.policy';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { extractTextFromUpload } from './text-extraction';
 
 export interface FileSummary {
   id: string;
@@ -28,7 +29,11 @@ export function createFileService(
 ) {
   function requireStorage(): PrivateObjectStorage {
     if (!storage) {
-      throw new AppError(503, 'OBJECT_STORAGE_UNAVAILABLE', 'Private object storage is not configured');
+      throw new AppError(
+        503,
+        'OBJECT_STORAGE_UNAVAILABLE',
+        'Private object storage is not configured',
+      );
     }
     return storage;
   }
@@ -89,6 +94,8 @@ export function createFileService(
 
       await store.put({ key: storageKey, body: input.body, contentType: input.mimeType });
 
+      const extractedText = extractTextFromUpload(input.fileName, input.mimeType, input.body);
+
       const file = await prisma.$transaction(async (tx) => {
         const created = await tx.fileAttachment.create({
           data: {
@@ -100,6 +107,8 @@ export function createFileService(
             mimeType: input.mimeType,
             sizeBytes: input.sizeBytes,
             storageKey,
+            extractedText,
+            textExtractedAt: extractedText ? new Date() : null,
           },
         });
 
@@ -204,7 +213,7 @@ export function createFileService(
 
       const hasMore = files.length > input.limit;
       const items = (hasMore ? files.slice(0, input.limit) : files).map(toSummary);
-      const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+      const nextCursor = hasMore ? (items[items.length - 1]?.id ?? null) : null;
       const totalBytes = totalBytesResult._sum.sizeBytes ?? 0;
 
       return { items, nextCursor, totalBytes };

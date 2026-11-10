@@ -1,6 +1,7 @@
 import type { AutomationTrigger, Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
+import { enqueueWebhookEventSafely } from '../webhooks/webhook.events';
 
 /**
  * Automation event registration.
@@ -79,8 +80,9 @@ export async function enqueueAutomationRunsSafely(
   client: AutomationDbClient = getPrismaClient(),
   log: Logger = defaultLogger,
 ): Promise<number> {
+  let runs = 0;
   try {
-    return await enqueueAutomationRuns(event, client, log);
+    runs = await enqueueAutomationRuns(event, client, log);
   } catch (error) {
     log.error('automation_enqueue_failed', {
       workspaceId: event.workspaceId,
@@ -88,6 +90,16 @@ export async function enqueueAutomationRunsSafely(
       eventKey: event.eventKey,
       error,
     });
-    return 0;
   }
+
+  // Mirror the same domain event into workspace webhook subscriptions. The
+  // helper catches its own failures, so webhooks can never break automation or
+  // the business operation that produced the event.
+  await enqueueWebhookEventSafely(
+    { workspaceId: event.workspaceId, trigger: event.trigger, payload: event.payload },
+    client,
+    log,
+  );
+
+  return runs;
 }

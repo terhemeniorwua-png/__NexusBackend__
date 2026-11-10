@@ -19,14 +19,23 @@ function driveConfig() {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri = process.env.GOOGLE_DRIVE_REDIRECT_URI;
   if (!clientId || !clientSecret || !redirectUri) {
-    throw new AppError(503, 'GOOGLE_DRIVE_NOT_CONFIGURED', 'The Google Drive integration is not configured');
+    throw new AppError(
+      503,
+      'GOOGLE_DRIVE_NOT_CONFIGURED',
+      'The Google Drive integration is not configured',
+    );
   }
   return { clientId, clientSecret, redirectUri };
 }
 
 function stateKey(): Buffer {
   const secret = process.env.JWT_ACCESS_SECRET;
-  if (!secret) throw new AppError(503, 'GOOGLE_DRIVE_NOT_CONFIGURED', 'The Google Drive integration is not configured');
+  if (!secret)
+    throw new AppError(
+      503,
+      'GOOGLE_DRIVE_NOT_CONFIGURED',
+      'The Google Drive integration is not configured',
+    );
   return createHash('sha256').update(`gdrive-oauth-state:${secret}`).digest();
 }
 
@@ -34,12 +43,22 @@ function sign(body: string): string {
   return createHmac('sha256', stateKey()).update(body).digest('base64url');
 }
 
-export async function buildDriveAuthorizeUrl(input: { userId: string; workspaceId: string }): Promise<string> {
+export async function buildDriveAuthorizeUrl(input: {
+  userId: string;
+  workspaceId: string;
+}): Promise<string> {
   const { clientId, redirectUri } = driveConfig();
   const nonce = randomBytes(16).toString('hex');
-  await getRedisClient().set(`gdrive:oauth:state:${nonce}`, input.userId, { EX: STATE_TTL_MS / 1000 });
+  await getRedisClient().set(`gdrive:oauth:state:${nonce}`, input.userId, {
+    EX: STATE_TTL_MS / 1000,
+  });
   const body = Buffer.from(
-    JSON.stringify({ u: input.userId, w: input.workspaceId, n: nonce, e: Date.now() + STATE_TTL_MS }),
+    JSON.stringify({
+      u: input.userId,
+      w: input.workspaceId,
+      n: nonce,
+      e: Date.now() + STATE_TTL_MS,
+    }),
   ).toString('base64url');
   const state = `${body}.${sign(body)}`;
 
@@ -54,9 +73,16 @@ export async function buildDriveAuthorizeUrl(input: { userId: string; workspaceI
   return url.toString();
 }
 
-export async function verifyDriveState(state: string): Promise<{ userId: string; workspaceId: string }> {
+export async function verifyDriveState(
+  state: string,
+): Promise<{ userId: string; workspaceId: string }> {
   const [body, sig, extra] = state.split('.');
-  const bad = () => new AppError(400, 'GOOGLE_DRIVE_STATE_INVALID', 'The Google Drive authorization link is invalid or expired');
+  const bad = () =>
+    new AppError(
+      400,
+      'GOOGLE_DRIVE_STATE_INVALID',
+      'The Google Drive authorization link is invalid or expired',
+    );
   if (!body || !sig || extra !== undefined) throw bad();
   const expected = Buffer.from(sign(body));
   const given = Buffer.from(sig);
@@ -67,7 +93,12 @@ export async function verifyDriveState(state: string): Promise<{ userId: string;
   } catch {
     throw bad();
   }
-  if (typeof claims.u !== 'string' || typeof claims.w !== 'string' || typeof claims.e !== 'number' || claims.e < Date.now()) {
+  if (
+    typeof claims.u !== 'string' ||
+    typeof claims.w !== 'string' ||
+    typeof claims.e !== 'number' ||
+    claims.e < Date.now()
+  ) {
     throw bad();
   }
   if (typeof claims.n !== 'string' || !/^[0-9a-f]{32}$/.test(claims.n)) throw bad();
@@ -91,10 +122,18 @@ export async function exchangeDriveCode(code: string) {
     signal: AbortSignal.timeout(10_000),
   });
   const data = (await res.json()) as {
-    access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error?: string;
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+    error?: string;
   };
   if (!res.ok || !data.access_token) {
-    throw new AppError(502, 'GOOGLE_DRIVE_OAUTH_FAILED', `Google rejected the authorization (${data.error ?? 'unknown'})`);
+    throw new AppError(
+      502,
+      'GOOGLE_DRIVE_OAUTH_FAILED',
+      `Google rejected the authorization (${data.error ?? 'unknown'})`,
+    );
   }
 
   // Best effort: record which Google account was connected.
@@ -112,9 +151,41 @@ export async function exchangeDriveCode(code: string) {
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token ?? null,
-    tokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000).toISOString() : null,
+    tokenExpiresAt: data.expires_in
+      ? new Date(Date.now() + data.expires_in * 1000).toISOString()
+      : null,
     scopes: data.scope ? data.scope.split(' ') : [],
     externalUserId,
+  };
+}
+
+/** Google access tokens last about an hour. Used by the Drive API calls (next stage). */
+export async function refreshDriveToken(refreshToken: string) {
+  const { clientId, clientSecret } = driveConfig();
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const data = (await res.json()) as { access_token?: string; expires_in?: number; error?: string };
+  if (!res.ok || !data.access_token) {
+    throw new AppError(
+      502,
+      'GOOGLE_DRIVE_REFRESH_FAILED',
+      `Google rejected the token refresh (${data.error ?? 'unknown'})`,
+    );
+  }
+  return {
+    accessToken: data.access_token,
+    tokenExpiresAt: data.expires_in
+      ? new Date(Date.now() + data.expires_in * 1000).toISOString()
+      : null,
   };
 }
 
