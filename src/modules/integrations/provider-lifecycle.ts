@@ -4,6 +4,7 @@ import { refreshDropboxToken } from './dropbox.oauth';
 import { refreshGithubToken } from './github.oauth';
 import { refreshGmailToken } from './gmail.oauth';
 import { refreshCalendarToken } from './google-calendar.oauth';
+import { refreshOutlookToken } from './outlook-calendar.oauth';
 import { refreshDriveToken } from './google-drive.oauth';
 
 /**
@@ -112,6 +113,8 @@ async function defaultRefresh(
       return refreshGmailToken(refreshToken);
     case 'GOOGLE_CALENDAR':
       return refreshCalendarToken(refreshToken);
+    case 'OUTLOOK_CALENDAR':
+      return refreshOutlookToken(refreshToken);
     case 'DROPBOX':
       return refreshDropboxToken(refreshToken);
     case 'GITHUB':

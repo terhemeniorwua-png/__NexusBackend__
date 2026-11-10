@@ -70,6 +70,14 @@ import {
   exchangeCalendarCode,
   verifyCalendarState,
 } from './google-calendar.oauth';
+import {
+  buildOutlookAuthorizeUrl,
+  exchangeOutlookCode,
+  outlookAuthorizeQuerySchema,
+  outlookCallbackQuerySchema,
+  outlookResultUrl,
+  verifyOutlookState,
+} from './outlook-calendar.oauth';
 
 export interface IntegrationRouterOptions {
   config: AppConfig;
@@ -142,6 +150,13 @@ export function createIntegrationRouter({
           400,
           'USE_GOOGLE_CALENDAR_OAUTH',
           'Connect Google Calendar through the Google authorization flow',
+        );
+      }
+      if (body.provider === 'OUTLOOK_CALENDAR') {
+        throw new AppError(
+          400,
+          'USE_OUTLOOK_CALENDAR_OAUTH',
+          'Connect Outlook Calendar through the Microsoft authorization flow',
         );
       }
       if (body.provider === 'GMAIL') {
@@ -474,6 +489,41 @@ export function createIntegrationRouter({
       return done('connected');
     } catch (err) {
       logger.warn('google_calendar_oauth_failed', { error: err });
+      return done('error');
+    }
+  });
+
+  // Outlook Calendar is a personal connection (workspaceId null).
+  router.get(
+    '/outlook-calendar/authorize',
+    requireAuth,
+    requireActive,
+    validate({ query: outlookAuthorizeQuerySchema }),
+    async (req, res) => {
+      sendSuccess(res, { url: await buildOutlookAuthorizeUrl({ userId: userId(req) }) });
+    },
+  );
+
+  router.get('/outlook-calendar/callback', async (req, res) => {
+    const done = (status: 'connected' | 'denied' | 'error') =>
+      res.redirect(302, outlookResultUrl(status));
+    const parsed = outlookCallbackQuerySchema.safeParse(req.query);
+    if (!parsed.success) return done('error');
+    const { code, state, error } = parsed.data;
+    if (error) return done('denied');
+    if (!code) return done('error');
+    try {
+      const claims = await verifyOutlookState(state);
+      const token = await exchangeOutlookCode(code);
+      await service.connect({
+        userId: claims.userId,
+        provider: 'OUTLOOK_CALENDAR',
+        workspaceId: null,
+        ...token,
+      });
+      return done('connected');
+    } catch (err) {
+      logger.warn('outlook_calendar_oauth_failed', { error: err });
       return done('error');
     }
   });
