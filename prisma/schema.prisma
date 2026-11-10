@@ -328,6 +328,11 @@ model User {
   meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
   searchHistory               SearchHistory[]
   webhookSubscriptions        WebhookSubscription[]        @relation("WebhookSubscriptionCreatedBy")
+  aiConversations             AiConversation[]             @relation("AiConversationOwner")
+  aiUsageRecords              AiUsageRecord[]              @relation("AiUsageRecordOwner")
+  aiActionProposals           AiActionProposal[]           @relation("AiActionProposalOwner")
+  aiActionApprovals           AiActionApproval[]           @relation("AiActionApprovalActor")
+  aiWritingSessions           AiWritingSession[]           @relation("AiWritingSessionOwner")
 
   @@index([status])
   @@index([createdAt])
@@ -506,6 +511,10 @@ model Workspace {
   ownershipTransfers  WorkspaceOwnershipTransfer[]
   searchHistory       SearchHistory[]
   webhookSubscriptions WebhookSubscription[]
+  aiConversations     AiConversation[]
+  aiUsageRecords      AiUsageRecord[]
+  aiActionProposals   AiActionProposal[]
+  aiWritingSessions   AiWritingSession[]
 
   @@index([ownerId])
   @@index([status])
@@ -1916,6 +1925,191 @@ model WebhookDelivery {
 }
 
 // ---------------------------------------------------------------------------
+// AI service (Phases 21-23)
+// ---------------------------------------------------------------------------
+
+enum AiConversationStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AiMessageStatus {
+  COMPLETED
+  FAILED
+}
+
+enum AiUsageStatus {
+  SUCCESS
+  FAILURE
+}
+
+enum AiActionType {
+  CREATE_TASK
+  ADD_TASK_COMMENT
+  COMPLETE_TASK
+  CREATE_DOCUMENT
+  SEND_NOTIFICATION
+}
+
+enum AiActionStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  EXECUTING
+  EXECUTED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum AiWritingStatus {
+  ACTIVE
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+}
+
+model AiConversation {
+  id            String               @id @default(uuid())
+  userId        String
+  workspaceId   String?
+  title         String
+  status        AiConversationStatus @default(ACTIVE)
+  contextType   String?
+  contextId     String?
+  lastMessageAt DateTime             @default(now())
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  user           User               @relation("AiConversationOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace      Workspace?         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages       AiMessage[]
+  actionProposals AiActionProposal[]
+
+  @@index([userId, updatedAt])
+  @@index([workspaceId, updatedAt])
+  @@index([status])
+}
+
+model AiMessage {
+  id             String          @id @default(uuid())
+  conversationId String
+  role           AiMessageRole
+  content        String
+  status         AiMessageStatus @default(COMPLETED)
+  model          String?
+  tokenCount     Int?
+  references     Json?
+  metadata       Json?
+  createdAt      DateTime        @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model AiUsageRecord {
+  id               String        @id @default(uuid())
+  userId           String
+  workspaceId      String?
+  conversationId   String?
+  operation        String
+  model            String?
+  promptTokens     Int           @default(0)
+  completionTokens Int           @default(0)
+  totalTokens      Int           @default(0)
+  latencyMs        Int?
+  status           AiUsageStatus
+  errorCode        String?
+  createdAt        DateTime      @default(now())
+
+  user      User       @relation("AiUsageRecordOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([operation, createdAt])
+  @@index([status, createdAt])
+}
+
+model AiActionProposal {
+  id               String         @id @default(uuid())
+  workspaceId      String
+  userId           String
+  conversationId   String?
+  actionType       AiActionType
+  status           AiActionStatus @default(PROPOSED)
+  title            String
+  summary          String?
+  payload          Json
+  sourceReferences Json?
+  idempotencyKey   String         @unique
+  expiresAt        DateTime
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  executedAt       DateTime?
+  executionResult  Json?
+  failureReason    String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user         User               @relation("AiActionProposalOwner", fields: [userId], references: [id], onDelete: Cascade)
+  conversation AiConversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  approvals    AiActionApproval[]
+
+  @@index([workspaceId, status])
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+}
+
+model AiActionApproval {
+  id         String   @id @default(uuid())
+  proposalId String
+  userId     String
+  decision   String
+  note       String?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  proposal AiActionProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  user     User             @relation("AiActionApprovalActor", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([proposalId, createdAt])
+  @@index([userId])
+}
+
+model AiWritingSession {
+  id                    String          @id @default(uuid())
+  userId                String
+  workspaceId           String?
+  status                AiWritingStatus @default(ACTIVE)
+  originalText          String
+  suggestions           Json
+  detectedTone          String?
+  summary               String?
+  acceptedSuggestionIds Json?
+  dismissedAt           DateTime?
+  acceptedAt            DateTime?
+  expiresAt             DateTime
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  user      User       @relation("AiWritingSessionOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+}
+
+// ---------------------------------------------------------------------------
 // Planned models — intentionally NOT created yet.
 //
 // These belong to later roadmap phases and must be designed when their
@@ -1923,7 +2117,8 @@ model WebhookDelivery {
 // section 5). Creating empty tables now would force premature migration churn.
 //
 //   Phase 21 — Python AI service
-//     AiConversation, AiMessage, AiUsageRecord, AiArtifact
+//     AiArtifact (planned; conversations, messages, usage, actions and
+//     writing sessions are implemented above)
 //
 // Implemented models are no longer listed here:
 //   Phase 10 — Messaging (Channel, Message, MessageReaction, MessageReadReceipt)

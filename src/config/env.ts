@@ -309,6 +309,55 @@ const envSchema = z
       .positive()
       .max(60_000)
       .default(15_000),
+
+    // --- AI service integration (Phases 21-23) ------------------------------
+    //
+    // The Python/FastAPI service is optional infrastructure. The Express
+    // backend keeps working when it is disabled or unreachable: AI endpoints
+    // return a clear unavailable response and every core feature continues.
+    AI_ENABLED: booleanString.default(false),
+    AI_SERVICE_URL: z.string().trim().url().default(''),
+    AI_SERVICE_TOKEN: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || value.length >= 32,
+        'AI_SERVICE_TOKEN must be at least 32 characters',
+      ),
+    AI_MODEL: z.string().trim().default(''),
+    AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(120_000).default(20_000),
+    AI_STREAM_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(90_000),
+    AI_MAX_INPUT_CHARS: z.coerce.number().int().min(1_000).max(200_000).default(50_000),
+    AI_MAX_CONTEXT_CHARS: z.coerce.number().int().min(1_000).max(200_000).default(12_000),
+    AI_DAILY_REQUEST_LIMIT: z.coerce.number().int().positive().max(1_000_000).default(500),
+    AI_MONTHLY_TOKEN_LIMIT: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1_000_000_000)
+      .default(2_000_000),
+    AI_CONVERSATION_RETENTION_DAYS: z.coerce.number().int().min(1).max(3_650).default(90),
+    AI_WRITING_RETENTION_MINUTES: z.coerce.number().int().min(1).max(10_080).default(60),
+    AI_ACTION_APPROVAL_TTL_SECONDS: z.coerce.number().int().positive().max(86_400).default(900),
+    AI_CIRCUIT_BREAKER_FAILURES: z.coerce.number().int().min(1).max(100).default(5),
+    AI_CIRCUIT_BREAKER_RESET_MS: z.coerce.number().int().positive().max(3_600_000).default(60_000),
+
+    // --- Cache, analytics and audit retention (Phases 24-27) ----------------
+    CACHE_NAMESPACE: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(
+        /^[a-zA-Z0-9:_-]+$/,
+        'CACHE_NAMESPACE may only contain letters, digits, ":" "_" and "-"',
+      )
+      .default('nexus-cache'),
+    ANALYTICS_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3_600).default(60),
+    ANALYTICS_MAX_RANGE_DAYS: z.coerce.number().int().min(1).max(3_660).default(366),
+    AUDIT_RETENTION_DAYS: z.coerce.number().int().min(1).max(36_500).default(365),
+    AUDIT_PRUNE_BATCH_SIZE: z.coerce.number().int().min(1).max(10_000).default(1_000),
+    WORKER_HEALTH_STALE_MS: z.coerce.number().int().positive().max(3_600_000).default(120_000),
   })
   .superRefine((values, ctx) => {
     if (
@@ -519,6 +568,52 @@ const envSchema = z
         });
       }
     }
+
+    if (values.AI_ENABLED && !values.AI_SERVICE_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AI_SERVICE_URL'],
+        message: 'AI_SERVICE_URL is required when AI_ENABLED=true',
+      });
+    }
+
+    if (values.AI_ENABLED && !values.AI_SERVICE_TOKEN) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AI_SERVICE_TOKEN'],
+        message: 'AI_SERVICE_TOKEN is required when AI_ENABLED=true',
+      });
+    }
+
+    if (values.AI_SERVICE_URL) {
+      try {
+        const url = new URL(values.AI_SERVICE_URL);
+        if (url.username || url.password || url.search || url.hash) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['AI_SERVICE_URL'],
+            message: 'AI_SERVICE_URL must not contain credentials, query parameters, or fragments',
+          });
+        }
+        if (
+          values.NODE_ENV === 'production' &&
+          url.protocol !== 'https:' &&
+          !['localhost', '127.0.0.1'].includes(url.hostname)
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['AI_SERVICE_URL'],
+            message: 'AI_SERVICE_URL must use https in production',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AI_SERVICE_URL'],
+          message: 'AI_SERVICE_URL must be an absolute URL',
+        });
+      }
+    }
   });
 
 export interface AppConfig {
@@ -619,6 +714,27 @@ export interface AppConfig {
   objectStorageAccessKeyId: string;
   objectStorageSecretAccessKey: string;
   objectStorageRequestTimeoutMs: number;
+  aiEnabled: boolean;
+  aiServiceUrl: string;
+  aiServiceToken: string;
+  aiModel: string;
+  aiRequestTimeoutMs: number;
+  aiStreamTimeoutMs: number;
+  aiMaxInputChars: number;
+  aiMaxContextChars: number;
+  aiDailyRequestLimit: number;
+  aiMonthlyTokenLimit: number;
+  aiConversationRetentionDays: number;
+  aiWritingRetentionMinutes: number;
+  aiActionApprovalTtlSeconds: number;
+  aiCircuitBreakerFailures: number;
+  aiCircuitBreakerResetMs: number;
+  cacheNamespace: string;
+  analyticsCacheTtlSeconds: number;
+  analyticsMaxRangeDays: number;
+  auditRetentionDays: number;
+  auditPruneBatchSize: number;
+  workerHealthStaleMs: number;
 }
 
 export class ConfigurationError extends Error {
@@ -775,6 +891,27 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     objectStorageAccessKeyId: values.OBJECT_STORAGE_ACCESS_KEY_ID,
     objectStorageSecretAccessKey: values.OBJECT_STORAGE_SECRET_ACCESS_KEY,
     objectStorageRequestTimeoutMs: values.OBJECT_STORAGE_REQUEST_TIMEOUT_MS,
+    aiEnabled: values.AI_ENABLED,
+    aiServiceUrl: values.AI_SERVICE_URL.replace(/\/+$/, ''),
+    aiServiceToken: values.AI_SERVICE_TOKEN,
+    aiModel: values.AI_MODEL,
+    aiRequestTimeoutMs: values.AI_REQUEST_TIMEOUT_MS,
+    aiStreamTimeoutMs: values.AI_STREAM_TIMEOUT_MS,
+    aiMaxInputChars: values.AI_MAX_INPUT_CHARS,
+    aiMaxContextChars: values.AI_MAX_CONTEXT_CHARS,
+    aiDailyRequestLimit: values.AI_DAILY_REQUEST_LIMIT,
+    aiMonthlyTokenLimit: values.AI_MONTHLY_TOKEN_LIMIT,
+    aiConversationRetentionDays: values.AI_CONVERSATION_RETENTION_DAYS,
+    aiWritingRetentionMinutes: values.AI_WRITING_RETENTION_MINUTES,
+    aiActionApprovalTtlSeconds: values.AI_ACTION_APPROVAL_TTL_SECONDS,
+    aiCircuitBreakerFailures: values.AI_CIRCUIT_BREAKER_FAILURES,
+    aiCircuitBreakerResetMs: values.AI_CIRCUIT_BREAKER_RESET_MS,
+    cacheNamespace: values.CACHE_NAMESPACE,
+    analyticsCacheTtlSeconds: values.ANALYTICS_CACHE_TTL_SECONDS,
+    analyticsMaxRangeDays: values.ANALYTICS_MAX_RANGE_DAYS,
+    auditRetentionDays: values.AUDIT_RETENTION_DAYS,
+    auditPruneBatchSize: values.AUDIT_PRUNE_BATCH_SIZE,
+    workerHealthStaleMs: values.WORKER_HEALTH_STALE_MS,
   };
 }
 
