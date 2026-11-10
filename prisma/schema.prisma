@@ -1651,20 +1651,28 @@ model Automation {
 }
 
 model AutomationRun {
-  id           String              @id @default(uuid())
-  automationId String
-  status       AutomationRunStatus @default(PENDING)
-  attempts     Int                 @default(0)
-  error        String?
-  startedAt    DateTime?
-  completedAt  DateTime?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  id            String              @id @default(uuid())
+  automationId  String
+  status        AutomationRunStatus @default(PENDING)
+  attempts      Int                 @default(0)
+  error         String?
+  eventKey      String?
+  payload       Json?
+  nextAttemptAt DateTime            @default(now())
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 
+  // eventKey makes an event-triggered run idempotent: a replayed event cannot
+  // create a second run for the same automation. NULL keys (manual runs) are
+  // not constrained by PostgreSQL unique indexes.
+  @@unique([automationId, eventKey])
   @@index([automationId, status])
   @@index([automationId, createdAt])
+  @@index([status, nextAttemptAt])
 }
 
 model AuditLog {

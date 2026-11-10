@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient, TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { AppError } from '../../utils/errors';
 import {
   ProjectCapability,
@@ -76,7 +77,7 @@ function dateOrNull(value: string | null | undefined): Date | null | undefined {
  * The key is `{projectKey}-{N}` where N is the highest existing suffix + 1.
  * We use a count-based heuristic as a fallback when no tasks exist yet.
  */
-async function generateTaskKey(
+export async function generateTaskKey(
   tx: Prisma.TransactionClient,
   projectId: string,
   projectKey: string,
@@ -260,7 +261,7 @@ export function createTaskService(
 
       const projectKey = access.project.key;
 
-      return prisma.$transaction(async (tx) => {
+      const created = await prisma.$transaction(async (tx) => {
         const key = await generateTaskKey(tx, access.project.id, projectKey);
 
         // Verify parent task exists in the same project if provided.
@@ -335,6 +336,24 @@ export function createTaskService(
 
         return toSummary(task);
       });
+
+      await enqueueAutomationRunsSafely({
+        workspaceId: input.workspaceId,
+        trigger: 'EVENT_TASK_CREATED',
+        eventKey: `task.created:${created.id}`,
+        payload: {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: created.id,
+          key: created.key,
+          title: created.title,
+          status: created.status,
+          priority: created.priority,
+          creatorId: input.userId,
+        },
+      });
+
+      return created;
     },
 
     // -------------------------------------------------------------------------
@@ -602,7 +621,7 @@ export function createTaskService(
       if (existing.status === 'APPROVED')
         return { id: existing.id, status: 'APPROVED', completedAt: null as Date | null };
 
-      return prisma.$transaction(async (tx) => {
+      const completed = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
           where: { id: existing.id },
           data: { status: 'APPROVED', completedAt: new Date() },
@@ -624,6 +643,24 @@ export function createTaskService(
         });
         return { id: row.id, status: row.status, completedAt: row.completedAt };
       });
+
+      await enqueueAutomationRunsSafely({
+        workspaceId: input.workspaceId,
+        trigger: 'EVENT_TASK_COMPLETED',
+        eventKey: `task.completed:${completed.id}:${completed.completedAt?.toISOString() ?? 'unknown'}`,
+        payload: {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: completed.id,
+          key: existing.key,
+          title: existing.title,
+          previousStatus: existing.status,
+          status: completed.status,
+          completedAt: completed.completedAt?.toISOString() ?? null,
+        },
+      });
+
+      return completed;
     },
 
     async reopen(input: Input & { projectId: string; taskId: string }, context: RequestContext) {

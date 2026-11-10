@@ -5,6 +5,7 @@ import { getPrismaClient } from '../../db/prisma';
 import type { RequestContext } from '../auth/auth.types';
 import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
 import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
@@ -615,6 +616,20 @@ export function createJoinRequestService(
       if (!stored) {
         throw new AppError(500, 'JOIN_REQUEST_NOT_STORED', 'The join request could not be stored');
       }
+
+      await enqueueAutomationRunsSafely({
+        workspaceId: access.workspace.id,
+        trigger: 'EVENT_MEMBER_JOINED',
+        eventKey: `member.joined:join-request:${approved.id}`,
+        payload: {
+          workspaceId: access.workspace.id,
+          userId: request.user.id,
+          role,
+          organizationRole: organizationRole ?? null,
+          teamId: teamId ?? null,
+          source: 'join_request',
+        },
+      });
 
       return toSummary(stored);
     },

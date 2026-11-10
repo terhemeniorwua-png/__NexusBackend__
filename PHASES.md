@@ -1600,7 +1600,7 @@ connection isolation, and external provider behavior. `docs/API.md` and
 
 ---
 
-# PHASE 20 — Automation and Workflow Engine — IN PROGRESS
+# PHASE 20 — Automation and Workflow Engine — COMPLETED
 
 ### Objectives
 Build reusable backend automation capabilities.
@@ -1628,6 +1628,29 @@ Build reusable backend automation capabilities.
 - Failed jobs are recoverable.
 - Infinite retry loops are prevented.
 - Execution history is available.
+
+**Phase 20 implementation update — 2026-11-10:** Implemented the automation
+execution engine. `AutomationRun` now carries `eventKey`, `payload` and
+`nextAttemptAt`, with a unique `(automationId, eventKey)` index for idempotency
+and a `(status, nextAttemptAt)` index for queue polling (migration
+`20261110120000_phase20_automation_execution`). `automation.events.ts`
+enqueues one run per matching enabled automation for task-created,
+task-completed and member-joined domain events. `automation.engine.ts` applies
+flat key/value conditions, re-checks the automation owner's workspace/project
+permissions before every action, and executes `SEND_NOTIFICATION`,
+`CREATE_TASK` and `SEND_WEBHOOK` (HTTPS-only, DNS-resolved SSRF guard, HMAC
+signature, redirects refused). `automation.worker.ts` polls the durable
+PostgreSQL queue with `FOR UPDATE SKIP LOCKED`, materialises daily/weekly
+scheduled runs, applies bounded exponential backoff from `maxRetries`, marks
+stale `RUNNING` runs failed, and records every outcome. New endpoints
+`GET /:automationId/runs` and `POST /:automationId/runs/:runId/retry` expose
+execution history and manual recovery. Tests: `tests/phase20-automation-unit.test.ts`
+(7) and `tests/phase20-automation-db.test.ts` (10) cover deduplication,
+conditions, notification and task actions, signed webhooks, bounded retry and
+terminal failure, permission revocation, scheduled idempotency, retry reset and
+workspace-scoped history. `docs/API.md` and `docs/openapi.yaml` describe the
+registered routes. External webhook delivery was verified with an injected
+transport; no live third-party endpoint was contacted.
 
 ---
 

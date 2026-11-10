@@ -485,7 +485,7 @@ request and response fields. Paths below are relative to `/api/v1`.
 | Forms | `/workspaces/{workspaceId}/forms` | Create/list/get/update/delete forms; manage fields and submit/list responses. All current routes require an authenticated active account. |
 | Search | `/search` | Search supported workspace content by query, category, and optional workspace scope; results are filtered by caller access. |
 | Integrations | `/integrations` | List/manage user integrations and provider OAuth connections. Live connections require provider credentials and callback configuration. |
-| Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; trigger execution is not implemented. |
+| Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; read execution history; retry a failed run. Event triggers (task created, task completed, member joined) and daily/weekly schedules are executed by the background automation worker with conditions, bounded retries, idempotency, and workspace-scoped permissions. |
 | AI | `/ai/analyze`, `/ai/query`, `/ai/actions/approve` | Placeholder endpoints; they do not invoke the AI service or execute approved mutations. |
 | Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. |
 

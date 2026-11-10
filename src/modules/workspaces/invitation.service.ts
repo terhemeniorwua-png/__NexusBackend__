@@ -12,6 +12,7 @@ import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
 import { buildEmailBrand, buildWorkspaceInvitationEmail } from '../../services/email';
 import { sendEmail } from '../../services/email';
 import { createNotification } from '../../services/notifications';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
 import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
@@ -858,6 +859,7 @@ export function createInvitationService(
         );
       }
 
+      let joined = false;
       const accepted = await client.$transaction(async (tx) => {
         await lockActiveWorkspace(tx, invitation.workspaceId);
         const existing = await tx.workspaceMembership.findUnique({
@@ -868,6 +870,7 @@ export function createInvitationService(
 
         // An account that already belongs to the workspace keeps its role.
         if (!existing) {
+          joined = true;
           await assertWorkspaceSeatCapacity(tx, {
             workspaceId: invitation.workspaceId,
             userId: user.id,
@@ -943,6 +946,21 @@ export function createInvitationService(
 
       if (!accepted) {
         throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      }
+
+      if (joined) {
+        await enqueueAutomationRunsSafely({
+          workspaceId: invitation.workspaceId,
+          trigger: 'EVENT_MEMBER_JOINED',
+          eventKey: `member.joined:invitation:${invitation.id}`,
+          payload: {
+            workspaceId: invitation.workspaceId,
+            userId: user.id,
+            role: invitation.role,
+            organizationRole: invitation.organizationRole ?? null,
+            source: 'invitation',
+          },
+        });
       }
 
       return toSummary(accepted);

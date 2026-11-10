@@ -4996,6 +4996,120 @@ paths:
         '200': { description: Milestone deleted. }
         '404': { description: Project or milestone is missing, archived, or inaccessible. }
 
+  /workspaces/{workspaceId}/automations:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Automations]
+      operationId: listAutomations
+      summary: List automation definitions in a workspace
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Automation definitions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationListResponse' }
+        '401': { description: Authentication is required. }
+        '403': { description: Workspace view permission is required. }
+    post:
+      tags: [Automations]
+      operationId: createAutomation
+      summary: Create an automation definition
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAutomationRequest' }
+      responses:
+        '201':
+          description: Automation created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationResponse' }
+        '400': { description: Invalid trigger, action, condition, or actionConfig. }
+        '403': { description: Workspace update permission is required. }
+  /workspaces/{workspaceId}/automations/{automationId}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - { name: automationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Automations]
+      operationId: getAutomation
+      summary: Read an automation definition and its recent runs
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Automation definition with recent runs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationResponse' }
+        '404': { description: Automation does not exist in this workspace. }
+    patch:
+      tags: [Automations]
+      operationId: updateAutomation
+      summary: Rename or enable/disable an automation
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateAutomationRequest' }
+      responses:
+        '200':
+          description: Updated automation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationResponse' }
+        '403': { description: Workspace update permission is required. }
+        '404': { description: Automation does not exist in this workspace. }
+    delete:
+      tags: [Automations]
+      operationId: deleteAutomation
+      summary: Soft-delete an automation
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Automation deleted. }
+        '403': { description: Workspace update permission is required. }
+        '404': { description: Automation does not exist in this workspace. }
+  /workspaces/{workspaceId}/automations/{automationId}/runs:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - { name: automationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    get:
+      tags: [Automations]
+      operationId: listAutomationRuns
+      summary: Read automation execution history
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Runs ordered newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationRunListResponse' }
+        '404': { description: Automation does not exist in this workspace. }
+  /workspaces/{workspaceId}/automations/{automationId}/runs/{runId}/retry:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - { name: automationId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: runId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Automations]
+      operationId: retryAutomationRun
+      summary: Reset a failed run for another execution attempt
+      description: Only FAILED runs can be retried. The automation owner's permissions are re-checked when the worker executes the run.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Run reset to PENDING.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationRunResponse' }
+        '403': { description: Workspace update permission is required. }
+        '404': { description: Automation or failed run does not exist. }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -7374,3 +7488,105 @@ components:
                 - `ignored` — the event carries no known action.
                 - `unmatched` — the event refers to an unknown message.
               enum: [processed, duplicate, ignored, unmatched]
+    AutomationTrigger:
+      type: string
+      enum: [EVENT_TASK_CREATED, EVENT_TASK_COMPLETED, EVENT_MEMBER_JOINED, SCHEDULED_DAILY, SCHEDULED_WEEKLY]
+    AutomationAction:
+      type: string
+      enum: [SEND_NOTIFICATION, CREATE_TASK, SEND_WEBHOOK]
+    AutomationRunStatus:
+      type: string
+      enum: [PENDING, RUNNING, SUCCEEDED, FAILED, SKIPPED]
+    Automation:
+      type: object
+      required: [id, workspaceId, createdById, name, trigger, action, actionConfig, enabled, maxRetries, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        createdById: { type: string, format: uuid }
+        name: { type: string }
+        trigger: { $ref: '#/components/schemas/AutomationTrigger' }
+        condition:
+          type: [object, 'null']
+          additionalProperties: { type: string }
+        action: { $ref: '#/components/schemas/AutomationAction' }
+        actionConfig:
+          type: object
+          additionalProperties: { type: string }
+        enabled: { type: boolean }
+        maxRetries: { type: integer, minimum: 0, maximum: 10 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: [string, 'null'], format: date-time }
+    AutomationRun:
+      type: object
+      required: [id, automationId, status, attempts, nextAttemptAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        automationId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/AutomationRunStatus' }
+        attempts: { type: integer, minimum: 0 }
+        error: { type: [string, 'null'] }
+        eventKey: { type: [string, 'null'] }
+        payload:
+          type: [object, 'null']
+        nextAttemptAt: { type: string, format: date-time }
+        startedAt: { type: [string, 'null'], format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateAutomationRequest:
+      type: object
+      required: [name, trigger, action, actionConfig]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        trigger: { $ref: '#/components/schemas/AutomationTrigger' }
+        condition:
+          type: [object, 'null']
+          additionalProperties: { type: string }
+        action: { $ref: '#/components/schemas/AutomationAction' }
+        actionConfig:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            SEND_NOTIFICATION: userIds (comma-separated) or userId, title, optional body/link.
+            CREATE_TASK: projectId, title, optional description/priority/assigneeIds.
+            SEND_WEBHOOK: https url, optional secret used for the x-nexus-signature HMAC.
+        enabled: { type: boolean, default: true }
+        maxRetries: { type: integer, minimum: 0, maximum: 10, default: 3 }
+    UpdateAutomationRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        enabled: { type: boolean }
+    AutomationListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Automation' }
+    AutomationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/Automation' }
+    AutomationRunListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/AutomationRun' }
+    AutomationRunResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/AutomationRun' }

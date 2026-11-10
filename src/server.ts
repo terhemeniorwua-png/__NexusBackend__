@@ -12,6 +12,7 @@ import { logger as baseLogger, type Logger } from './utils/logger';
 import { createAccountDeletionWorker } from './modules/auth/account-deletion.service';
 import { createBillingService } from './modules/billing/billing.service';
 import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
+import { createAutomationWorker } from './modules/automation/automation.worker';
 import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
 import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
@@ -115,6 +116,12 @@ export async function startServer(): Promise<RunningServer> {
   });
   billingSeatSyncWorker.start();
 
+  const automationWorker = createAutomationWorker({
+    prisma: getPrismaClient(),
+    logger,
+  });
+  automationWorker.start();
+
   try {
     await listen(server, config.port);
   } catch (error) {
@@ -123,6 +130,7 @@ export async function startServer(): Promise<RunningServer> {
       emailWorker.stop(),
       accountDeletionWorker.stop(),
       billingSeatSyncWorker.stop(),
+      automationWorker.stop(),
     ]);
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
@@ -167,6 +175,7 @@ export async function startServer(): Promise<RunningServer> {
       emailWorker.stop(),
       accountDeletionWorker.stop(),
       billingSeatSyncWorker.stop(),
+      automationWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);
