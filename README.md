@@ -1852,6 +1852,16 @@ Important areas:
 - API rate limiting.
 - Efficient event delivery.
 
+### Production hardening (Phase 30)
+
+- Database indexes are added for read-only aggregation query patterns used by analytics and audit pruning (`Task.createdAt`, `Task.completedAt`, `FileAttachment.workspaceId + createdAt`). Review `pg_indexes` before adding further indexes.
+- External provider calls use bounded timeouts and circuit breakers (AI provider) so slow or failing providers do not exhaust workers.
+- Email delivery uses bounded retries with exponential backoff and a dead-letter/failed-job concept; a provider outage degrades gracefully without rolling back committed business data.
+- Redis-backed rate limiting is shared across backend instances through `RATE_LIMIT_NAMESPACE`; if Redis is unavailable, rate-limited requests fail closed with `503 RATE_LIMIT_UNAVAILABLE`.
+- The read-through cache degrades to a cache miss on Redis outage; core reads and writes continue without Redis.
+- Worker liveness is reported per instance through `GET /health/workers`; a load balancer should probe each instance independently.
+- Background workers process durable PostgreSQL queues (`FOR UPDATE SKIP LOCKED`) with bounded backoff and retries, so work survives expected restarts.
+
 Do not introduce unnecessary infrastructure prematurely.
 
 Scale based on actual architectural and performance requirements.

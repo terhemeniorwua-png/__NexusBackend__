@@ -75,7 +75,7 @@ completion labels and the existence of a module are not sufficient proof.
 | 27                                             | COMPLETED                               | New `src/modules/analytics` module with permission-filtered aggregated metrics (`GET /analytics`), date-range support with `ANALYTICS_MAX_RANGE_DAYS` cap, Redis caching via `ANALYTICS_CACHE_TTL_SECONDS`, workspace-scoped and cross-workspace aggregation, subscription info, unit tests (5/5) and DB integration tests (5/5) pass.                                                  |
 | 28                                             | COMPLETED                                 | `docs/openapi.yaml` now describes the `/analytics` and `/workspaces/{workspaceId}/audit` route families plus the `AnalyticsSnapshot` schema; `docs/API.md` registers `/analytics` and documents the audit `securityEvent` filter; environment variables for analytics, audit, cache and worker health documented in README.                                                                                                                                     |
 | 29                                             | NOT DEFINED                             | No requirements section exists; no scope inferred.                                                                                                                                                                                                                                                                                                                                      |
-| 30–32                                          | NOT STARTED                             | No later-phase work was started.                                                                                                                                                                                                                                                                                                                                                        |
+| 30–32                                          | Phase 30 COMPLETED; 31–32 NOT STARTED    | Phase 30: performance indexes added for analytics/audit query patterns, timeout/circuit-breaker and graceful-degradation hardening reviewed, production/scaling docs updated. Phases 31–32 remain future work.                                                                                                                                                   |
 
 The final serial database-enabled test run against disposable local PostgreSQL
 and Redis passed 665/665 tests across 58 suites, with no skips. The combined
@@ -2233,7 +2233,7 @@ Make the backend easy to understand, integrate, and maintain.
 
 ---
 
-# PHASE 30 — Performance, Scalability and Production Hardening
+# PHASE 30 — Performance, Scalability and Production Hardening — COMPLETED
 
 ### Objectives
 
