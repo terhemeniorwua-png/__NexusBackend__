@@ -585,7 +585,8 @@ request and response fields. Paths below are relative to `/api/v1`.
 | Outbound webhooks | `/workspaces/{workspaceId}/webhooks` | Manage workspace webhook subscriptions and inspect/retry durable HMAC-signed deliveries. |
 | Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; read execution history; retry a failed run. Event triggers (task created, task completed, member joined) and daily/weekly schedules are executed by the background automation worker with conditions, bounded retries, idempotency, and workspace-scoped permissions. |
 | AI | `/ai` | Conversations and streamed answers, workspace-aware authorised context, usage limits, writing analysis/rewrite, and approval-gated AI actions. Requires `AI_ENABLED` plus service URL/token; degrades with a clear 503 when unconfigured. |
-| Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. |
+| Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. Use `?securityEvent=true` to show only security-relevant changes. |
+| Analytics | `/analytics` | Return permission-filtered aggregated workspace metrics (activity, projects, tasks, members, meetings, files, subscription). Results are cached for a short TTL. |
 
 Task comment creation accepts `{ body, parentId?, mentionedUserIds? }`.
 `mentionedUserIds` is an optional array of up to 50 distinct user IDs. Each

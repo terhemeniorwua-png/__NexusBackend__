@@ -937,6 +937,27 @@ The variables below are read by `src/config/env.ts` and drive the Phase 4 transa
 | `EMAIL_WORKER_POLL_INTERVAL_MS` | `5000` | Delay between outbox polls |
 | `EMAIL_WORKER_BATCH_SIZE` | `10` | Maximum rows claimed per poll |
 
+### Analytics settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANALYTICS_CACHE_TTL_SECONDS` | `60` | Time-to-live for cached analytics snapshots |
+| `ANALYTICS_MAX_RANGE_DAYS` | `366` | Maximum number of days in a requested analytics date range |
+
+### Audit settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUDIT_RETENTION_DAYS` | `365` | Number of days to retain audit log entries before pruning |
+| `AUDIT_PRUNE_BATCH_SIZE` | `1000` | Maximum audit entries deleted per pruning worker pass |
+
+### Cache and worker health settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CACHE_NAMESPACE` | `nexus-cache` | Prefix shared by every Redis cache key |
+| `WORKER_HEALTH_STALE_MS` | `120000` | Milliseconds after which a worker with no successful pass is stale |
+
 ## Database Setup
 
 Nexus uses PostgreSQL as its relational data store and Prisma for schema management and database access.
