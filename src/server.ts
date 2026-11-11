@@ -16,6 +16,8 @@ import { createAutomationWorker } from './modules/automation/automation.worker';
 import { createIntegrationSyncWorker } from './modules/integrations/integration-sync.worker';
 import { createWebhookWorker } from './modules/webhooks/webhook.worker';
 import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
+import { createQueueStatusProbe } from './services/workers/queue-status';
+import { createWorkerHealthRegistry } from './services/workers/worker-health';
 import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
 export interface RunningServer {
@@ -69,7 +71,24 @@ export async function startServer(): Promise<RunningServer> {
     logger.warn('redis_unavailable', { error });
   }
 
-  const app = createApp({ config, logger });
+  // Worker liveness is process-local. Each instance reports its own loops so
+  // a load balancer can detect an instance whose timers stopped advancing.
+  const workerHealth = createWorkerHealthRegistry({ staleAfterMs: config.workerHealthStaleMs });
+  const workerRecorders = {
+    email: workerHealth.register('email'),
+    accountDeletion: workerHealth.register('account-deletion'),
+    billingSeatSync: workerHealth.register('billing-seat-sync'),
+    automation: workerHealth.register('automation'),
+    integrationSync: workerHealth.register('integration-sync'),
+    webhooks: workerHealth.register('webhooks'),
+  };
+
+  const app = createApp({
+    config,
+    logger,
+    workerHealth,
+    queueStatusProbe: createQueueStatusProbe(getPrismaClient()),
+  });
   const server = createServer(app);
 
   // Realtime (Socket.IO) shares the HTTP server. A failure here must not stop
@@ -90,6 +109,7 @@ export async function startServer(): Promise<RunningServer> {
     service: getEmailDeliveryService(config),
     config,
     logger,
+    health: workerRecorders.email,
   });
 
   if (config.emailWorkerEnabled) {
@@ -108,6 +128,7 @@ export async function startServer(): Promise<RunningServer> {
       secretAccessKey: config.objectStorageSecretAccessKey,
       requestTimeoutMs: config.objectStorageRequestTimeoutMs,
     }),
+    health: workerRecorders.accountDeletion,
   });
   accountDeletionWorker.start();
 
@@ -115,24 +136,28 @@ export async function startServer(): Promise<RunningServer> {
     prisma: getPrismaClient(),
     service: createBillingService(config, { prisma: getPrismaClient() }),
     logger,
+    health: workerRecorders.billingSeatSync,
   });
   billingSeatSyncWorker.start();
 
   const automationWorker = createAutomationWorker({
     prisma: getPrismaClient(),
     logger,
+    health: workerRecorders.automation,
   });
   automationWorker.start();
 
   const integrationSyncWorker = createIntegrationSyncWorker({
     prisma: getPrismaClient(),
     logger,
+    health: workerRecorders.integrationSync,
   });
   integrationSyncWorker.start();
 
   const webhookWorker = createWebhookWorker({
     prisma: getPrismaClient(),
     logger,
+    health: workerRecorders.webhooks,
   });
   webhookWorker.start();
 

@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import type { BillingService } from './billing.service';
+import type { WorkerHealthRecorder } from '../../services/workers/worker-health';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 
 const BATCH_SIZE = 25;
@@ -19,6 +20,8 @@ export function createBillingSeatSyncWorker(input: {
   service: BillingService;
   logger?: Logger;
   now?: () => Date;
+  /** Optional liveness recorder for `GET /health/workers`. */
+  health?: WorkerHealthRecorder;
 }): BillingSeatSyncWorker {
   const log = input.logger ?? defaultLogger;
   const now = input.now ?? (() => new Date());
@@ -162,11 +165,14 @@ export function createBillingSeatSyncWorker(input: {
   async function tick(): Promise<void> {
     if (stopped) return;
     running = true;
+    input.health?.passStarted();
     try {
       const result = await runOnce();
       if (result.claimed) log.info('billing_seat_sync_pass_complete', result);
+      input.health?.succeeded();
     } catch (error) {
       log.error('billing_seat_sync_pass_failed', { error });
+      input.health?.failed(error);
     } finally {
       running = false;
       if (!stopped) {
@@ -180,6 +186,7 @@ export function createBillingSeatSyncWorker(input: {
     start(): void {
       if (!stopped) return;
       stopped = false;
+      input.health?.started();
       timer = setTimeout(() => void tick(), 0);
       timer.unref();
     },
@@ -188,6 +195,7 @@ export function createBillingSeatSyncWorker(input: {
       if (timer) clearTimeout(timer);
       timer = null;
       while (running) await new Promise((resolve) => setTimeout(resolve, 25));
+      input.health?.stopped();
     },
     runOnce,
   };

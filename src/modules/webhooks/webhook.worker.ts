@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import type { WorkerHealthRecorder } from '../../services/workers/worker-health';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import {
   createWebhookService,
@@ -28,6 +29,8 @@ export interface WebhookWorkerDependencies {
   logger?: Logger;
   pollIntervalMs?: number;
   now?: () => Date;
+  /** Optional liveness recorder for `GET /health/workers`. */
+  health?: WorkerHealthRecorder;
 }
 
 export function createWebhookWorker(deps: WebhookWorkerDependencies): WebhookWorker {
@@ -51,10 +54,13 @@ export function createWebhookWorker(deps: WebhookWorkerDependencies): WebhookWor
   async function tick(): Promise<void> {
     if (stopped) return;
     running = true;
+    deps.health?.passStarted();
     try {
       await runOnce();
+      deps.health?.succeeded();
     } catch (error) {
       log.error('webhook_delivery_pass_failed', { error });
+      deps.health?.failed(error);
     } finally {
       running = false;
       if (!stopped) {
@@ -68,6 +74,7 @@ export function createWebhookWorker(deps: WebhookWorkerDependencies): WebhookWor
     start(): void {
       if (!stopped) return;
       stopped = false;
+      deps.health?.started();
       timer = setTimeout(() => void tick(), 0);
       timer.unref();
     },
@@ -76,6 +83,7 @@ export function createWebhookWorker(deps: WebhookWorkerDependencies): WebhookWor
       if (timer) clearTimeout(timer);
       timer = null;
       while (running) await new Promise((resolve) => setTimeout(resolve, 25));
+      deps.health?.stopped();
     },
     runOnce,
   };

@@ -23,6 +23,28 @@ listed here is not evidence that a roadmap phase is complete.
 | GET    | `/health`       | Public | Liveness information.                                        |
 | GET    | `/health/live`  | Public | Liveness probe.                                              |
 | GET    | `/health/ready` | Public | Readiness and dependency status; returns 503 when not ready. |
+| GET    | `/health/workers` | Public | Background worker liveness and durable queue depth; returns 503 when a worker is failing or stale. |
+
+### Background processing (Phase 24)
+
+Each background worker claims rows from a PostgreSQL-backed queue with
+`FOR UPDATE SKIP LOCKED`, applies bounded exponential backoff, and records
+failures for inspection. PostgreSQL is the durable queue; Redis is never the
+only record of a job or message. Workers run inside the API process and stop
+during graceful shutdown.
+
+`GET /health/workers` returns `status` (`ok` or `degraded`), per-worker
+liveness (`state`, `stale`, `consecutiveFailures`, `lastSuccessAt`,
+`lastFailureAt`, `lastErrorCode`), and queue depth (`pending`, `failed`) for
+email, outbox webhooks, automation runs and integration sync jobs. Worker
+liveness is process-local, so a load balancer should probe each instance.
+The response never contains job payloads, recipient addresses or raw error
+messages.
+
+Redis cache entries use the `CACHE_NAMESPACE` prefix and always have a TTL.
+Cache reads and writes degrade to cache misses when Redis is unavailable; the
+cache never makes a request fail. Invalidation of an entity prefix uses
+`SCAN`, not `KEYS`, so it cannot block the Redis server.
 
 ## Authentication and account lifecycle
 

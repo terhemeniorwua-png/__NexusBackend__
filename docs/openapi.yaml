@@ -1484,6 +1484,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
+  /health/workers:
+    get:
+      tags: [Health]
+      operationId: getWorkerHealth
+      summary: Background worker and durable queue health
+      description: |
+        Reports process-local worker liveness and PostgreSQL-backed queue depth.
+        Returns 503 when a worker is failing or stale. The response never
+        includes job payloads, recipient addresses or raw error messages.
+      security: []
+      responses:
+        '200':
+          description: Background processing is healthy.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerHealthResponse'
+        '503':
+          description: A worker is failing or has not completed a pass recently.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerHealthResponse'
   /auth/register:
     post:
       tags: [Authentication]
@@ -6167,6 +6196,102 @@ components:
           enum: [up, down]
         latencyMs:
           type: number
+    WorkerHealthResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required: [status, service, workers, queues, checkedAt, staleAfterMs, timestamp]
+          properties:
+            status:
+              type: string
+              enum: [ok, degraded]
+            service:
+              type: string
+            version:
+              type: string
+            environment:
+              type: string
+              enum: [development, test, production]
+            uptimeSeconds:
+              type: number
+            timestamp:
+              type: string
+              format: date-time
+            checkedAt:
+              type: string
+              format: date-time
+            staleAfterMs:
+              type: integer
+              minimum: 0
+            requestId:
+              type: string
+            workers:
+              type: array
+              items:
+                $ref: '#/components/schemas/WorkerHealthEntry'
+            queues:
+              type: array
+              items:
+                $ref: '#/components/schemas/QueueStatus'
+    WorkerHealthEntry:
+      type: object
+      required:
+        - name
+        - state
+        - started
+        - stale
+        - consecutiveFailures
+        - lastPassStartedAt
+        - lastSuccessAt
+        - lastFailureAt
+        - lastErrorCode
+      properties:
+        name:
+          type: string
+          example: email
+        state:
+          type: string
+          enum: [IDLE, RUNNING, FAILING, STOPPED]
+        started:
+          type: boolean
+        stale:
+          type: boolean
+        consecutiveFailures:
+          type: integer
+          minimum: 0
+        lastPassStartedAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSuccessAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastFailureAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastErrorCode:
+          type: string
+          nullable: true
+          description: A stable error code. Raw messages are never returned.
+    QueueStatus:
+      type: object
+      required: [name, pending, failed]
+      properties:
+        name:
+          type: string
+          example: email
+        pending:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
     ErrorResponse:
       type: object
       required: [success, error]

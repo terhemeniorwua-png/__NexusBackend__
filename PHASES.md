@@ -1700,7 +1700,7 @@ transport; no live third-party endpoint was contacted.
 
 ---
 
-# PHASE 21 — Python AI Service Integration
+# PHASE 21 — Python AI Service Integration — COMPLETED
 
 ### Objectives
 Integrate the independently deployable Python AI service with the main Express backend.
@@ -1753,9 +1753,26 @@ Integrate the independently deployable Python AI service with the main Express b
 - Source references are returned where relevant.
 - AI failures do not break core application features.
 
+**Phase 21 implementation update — 2026-11-11:** Implemented the Express side of
+the AI boundary. `src/services/providers/ai` contains the authenticated HTTP
+client, typed request/response contracts, bounded timeouts, a circuit breaker
+and SSE stream parsing. `src/modules/ai/ai-context.service.ts` builds the only
+context the AI service receives and filters workspaces, projects, tasks,
+documents and meetings by the caller's current access; citations are filtered
+against the authorised source set. Conversations and messages persist in
+PostgreSQL (`AiConversation`, `AiMessage`), usage is recorded per call
+(`AiUsageRecord`), and daily/monthly limits are enforced before a request. AI
+routes return 503 `AI_NOT_CONFIGURED` / `AI_UNAVAILABLE` instead of breaking
+non-AI features. Migration `20261110160000_phase21_ai_service`. Tests:
+`tests/phase21-ai-unit.test.ts` (8) and `tests/phase21-ai-db.test.ts` (7) cover
+provider failures, streaming, permission-filtered context, conversation
+ownership, usage limits and degradation. A live Python/FastAPI deployment was
+not available in this environment; the service contract is verified against
+stubs and must be re-verified against the deployed AI service.
+
 ---
 
-# PHASE 22 — Nexus Write
+# PHASE 22 — Nexus Write — COMPLETED
 
 ### Objectives
 Implement Grammarly-like writing assistance as part of Nexus.
@@ -1803,9 +1820,21 @@ Implement Grammarly-like writing assistance as part of Nexus.
 - User text is not modified without consent.
 - AI service failures are handled gracefully.
 
+**Phase 22 implementation update — 2026-11-11:** Implemented
+`src/modules/ai/writing.service.ts` and the `/ai/writing` routes for spelling,
+grammar, punctuation, clarity, vocabulary, tone and style analysis, plus
+rewrite, summarise and translate. Analysis returns categorised suggestions with
+offsets and never edits a document, message or comment. A writing session keeps
+the original text only until it is accepted, dismissed or expires
+(`AI_WRITING_RETENTION_MINUTES`), then clears it. Accepting selected suggestion
+IDs applies non-overlapping edits deterministically and returns the resulting
+text for the caller's editor to save; overlapping spans resolve to the earliest,
+longest edit. Dismiss is non-destructive. Provider errors degrade without
+changing user text. Covered by the Phase 21 unit and database tests.
+
 ---
 
-# PHASE 23 — AI Action Approval and Execution
+# PHASE 23 — AI Action Approval and Execution — COMPLETED
 
 ### Objectives
 Allow Nexus AI to recommend and execute approved actions safely.
@@ -1837,9 +1866,23 @@ Every mutation requires specific user approval. Express must revalidate permissi
 - Duplicate and unauthorised actions are prevented.
 - Actions are auditable.
 
+**Phase 23 implementation update — 2026-11-11:** Implemented
+`src/modules/ai/ai-action.service.ts` with `AiActionProposal` and
+`AiActionApproval`. A proposal is inert until approved. Supported actions are
+`CREATE_TASK`, `ADD_TASK_COMMENT`, `COMPLETE_TASK`, `CREATE_DOCUMENT` and
+`SEND_NOTIFICATION`, executed through the owning Nexus services after
+re-checking workspace and project permissions at propose, approve and execute
+time. Execution uses a conditional `APPROVED → EXECUTING` update so concurrent
+requests cannot apply one proposal twice, and approvals expire after
+`AI_ACTION_APPROVAL_TTL_SECONDS`. Rejection and cancellation are terminal.
+Propose, approve, reject, execute and failure events are recorded in the audit
+log. A unique `idempotencyKey` prevents duplicate proposals. Covered by the
+Phase 21 database tests (approval required, exactly-once execution, rejection
+inertness, permission denial).
+
 ---
 
-# PHASE 24 — Redis, Background Jobs and Event Processing
+# PHASE 24 — Redis, Background Jobs and Event Processing — COMPLETED
 
 ### Objectives
 Implement reliable asynchronous processing and real-time coordination.
@@ -1877,6 +1920,27 @@ Implement reliable asynchronous processing and real-time coordination.
 - Retry behaviour is bounded.
 - Failed jobs can be inspected.
 - Redis failures are handled safely.
+
+**Phase 24 implementation update — 2026-11-11:** Background processing already
+used durable PostgreSQL queues: every worker claims rows with
+`FOR UPDATE SKIP LOCKED` and applies bounded backoff (email delivery, account
+deletion, billing seat sync, automation runs, integration sync and outbound
+webhooks). This phase adds the missing shared pieces without replacing that
+queue design. `src/services/cache/cache.service.ts` provides a namespaced
+Redis read-through cache with TTLs, `SCAN`-based prefix invalidation, in-process
+single-flight loading and safe degradation: a cache outage produces misses, not
+failed requests. `src/services/workers/worker-health.ts` records worker loop
+liveness without retaining payloads or error messages, and all six workers now
+report pass start, success, failure and stop. `GET /health/workers` reports
+worker state, staleness and durable queue depth (pending/failed) for email,
+webhooks, automation and integration sync; it returns 503 when a worker is
+failing or stale and never exposes job data. Queue depth is read with a bounded
+timeout so a database probe failure cannot hide worker liveness. New
+configuration: `CACHE_NAMESPACE`, `WORKER_HEALTH_STALE_MS`. Tests:
+`tests/phase24-cache-worker.test.ts` (13) cover cache JSON/TTL, invalidation,
+degradation, single-flight loading, worker state transitions, staleness and
+health endpoint responses; existing billing, automation and email suite tests
+continue to pass.
 
 ---
 
