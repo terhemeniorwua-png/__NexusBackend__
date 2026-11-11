@@ -61,8 +61,12 @@ export const TeamAuditAction = {
 export type TeamAuditActionValue = (typeof TeamAuditAction)[keyof typeof TeamAuditAction];
 
 export const ChannelAuditAction = {
-  Created: 'channel.created', Updated: 'channel.updated', Archived: 'channel.archived',
-  Deleted: 'channel.deleted', MemberAdded: 'channel.member_added', MemberRemoved: 'channel.member_removed',
+  Created: 'channel.created',
+  Updated: 'channel.updated',
+  Archived: 'channel.archived',
+  Deleted: 'channel.deleted',
+  MemberAdded: 'channel.member_added',
+  MemberRemoved: 'channel.member_removed',
 } as const;
 
 export const TaskAuditAction = {
@@ -83,6 +87,39 @@ export const TaskAuditAction = {
 } as const;
 
 export type TaskAuditActionValue = (typeof TaskAuditAction)[keyof typeof TaskAuditAction];
+
+/**
+ * Audit actions that represent a security-relevant change to a workspace or
+ * its membership. These are flagged on the audit log so they can be queried
+ * and monitored separately from routine entries.
+ */
+export const SecurityAuditAction = {
+  WorkspaceOwnershipTransferred: 'workspace.ownership_transferred',
+  WorkspaceArchived: 'workspace.archived',
+  WorkspaceDeleted: 'workspace.deleted',
+  MemberRoleChanged: 'workspace.member_role_changed',
+  MemberRemoved: 'workspace.member_removed',
+  MemberSuspended: 'workspace.member_suspended',
+  MemberRestored: 'workspace.member_restored',
+  InvitationRevoked: 'workspace.invitation_revoked',
+  JoinRequestRejected: 'workspace.join_request_rejected',
+  JoinRequestWithdrawn: 'workspace.join_request_withdrawn',
+  JoinCodeRotated: 'workspace.join_code_rotated',
+  JoinCodeDisabled: 'workspace.join_code_disabled',
+  DepartmentMemberRemoved: 'institution.department_member_removed',
+  AiActionApproved: 'ai.action_approved',
+  AiActionExecuted: 'ai.action_executed',
+} as const;
+
+export type SecurityAuditActionValue =
+  (typeof SecurityAuditAction)[keyof typeof SecurityAuditAction];
+
+/**
+ * Returns true when an audit action is classified as a security event.
+ */
+export function isSecurityEvent(action: string): boolean {
+  return Object.values(SecurityAuditAction).includes(action as SecurityAuditActionValue);
+}
 
 export const MessageAuditAction = {
   MessageCreated: 'message.created',
@@ -121,6 +158,7 @@ export async function recordAuditEvent(client: AuditClient, event: AuditEventInp
       action: event.action,
       targetType: event.targetType,
       targetId: event.targetId,
+      securityEvent: isSecurityEvent(event.action),
       ...(event.actorId ? { actorId: event.actorId } : {}),
       ...(event.metadata ? { metadata: event.metadata as Prisma.InputJsonValue } : {}),
       ...(event.ip ? { ip: event.ip.slice(0, 128) } : {}),

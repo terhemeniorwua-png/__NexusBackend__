@@ -1754,6 +1754,7 @@ model AuditLog {
   metadata    Json?
   ip          String?
   userAgent   String?
+  securityEvent Boolean @default(false)
   createdAt   DateTime @default(now())
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1764,6 +1765,7 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@index([createdAt])
+  @@index([workspaceId, securityEvent, createdAt])
 }
 
 model PrivacyRequest {

@@ -8,8 +8,13 @@ import { z } from 'zod';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { getPrismaClient } from '../../db/prisma';
 
-export interface AuditRouterOptions { config: AppConfig }
-function userId(req: Request): string { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth.userId; }
+export interface AuditRouterOptions {
+  config: AppConfig;
+}
+function userId(req: Request): string {
+  if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in');
+  return req.auth.userId;
+}
 
 const auditQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
@@ -17,6 +22,10 @@ const auditQuerySchema = z.object({
   actorId: z.string().uuid().optional(),
   action: z.string().max(200).optional(),
   targetType: z.string().max(100).optional(),
+  securityEvent: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
 });
 const workspaceIdParams = z.object({ workspaceId: z.string().uuid() });
 
@@ -26,21 +35,40 @@ export function createAuditRouter({ config }: AuditRouterOptions): Router {
   const requireActive = createRequireActiveAccount();
   const prisma = getPrismaClient();
 
-  router.get('/', requireAuth, requireActive,
+  router.get(
+    '/',
+    requireAuth,
+    requireActive,
     validate({ params: workspaceIdParams, query: auditQuerySchema }),
     async (req, res) => {
       const { workspaceId } = req.validated!.params as { workspaceId: string };
-      const q = req.validated!.query as { cursor?: string; limit: number; actorId?: string; action?: string; targetType?: string };
+      const q = req.validated!.query as {
+        cursor?: string;
+        limit: number;
+        actorId?: string;
+        action?: string;
+        targetType?: string;
+        securityEvent?: boolean;
+      };
 
       // Only workspace owners/managers can access audit logs
-      const access = await requireWorkspaceAccess(prisma, { userId: userId(req), workspaceId, capability: WorkspaceCapability.ManageMembers });
+      const access = await requireWorkspaceAccess(prisma, {
+        userId: userId(req),
+        workspaceId,
+        capability: WorkspaceCapability.ManageMembers,
+      });
       if (access.effectiveRole !== 'OWNER' && access.effectiveRole !== 'PROJECT_MANAGER') {
-        throw new AppError(403, 'INSUFFICIENT_ROLE', 'Only workspace managers can access audit logs');
+        throw new AppError(
+          403,
+          'INSUFFICIENT_ROLE',
+          'Only workspace managers can access audit logs',
+        );
       }
 
       const entries = await prisma.auditLog.findMany({
         where: {
           workspaceId,
+          ...(q.securityEvent !== undefined ? { securityEvent: q.securityEvent } : {}),
           ...(q.actorId ? { actorId: q.actorId } : {}),
           ...(q.action ? { action: { contains: q.action, mode: 'insensitive' } } : {}),
           ...(q.targetType ? { targetType: q.targetType } : {}),
@@ -53,11 +81,15 @@ export function createAuditRouter({ config }: AuditRouterOptions): Router {
 
       const hasMore = entries.length > q.limit;
       const items = (hasMore ? entries.slice(0, q.limit) : entries).map((e) => ({
-        id: e.id, action: e.action, targetType: e.targetType, targetId: e.targetId,
+        id: e.id,
+        action: e.action,
+        targetType: e.targetType,
+        targetId: e.targetId,
         actor: e.actor ? { id: e.actor.id, name: e.actor.name } : null,
-        metadata: e.metadata, createdAt: e.createdAt.toISOString(),
+        metadata: e.metadata,
+        createdAt: e.createdAt.toISOString(),
       }));
-      const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+      const nextCursor = hasMore ? (items[items.length - 1]?.id ?? null) : null;
 
       sendSuccess(res, { items, nextCursor });
     },
