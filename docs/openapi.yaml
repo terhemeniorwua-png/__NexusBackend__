@@ -5678,6 +5678,352 @@ paths:
         '403': { description: Workspace update permission is required. }
         '404': { description: Automation or failed run does not exist. }
 
+  /ai/health:
+    get:
+      tags: [AI]
+      operationId: getAiHealth
+      summary: AI service configuration and provider health
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: AI is either configured and reachable or disabled; the body reports which.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiHealthResponse' }
+  /ai/chat:
+    post:
+      tags: [AI]
+      operationId: aiChat
+      summary: Ask the workspace-aware AI assistant
+      description: Express verifies workspace/project permissions and builds the only context sent to the AI service. Returns HTTP 503 AI_NOT_CONFIGURED when the service is disabled.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiChatRequest' }
+      responses:
+        '200':
+          description: Answer with filtered source references and usage.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiChatResponse' }
+        '429': { description: Daily request or monthly token limit reached (AI_USAGE_LIMIT_EXCEEDED). }
+        '503': { description: AI service disabled or unavailable (AI_NOT_CONFIGURED / AI_UNAVAILABLE). }
+  /ai/chat/stream:
+    post:
+      tags: [AI]
+      operationId: aiChatStream
+      summary: Stream the AI assistant response as server-sent events
+      description: Emits `conversation`, `token`, `references`, `done` and `error` events.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiChatRequest' }
+      responses:
+        '200':
+          description: Server-sent event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '503': { description: AI service disabled. }
+  /ai/conversations:
+    get:
+      tags: [AI]
+      operationId: listAiConversations
+      summary: List the caller's AI conversations
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: cursor, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        '200':
+          description: Cursor page of conversations.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiConversationListResponse' }
+  /ai/conversations/{conversationId}:
+    parameters:
+      - { name: conversationId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [AI]
+      operationId: getAiConversation
+      summary: Read an owned AI conversation and its messages
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Conversation with messages.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiConversationResponse' }
+        '404': { description: Conversation does not exist for this user. }
+    delete:
+      tags: [AI]
+      operationId: deleteAiConversation
+      summary: Delete an owned AI conversation
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Conversation deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiDeleteResponse' }
+        '404': { description: Conversation does not exist for this user. }
+  /ai/usage:
+    get:
+      tags: [AI]
+      operationId: getAiUsage
+      summary: Read AI usage against configured limits
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Daily request and monthly token usage.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiUsageResponse' }
+  /ai/writing/analyze:
+    post:
+      tags: [AI]
+      operationId: analyzeWriting
+      summary: Analyse text for spelling, grammar, clarity, tone and style
+      description: Never modifies a document, message or comment. Suggestions are retained for a bounded writing session.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiWritingAnalyzeRequest' }
+      responses:
+        '200':
+          description: Suggestions and a writing session id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiWritingAnalyzeResponse' }
+        '503': { description: AI service disabled or unavailable. }
+  /ai/writing/rewrite:
+    post:
+      tags: [AI]
+      operationId: rewriteWriting
+      summary: Rewrite text with an explicit instruction
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiWritingRewriteRequest' }
+      responses:
+        '200':
+          description: Rewritten text and explanation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiWritingRewriteResponse' }
+        '503': { description: AI service disabled or unavailable. }
+  /ai/writing/summarize:
+    post:
+      tags: [AI]
+      operationId: summarizeWriting
+      summary: Summarise text using the rewrite contract
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiWritingRewriteRequest' }
+      responses:
+        '200':
+          description: Summary text.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiWritingRewriteResponse' }
+        '503': { description: AI service disabled or unavailable. }
+  /ai/writing/translate:
+    post:
+      tags: [AI]
+      operationId: translateWriting
+      summary: Translate text using the rewrite contract
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiWritingRewriteRequest' }
+      responses:
+        '200':
+          description: Translated text.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiWritingRewriteResponse' }
+        '503': { description: AI service disabled or unavailable. }
+  /ai/writing/sessions/{sessionId}/accept:
+    post:
+      tags: [AI]
+      operationId: acceptWritingSuggestions
+      summary: Apply selected suggestions and return the resulting text
+      description: The caller's editor decides whether to save the returned text; no document is modified server-side.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiWritingAcceptRequest' }
+      responses:
+        '200':
+          description: Resulting text after applying the selected suggestions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiWritingAcceptResponse' }
+        '404': { description: Writing session does not exist for this user. }
+        '409': { description: Writing session is no longer active. }
+        '410': { description: Writing session expired. }
+  /ai/writing/sessions/{sessionId}/dismiss:
+    post:
+      tags: [AI]
+      operationId: dismissWritingSession
+      summary: Discard a writing session and its retained text
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Writing session dismissed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiWritingDismissResponse' }
+        '404': { description: Writing session does not exist for this user. }
+  /ai/actions/proposals:
+    post:
+      tags: [AI]
+      operationId: proposeAiAction
+      summary: Create an AI action proposal
+      description: A proposal is inert until separately approved and executed.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiActionProposalRequest' }
+      responses:
+        '201':
+          description: Proposal created (or the existing proposal for the same idempotency key).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiActionProposalResponse' }
+        '403': { description: The caller lacks permission for the proposed action. }
+        '404': { description: A referenced project, task or resource does not exist or is not accessible. }
+    get:
+      tags: [AI]
+      operationId: listAiActionProposals
+      summary: List the caller's AI action proposals in a workspace
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [PROPOSED, APPROVED, REJECTED, EXECUTING, EXECUTED, FAILED, CANCELLED, EXPIRED] } }
+        - { name: cursor, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        '200':
+          description: Cursor page of proposals.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiActionProposalListResponse' }
+  /ai/actions/proposals/{proposalId}:
+    parameters:
+      - { name: proposalId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [AI]
+      operationId: getAiActionProposal
+      summary: Read an owned AI action proposal
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Proposal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiActionProposalResponse' }
+        '404': { description: Proposal does not exist for this user. }
+  /ai/actions/proposals/{proposalId}/approve:
+    parameters:
+      - { name: proposalId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [AI]
+      operationId: approveAiAction
+      summary: Approve a proposed AI action
+      description: The caller's permissions are re-checked. Expired proposals cannot be approved.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiActionDecisionRequest' }
+      responses:
+        '200':
+          description: Proposal approved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiActionProposalResponse' }
+        '409': { description: Proposal is not pending (AI_ACTION_NOT_PENDING). }
+        '410': { description: Proposal expired (AI_ACTION_EXPIRED). }
+  /ai/actions/proposals/{proposalId}/reject:
+    parameters:
+      - { name: proposalId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [AI]
+      operationId: rejectAiAction
+      summary: Reject a proposed or approved AI action
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiActionDecisionRequest' }
+      responses:
+        '200':
+          description: Proposal rejected.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiActionProposalResponse' }
+        '409': { description: Proposal cannot be rejected in its current state. }
+  /ai/actions/proposals/{proposalId}/cancel:
+    parameters:
+      - { name: proposalId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [AI]
+      operationId: cancelAiAction
+      summary: Cancel a proposed or approved AI action
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Proposal cancelled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiActionProposalResponse' }
+        '409': { description: Proposal cannot be cancelled in its current state. }
+  /ai/actions/proposals/{proposalId}/execute:
+    parameters:
+      - { name: proposalId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [AI]
+      operationId: executeAiAction
+      summary: Execute an approved AI action
+      description: Re-checks current permissions, transitions APPROVED→EXECUTING conditionally, and executes through the owning Nexus service. The same proposal cannot execute twice.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Proposal executed with an execution result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiActionProposalResponse' }
+        '409': { description: Proposal is not approved or is already executing. }
+        '410': { description: Approval expired. }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -8313,3 +8659,315 @@ components:
       properties:
         success: { type: boolean, const: true }
         data: { $ref: '#/components/schemas/AutomationRun' }
+
+    # --- AI service (Phases 21-23) -------------------------------------------
+    AiHealthResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [configured, status]
+          properties:
+            configured: { type: boolean }
+            status: { type: string, enum: [up, down] }
+            latencyMs: { type: number }
+            version: { type: string }
+            error: { type: string }
+    AiSourceReference:
+      type: object
+      required: [type, id, title]
+      properties:
+        type: { type: string }
+        id: { type: string }
+        title: { type: string }
+        workspaceId: { type: [string, 'null'], format: uuid }
+        projectId: { type: [string, 'null'], format: uuid }
+        snippet: { type: string }
+    AiUsage:
+      type: object
+      required: [promptTokens, completionTokens, totalTokens]
+      properties:
+        promptTokens: { type: integer, minimum: 0 }
+        completionTokens: { type: integer, minimum: 0 }
+        totalTokens: { type: integer, minimum: 0 }
+    AiChatRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        workspaceId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        query: { type: string, minLength: 1, maxLength: 4000 }
+        projectId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        meetingId: { type: string, format: uuid }
+        contextType: { type: string, maxLength: 60 }
+        contextId: { type: string, format: uuid }
+    AiChatResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [conversationId, answer, references, model, usage, sources]
+          properties:
+            conversationId: { type: string, format: uuid }
+            answer: { type: string }
+            references:
+              type: array
+              items: { $ref: '#/components/schemas/AiSourceReference' }
+            sources:
+              type: array
+              items: { $ref: '#/components/schemas/AiSourceReference' }
+            model: { type: string }
+            usage: { $ref: '#/components/schemas/AiUsage' }
+    AiConversation:
+      type: object
+      required: [id, title, status, lastMessageAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        workspaceId: { type: [string, 'null'], format: uuid }
+        status: { type: string, enum: [ACTIVE, ARCHIVED] }
+        contextType: { type: [string, 'null'] }
+        contextId: { type: [string, 'null'] }
+        lastMessageAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AiConversationMessage:
+      type: object
+      required: [id, role, content, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [USER, ASSISTANT, SYSTEM] }
+        content: { type: string }
+        status: { type: string, enum: [COMPLETED, FAILED] }
+        model: { type: [string, 'null'] }
+        tokenCount: { type: [integer, 'null'] }
+        references: {}
+        createdAt: { type: string, format: date-time }
+    AiConversationResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          allOf:
+            - $ref: '#/components/schemas/AiConversation'
+            - type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  items: { $ref: '#/components/schemas/AiConversationMessage' }
+    AiConversationListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [items, nextCursor]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AiConversation' }
+            nextCursor: { type: [string, 'null'] }
+    AiDeleteResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [deleted]
+          properties:
+            deleted: { type: boolean, const: true }
+    AiUsageResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [dailyRequests, dailyRequestLimit, monthlyTokens, monthlyTokenLimit, remainingDailyRequests, remainingMonthlyTokens, since]
+          properties:
+            dailyRequests: { type: integer }
+            dailyRequestLimit: { type: integer }
+            monthlyTokens: { type: integer }
+            monthlyTokenLimit: { type: integer }
+            remainingDailyRequests: { type: integer }
+            remainingMonthlyTokens: { type: integer }
+            since:
+              type: object
+              properties:
+                day: { type: string, format: date-time }
+                month: { type: string, format: date-time }
+    AiWritingSuggestion:
+      type: object
+      required: [id, category, severity, message, original, replacement, offset, length]
+      properties:
+        id: { type: string }
+        category: { type: string, enum: [SPELLING, GRAMMAR, PUNCTUATION, CLARITY, VOCABULARY, TONE, STYLE] }
+        severity: { type: string, enum: [low, medium, high] }
+        message: { type: string }
+        original: { type: string }
+        replacement: { type: string }
+        offset: { type: integer, minimum: 0 }
+        length: { type: integer, minimum: 0 }
+        explanation: { type: string }
+    AiWritingAnalyzeRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        workspaceId: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 50000 }
+        features:
+          type: array
+          items: { type: string, enum: [SPELLING, GRAMMAR, PUNCTUATION, CLARITY, VOCABULARY, TONE, STYLE] }
+        language: { type: string, minLength: 2, maxLength: 20 }
+        toneTarget: { type: string, maxLength: 60 }
+    AiWritingAnalyzeResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [sessionId, suggestions, usage, expiresAt]
+          properties:
+            sessionId: { type: string, format: uuid }
+            suggestions:
+              type: array
+              items: { $ref: '#/components/schemas/AiWritingSuggestion' }
+            detectedTone: { type: [string, 'null'] }
+            summary: { type: [string, 'null'] }
+            usage: { $ref: '#/components/schemas/AiUsage' }
+            expiresAt: { type: string, format: date-time }
+    AiWritingRewriteRequest:
+      type: object
+      additionalProperties: false
+      required: [text, instruction]
+      properties:
+        workspaceId: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 50000 }
+        instruction: { type: string, minLength: 1, maxLength: 1000 }
+        tone: { type: string, maxLength: 60 }
+    AiWritingRewriteResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [text, usage]
+          properties:
+            text: { type: string }
+            explanation: { type: [string, 'null'] }
+            usage: { $ref: '#/components/schemas/AiUsage' }
+    AiWritingAcceptRequest:
+      type: object
+      additionalProperties: false
+      required: [suggestionIds]
+      properties:
+        suggestionIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string }
+    AiWritingAcceptResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [sessionId, text, appliedSuggestionIds]
+          properties:
+            sessionId: { type: string, format: uuid }
+            text: { type: string }
+            appliedSuggestionIds:
+              type: array
+              items: { type: string }
+    AiWritingDismissResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [sessionId, dismissed]
+          properties:
+            sessionId: { type: string, format: uuid }
+            dismissed: { type: boolean, const: true }
+    AiActionProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [workspaceId, actionType, payload]
+      properties:
+        workspaceId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        actionType: { type: string, enum: [CREATE_TASK, ADD_TASK_COMMENT, COMPLETE_TASK, CREATE_DOCUMENT, SEND_NOTIFICATION] }
+        payload: { type: object }
+        title: { type: string, maxLength: 200 }
+        summary: { type: string, maxLength: 2000 }
+        idempotencyKey: { type: string, minLength: 8, maxLength: 200 }
+        sourceReferences:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [type, id, title]
+            properties:
+              type: { type: string }
+              id: { type: string }
+              title: { type: string }
+    AiActionDecisionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note: { type: string, maxLength: 1000 }
+    AiActionProposal:
+      type: object
+      required: [id, workspaceId, actionType, status, title, payload, expiresAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workspaceId: { type: string, format: uuid }
+        actionType: { type: string, enum: [CREATE_TASK, ADD_TASK_COMMENT, COMPLETE_TASK, CREATE_DOCUMENT, SEND_NOTIFICATION] }
+        status: { type: string, enum: [PROPOSED, APPROVED, REJECTED, EXECUTING, EXECUTED, FAILED, CANCELLED, EXPIRED] }
+        title: { type: string }
+        summary: { type: [string, 'null'] }
+        payload: { type: object }
+        sourceReferences: {}
+        expiresAt: { type: string, format: date-time }
+        approvedAt: { type: [string, 'null'], format: date-time }
+        rejectedAt: { type: [string, 'null'], format: date-time }
+        executedAt: { type: [string, 'null'], format: date-time }
+        executionResult: {}
+        failureReason: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AiActionProposalResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: '#/components/schemas/AiActionProposal' }
+    AiActionProposalListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [items, nextCursor]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/AiActionProposal' }
+            nextCursor: { type: [string, 'null'] }

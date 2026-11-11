@@ -559,7 +559,7 @@ request and response fields. Paths below are relative to `/api/v1`.
 | Integrations | `/integrations` | List/manage personal and workspace integrations, OAuth connections, enable/disable, token refresh, provider revocation on disconnect, and durable sync jobs. Live connections require provider credentials and callback configuration. |
 | Outbound webhooks | `/workspaces/{workspaceId}/webhooks` | Manage workspace webhook subscriptions and inspect/retry durable HMAC-signed deliveries. |
 | Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; read execution history; retry a failed run. Event triggers (task created, task completed, member joined) and daily/weekly schedules are executed by the background automation worker with conditions, bounded retries, idempotency, and workspace-scoped permissions. |
-| AI | `/ai/analyze`, `/ai/query`, `/ai/actions/approve` | Placeholder endpoints; they do not invoke the AI service or execute approved mutations. |
+| AI | `/ai` | Conversations and streamed answers, workspace-aware authorised context, usage limits, writing analysis/rewrite, and approval-gated AI actions. Requires `AI_ENABLED` plus service URL/token; degrades with a clear 503 when unconfigured. |
 | Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. |
 
 Task comment creation accepts `{ body, parentId?, mentionedUserIds? }`.
@@ -675,6 +675,70 @@ other than workspace owners/project managers may delete a channel. Parent team,
 department, or project archival/deletion revokes ordinary channel access;
 workspace managers retain archive/delete actions for those parent-inaccessible
 channels.
+
+## AI service (Phases 21–23)
+
+All AI routes require an authenticated active account. Paths are relative to
+`/api/v1`. When the optional Python/FastAPI service is disabled or
+misconfigured, AI endpoints return HTTP 503 `AI_NOT_CONFIGURED`; they never
+break non-AI features. Express performs every permission check and prepares
+the only context the AI service receives. The AI service never writes to the
+Nexus database and never executes a mutation itself.
+
+### Conversations
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/ai/health` | Report configuration and AI service health (`configured`, `status`, `latencyMs`, optional `version`). |
+| POST | `/ai/chat` | Ask a question. Body: `{workspaceId?,conversationId?,query,projectId?,taskId?,documentId?,meetingId?,contextType?,contextId?}`. Returns `{conversationId,answer,references,model,usage,sources}`. |
+| POST | `/ai/chat/stream` | Same body; responds with server-sent events `conversation`, `token`, `references`, `done`, or `error`. |
+| GET | `/ai/conversations?workspaceId=&cursor=&limit=` | Stable cursor page of the caller's conversations. |
+| GET | `/ai/conversations/{conversationId}` | Read one owned conversation and its messages. |
+| DELETE | `/ai/conversations/{conversationId}` | Delete an owned conversation and its messages. |
+| GET | `/ai/usage?workspaceId=` | Daily request and monthly token usage against configured limits. |
+
+Context is limited to workspaces, projects, tasks, documents and meetings the
+caller may currently access. Private projects, hidden documents and meetings
+the caller is not part of are excluded before any text reaches the AI service.
+Returned citations are filtered against the authorised source set. Usage rows
+are written for successful and failed calls.
+
+### Nexus Write
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/ai/writing/analyze` | Analyse text. Body: `{workspaceId?,text,features[],language?,toneTarget?}`; returns `{sessionId,suggestions,detectedTone,summary,usage,expiresAt}`. |
+| POST | `/ai/writing/rewrite` | Rewrite text from `{workspaceId?,text,instruction,tone?}`; returns the rewritten `text` and explanation. |
+| POST | `/ai/writing/summarize` | Summarise text using the rewrite contract with a summarisation instruction. |
+| POST | `/ai/writing/translate` | Translate text using the rewrite contract with a translation instruction. |
+| POST | `/ai/writing/sessions/{sessionId}/accept` | Apply selected `{suggestionIds[]}`. Returns the resulting `text`; the caller's editor decides whether to save it. |
+| POST | `/ai/writing/sessions/{sessionId}/dismiss` | Discard a writing session and its retained original text. |
+
+Analysis never modifies a document, message or comment. Original text is
+retained only until the session is accepted, dismissed or expires (default 60
+minutes) and is cleared afterwards.
+
+### Approval-gated actions
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/ai/actions/proposals` | Create a proposal. Body: `{workspaceId,actionType,payload,conversationId?,title?,summary?,idempotencyKey?,sourceReferences?}`. |
+| GET | `/ai/actions/proposals?workspaceId=&status=&cursor=&limit=` | List the caller's proposals in a workspace. |
+| GET | `/ai/actions/proposals/{proposalId}` | Read one proposal. |
+| POST | `/ai/actions/proposals/{proposalId}/approve` | Approve a proposed action (`{note?}`). |
+| POST | `/ai/actions/proposals/{proposalId}/reject` | Reject a proposed or approved action (`{note?}`). |
+| POST | `/ai/actions/proposals/{proposalId}/cancel` | Cancel a proposed or approved action. |
+| POST | `/ai/actions/proposals/{proposalId}/execute` | Execute an approved action after re-checking permissions. |
+
+Supported `actionType` values are `CREATE_TASK`, `ADD_TASK_COMMENT`,
+`COMPLETE_TASK`, `CREATE_DOCUMENT` and `SEND_NOTIFICATION`. A proposal is
+inert until approved. Approval and execution both re-evaluate the caller's
+current workspace/project permissions. Execution uses a conditional
+`APPROVED → EXECUTING` transition so concurrent requests cannot apply the same
+action twice. Proposals expire after the configured approval TTL (default 15
+minutes). Propose, approve, reject, execute and failure events are audited.
+Providing the same `idempotencyKey` for the same user and workspace returns the
+existing proposal instead of creating a duplicate.
 
 ## Updating this API reference
 

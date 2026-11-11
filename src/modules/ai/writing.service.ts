@@ -90,29 +90,35 @@ function readSuggestions(value: Prisma.JsonValue): AiWritingSuggestion[] {
 }
 
 export function applySuggestions(original: string, suggestions: AiWritingSuggestion[]): string {
-  const accepted = suggestions
+  const candidates = suggestions
     .filter((suggestion) => Number.isInteger(suggestion.offset) && suggestion.offset >= 0)
     .filter((suggestion) => suggestion.offset <= original.length)
-    .sort((a, b) => b.offset - a.offset || b.length - a.length);
+    .filter((suggestion) => Number.isInteger(suggestion.length) && suggestion.length >= 0)
+    .sort((a, b) => a.offset - b.offset || b.length - a.length);
+
+  // Resolve overlapping suggestions before touching the text. Nested fixes are
+  // common (an outer phrase rewrite that contains an inner grammar fix), so we
+  // prefer the earliest, longest span and discard anything that overlaps it.
+  // Applying an inner fix first would leave a half-rewritten phrase.
+  const selected: AiWritingSuggestion[] = [];
+  let coveredEnd = 0;
+  for (const suggestion of candidates) {
+    if (suggestion.offset < coveredEnd) continue;
+    selected.push(suggestion);
+    coveredEnd = suggestion.offset + suggestion.length;
+  }
 
   let result = original;
-  let lastStart = Number.POSITIVE_INFINITY;
-
-  for (const suggestion of accepted) {
-    const declaredLength = Math.max(0, suggestion.length);
-    const declaredEnd = suggestion.offset + declaredLength;
-    // Skip overlapping suggestions and suggestions whose range points outside
-    // the current text. Overlap happens with nested grammar fixes; applying
-    // the later one would corrupt the earlier result.
-    if (declaredEnd > lastStart) continue;
-
+  // Apply from the end so an earlier offset stays valid after a later edit
+  // changes the length of the string.
+  for (const suggestion of [...selected].sort((a, b) => b.offset - a.offset)) {
+    const declaredEnd = suggestion.offset + suggestion.length;
     const actual = original.slice(suggestion.offset, declaredEnd);
     const matches = !suggestion.original || actual === suggestion.original;
 
     if (matches) {
       result =
         result.slice(0, suggestion.offset) + suggestion.replacement + result.slice(declaredEnd);
-      lastStart = suggestion.offset;
       continue;
     }
 
@@ -124,7 +130,6 @@ export function applySuggestions(original: string, suggestions: AiWritingSuggest
         result.slice(0, index) +
         suggestion.replacement +
         result.slice(index + suggestion.original.length);
-      lastStart = index;
     }
   }
 
