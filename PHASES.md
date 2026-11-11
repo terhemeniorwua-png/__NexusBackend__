@@ -71,7 +71,7 @@ completion labels and the existence of a module are not sufficient proof.
 | 21–23 | NOT IMPLEMENTED | AI routes are placeholders; action approval reports `executed: false`; no Express-to-Python workflow was found. |
 | 24 | PARTIALLY COMPLETE | Email/deletion/billing workers exist; generalized queue/job requirements need more audit. |
 | 25 | COMPLETED | Email preference channel implemented (`NotificationPreference.emailEnabled`, shared `isEmailNotificationEnabled` helper); preference gating on task-assignment, mention and meeting notifiers (`preference_disabled` status); join-request approve/reject emails; transactional billing webhook emails with idempotency keys; unit tests (13/13) and DB integration tests (10/10) pass. |
-| 26 | PARTIALLY COMPLETE | Audit read route and writes exist; retention, monitoring and complete event coverage are unverified. |
+| 26 | COMPLETED | Security event classification on `AuditLog` (`securityEvent` flag + `isSecurityEvent` helper + `SecurityAuditAction`), audit log query filter (`?securityEvent=true/false`), retention pruning worker (`AUDIT_RETENTION_DAYS`/`AUDIT_PRUNE_BATCH_SIZE`, bounded batches), unit tests (5/5) and DB integration tests (5/5) pass. |
 | 27 | NOT IMPLEMENTED | No reporting module or route was found. |
 | 28 | PARTIALLY COMPLETE | Corrected API.md's false assertion that mounted routes were absent; OpenAPI still omits registered route families. |
 | 29 | NOT DEFINED | No requirements section exists; no scope inferred. |

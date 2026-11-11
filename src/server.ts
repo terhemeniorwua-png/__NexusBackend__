@@ -18,6 +18,7 @@ import { createWebhookWorker } from './modules/webhooks/webhook.worker';
 import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
 import { createQueueStatusProbe } from './services/workers/queue-status';
 import { createWorkerHealthRegistry } from './services/workers/worker-health';
+import { createAuditPruneWorker } from './services/workers/audit-prune.worker';
 import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
 export interface RunningServer {
@@ -81,6 +82,7 @@ export async function startServer(): Promise<RunningServer> {
     automation: workerHealth.register('automation'),
     integrationSync: workerHealth.register('integration-sync'),
     webhooks: workerHealth.register('webhooks'),
+    auditPrune: workerHealth.register('audit-prune'),
   };
 
   const app = createApp({
@@ -161,6 +163,14 @@ export async function startServer(): Promise<RunningServer> {
   });
   webhookWorker.start();
 
+  const auditPruneWorker = createAuditPruneWorker({
+    prisma: getPrismaClient(),
+    config,
+    logger,
+    health: workerRecorders.auditPrune,
+  });
+  auditPruneWorker.start();
+
   try {
     await listen(server, config.port);
   } catch (error) {
@@ -219,6 +229,7 @@ export async function startServer(): Promise<RunningServer> {
       automationWorker.stop(),
       integrationSyncWorker.stop(),
       webhookWorker.stop(),
+      auditPruneWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);
