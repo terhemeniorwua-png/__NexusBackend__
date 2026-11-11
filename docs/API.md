@@ -313,13 +313,16 @@ Institution groups are independent from departments. They do not grant access
 to departments, teams, projects, or channels by themselves.
 
 Notification preferences are scoped to the authenticated member and workspace.
-All in-app notification types are enabled by default; a member can update
-selected types. These preferences do not affect email or message unread state.
+All notification types are enabled by default for both the in-app and email
+channels; a member can update selected types per channel. These preferences do
+not affect message unread state. Transactional emails (join-request decisions,
+billing receipts, failed-payment warnings, subscription changes) are always
+sent and are not gated by preference channels.
 
 | Method | Path                                                 | Access           | Purpose                                                                |
 | ------ | ---------------------------------------------------- | ---------------- | ---------------------------------------------------------------------- |
-| GET    | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Read the caller's in-app notification preferences, including defaults. |
-| PATCH  | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Update selected in-app notification type preferences.                  |
+| GET    | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Read the caller's notification preferences, including defaults.        |
+| PATCH  | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Update selected notification type preferences for the in-app and email |
 
 ## Invitations
 

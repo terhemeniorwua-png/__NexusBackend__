@@ -11,6 +11,7 @@ import {
 } from './email';
 import { redactEmailAddresses, summarizeErrorForLog } from './email/log-privacy';
 import { isAddressSuppressed } from './email/suppression.service';
+import { isEmailNotificationEnabled } from './notification-preferences';
 
 /**
  * Task assignment email notifier.
@@ -27,7 +28,7 @@ import { isAddressSuppressed } from './email/suppression.service';
  */
 
 export type TaskAssignmentNoticeStatus =
-  'queued' | 'suppressed' | 'not_found' | 'ineligible' | 'failed';
+  'queued' | 'suppressed' | 'not_found' | 'ineligible' | 'preference_disabled' | 'failed';
 
 export interface TaskAssignmentNoticeResult {
   status: TaskAssignmentNoticeStatus;
@@ -42,6 +43,7 @@ export interface TaskAssignmentNotifierDependencies {
   logger?: Logger;
   send?: TaskAssignmentEmailSender;
   isSuppressed?: (client: PrismaClient, address: string) => Promise<boolean>;
+  isEmailEnabled?: typeof isEmailNotificationEnabled;
 }
 
 export interface NotifyTaskAssignmentInput {
@@ -96,6 +98,7 @@ export function createTaskAssignmentNotifier(
   const log = deps.logger ?? defaultLogger;
   const send = deps.send ?? sendEmail;
   const suppressed = deps.isSuppressed ?? isAddressSuppressed;
+  const emailEnabled = deps.isEmailEnabled ?? isEmailNotificationEnabled;
   const brand = buildEmailBrand(config);
 
   return {
@@ -201,6 +204,16 @@ export function createTaskAssignmentNotifier(
 
         if (await suppressed(client, user.email)) {
           return { status: 'suppressed', accepted: false };
+        }
+
+        if (
+          !(await emailEnabled(client, {
+            workspaceId: workspace.id,
+            userId: user.id,
+            type: 'TASK_ASSIGNED',
+          }))
+        ) {
+          return { status: 'preference_disabled', accepted: false };
         }
 
         const assignedByName = assignment.assigner?.name ?? task.creator.name;

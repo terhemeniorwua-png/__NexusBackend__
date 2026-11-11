@@ -15,9 +15,10 @@ import {
 } from './email';
 import { redactEmailAddresses, summarizeErrorForLog } from './email/log-privacy';
 import { isAddressSuppressed } from './email/suppression.service';
+import { isEmailNotificationEnabled } from './notification-preferences';
 
 export type CollaborationEmailStatus =
-  'queued' | 'suppressed' | 'not_found' | 'ineligible' | 'failed';
+  'queued' | 'suppressed' | 'not_found' | 'ineligible' | 'preference_disabled' | 'failed';
 
 export interface CollaborationEmailResult {
   status: CollaborationEmailStatus;
@@ -32,6 +33,7 @@ export interface CollaborationEmailNotifierDependencies {
   logger?: Logger;
   send?: CollaborationEmailSender;
   isSuppressed?: (client: PrismaClient, address: string) => Promise<boolean>;
+  isEmailEnabled?: typeof isEmailNotificationEnabled;
 }
 
 export interface NotifyCommentMentionInput {
@@ -52,6 +54,8 @@ export interface NotifyMeetingInvitationInput {
   durationMinutes?: number;
   location?: string;
   meetingId: string;
+  /** Workspace the meeting belongs to, when the workflow has one. */
+  workspaceId?: string;
   /** Workspace the meeting belongs to, when the workflow has one. */
   workspaceName?: string;
   /** Project the meeting belongs to, when the workflow has one. */
@@ -161,6 +165,7 @@ export function createCollaborationEmailNotifier(
   const log = deps.logger ?? defaultLogger;
   const send = deps.send ?? sendEmail;
   const suppressed = deps.isSuppressed ?? isAddressSuppressed;
+  const emailEnabled = deps.isEmailEnabled ?? isEmailNotificationEnabled;
   const brand = buildEmailBrand(config);
 
   async function deliver(
@@ -260,6 +265,16 @@ export function createCollaborationEmailNotifier(
       });
       if (!membership) return { status: 'ineligible', accepted: false };
 
+      if (
+        !(await emailEnabled(client, {
+          workspaceId: comment.task.project.workspace.id,
+          userId: recipient.id,
+          type: 'MENTION',
+        }))
+      ) {
+        return { status: 'preference_disabled', accepted: false };
+      }
+
       const message = buildMentionEmail({
         to: recipient.email,
         name: recipient.name,
@@ -305,6 +320,17 @@ export function createCollaborationEmailNotifier(
             (!Number.isFinite(input.durationMinutes) || input.durationMinutes <= 0))
         ) {
           return { status: 'ineligible', accepted: false };
+        }
+
+        if (
+          input.workspaceId &&
+          !(await emailEnabled(client, {
+            workspaceId: input.workspaceId,
+            userId: input.inviteeId,
+            type: 'MEETING_INVITE',
+          }))
+        ) {
+          return { status: 'preference_disabled', accepted: false };
         }
 
         const message = buildMeetingInvitationEmail({

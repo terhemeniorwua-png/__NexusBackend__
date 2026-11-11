@@ -22,7 +22,13 @@ export type EmailTemplate =
   | 'project_invitation'
   | 'task_assignment'
   | 'mention'
-  | 'meeting_invitation';
+  | 'meeting_invitation'
+  | 'join_request_approved'
+  | 'join_request_rejected'
+  | 'billing_receipt'
+  | 'billing_payment_failed'
+  | 'billing_subscription_cancelled'
+  | 'billing_subscription_not_renewing';
 
 export interface EmailMessage {
   to: string;
