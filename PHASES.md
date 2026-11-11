@@ -10,30 +10,30 @@ Evidence: `main` was verified at `7b0b88d` (tsc, lint, build, 302/304 tests, plu
 database-backed suites passing against a clean PostgreSQL). The Render deploy of `main` is green.
 Re-run the DB suites after PRs #42 and #43 before relying on this.
 
-| Phase | Status now | What closes it |
-|---|---|---|
-| 1 to 3.5 | Complete | None. |
-| 3.6 Google OAuth | In progress | Unit and disposable DB suites pass. Needs confirmation of Render `redirect_URL` and Google Cloud URI, a Vercel browser sign-in/proxy cookie test, and deployed CORS/cookie/trust-proxy verification. |
-| 3.7 One-time codes | Ready to close | Migration applied locally and on Aiven; DB suites passed. Confirm a real code email arrives via Brevo. |
-| 4 | In progress | SPF/DKIM/DMARC and Brevo webhook still external. |
-| 4.3 | Complete | Task assignment and task-comment mention flows call their post-commit notifiers; disposable PostgreSQL/outbox tests pass. |
-| 4.4 | Complete | Mention, meeting, and team invitation callers are covered by the Phase 4 disposable-database suites. |
-| 4.5 to 4.6 | In progress | Project invitation workflow and final email audit remain. |
-| 5 | Ready to close | The three Phase 5 DB suites were the missing evidence and have now passed. |
-| 6, 7 | Complete | DB suites pass. |
-| 8 | In progress | Search and Document visibility gaps were fixed on `feature/backend-phase-audit-remediation`; disposable DB regressions pass. Continue route audit for files, calendar, meetings and forms. |
-| 9 | Implemented | Message-to-task and task attachments were deferred; Phases 10 and 12 now exist, so they are unblocked. |
-| 10 | Implemented | Deferred: @mention parsing, attachments, search, saved messages, message-to-task. |
-| 11 | REST done | The record lists 7 REST endpoints but no real-time notification push. Confirm Socket.IO notification events exist (frontend is waiting on this). |
-| 12 | Implemented, no tests | Deferred: folders, versioning, share links. |
-| 13, 14 | Implemented, no tests | Phase 14 deferred: Google/Microsoft sync, recurrence, reminders, aggregation. |
-| 15, 16, 18, 19, 20 | In progress | Modules exist for these areas; verify full workflows and add phase-specific evidence. Phase 19 now has provider routes and is documented below; Gmail-specific and provider-revocation verification remain outstanding. |
-| 17 Billing | In progress | Release blockers and external dependencies as recorded in Phase 17. |
-| 21 to 26 | Code on `main`, unconfirmed | Verify AI, automation and audit modules against their completion criteria. |
-| 27 Reporting | Not found | No module seen. |
-| 28 API docs | Partial | `docs/API.md` and `docs/openapi.yaml` exist. |
-| 29 | Undefined | No section exists. |
-| 30 to 32 | Not started | |
+| Phase              | Status now                  | What closes it                                                                                                                                                                                                          |
+| ------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 to 3.5           | Complete                    | None.                                                                                                                                                                                                                   |
+| 3.6 Google OAuth   | In progress                 | Unit and disposable DB suites pass. Needs confirmation of Render `redirect_URL` and Google Cloud URI, a Vercel browser sign-in/proxy cookie test, and deployed CORS/cookie/trust-proxy verification.                    |
+| 3.7 One-time codes | Ready to close              | Migration applied locally and on Aiven; DB suites passed. Confirm a real code email arrives via Brevo.                                                                                                                  |
+| 4                  | In progress                 | SPF/DKIM/DMARC and Brevo webhook still external.                                                                                                                                                                        |
+| 4.3                | Complete                    | Task assignment and task-comment mention flows call their post-commit notifiers; disposable PostgreSQL/outbox tests pass.                                                                                               |
+| 4.4                | Complete                    | Mention, meeting, and team invitation callers are covered by the Phase 4 disposable-database suites.                                                                                                                    |
+| 4.5 to 4.6         | In progress                 | Project invitation workflow and final email audit remain.                                                                                                                                                               |
+| 5                  | Ready to close              | The three Phase 5 DB suites were the missing evidence and have now passed.                                                                                                                                              |
+| 6, 7               | Complete                    | DB suites pass.                                                                                                                                                                                                         |
+| 8                  | In progress                 | Search and Document visibility gaps were fixed on `feature/backend-phase-audit-remediation`; disposable DB regressions pass. Continue route audit for files, calendar, meetings and forms.                              |
+| 9                  | Implemented                 | Message-to-task and task attachments were deferred; Phases 10 and 12 now exist, so they are unblocked.                                                                                                                  |
+| 10                 | Implemented                 | Deferred: @mention parsing, attachments, search, saved messages, message-to-task.                                                                                                                                       |
+| 11                 | REST done                   | The record lists 7 REST endpoints but no real-time notification push. Confirm Socket.IO notification events exist (frontend is waiting on this).                                                                        |
+| 12                 | Implemented, no tests       | Deferred: folders, versioning, share links.                                                                                                                                                                             |
+| 13, 14             | Implemented, no tests       | Phase 14 deferred: Google/Microsoft sync, recurrence, reminders, aggregation.                                                                                                                                           |
+| 15, 16, 18, 19, 20 | In progress                 | Modules exist for these areas; verify full workflows and add phase-specific evidence. Phase 19 now has provider routes and is documented below; Gmail-specific and provider-revocation verification remain outstanding. |
+| 17 Billing         | In progress                 | Release blockers and external dependencies as recorded in Phase 17.                                                                                                                                                     |
+| 21 to 26           | Code on `main`, unconfirmed | Verify AI, automation and audit modules against their completion criteria.                                                                                                                                              |
+| 27 Reporting       | Not found                   | No module seen.                                                                                                                                                                                                         |
+| 28 API docs        | Partial                     | `docs/API.md` and `docs/openapi.yaml` exist.                                                                                                                                                                            |
+| 29                 | Undefined                   | No section exists.                                                                                                                                                                                                      |
+| 30 to 32           | Not started                 |                                                                                                                                                                                                                         |
 
 _Update the phase-specific status beside its acceptance criteria. Do not use the retired 24-phase aggregate counts._
 
@@ -43,39 +43,39 @@ Audit evidence is based on the current `origin/main` source, tests, route
 registrations and the disposable-database verification below. Historical
 completion labels and the existence of a module are not sufficient proof.
 
-| Phase | Audit classification | Evidence / remaining work |
-|---|---|---|
-| 1, 1.2, 1.3 | VERIFIED COMPLETE (historical evidence) | Foundation, configuration and Redis rate limiting are implemented; required current checks found no regression. |
-| 2, 2.1, 2.2 | VERIFIED COMPLETE | Prisma schema/migration recovery docs and migration tests exist; `npx prisma validate` passes. No schema change was required. |
-| 3, 3.1–3.5 | VERIFIED COMPLETE | Auth/account lifecycle suites exist and passed; corrected an OAuth response fixture type mismatch. |
-| 3.6 | PARTIALLY COMPLETE / externally blocked | Source, unit and disposable DB coverage pass. Render callback registration and the Vercel-to-Render browser cookie flow require production configuration and human verification. Do not close. |
-| 3.7 | PARTIALLY COMPLETE | DB implementation is recorded as passing; real Brevo delivery remains unverified. |
-| 4, 4.3–4.6 | PARTIALLY COMPLETE | Email infrastructure exists; production DNS/webhook and notifier delivery/callers remain outstanding per phase evidence. |
-| Legacy Phase 4 — Workspace creation/management | PARTIALLY COMPLETE | This duplicate legacy section has distinct acceptance criteria; preserve its separate status and reconcile tracker numbering. |
-| 5 | VERIFIED COMPLETE | Opt-in Phase 5 database suites passed in the full disposable-DB run. |
-| 6 | VERIFIED COMPLETE | Authorization implementation and database suites passed. |
-| 7 | PARTIALLY COMPLETE | Teams/departments are implemented and tested; tracker retains notification preference, department settings and lifecycle gaps. |
-| 8 | PARTIALLY COMPLETE | Search and document visibility regressions pass; files/calendar/meetings/forms and remaining project policy cases still need route-by-route audit. |
-| 9 | PARTIALLY COMPLETE | Core task APIs/database tests pass; attachments and message-to-task conversion remain deferred. |
-| 10 | PARTIALLY COMPLETE | Messaging/channel APIs and DB tests pass; mentions, attachments, saved messages and other tracker deferrals remain. |
-| 11 | PARTIALLY COMPLETE | REST notifications exist; reliable Socket.IO notification push remains unverified. |
-| 12 | PARTIALLY COMPLETE | File APIs exist; folders/versioning/share links are deferred and storage-backed uploads were not verified here. |
-| 13 | PARTIALLY COMPLETE | Direct document get/list visibility was fixed and DB regression passes; other revision/comment criteria need a wider audit. |
-| 14 | PARTIALLY COMPLETE | Calendar routes and DB tests pass; provider sync, recurrence, reminders and aggregation remain deferred. |
-| 15 | PARTIALLY COMPLETE | Meeting CRUD/participants exist; no calling-provider integration was found. |
-| 16 | PARTIALLY COMPLETE | Form APIs exist; publication/public submission and full lifecycle criteria need review. Current response routes require authentication. |
-| 17 | PARTIALLY COMPLETE | Billing DB tests pass; release/provider and operational criteria recorded in Phase 17 remain. |
-| 18 | PARTIALLY COMPLETE | Search DB tests pass and private project documents/private channels are filtered; full indexing/content criteria remain. |
-| 19 | PARTIALLY COMPLETE | Provider routes and mocked/DB tests exist; refresh, revocation, isolation and Gmail provider verification remain. Gmail code was not changed. |
-| 20 | PARTIALLY COMPLETE | Automation CRUD exists; no trigger execution/worker path was found. |
-| 21–23 | NOT IMPLEMENTED | AI routes are placeholders; action approval reports `executed: false`; no Express-to-Python workflow was found. |
-| 24 | PARTIALLY COMPLETE | Email/deletion/billing workers exist; generalized queue/job requirements need more audit. |
-| 25 | COMPLETED | Email preference channel implemented (`NotificationPreference.emailEnabled`, shared `isEmailNotificationEnabled` helper); preference gating on task-assignment, mention and meeting notifiers (`preference_disabled` status); join-request approve/reject emails; transactional billing webhook emails with idempotency keys; unit tests (13/13) and DB integration tests (10/10) pass. |
-| 26 | COMPLETED | Security event classification on `AuditLog` (`securityEvent` flag + `isSecurityEvent` helper + `SecurityAuditAction`), audit log query filter (`?securityEvent=true/false`), retention pruning worker (`AUDIT_RETENTION_DAYS`/`AUDIT_PRUNE_BATCH_SIZE`, bounded batches), unit tests (5/5) and DB integration tests (5/5) pass. |
-| 27 | NOT IMPLEMENTED | No reporting module or route was found. |
-| 28 | PARTIALLY COMPLETE | Corrected API.md's false assertion that mounted routes were absent; OpenAPI still omits registered route families. |
-| 29 | NOT DEFINED | No requirements section exists; no scope inferred. |
-| 30–32 | NOT STARTED | No later-phase work was started. |
+| Phase                                          | Audit classification                    | Evidence / remaining work                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1, 1.2, 1.3                                    | VERIFIED COMPLETE (historical evidence) | Foundation, configuration and Redis rate limiting are implemented; required current checks found no regression.                                                                                                                                                                                                                                                                         |
+| 2, 2.1, 2.2                                    | VERIFIED COMPLETE                       | Prisma schema/migration recovery docs and migration tests exist; `npx prisma validate` passes. No schema change was required.                                                                                                                                                                                                                                                           |
+| 3, 3.1–3.5                                     | VERIFIED COMPLETE                       | Auth/account lifecycle suites exist and passed; corrected an OAuth response fixture type mismatch.                                                                                                                                                                                                                                                                                      |
+| 3.6                                            | PARTIALLY COMPLETE / externally blocked | Source, unit and disposable DB coverage pass. Render callback registration and the Vercel-to-Render browser cookie flow require production configuration and human verification. Do not close.                                                                                                                                                                                          |
+| 3.7                                            | PARTIALLY COMPLETE                      | DB implementation is recorded as passing; real Brevo delivery remains unverified.                                                                                                                                                                                                                                                                                                       |
+| 4, 4.3–4.6                                     | PARTIALLY COMPLETE                      | Email infrastructure exists; production DNS/webhook and notifier delivery/callers remain outstanding per phase evidence.                                                                                                                                                                                                                                                                |
+| Legacy Phase 4 — Workspace creation/management | PARTIALLY COMPLETE                      | This duplicate legacy section has distinct acceptance criteria; preserve its separate status and reconcile tracker numbering.                                                                                                                                                                                                                                                           |
+| 5                                              | VERIFIED COMPLETE                       | Opt-in Phase 5 database suites passed in the full disposable-DB run.                                                                                                                                                                                                                                                                                                                    |
+| 6                                              | VERIFIED COMPLETE                       | Authorization implementation and database suites passed.                                                                                                                                                                                                                                                                                                                                |
+| 7                                              | PARTIALLY COMPLETE                      | Teams/departments are implemented and tested; tracker retains notification preference, department settings and lifecycle gaps.                                                                                                                                                                                                                                                          |
+| 8                                              | PARTIALLY COMPLETE                      | Search and document visibility regressions pass; files/calendar/meetings/forms and remaining project policy cases still need route-by-route audit.                                                                                                                                                                                                                                      |
+| 9                                              | PARTIALLY COMPLETE                      | Core task APIs/database tests pass; attachments and message-to-task conversion remain deferred.                                                                                                                                                                                                                                                                                         |
+| 10                                             | PARTIALLY COMPLETE                      | Messaging/channel APIs and DB tests pass; mentions, attachments, saved messages and other tracker deferrals remain.                                                                                                                                                                                                                                                                     |
+| 11                                             | PARTIALLY COMPLETE                      | REST notifications exist; reliable Socket.IO notification push remains unverified.                                                                                                                                                                                                                                                                                                      |
+| 12                                             | PARTIALLY COMPLETE                      | File APIs exist; folders/versioning/share links are deferred and storage-backed uploads were not verified here.                                                                                                                                                                                                                                                                         |
+| 13                                             | PARTIALLY COMPLETE                      | Direct document get/list visibility was fixed and DB regression passes; other revision/comment criteria need a wider audit.                                                                                                                                                                                                                                                             |
+| 14                                             | PARTIALLY COMPLETE                      | Calendar routes and DB tests pass; provider sync, recurrence, reminders and aggregation remain deferred.                                                                                                                                                                                                                                                                                |
+| 15                                             | PARTIALLY COMPLETE                      | Meeting CRUD/participants exist; no calling-provider integration was found.                                                                                                                                                                                                                                                                                                             |
+| 16                                             | PARTIALLY COMPLETE                      | Form APIs exist; publication/public submission and full lifecycle criteria need review. Current response routes require authentication.                                                                                                                                                                                                                                                 |
+| 17                                             | PARTIALLY COMPLETE                      | Billing DB tests pass; release/provider and operational criteria recorded in Phase 17 remain.                                                                                                                                                                                                                                                                                           |
+| 18                                             | PARTIALLY COMPLETE                      | Search DB tests pass and private project documents/private channels are filtered; full indexing/content criteria remain.                                                                                                                                                                                                                                                                |
+| 19                                             | PARTIALLY COMPLETE                      | Provider routes and mocked/DB tests exist; refresh, revocation, isolation and Gmail provider verification remain. Gmail code was not changed.                                                                                                                                                                                                                                           |
+| 20                                             | PARTIALLY COMPLETE                      | Automation CRUD exists; no trigger execution/worker path was found.                                                                                                                                                                                                                                                                                                                     |
+| 21–23                                          | NOT IMPLEMENTED                         | AI routes are placeholders; action approval reports `executed: false`; no Express-to-Python workflow was found.                                                                                                                                                                                                                                                                         |
+| 24                                             | PARTIALLY COMPLETE                      | Email/deletion/billing workers exist; generalized queue/job requirements need more audit.                                                                                                                                                                                                                                                                                               |
+| 25                                             | COMPLETED                               | Email preference channel implemented (`NotificationPreference.emailEnabled`, shared `isEmailNotificationEnabled` helper); preference gating on task-assignment, mention and meeting notifiers (`preference_disabled` status); join-request approve/reject emails; transactional billing webhook emails with idempotency keys; unit tests (13/13) and DB integration tests (10/10) pass. |
+| 26                                             | COMPLETED                               | Security event classification on `AuditLog` (`securityEvent` flag + `isSecurityEvent` helper + `SecurityAuditAction`), audit log query filter (`?securityEvent=true/false`), retention pruning worker (`AUDIT_RETENTION_DAYS`/`AUDIT_PRUNE_BATCH_SIZE`, bounded batches), unit tests (5/5) and DB integration tests (5/5) pass.                                                         |
+| 27                                             | COMPLETED                               | New `src/modules/analytics` module with permission-filtered aggregated metrics (`GET /analytics`), date-range support with `ANALYTICS_MAX_RANGE_DAYS` cap, Redis caching via `ANALYTICS_CACHE_TTL_SECONDS`, workspace-scoped and cross-workspace aggregation, subscription info, unit tests (5/5) and DB integration tests (5/5) pass.                                                  |
+| 28                                             | PARTIALLY COMPLETE                      | Corrected API.md's false assertion that mounted routes were absent; OpenAPI still omits registered route families.                                                                                                                                                                                                                                                                      |
+| 29                                             | NOT DEFINED                             | No requirements section exists; no scope inferred.                                                                                                                                                                                                                                                                                                                                      |
+| 30–32                                          | NOT STARTED                             | No later-phase work was started.                                                                                                                                                                                                                                                                                                                                                        |
 
 The final serial database-enabled test run against disposable local PostgreSQL
 and Redis passed 665/665 tests across 58 suites, with no skips. The combined
@@ -96,15 +96,15 @@ This tracker must be treated as the authoritative implementation sequence for ba
 
 ## 3. Verified Progress Snapshot — 2026-11-03
 
-| Phase | Status | Evidence / remaining work |
-|---|---|---|
-| 1 — Foundation and Infrastructure | 1–4 | Running backend, database schema, authentication, email delivery |
-| 2 — Organization and Access Control | 5–7 | Workspaces, invitations, roles, permissions, teams |
-| 3 — Project Management | 8–10 | Projects, tasks, reviews, comments, activity history |
-| 4 — Files and Collaboration | 11–14 | Uploads, real-time events, messaging, notifications |
-| 5 — Productivity | 15–16 | Search, calendars, reminders |
-| 6 — Advanced Capabilities | 17–20 | Meetings, AI, automation, reporting, integrations |
-| 7 — Production Readiness | 21–24 | Security hardening, tests, deployment, operations |
+| Phase                               | Status | Evidence / remaining work                                        |
+| ----------------------------------- | ------ | ---------------------------------------------------------------- |
+| 1 — Foundation and Infrastructure   | 1–4    | Running backend, database schema, authentication, email delivery |
+| 2 — Organization and Access Control | 5–7    | Workspaces, invitations, roles, permissions, teams               |
+| 3 — Project Management              | 8–10   | Projects, tasks, reviews, comments, activity history             |
+| 4 — Files and Collaboration         | 11–14  | Uploads, real-time events, messaging, notifications              |
+| 5 — Productivity                    | 15–16  | Search, calendars, reminders                                     |
+| 6 — Advanced Capabilities           | 17–20  | Meetings, AI, automation, reporting, integrations                |
+| 7 — Production Readiness            | 21–24  | Security hardening, tests, deployment, operations                |
 
 ---
 
@@ -119,6 +119,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Create a stable, tested backend application shell that safely supports every future Nexus feature.
 
 **Deliverables:**
+
 - Express + TypeScript application with `app.ts` / `server.ts` separation
 - Validated environment configuration (`src/config/env.ts`)
 - Structured JSON logging, request correlation IDs
@@ -137,6 +138,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** None — this is the first phase.
 
 **Verification criteria:**
+
 - Server builds and starts without errors
 - Health endpoints return correct status codes
 - Environment validation rejects missing required variables
@@ -152,6 +154,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Ensure every Express rate limiter uses shared Redis counters across backend instances and fails closed when distributed enforcement is unavailable.
 
 **Deliverables:**
+
 - The global limiter is created through the shared `createRateLimiter` middleware and uses the Redis-backed store.
 - Route-specific authentication, invitation and workspace limiters use the same store and key convention.
 - The in-process fallback was removed. Redis unavailability produces a controlled `503 RATE_LIMIT_UNAVAILABLE` response.
@@ -163,6 +166,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phase 1 and Phase 1.1 complete.
 
 **Verification criteria:**
+
 - Global and route-level limiter tests pass.
 - Counters are shared by two limiter instances using the same Redis key space.
 - Redis failure returns the documented fail-closed response.
@@ -177,6 +181,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Remove the legacy CommonJS middleware and validator files that were superseded by the TypeScript application shell and module-level Zod schemas.
 
 **Deliverables:**
+
 - Removed `src/middleware/authorization.js`, `src/middleware/logger.js` and `src/middleware/validator.js`.
 - Removed `src/validators/avatar.js`, `src/validators/login.js`, `src/validators/registration.js` and `src/validators/verification.js`; the now-empty `src/validators` directory was removed.
 - Preserved the active implementations: `src/middleware/validation.ts`, `src/utils/logger.ts`, `src/middleware/request-logger.ts`, `src/middleware/authenticate.ts`, `src/modules/authorization/*`, `src/modules/auth/auth.schemas.ts` and `src/modules/users/users.schemas.ts`.
@@ -186,6 +191,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phases 1, 1.1 and 1.2 complete.
 
 **Verification criteria:**
+
 - No `.js` files remain under `src/`.
 - No imports, requires, dynamic imports or string references to the removed modules remain.
 - The validation, authorization and logging tests continue to pass.
@@ -200,6 +206,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Define the complete relational foundation for the Nexus platform before implementing business logic.
 
 **Deliverables:**
+
 - Prisma schema with core models: `User`, `UserProfile`, `Workspace`, `WorkspaceMembership`, `Team`, `TeamMembership`, `Project`, `ProjectMembership`, `Task`, `TaskAssignee`, `TaskDependency`, `Comment`, `Notification`, `Invitation`, `FileAttachment`, `AuditLog`, session records
 - Foreign keys and appropriate cascade / restrict deletion policies
 - Uniqueness constraints (email normalization, duplicate membership prevention)
@@ -215,6 +222,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phase 1
 
 **Verification criteria:**
+
 - Fresh database setup runs all migrations without errors
 - Seed script populates test data reproducibly
 - Uniqueness, foreign-key, and index constraints verified by tests or migration review
@@ -234,6 +242,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Audit the Phase 2 schema against the planned-model list, determine whether any missing models are a genuine defect, and document the result without making unjustified schema changes.
 
 **Deliverables:**
+
 - Compared `prisma/schema.prisma` with `docs/planned-models.md` and the roadmap.
 - Confirmed the active ORM and migration system is Prisma (`@prisma/client` 6.19.3); the Sequelize packages in `package.json` are unused.
 - Verified all 21 current models and 16 enums against implemented modules, routes, services and tests.
@@ -246,6 +255,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phase 2 complete.
 
 **Verification criteria:**
+
 - The schema validates and the Prisma client generates.
 - All six existing migrations apply to a disposable test database.
 - The migration history matches the schema with no drift.
@@ -261,6 +271,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Establish and verify a safe recovery strategy for Prisma migrations without assuming that every migration has a reversible down path.
 
 **Deliverables:**
+
 - Documented the difference between application deployment rollback, schema reversal, failed-migration recovery and backup restoration.
 - Reviewed all six committed migrations and classified their operations and reversal risks.
 - Confirmed Prisma Migrate is the active migration system and that it does not provide automatic down migrations.
@@ -273,6 +284,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phases 2 and 2.1 complete.
 
 **Verification criteria:**
+
 - All committed migrations apply to a disposable database.
 - The resulting schema matches `prisma/schema.prisma` with no drift.
 - A backup/restore round trip preserves sentinel data.
@@ -291,6 +303,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Build the complete account system from registration through recovery and deletion.
 
 **Deliverables:**
+
 - Registration with email, name, and password; normalized email; hashed password
 - `PENDING_VERIFICATION` → `ACTIVE` account status flow
 - Secure single-use expiring email-verification tokens
@@ -313,6 +326,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phases 1, 2
 
 **Verification criteria:**
+
 - Full register → verify → login → logout flow passes tests
 - Expired and reused tokens are rejected
 - Password reset revokes prior sessions
@@ -338,6 +352,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Close the account-lifecycle gap left by Phase 3: a deactivated account had no supported recovery path, and deactivation left outstanding credentials that could restore access.
 
 **Deliverables:**
+
 - Self-service reactivation for a deactivated account using its email address and password
 - Reactivation that never creates a session and requires a fresh sign-in
 - Return an unverified account to `PENDING_VERIFICATION` with a new verification email
@@ -350,6 +365,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phases 2, 3, 4
 
 **Verification criteria:**
+
 - A deactivated account can reactivate and sign in again
 - Reactivation returns no access token, refresh token or session
 - Old access and refresh tokens stay invalid after reactivation
@@ -369,6 +385,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Prevent account deletion while the account remains the owner of any persisted workspace.
 
 **Deliverables:**
+
 - Block deletion for owned workspaces in every persisted state, including `ACTIVE`, `ARCHIVED`, and soft-deleted rows
 - Preserve the existing requirement that ownership be transferred to an existing workspace member before account deletion
 - Keep a rejected deletion side-effect free, including sessions and one-time tokens
@@ -377,6 +394,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 - Align the transfer route with its documented `/workspaces/{workspaceId}/owner/{userId}` contract
 
 **Verification criteria:**
+
 - Active, archived, soft-deleted, and mixed-status owned workspaces block account deletion
 - Membership and workspaces owned by another account do not block deletion
 - A successful ownership transfer permits deletion by the previous owner
@@ -394,12 +412,14 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Prevent concurrent refresh requests from successfully consuming the same session refresh-token state.
 
 **Deliverables:**
+
 - Compare-and-swap a refresh only while the session still contains the presented token hash and remains unrevoked and unexpired
 - Preserve existing expired, revoked, invalid-token, and refresh-token reuse responses
 - Return a replacement token only after the conditional database update succeeds
 - Add real PostgreSQL coverage for two simultaneous refresh requests against one session
 
 **Verification criteria:**
+
 - One of two concurrent requests using the same original token succeeds, and the other receives the established reuse failure
 - The stored current and previous token hashes match the successful rotation
 - Failed persistence returns no replacement token and leaves the previous token state intact
@@ -414,12 +434,14 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Keep account deletion and security-state changes consistent when a database operation fails or deletion requests race.
 
 **Deliverables:**
+
 - Keep ownership validation, session revocation, one-time token invalidation, profile anonymization, and account deletion in one database transaction
 - Preserve workspace ownership safeguards and existing error responses
 - Verify rollback when a later deletion operation fails after session and token updates have executed
 - Verify successful deletion commits session revocation and concurrent deletion requests serialize safely
 
 **Verification criteria:**
+
 - Workspace ownership rejection leaves the account and sessions unchanged
 - A failure during session revocation or a later account update rolls back account, session, token, and profile changes
 - Successful deletion commits account anonymization and session revocation
@@ -435,10 +457,12 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Remove obsolete commented-out debug logging from the authentication module without changing runtime behavior.
 
 **Deliverables:**
+
 - Remove only obsolete commented `console.log` statements in authentication service and controller code
 - Preserve active code, useful comments, and all runtime logging
 
 **Verification criteria:**
+
 - Authentication-module search finds no remaining commented `console.log` statements
 - Diff contains no executable logic changes
 - Authentication unit and PostgreSQL integration tests, typecheck, lint, and formatting checks pass
@@ -461,18 +485,18 @@ This tracker must be treated as the authoritative implementation sequence for ba
 
 **Phase 3.6 audit and remediation (2026-11-08):** Verification result: **PARTIALLY COMPLETE**; roadmap status remains `IN PROGRESS` because the external production checks below are outstanding. Source, unit, and disposable PostgreSQL evidence:
 
-| Criterion | Result | Evidence and coverage |
-|---|---|---|
-| Callback configuration and exact production URI | PARTIAL | `src/config/env.ts:668-692` gives `redirect_URL` precedence over `GOOGLE_CALLBACK_URL`; `src/modules/auth/google-oauth.service.ts:53-61, 189-212` fails clearly on first use and sends the configured value as the OAuth redirect URI. The required Render value is `https://nexusbackend-1-0ffo.onrender.com/api/auth/google/callback`, also documented in `docs/API.md`. The Render environment value and Google Cloud registered URI were not inspected; verify them manually. |
-| CSRF state and browser binding | MET | Random state/nonce are generated, only hashes are persisted, state expires after ten minutes and is atomically consumed once; a purpose-derived HMAC signed state cookie must match the callback. See `src/modules/auth/google-oauth.service.ts:15-19,40-50,92-120,189-212` and `src/modules/auth/auth.controller.ts:150-176`. `tests/google-oauth.test.ts:208-280` covers nonce mismatch, replay, expiry, and missing/forged/mismatched browser cookies. |
-| Server-side code exchange, timeout, and provider errors | MET | The secret stays in the backend OAuth client; Google requests use a 10-second Gaxios timeout (`google-oauth.service.ts:17,29-35`), and token failures are translated to safe callback redirects (`:133-166,215-235`). Request logging omits query strings (`src/middleware/request-logger.ts:11`). Unit regression: `tests/google-oauth.test.ts:318-333`. |
-| ID token validation and verified email | MET | Google `verifyIdToken` validates signature, issuer, audience and expiry; the backend separately checks nonce, subject, email and `email_verified === true` before `ensureGoogleAccount` (`google-oauth.service.ts:147-173`). Unit tests mock Google's verifier and cover invalid nonce/unverified email (`tests/google-oauth.test.ts:230-276`); there is no signed Google JWT fixture test. |
+| Criterion                                                                     | Result                   | Evidence and coverage                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Callback configuration and exact production URI                               | PARTIAL                  | `src/config/env.ts:668-692` gives `redirect_URL` precedence over `GOOGLE_CALLBACK_URL`; `src/modules/auth/google-oauth.service.ts:53-61, 189-212` fails clearly on first use and sends the configured value as the OAuth redirect URI. The required Render value is `https://nexusbackend-1-0ffo.onrender.com/api/auth/google/callback`, also documented in `docs/API.md`. The Render environment value and Google Cloud registered URI were not inspected; verify them manually.                                                                                                                                                                                                                                                                                                                                                               |
+| CSRF state and browser binding                                                | MET                      | Random state/nonce are generated, only hashes are persisted, state expires after ten minutes and is atomically consumed once; a purpose-derived HMAC signed state cookie must match the callback. See `src/modules/auth/google-oauth.service.ts:15-19,40-50,92-120,189-212` and `src/modules/auth/auth.controller.ts:150-176`. `tests/google-oauth.test.ts:208-280` covers nonce mismatch, replay, expiry, and missing/forged/mismatched browser cookies.                                                                                                                                                                                                                                                                                                                                                                                       |
+| Server-side code exchange, timeout, and provider errors                       | MET                      | The secret stays in the backend OAuth client; Google requests use a 10-second Gaxios timeout (`google-oauth.service.ts:17,29-35`), and token failures are translated to safe callback redirects (`:133-166,215-235`). Request logging omits query strings (`src/middleware/request-logger.ts:11`). Unit regression: `tests/google-oauth.test.ts:318-333`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ID token validation and verified email                                        | MET                      | Google `verifyIdToken` validates signature, issuer, audience and expiry; the backend separately checks nonce, subject, email and `email_verified === true` before `ensureGoogleAccount` (`google-oauth.service.ts:147-173`). Unit tests mock Google's verifier and cover invalid nonce/unverified email (`tests/google-oauth.test.ts:230-276`); there is no signed Google JWT fixture test.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Account creation, return login, existing account policy, status refusal, race | MET under roadmap policy | `src/modules/auth/auth.service.ts:306-371` creates a verified user and unique Google identity transactionally, rejects an existing email instead of auto-linking, and handles the unique-constraint race. `:373-400` rejects unusable accounts and signs in through normal session creation. Disposable PostgreSQL coverage in `tests/google-oauth-db.test.ts` passed for new user, returning identity/session, safe matching-email refusal, deactivated/suspended/pending-deletion/deleted refusal, and concurrent first sign-in. **Conflict:** the task requested linking an existing verified-email account, but the quoted Phase 3.6 deliverable and existing API contract explicitly say no matching-email auto-link. This audit follows that documented product decision; a separate authenticated linking flow is not part of Phase 3.6. |
-| Normal session, token rotation, revocation, 2FA, and audit | PARTIAL | Exchange delegates to `loginGoogleAccount`; this uses the existing session service, existing 2FA challenge, and `auth.login_succeeded` audit event (`auth.service.ts:373-400`); the controller returns normal access-token data and sets the standard cookies (`auth.controller.ts:70-83,179-194`). Controller regression `tests/google-oauth.test.ts:305-364` checks the public token payload and refresh/CSRF cookies; the DB suite verifies a persistent session and successful-login audit. Phase 3's shared auth suite covers rotation/revocation; there is no Google-specific two-factor challenge test or deployed exchange test. |
-| Cookie, CORS, proxy, and forwarded IP configuration | PARTIAL | Session cookie attributes follow `AppConfig` (`auth.controller.ts:62-83`); OAuth state cookie is host-only, HttpOnly, ten-minute, and SameSite=Lax (`:150-175`). Controller unit tests check the OAuth start cookie and standard session cookies (`tests/google-oauth.test.ts:277-364`). The browser sees Vercel `/api/backend/*` calls as same-origin; direct Render calls are cross-site. Use direct Render navigation for OAuth start, then the Vercel proxy for exchange and subsequent cookie requests; verify proxy `Set-Cookie` forwarding. Production `CORS_CREDENTIALS`, cookie settings, `TRUST_PROXY`, and proxy behavior were not inspected. `docs/API.md` records the two supported modes and required Render `TRUST_PROXY=true` setting. |
-| Redirect allowlist and safe failures | MET | Redirects are fixed to `/auth/google/callback` at the first configured frontend origin (`google-oauth.service.ts:64-75,184-186`); no request redirect parameter is read. Cancellation, missing code, invalid state, and provider failures return stable frontend error codes. Unit coverage: `tests/google-oauth.test.ts:208-354`. |
-| Rate limits and account-enumeration resistance | MET | Start, callback, and exchange are rate-limited (`auth.routes.ts:145-160`); the configured callback alias has its own limiter (`google-oauth.routes.ts:12-19`). Existing matching-email/status failures are mapped to generic `GOOGLE_SIGN_IN_FAILED`. Generic route limiter tests pass, but there is no Google-specific limiter test. Production forwarded-IP behavior remains unverified. |
-| Audit and log safety | PARTIAL | Successful logins use the existing audit event; callback and exchange failures write a provider-only `auth.login_failed` event without codes, tokens, email, or provider payload. OAuth failure tests assert safe redirects/audit records (`tests/google-oauth.test.ts:365-393`); generic request/error log tests confirm query strings are omitted (`tests/request-logger-security.test.ts:55-75`). Audit persistence failure and deployed log output were not fault-injected/inspected. No account-link event exists because account linking is explicitly unsupported by this phase. |
+| Normal session, token rotation, revocation, 2FA, and audit                    | PARTIAL                  | Exchange delegates to `loginGoogleAccount`; this uses the existing session service, existing 2FA challenge, and `auth.login_succeeded` audit event (`auth.service.ts:373-400`); the controller returns normal access-token data and sets the standard cookies (`auth.controller.ts:70-83,179-194`). Controller regression `tests/google-oauth.test.ts:305-364` checks the public token payload and refresh/CSRF cookies; the DB suite verifies a persistent session and successful-login audit. Phase 3's shared auth suite covers rotation/revocation; there is no Google-specific two-factor challenge test or deployed exchange test.                                                                                                                                                                                                        |
+| Cookie, CORS, proxy, and forwarded IP configuration                           | PARTIAL                  | Session cookie attributes follow `AppConfig` (`auth.controller.ts:62-83`); OAuth state cookie is host-only, HttpOnly, ten-minute, and SameSite=Lax (`:150-175`). Controller unit tests check the OAuth start cookie and standard session cookies (`tests/google-oauth.test.ts:277-364`). The browser sees Vercel `/api/backend/*` calls as same-origin; direct Render calls are cross-site. Use direct Render navigation for OAuth start, then the Vercel proxy for exchange and subsequent cookie requests; verify proxy `Set-Cookie` forwarding. Production `CORS_CREDENTIALS`, cookie settings, `TRUST_PROXY`, and proxy behavior were not inspected. `docs/API.md` records the two supported modes and required Render `TRUST_PROXY=true` setting.                                                                                          |
+| Redirect allowlist and safe failures                                          | MET                      | Redirects are fixed to `/auth/google/callback` at the first configured frontend origin (`google-oauth.service.ts:64-75,184-186`); no request redirect parameter is read. Cancellation, missing code, invalid state, and provider failures return stable frontend error codes. Unit coverage: `tests/google-oauth.test.ts:208-354`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Rate limits and account-enumeration resistance                                | MET                      | Start, callback, and exchange are rate-limited (`auth.routes.ts:145-160`); the configured callback alias has its own limiter (`google-oauth.routes.ts:12-19`). Existing matching-email/status failures are mapped to generic `GOOGLE_SIGN_IN_FAILED`. Generic route limiter tests pass, but there is no Google-specific limiter test. Production forwarded-IP behavior remains unverified.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Audit and log safety                                                          | PARTIAL                  | Successful logins use the existing audit event; callback and exchange failures write a provider-only `auth.login_failed` event without codes, tokens, email, or provider payload. OAuth failure tests assert safe redirects/audit records (`tests/google-oauth.test.ts:365-393`); generic request/error log tests confirm query strings are omitted (`tests/request-logger-security.test.ts:55-75`). Audit persistence failure and deployed log output were not fault-injected/inspected. No account-link event exists because account linking is explicitly unsupported by this phase.                                                                                                                                                                                                                                                         |
 
 **Verification run:** `npm run typecheck`, `npm run lint`, `npm test`, `npx prisma validate`, `npm run build`, and `git diff --check` passed. Full `npm test`: 318 passed, 0 failed, 2 skipped. The opt-in Phase 3 and Google database suites ran against the local disposable `nexus_test` PostgreSQL database with `RUN_PHASE3_DB_TESTS=true`, `TEST_DATABASE_URL` explicitly set to loopback, and matching `DATABASE_URL`: Phase 3 lifecycle 75/75 and Google OAuth lifecycle 6/6 (81 combined, 0 failed, 0 skipped). Google OAuth unit/controller tests pass 12/12. The suites emitted the existing `express-rate-limit` `ERR_ERL_DOUBLE_COUNT` validation warning in rate-limit tests; those tests passed. No Prisma schema change was required. The application test did not contact Google or production.
 
@@ -485,6 +509,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Make email a reusable platform capability with a provider-agnostic adapter.
 
 **Deliverables:**
+
 - Transactional email provider selected and configured (Resend, Brevo, or Amazon SES)
 - Sending-domain DNS verified (SPF, DKIM, DMARC)
 - Reusable email service and provider adapter (`src/services/providers/email`)
@@ -500,6 +525,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phases 1, 2, 3
 
 **Verification criteria:**
+
 - Registration and invitation emails arrive end-to-end
 - Templates render correctly in both HTML and plain-text
 - Failed deliveries are recorded and retried without duplicating operations
@@ -515,6 +541,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Remove the infinite email retry path found in the Phase 4 audit and guarantee that every delivery attempt sequence ends in a terminal state.
 
 **Deliverables:**
+
 - One bounded retry decision shared by provider failures and unexpected worker errors
 - Attempt counter persisted atomically on claim and never reset by retry scheduling
 - Retry exhaustion transitions the delivery to `FAILED`
@@ -525,6 +552,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phase 4
 
 **Verification criteria:**
+
 - A transient failure retries with backoff and succeeds when the provider recovers
 - Repeated transient failures stop at `EMAIL_MAX_ATTEMPTS`
 - A permanent failure does not retry
@@ -543,6 +571,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Objective:** Remove recipient email addresses from the transactional email logs without losing the delivery metadata needed to operate and troubleshoot the outbox.
 
 **Deliverables:**
+
 - Recipient addresses removed from the queued, console, disabled and logging-sender events
 - Error text from providers, workers and persistence failures redacted before logging
 - Delivery ID, template, provider, attempt, maximum attempts, retry delay and failure category retained
@@ -551,6 +580,7 @@ This tracker must be treated as the authoritative implementation sequence for ba
 **Dependencies:** Phase 4.1
 
 **Verification criteria:**
+
 - `email_delivery_queued` contains no recipient address or `to` field
 - Structured log metadata contains no recipient address
 - Provider responses and unexpected worker errors cannot reintroduce an address through their message or stack
@@ -570,6 +600,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 **Objective:** Connect the existing `task_assignment` and `mention` templates to reusable post-commit notifiers that the authoritative task and comment workflows can call after they persist an assignment or mention.
 
 **Deliverables:**
+
 - Reusable task-assignment notifier around the existing template and transactional outbox
 - Reusable mention notifier around the existing template and transactional outbox
 - Recipient validation against active workspace and project membership
@@ -582,6 +613,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 **Dependencies:** Phase 4.2, Phase 9, Phase 14
 
 **Verification criteria:**
+
 - The existing task-assignment and mention templates have real runtime callers
 - Task assignment triggers the expected email to the new assignee
 - A mention triggers the expected email to the mentioned workspace member
@@ -599,6 +631,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 **Objective:** Connect the existing mention, meeting-invitation and team-invitation templates to their authoritative collaboration workflows without duplicating event parsing, invitation creation or notification state.
 
 **Deliverables:**
+
 - Post-commit mention email integration using existing persisted comment and workspace membership data
 - Post-commit pending meeting-invitation email integration using the invitation workflow's authorized context, including workspace/project context
 - Post-commit team-invitation email integration using a persisted `TEAM` invitation, its owning team and a digest-verified single-use token
@@ -610,6 +643,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 **Dependencies:** Phase 4.2, Phase 7 teams, Phase 14 messaging/mentions, Phase 17 meetings
 
 **Verification criteria:**
+
 - All three existing templates have runtime callers
 - Mention events target the mentioned workspace member, excluding the author
 - Meeting mail is sent only for a valid pending invitation and does not independently grant access
@@ -628,6 +662,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 **Objective:** Connect the existing project-invitation template to the authoritative project invitation workflow, then complete the Phase 4 email subsystem audit.
 
 **Deliverables:**
+
 - Post-commit project invitation email integration using a persisted `PROJECT` invitation, its project and a digest-verified single-use token
 - Project name, inviter, workspace context, expiration and a configurable acceptance link
 - Stable idempotency, existing suppression enforcement and non-fatal delivery failures
@@ -638,6 +673,7 @@ The Phase 4 database suite passed with 21 subtests. The Phase 4 unit suite passe
 **Dependencies:** Phases 4.1–4.4 and Phase 8 projects.
 
 **Verification criteria:**
+
 - Project mail includes the project name, inviter, workspace context, expiration and the configured acceptance link
 - Only a pending, unexpired `PROJECT` invitation for a live project in an active workspace is emailed
 - Invitation tokens never appear in logs, outbox metadata or idempotency keys
@@ -657,6 +693,7 @@ The repository still has no project invitation creation/acceptance workflow. The
 **Objective:** Verify the Phase 4 email delivery and security protections, connect all collaboration templates to real workflows, and keep the phase open while required workflows are missing.
 
 **Deliverables:**
+
 - Regression verification for bounded retries, recipient privacy, webhook verification/idempotency, suppression, bounces and complaints
 - Safe request and error logging for invitation and webhook URL tokens
 - Real workflow callers for task assignment, mentions, meeting invitations, team invitations and project invitations
@@ -665,6 +702,7 @@ The repository still has no project invitation creation/acceptance workflow. The
 **Dependencies:** Phases 4.1–4.5 and the owning task, messaging, meeting, team and project workflows.
 
 **Verification criteria:**
+
 - Retry counters persist, failures terminate at the configured limit, and duplicate processing stays bounded
 - Recipient addresses, invitation tokens and webhook URL tokens are not exposed in logs
 - Existing webhook, suppression, bounce and complaint protections pass regression tests
@@ -678,9 +716,11 @@ The repository still has no project invitation creation/acceptance workflow. The
 # PHASE 2 — Database Architecture and Data Modelling
 
 ### Objectives
+
 Implement a reliable database foundation that supports Nexus's multi-workspace architecture.
 
 ### Tasks
+
 - Review existing database models and migrations.
 - Define the user identity model.
 - Define workspace and organisation models.
@@ -700,6 +740,7 @@ Implement a reliable database foundation that supports Nexus's multi-workspace a
 - Establish safe migration and rollback procedures.
 
 ### Completion Criteria
+
 - Core database schema is implemented.
 - Relationships and constraints are verified.
 - Migrations run successfully.
@@ -711,9 +752,11 @@ Implement a reliable database foundation that supports Nexus's multi-workspace a
 # PHASE 3 — Authentication and User Identity
 
 ### Objectives
+
 Implement secure user authentication and identity management.
 
 ### Tasks
+
 - User registration.
 - User login.
 - Logout and session invalidation.
@@ -733,6 +776,7 @@ Implement secure user authentication and identity management.
 - Account deactivation and deletion workflows.
 
 ### Completion Criteria
+
 - Authentication works securely.
 - Refresh token handling is tested.
 - Users cannot access another user's account.
@@ -745,11 +789,13 @@ Implement secure user authentication and identity management.
 # PHASE 4 — Workspace Creation and Workspace Management
 
 ### Objectives
+
 Support Individual, Company, and Institution workspaces within one Nexus platform.
 
 ### Tasks
 
 #### Individual Workspaces
+
 - Automatically create a personal workspace for new individual users.
 - Implement personal workspace settings.
 - Support additional collaborative workspaces.
@@ -763,6 +809,7 @@ Support Individual, Company, and Institution workspaces within one Nexus platfor
 - Do not remove personal-workspace files until their storage objects can be deleted through the configured object-storage provider.
 
 #### Company Workspaces
+
 - Company registration.
 - Organisation profile.
 - Company workspace configuration.
@@ -771,6 +818,7 @@ Support Individual, Company, and Institution workspaces within one Nexus platfor
 - Company-specific workspace structure.
 
 #### Institution Workspaces
+
 - Institution registration.
 - Institution profile.
 - Institution workspace configuration.
@@ -798,6 +846,7 @@ These fields and settings are approved product requirements. Phase 4 implements 
 **Organization settings:** general profile and contact settings, workspace name and basic preferences, supported notification preferences, member/role views, invitations and member removal, ownership and administrator management, and role-protected security/access settings. Only authorized owners and administrators may change sensitive settings. Subscription, billing, pricing, department hierarchy, logo storage, and complete organization administration are deferred to their designated roadmap phases; no commercial rules are specified here.
 
 #### Shared Functionality
+
 - Workspace creation and updates.
 - Workspace switching support.
 - Workspace type validation.
@@ -808,6 +857,7 @@ These fields and settings are approved product requirements. Phase 4 implements 
 - Workspace membership isolation.
 
 ### Completion Criteria
+
 - All three workspace types can be created.
 - Workspace type controls applicable features.
 - Users can belong to multiple workspaces.
@@ -816,34 +866,36 @@ These fields and settings are approved product requirements. Phase 4 implements 
 
 ### Verified Phase 4 requirement status — 2026-11-03
 
-| Requirement | Status | Evidence / remaining work |
-|---|---|---|
-| Create company, institution, and individual workspace records; validate type; make them private by default; assign initial owner | COMPLETED | `WorkspaceType` migration and API/database tests cover all types and private defaults. Individual workspaces cannot be made public. |
-| Workspace create, list, retrieve, update, switch validation, soft delete, and archive | COMPLETED | API/database tests verify these operations, authorization, audit history, and deleted workspace access denial. |
-| Workspace restoration | COMPLETED | Added owner-only `POST /workspaces/{workspaceId}/restore`, transactional state transition and audit event; targeted regression test verifies role denial, success, repeat restore conflict, and audit. |
-| Membership isolation and ownership controls | COMPLETED | Database-backed workspace and Phase 6 policy tests verify membership scoping, owner protections, and cross-workspace denial. Phase 6 implementation was not changed in this audit. |
-| Workspace invitations and invitation state handling | COMPLETED | Existing Phase 5 integration tests cover invite/accept, single use, expiry, revocation, and workspace scoping. These capabilities remain implemented by the Phase 5 invitation module. |
-| Invitation decline/rejection | COMPLETED | Authenticated, recipient-bound `POST /invitations/{token}/decline` transitions pending invitations to `DECLINED`, records the audit event, and prevents reuse. The Phase 5 PostgreSQL suite now covers this lifecycle. |
-| Automatically provision a personal workspace after email verification | COMPLETED | Verification now transactionally creates or adopts one private `isPersonal` workspace and OWNER membership; migration backfills existing active users. |
-| Personal workspace archive/delete safeguards | COMPLETED | The ordinary workspace archive/delete routes reject personal workspaces; account deletion owns their lifecycle. |
-| Account deletion request, confirmation, and 30-day schedule | COMPLETED | Password and email confirmation, status and timestamps, token/session revocation, rate limiting, response, and transactional email are implemented. |
-| Recovery during the grace period | COMPLETED | Existing password-verified reactivation cancels the schedule without restoring old sessions. |
-| Permanent deletion of personal relational data and shared-data protection | IN PROGRESS | Idempotent locked worker removes personal-only relational data and personal-only files after storage deletion succeeds, anonymizes retained attribution, and preserves shared workspace/collaboration records and files. Storage failures are audited and retryable. |
-| Last organization owner/administrator protection | COMPLETED | Requests are rejected until organization ownership is transferred and another active owner or administrator remains. |
-| Personal workspace-specific settings | IN PROGRESS | Generic workspace name/description/visibility settings remain available; no distinct personal settings model/API is required by the current foundational scope. |
-| Company profile and organization settings | NOT STARTED | Approved field and permission requirements are documented above and assigned to Phase 7. |
-| Institution profile and organization settings | NOT STARTED | Institution-specific fields are documented above and assigned to Phase 7; department hierarchy remains part of Phase 7. |
-| Frontend integration for onboarding, workspace list/switch, account recovery, and management | IN PROGRESS | Backend endpoints and response contracts are documented; frontend integration is outside this backend repository. |
-| Workspace lifecycle notifications and real-time events | NOT STARTED | Workspace audit logging exists; no Phase 4 workspace notification or real-time event integration was found in this branch. |
+| Requirement                                                                                                                      | Status      | Evidence / remaining work                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create company, institution, and individual workspace records; validate type; make them private by default; assign initial owner | COMPLETED   | `WorkspaceType` migration and API/database tests cover all types and private defaults. Individual workspaces cannot be made public.                                                                                                                                  |
+| Workspace create, list, retrieve, update, switch validation, soft delete, and archive                                            | COMPLETED   | API/database tests verify these operations, authorization, audit history, and deleted workspace access denial.                                                                                                                                                       |
+| Workspace restoration                                                                                                            | COMPLETED   | Added owner-only `POST /workspaces/{workspaceId}/restore`, transactional state transition and audit event; targeted regression test verifies role denial, success, repeat restore conflict, and audit.                                                               |
+| Membership isolation and ownership controls                                                                                      | COMPLETED   | Database-backed workspace and Phase 6 policy tests verify membership scoping, owner protections, and cross-workspace denial. Phase 6 implementation was not changed in this audit.                                                                                   |
+| Workspace invitations and invitation state handling                                                                              | COMPLETED   | Existing Phase 5 integration tests cover invite/accept, single use, expiry, revocation, and workspace scoping. These capabilities remain implemented by the Phase 5 invitation module.                                                                               |
+| Invitation decline/rejection                                                                                                     | COMPLETED   | Authenticated, recipient-bound `POST /invitations/{token}/decline` transitions pending invitations to `DECLINED`, records the audit event, and prevents reuse. The Phase 5 PostgreSQL suite now covers this lifecycle.                                               |
+| Automatically provision a personal workspace after email verification                                                            | COMPLETED   | Verification now transactionally creates or adopts one private `isPersonal` workspace and OWNER membership; migration backfills existing active users.                                                                                                               |
+| Personal workspace archive/delete safeguards                                                                                     | COMPLETED   | The ordinary workspace archive/delete routes reject personal workspaces; account deletion owns their lifecycle.                                                                                                                                                      |
+| Account deletion request, confirmation, and 30-day schedule                                                                      | COMPLETED   | Password and email confirmation, status and timestamps, token/session revocation, rate limiting, response, and transactional email are implemented.                                                                                                                  |
+| Recovery during the grace period                                                                                                 | COMPLETED   | Existing password-verified reactivation cancels the schedule without restoring old sessions.                                                                                                                                                                         |
+| Permanent deletion of personal relational data and shared-data protection                                                        | IN PROGRESS | Idempotent locked worker removes personal-only relational data and personal-only files after storage deletion succeeds, anonymizes retained attribution, and preserves shared workspace/collaboration records and files. Storage failures are audited and retryable. |
+| Last organization owner/administrator protection                                                                                 | COMPLETED   | Requests are rejected until organization ownership is transferred and another active owner or administrator remains.                                                                                                                                                 |
+| Personal workspace-specific settings                                                                                             | IN PROGRESS | Generic workspace name/description/visibility settings remain available; no distinct personal settings model/API is required by the current foundational scope.                                                                                                      |
+| Company profile and organization settings                                                                                        | NOT STARTED | Approved field and permission requirements are documented above and assigned to Phase 7.                                                                                                                                                                             |
+| Institution profile and organization settings                                                                                    | NOT STARTED | Institution-specific fields are documented above and assigned to Phase 7; department hierarchy remains part of Phase 7.                                                                                                                                              |
+| Frontend integration for onboarding, workspace list/switch, account recovery, and management                                     | IN PROGRESS | Backend endpoints and response contracts are documented; frontend integration is outside this backend repository.                                                                                                                                                    |
+| Workspace lifecycle notifications and real-time events                                                                           | NOT STARTED | Workspace audit logging exists; no Phase 4 workspace notification or real-time event integration was found in this branch.                                                                                                                                           |
 
 ---
 
 # PHASE 5 — Organisation Membership, Invitations and Join Requests
 
 ### Objectives
+
 Implement organisation membership and controlled onboarding.
 
 ### Tasks
+
 - Organisation membership management.
 - Direct invitations.
 - Invitation acceptance and rejection.
@@ -868,6 +920,7 @@ Implement organisation membership and controlled onboarding.
 - Preserve organisation assets and audit history after member removal.
 
 ### Completion Criteria
+
 - Invitations and join requests follow their separate rules.
 - Expiration is enforced server-side.
 - Applicants cannot access private workspace resources.
@@ -878,15 +931,15 @@ Implement organisation membership and controlled onboarding.
 
 **Status: IN PROGRESS.** Audit found and corrected invitation lifecycle races and missing archived-workspace guards. The rest of the Phase 5 service/routes were present on inspection; the Phase 5 PostgreSQL integration suites could not be run because no test `DATABASE_URL` is configured and the local PostgreSQL instance has no role for the current OS account. Do not treat code inspection or the unit suite as database-backed completion evidence.
 
-| Requirement area | Audit result | Evidence / remaining verification |
-|---|---|---|
-| Workspace membership, role restrictions, isolation, and ownership transfer | Existing implementation found; no change required | Central workspace policies and service transactions are in place. Database-backed route and cross-workspace tests are present but were skipped without the guarded test database. |
-| Invitation creation, recipient binding, acceptance/rejection, 48-hour expiry, revoke/resend, single use | Existing implementation found; lifecycle race guards strengthened | Invitation state and token digest are conditionally checked; targeted PostgreSQL regressions were added but are not yet executed. |
-| Duplicate invitation prevention | Fixed race found during audit | Creation now serializes on the workspace row, expires stale pending records before checking, and maps uniqueness conflicts to the established 409 response. Concurrent duplicate integration test added, not yet run. |
-| Archived/deleted workspace invitation behavior | Missing behavior fixed during audit | Archive transaction expires already-due pending invites and revokes the rest; creation, resend, acceptance, preview, decline, and switching now reject unavailable workspaces/states. Regression test added, not yet run. |
-| Join discovery/codes, approval/rejection/withdrawal, 7-day expiry, applicant privacy and email-domain handling | Existing implementation found; no change required | Implemented in `join-request.service.ts`; dedicated unit and PostgreSQL test suites exist. PostgreSQL suite was skipped in this run. |
-| Membership removal, task reassignment, preservation of personal identity/assets and audit history | Existing implementation found; no change required | `phase5-workspaces-db.test.ts` covers member removal, workspace access revocation, audit history and owner removal protection. `phase5-task-reassignment-db.test.ts` and `phase5-join-requests-db.test.ts` cover reassignment-required and successful transactional reassignment. These suites still require execution against the verified disposable database. |
-| Frontend API contract compatibility | Static contract review passed | Frontend workspace service paths/payloads align with registered workspace routes and response envelope. No live authenticated backend flow was exercised. Invitation UI is a separate frontend roadmap phase. |
+| Requirement area                                                                                               | Audit result                                                      | Evidence / remaining verification                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace membership, role restrictions, isolation, and ownership transfer                                     | Existing implementation found; no change required                 | Central workspace policies and service transactions are in place. Database-backed route and cross-workspace tests are present but were skipped without the guarded test database.                                                                                                                                                                                |
+| Invitation creation, recipient binding, acceptance/rejection, 48-hour expiry, revoke/resend, single use        | Existing implementation found; lifecycle race guards strengthened | Invitation state and token digest are conditionally checked; targeted PostgreSQL regressions were added but are not yet executed.                                                                                                                                                                                                                                |
+| Duplicate invitation prevention                                                                                | Fixed race found during audit                                     | Creation now serializes on the workspace row, expires stale pending records before checking, and maps uniqueness conflicts to the established 409 response. Concurrent duplicate integration test added, not yet run.                                                                                                                                            |
+| Archived/deleted workspace invitation behavior                                                                 | Missing behavior fixed during audit                               | Archive transaction expires already-due pending invites and revokes the rest; creation, resend, acceptance, preview, decline, and switching now reject unavailable workspaces/states. Regression test added, not yet run.                                                                                                                                        |
+| Join discovery/codes, approval/rejection/withdrawal, 7-day expiry, applicant privacy and email-domain handling | Existing implementation found; no change required                 | Implemented in `join-request.service.ts`; dedicated unit and PostgreSQL test suites exist. PostgreSQL suite was skipped in this run.                                                                                                                                                                                                                             |
+| Membership removal, task reassignment, preservation of personal identity/assets and audit history              | Existing implementation found; no change required                 | `phase5-workspaces-db.test.ts` covers member removal, workspace access revocation, audit history and owner removal protection. `phase5-task-reassignment-db.test.ts` and `phase5-join-requests-db.test.ts` cover reassignment-required and successful transactional reassignment. These suites still require execution against the verified disposable database. |
+| Frontend API contract compatibility                                                                            | Static contract review passed                                     | Frontend workspace service paths/payloads align with registered workspace routes and response envelope. No live authenticated backend flow was exercised. Invitation UI is a separate frontend roadmap phase.                                                                                                                                                    |
 
 **Changes:** `src/modules/workspaces/invitation.service.ts`, `src/modules/workspaces/workspace.service.ts`, and `tests/phase5-workspaces-db.test.ts`; no schema or migration change and no endpoint or payload change. `docs/API.md` and `docs/openapi.yaml` describe the archive and invitation lifecycle behavior.
 
@@ -903,6 +956,7 @@ Implement organisation membership and controlled onboarding.
 **Objective:** Support teams within workspaces and make team membership meaningful across the platform.
 
 **Deliverables:**
+
 - Create, update, list, archive, and delete teams
 - Add and remove team members; assign team leads
 - Team descriptions and settings
@@ -916,6 +970,7 @@ Implement organisation membership and controlled onboarding.
 **Dependencies:** Phases 1, 2, 5, 6
 
 **Verification criteria:**
+
 - Full team lifecycle (create → member add → archive → delete) passes tests
 - Team permissions enforced in project and communication modules
 - Membership change notifications delivered
@@ -937,9 +992,11 @@ Implement organisation membership and controlled onboarding.
 # PHASE 7 — Teams, Departments and Groups — COMPLETED
 
 ### Objectives
+
 Implement collaboration structures within Company and Institution workspaces.
 
 ### Tasks
+
 - Add Company profile fields: name, logo reference, description, industry/business category, official website, business email, contact information, country/location, workspace ID, and timestamps.
 - Add Institution profile fields: name, logo reference, description, institution type, official website, institutional email, contact information, country/location, workspace ID, and timestamps.
 - Keep Company and Institution profile schemas distinct; do not require organization-specific fields on the other type.
@@ -960,6 +1017,7 @@ Implement collaboration structures within Company and Institution workspaces.
 - Implement team-level communication access.
 
 ### Completion Criteria
+
 - Company and Institution profiles are independently validated and workspace-scoped.
 - Only authorized owners and administrators can change sensitive organization settings.
 - Profile updates preserve workspace isolation and audit history.
@@ -973,9 +1031,11 @@ Implement collaboration structures within Company and Institution workspaces.
 # PHASE 8 — Projects and Project Visibility — IN PROGRESS
 
 ### Objectives
+
 Implement the shared project management foundation.
 
 ### Tasks
+
 - Project creation and management.
 - Project descriptions and metadata.
 - Project ownership.
@@ -999,12 +1059,14 @@ Implement three visibility levels:
 3. Private/invitation-only.
 
 ### Important Requirements
+
 - Project visibility must apply to all related resources.
 - Project messages, files, meetings, tasks, and activity history must follow project access rules.
 - Changing project visibility must not expose previously private resources.
 - Organisation Admins must not automatically gain access to private projects unless their permissions explicitly allow it.
 
 ### Completion Criteria
+
 - Projects can be created and managed.
 - All visibility levels work correctly.
 - Project resources inherit the appropriate access restrictions.
@@ -1020,9 +1082,11 @@ Implement three visibility levels:
 # PHASE 9 — Task and Work Management — IN PROGRESS
 
 ### Objectives
+
 Implement Nexus task management and project execution capabilities.
 
 ### Tasks
+
 - Task creation and updates.
 - Task descriptions.
 - Multiple assignees where appropriate.
@@ -1046,6 +1110,7 @@ Implement Nexus task management and project execution capabilities.
 - Task notifications.
 
 ### Message-to-Task Conversion
+
 - Convert an eligible message into a task.
 - Preserve the original message reference.
 - Preserve the conversation context.
@@ -1053,6 +1118,7 @@ Implement Nexus task management and project execution capabilities.
 - Prevent duplicate conversion where appropriate.
 
 ### Completion Criteria
+
 - Task lifecycle works.
 - Multiple task views use consistent data.
 - Task permissions are enforced.
@@ -1066,9 +1132,11 @@ Implement Nexus task management and project execution capabilities.
 # PHASE 10 — Real-Time Messaging and Conversations
 
 ### Objectives
+
 Implement Nexus communication infrastructure.
 
 ### Conversation Types
+
 - Direct messages.
 - Group conversations.
 - Team channels.
@@ -1076,6 +1144,7 @@ Implement Nexus communication infrastructure.
 - Announcements.
 
 ### Tasks
+
 - Conversation creation.
 - Conversation membership.
 - Message sending and receiving.
@@ -1108,12 +1177,14 @@ Channels are controlled by authorised workspace administrators.
 - Guests can access only explicitly shared channels.
 
 Support:
+
 - Workspace-public channels.
 - Private channels.
 - Read-only announcement channels.
 - Project-linked channels.
 
 ### Completion Criteria
+
 - Messages persist in PostgreSQL.
 - Real-time delivery works.
 - Conversation membership is enforced.
@@ -1128,9 +1199,11 @@ Support:
 # PHASE 11 — Notification and Activity Infrastructure
 
 ### Objectives
+
 Implement a centralised notification and activity system.
 
 ### Tasks
+
 - Central event service.
 - Persistent notification records.
 - Activity feed.
@@ -1147,6 +1220,7 @@ Implement a centralised notification and activity system.
 - Notification audit records.
 
 ### General Notification Events
+
 - Task assignments.
 - Task mentions and comments.
 - Meeting invitations.
@@ -1166,6 +1240,7 @@ Implement a centralised notification and activity system.
 - General notification counts and message unread counts must remain independent.
 
 ### Smart Notification Behaviour
+
 - Important events should alert immediately.
 - Less important events may be grouped.
 - Relevant activities should remain available in the activity feed.
@@ -1173,6 +1248,7 @@ Implement a centralised notification and activity system.
 - Duplicate alerts must be prevented.
 
 ### Completion Criteria
+
 - Events are persisted reliably.
 - Notification delivery works.
 - Message notifications are separated from general notifications.
@@ -1186,9 +1262,11 @@ Implement a centralised notification and activity system.
 # PHASE 12 — File Management and Nexus Drive
 
 ### Objectives
+
 Implement secure file storage and management.
 
 ### Tasks
+
 - Private object storage integration.
 - File upload.
 - File download.
@@ -1209,6 +1287,7 @@ Implement secure file storage and management.
 - File activity history.
 
 ### Security Requirements
+
 - Private storage by default.
 - Do not expose private storage credentials.
 - Validate permissions before issuing access links.
@@ -1217,6 +1296,7 @@ Implement secure file storage and management.
 - Do not trust client-supplied storage paths.
 
 ### Completion Criteria
+
 - Files can be uploaded and retrieved securely.
 - File access follows workspace and project permissions.
 - Metadata is persisted.
@@ -1229,9 +1309,11 @@ Implement secure file storage and management.
 # PHASE 13 — Document Collaboration
 
 ### Objectives
+
 Provide document collaboration capabilities within Nexus.
 
 ### Tasks
+
 - Document creation.
 - Document metadata.
 - Document access control.
@@ -1245,6 +1327,7 @@ Provide document collaboration capabilities within Nexus.
 - Integration with Nexus Drive.
 
 ### Completion Criteria
+
 - Documents can be managed securely.
 - Access permissions are enforced.
 - Document history is maintained where supported.
@@ -1257,9 +1340,11 @@ Provide document collaboration capabilities within Nexus.
 # PHASE 14 — Calendar and Scheduling
 
 ### Objectives
+
 Implement the shared Nexus calendar and scheduling infrastructure.
 
 ### Tasks
+
 - Calendar creation and management.
 - Personal calendars.
 - Workspace calendars.
@@ -1277,6 +1362,7 @@ Implement the shared Nexus calendar and scheduling infrastructure.
 - External calendar connection foundations.
 
 ### Two-Way External Synchronisation
+
 - Google Calendar integration.
 - Microsoft Outlook Calendar integration.
 - OAuth connection management.
@@ -1290,10 +1376,12 @@ Implement the shared Nexus calendar and scheduling infrastructure.
 - Idempotency to prevent sync loops.
 
 ### Privacy
+
 - Private event details must remain hidden from unauthorised users.
 - Calendar aggregation must respect workspace membership and permissions.
 
 ### Completion Criteria
+
 - Internal calendar operations work.
 - Event permissions are enforced.
 - Synchronisation is reliable and does not create duplicate events.
@@ -1306,9 +1394,11 @@ Implement the shared Nexus calendar and scheduling infrastructure.
 # PHASE 15 — Meetings and Calling Integration — IN PROGRESS
 
 ### Objectives
+
 Integrate the managed audio/video calling SDK.
 
 ### Tasks
+
 - Meeting creation.
 - Instant meetings.
 - Scheduled meetings.
@@ -1329,6 +1419,7 @@ Integrate the managed audio/video calling SDK.
 - Meeting history.
 
 ### Security
+
 - Generate provider credentials server-side.
 - Validate meeting access.
 - Prevent unauthorised meeting joins.
@@ -1336,6 +1427,7 @@ Integrate the managed audio/video calling SDK.
 - Never expose provider secret keys.
 
 ### Completion Criteria
+
 - Meetings can be created and joined.
 - Provider integration works.
 - Access is permission-controlled.
@@ -1346,9 +1438,11 @@ Integrate the managed audio/video calling SDK.
 # PHASE 16 — Forms and Surveys — IN PROGRESS
 
 ### Objectives
+
 Implement reusable forms and survey capabilities.
 
 ### Tasks
+
 - Form creation.
 - Form editing.
 - Form publishing.
@@ -1366,6 +1460,7 @@ Implement reusable forms and survey capabilities.
 - Survey results and summary foundations.
 
 ### Completion Criteria
+
 - Forms can be created and published.
 - Responses are validated and stored.
 - Access restrictions are enforced.
@@ -1376,29 +1471,34 @@ Implement reusable forms and survey capabilities.
 # PHASE 17 — Subscription, Plans and Billing
 
 ### Objectives
+
 Implement Nexus subscription and payment management.
 
 ### Subscription Structure
 
 #### Individual
+
 - Free plan.
 - Premium plan.
 - Monthly and yearly billing.
 - Optional saved payment method for authorised auto-renewal.
 
 #### Company
+
 - Free plan.
 - Paid organisation plans.
 - Included seats and additional seat pricing.
 - Owner-controlled billing.
 
 #### Institution
+
 - Free plan.
 - Institution-specific paid plans.
 - Member-category allowances.
 - Owner-controlled billing.
 
 ### Tasks
+
 - Plan definitions.
 - Subscription records.
 - Subscription creation.
@@ -1426,10 +1526,10 @@ Implement Nexus subscription and payment management.
 
 These approved prices and rules are recorded in the Phase 3 product decision log. `src/modules/billing/` now contains server-owned pricing, billing routes/service, persistence models, Paystack adapter, transaction verification, signed webhook handling, encrypted provider tokens, and lifecycle calculations. This work is in progress; merchant test credentials and test-mode payment verification are not configured.
 
-| Plan | Monthly | Annual | Included members | Extra active member |
-|---|---:|---:|---:|---:|
-| Pro | $10/month | $50/year | 15 | $0.50/member per selected billing period |
-| Business | $15/month | $70/year | 25 | $1/member per selected billing period |
+| Plan     |   Monthly |   Annual | Included members |                      Extra active member |
+| -------- | --------: | -------: | ---------------: | ---------------------------------------: |
+| Pro      | $10/month | $50/year |               15 | $0.50/member per selected billing period |
+| Business | $15/month | $70/year |               25 |    $1/member per selected billing period |
 
 - The workspace owner counts once and consumes an included seat.
 - Only active memberships with active accounts count. Pending invitations, suspended, removed, and deactivated memberships do not count. Admin roles do not have a separate billing exclusion.
@@ -1439,6 +1539,7 @@ These approved prices and rules are recorded in the Phase 3 product decision log
 - Failed-payment policy is deferred; retry behavior, grace periods, notifications, access timing, and additional-seat treatment remain undecided. Do not invent failure timelines or grant paid access without verified payment.
 
 ### Important Rules
+
 - A trial must not silently convert into a paid subscription.
 - If the user does not upgrade, the subscription falls back to the applicable Free plan.
 - Company and Institution subscriptions belong to the organisation.
@@ -1458,6 +1559,7 @@ These approved prices and rules are recorded in the Phase 3 product decision log
 - USD merchant enablement, legal review, and Paystack Dashboard/test-mode setup remain external dependencies. Requirements and setup are in the frontend repository's `docs/SUBSCRIPTION_BILLING_BACKEND_REQUIREMENTS.md`.
 
 ### Completion Criteria
+
 - Payment flows are verified.
 - Webhooks are secure and idempotent.
 - Subscription entitlements are enforced.
@@ -1469,9 +1571,11 @@ These approved prices and rules are recorded in the Phase 3 product decision log
 # PHASE 18 — Global Search and Full Document Search — COMPLETED
 
 ### Objectives
+
 Implement a unified search service across all workspaces a user is authorised to access.
 
 ### Search Categories
+
 - People.
 - Workspaces.
 - Teams.
@@ -1486,6 +1590,7 @@ Implement a unified search service across all workspaces a user is authorised to
 - Announcements.
 
 ### Tasks
+
 - Central search service.
 - PostgreSQL full-text search foundation.
 - Search indexing.
@@ -1507,6 +1612,7 @@ Implement a unified search service across all workspaces a user is authorised to
 - Search history privacy.
 
 ### Security Requirements
+
 - Apply permission filtering before returning results.
 - Never expose private workspace content.
 - Remove access when membership is revoked.
@@ -1514,6 +1620,7 @@ Implement a unified search service across all workspaces a user is authorised to
 - Search indexes must respect resource visibility.
 
 ### Completion Criteria
+
 - Search spans authorised workspaces.
 - Full document search works for supported file formats.
 - Search results respect permissions.
@@ -1548,34 +1655,41 @@ covers text/DOCX/PDF extraction and malformed input; the existing
 # PHASE 19 — Integrations Framework — COMPLETED
 
 ### Objectives
+
 Create a reusable integrations architecture.
 
 ### Supported Integration Categories
 
 #### File Storage
+
 - Google Drive.
 - OneDrive.
 - Dropbox.
 
 #### Communication
+
 - Gmail.
 - Outlook.
 - Slack.
 - Microsoft Teams.
 
 #### Calendar
+
 - Google Calendar.
 - Microsoft Outlook Calendar.
 
 #### Development
+
 - GitHub.
 - GitLab.
 
 #### Automation
+
 - Webhooks.
 - Supported automation providers.
 
 ### Tasks
+
 - Integration registry.
 - OAuth connection management.
 - OAuth callback handling.
@@ -1592,6 +1706,7 @@ Create a reusable integrations architecture.
 - Integration audit history.
 
 ### Important Rules
+
 - Integrations are available to Individual, Company, and Institution workspaces.
 - Each workspace independently controls enabled integrations.
 - Personal connections and shared workspace connections must remain separate.
@@ -1600,6 +1715,7 @@ Create a reusable integrations architecture.
 - Request only necessary OAuth scopes.
 
 ### Completion Criteria
+
 - Integration connections are secure.
 - Tokens are protected.
 - Personal and workspace connections remain isolated.
@@ -1649,9 +1765,11 @@ untested claims of completion.
 # PHASE 20 — Automation and Workflow Engine — COMPLETED
 
 ### Objectives
+
 Build reusable backend automation capabilities.
 
 ### Tasks
+
 - Automation definitions.
 - Trigger registration.
 - Event-based triggers.
@@ -1669,6 +1787,7 @@ Build reusable backend automation capabilities.
 - Automation enable/disable controls.
 
 ### Completion Criteria
+
 - Automations execute from authorised triggers.
 - Actions respect permissions.
 - Failed jobs are recoverable.
@@ -1703,9 +1822,11 @@ transport; no live third-party endpoint was contacted.
 # PHASE 21 — Python AI Service Integration — COMPLETED
 
 ### Objectives
+
 Integrate the independently deployable Python AI service with the main Express backend.
 
 ### Architecture
+
 - Python.
 - FastAPI.
 - Managed AI API.
@@ -1713,6 +1834,7 @@ Integrate the independently deployable Python AI service with the main Express b
 - Express remains the authoritative application backend.
 
 ### Tasks
+
 - Define Express-to-Python communication.
 - Define authenticated service-to-service requests.
 - Define request and response schemas.
@@ -1727,6 +1849,7 @@ Integrate the independently deployable Python AI service with the main Express b
 - Implement AI response streaming where supported.
 
 ### AI Capabilities
+
 - AI conversations.
 - Workspace-aware assistance.
 - Project summaries.
@@ -1740,6 +1863,7 @@ Integrate the independently deployable Python AI service with the main Express b
 - Contextual questions and answers.
 
 ### Mandatory Architecture Rules
+
 - Express authenticates the user.
 - Express verifies permissions.
 - Express prepares authorised context.
@@ -1748,6 +1872,7 @@ Integrate the independently deployable Python AI service with the main Express b
 - Core Nexus features must continue working when the AI service is unavailable.
 
 ### Completion Criteria
+
 - Express and Python communicate securely.
 - AI context is permission-filtered.
 - Source references are returned where relevant.
@@ -1775,9 +1900,11 @@ stubs and must be re-verified against the deployed AI service.
 # PHASE 22 — Nexus Write — COMPLETED
 
 ### Objectives
+
 Implement Grammarly-like writing assistance as part of Nexus.
 
 ### Capabilities
+
 - Spelling correction.
 - Grammar correction.
 - Punctuation correction.
@@ -1793,6 +1920,7 @@ Implement Grammarly-like writing assistance as part of Nexus.
 - Writing improvement recommendations.
 
 ### Tasks
+
 - Writing analysis API.
 - Selected-text analysis.
 - Incremental analysis.
@@ -1807,6 +1935,7 @@ Implement Grammarly-like writing assistance as part of Nexus.
 - AI provider error handling.
 
 ### User Experience Requirements
+
 - Never silently replace user writing.
 - Users must accept or dismiss suggestions.
 - Preserve original text until a suggestion is accepted.
@@ -1815,6 +1944,7 @@ Implement Grammarly-like writing assistance as part of Nexus.
 - Support integration with Nexus editors and relevant text inputs.
 
 ### Completion Criteria
+
 - Writing analysis works.
 - Suggestions are returned in a structured format.
 - User text is not modified without consent.
@@ -1837,9 +1967,11 @@ changing user text. Covered by the Phase 21 unit and database tests.
 # PHASE 23 — AI Action Approval and Execution — COMPLETED
 
 ### Objectives
+
 Allow Nexus AI to recommend and execute approved actions safely.
 
 ### Tasks
+
 - Define AI action types.
 - Implement read-only AI actions.
 - Implement recommendation responses.
@@ -1855,11 +1987,13 @@ Allow Nexus AI to recommend and execute approved actions safely.
 - Support rejection and cancellation.
 
 ### Mandatory Rule
+
 AI must never perform a mutation merely because it suggested the action.
 
 Every mutation requires specific user approval. Express must revalidate permissions before executing the approved action.
 
 ### Completion Criteria
+
 - Read, recommend, and act workflows are separated.
 - Mutation approval is explicit.
 - Permissions are rechecked.
@@ -1885,9 +2019,11 @@ inertness, permission denial).
 # PHASE 24 — Redis, Background Jobs and Event Processing — COMPLETED
 
 ### Objectives
+
 Implement reliable asynchronous processing and real-time coordination.
 
 ### Tasks
+
 - Redis cache management.
 - Cache invalidation.
 - Rate-limit storage.
@@ -1907,6 +2043,7 @@ Implement reliable asynchronous processing and real-time coordination.
 - Worker health monitoring.
 
 ### Important Rules
+
 - Redis must not be treated as the permanent source of truth for messages or notifications.
 - Persistent application data belongs in PostgreSQL.
 - Retry attempts must be bounded.
@@ -1915,6 +2052,7 @@ Implement reliable asynchronous processing and real-time coordination.
 - Use appropriate job priorities and concurrency limits.
 
 ### Completion Criteria
+
 - Background processing works.
 - Jobs survive expected application restarts according to the chosen queue implementation.
 - Retry behaviour is bounded.
@@ -1947,9 +2085,11 @@ continue to pass.
 # PHASE 25 — Email Delivery and Communication
 
 ### Objectives
+
 Implement reliable transactional and notification email delivery.
 
 ### Tasks
+
 - Email provider integration.
 - Central email service.
 - Email templates.
@@ -1970,12 +2110,14 @@ Implement reliable transactional and notification email delivery.
 - Provider webhook processing.
 
 ### Security and Privacy
+
 - Avoid exposing recipient addresses in unnecessary logs.
 - Never log passwords, tokens, or sensitive email contents.
 - Prevent duplicate email delivery.
 - Respect user notification preferences.
 
 ### Completion Criteria
+
 - Transactional email delivery works.
 - Templates are consistent.
 - Delivery failures are observable.
@@ -1987,9 +2129,11 @@ Implement reliable transactional and notification email delivery.
 # PHASE 26 — Audit Logging and Security Monitoring
 
 ### Objectives
+
 Provide reliable audit trails and security monitoring.
 
 ### Tasks
+
 - Central audit logging service.
 - Authentication events.
 - Session events.
@@ -2008,6 +2152,7 @@ Provide reliable audit trails and security monitoring.
 - Suspicious activity detection foundations.
 
 ### Completion Criteria
+
 - Important actions are recorded.
 - Audit logs cannot be modified by ordinary users.
 - Audit access is permission-controlled.
@@ -2018,9 +2163,11 @@ Provide reliable audit trails and security monitoring.
 # PHASE 27 — Reporting and Analytics
 
 ### Objectives
+
 Provide workspace-aware reporting and analytics.
 
 ### Tasks
+
 - Workspace activity metrics.
 - Project progress metrics.
 - Task completion metrics.
@@ -2038,6 +2185,7 @@ Provide workspace-aware reporting and analytics.
 - Aggregated analytics endpoints.
 
 ### Completion Criteria
+
 - Metrics are calculated consistently.
 - Reports respect workspace permissions.
 - Analytics do not expose private project information.
@@ -2048,9 +2196,11 @@ Provide workspace-aware reporting and analytics.
 # PHASE 28 — API Documentation and Developer Experience
 
 ### Objectives
+
 Make the backend easy to understand, integrate, and maintain.
 
 ### Tasks
+
 - API documentation.
 - OpenAPI/Swagger documentation where appropriate.
 - Authentication documentation.
@@ -2067,6 +2217,7 @@ Make the backend easy to understand, integrate, and maintain.
 - Database migration instructions.
 
 ### Completion Criteria
+
 - API documentation reflects actual implementation.
 - Developers can run the backend using documented instructions.
 - Environment variables are documented without exposing secrets.
@@ -2085,9 +2236,11 @@ Make the backend easy to understand, integrate, and maintain.
 # PHASE 30 — Performance, Scalability and Production Hardening
 
 ### Objectives
+
 Prepare the backend for production workloads and future horizontal scaling.
 
 ### Tasks
+
 - Database query optimisation.
 - Database indexing review.
 - Connection pooling.
@@ -2108,6 +2261,7 @@ Prepare the backend for production workloads and future horizontal scaling.
 - Production security review.
 
 ### Completion Criteria
+
 - Critical queries are optimised.
 - API and worker scaling strategies are documented.
 - Rate limiting works across multiple API instances.
@@ -2118,9 +2272,11 @@ Prepare the backend for production workloads and future horizontal scaling.
 # PHASE 31 — Deployment and Production Operations
 
 ### Objectives
+
 Prepare and deploy the backend and Python AI service.
 
 ### Tasks
+
 - Production environment configuration.
 - Production database configuration.
 - Redis production configuration.
@@ -2143,6 +2299,7 @@ Prepare and deploy the backend and Python AI service.
 - Production smoke tests.
 
 ### Completion Criteria
+
 - Backend deploys successfully.
 - Python AI service deploys independently.
 - Production environment variables are verified.
@@ -2156,9 +2313,11 @@ Prepare and deploy the backend and Python AI service.
 # PHASE 32 — Final Backend Review and Release Readiness
 
 ### Objectives
+
 Verify that the backend is ready for the intended Nexus release.
 
 ### Tasks
+
 - Review all completed phases.
 - Verify phase completion evidence.
 - Check for unfinished endpoints.
@@ -2181,6 +2340,7 @@ Verify that the backend is ready for the intended Nexus release.
 - Prepare release notes.
 
 ### Completion Criteria
+
 - All required release phases are completed.
 - Critical workflows work end to end.
 - No unresolved critical security issues remain.
@@ -2208,17 +2368,17 @@ Potential future backend capabilities include:
 - Additional third-party integrations.
 - Advanced organisation-wide reporting.
 
-| Phase | Date | Result |
-|---|---|---|
-| 1 — Foundation and infrastructure | 2026-10-21 | `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and the unit suite pass. |
-| 2 — Core domain schema | 2026-10-21 | Migrations apply to PostgreSQL 16, the constraint and index checks pass, the `npm test` suite passes with the database integration tests enabled. |
-| 3 — Authentication and account lifecycle | 2026-10-21 | 63 tests pass with the database integration tests enabled, covering the full account lifecycle, the session rotation, the CSRF enforcement, the rate limits and the audit trail. |
-| 4 — Transactional email | 2026-10-21 | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account. |
-| 4.1 — Bounded email delivery retries | 2026-11-01 | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. |
-| 4.2 — Recipient email privacy in logs | 2026-11-01, re-verified 2026-11-03 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. The 2026-11-03 audit also removed a leftover rate-limit URL debug log and added shared redaction for invitation, webhook and authentication tokens in request and error logs. New unit, security and PostgreSQL integration tests pass; the Phase 4 database suite passed with 21 subtests, the full suite after merging `main` passes 248 tests with two intentionally skipped database suites (Phase 6 and Phase 7), and build, typecheck, lint and format check pass. |
-| 5 — Workspaces, memberships and invitations | 2026-10-22 | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures. |
-| 6 — Roles, permissions and authorization | 2026-10-23 | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log. |
-| 7 — Teams and organizational structure | 2026-10-23 | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications. |
+| Phase                                       | Date                               | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 — Foundation and infrastructure           | 2026-10-21                         | `npm run build`, `npm run typecheck`, `npm run lint`, `npm run format:check` and the unit suite pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 2 — Core domain schema                      | 2026-10-21                         | Migrations apply to PostgreSQL 16, the constraint and index checks pass, the `npm test` suite passes with the database integration tests enabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 3 — Authentication and account lifecycle    | 2026-10-21                         | 63 tests pass with the database integration tests enabled, covering the full account lifecycle, the session rotation, the CSRF enforcement, the rate limits and the audit trail.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 4 — Transactional email                     | 2026-10-21                         | 86 tests pass. The live provider was verified separately: the SMTP relay accepted the connection, the credentials and a real test message. The sending domain DNS and the provider webhook still have to be configured in the provider account.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 4.1 — Bounded email delivery retries        | 2026-11-01                         | Infinite retries removed. The unexpected-error path now uses the same `EMAIL_MAX_ATTEMPTS` limit as provider failures, exhausted rows are moved to `FAILED`, and legacy exhausted queued rows are repaired before claiming. The Phase 4 suite passes 18/18 with PostgreSQL and the SMTP capture server; the full Phase 2–5 database-enabled suite passes 189/189. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass.                                                                                                                                                                                                                                                                                                                                |
+| 4.2 — Recipient email privacy in logs       | 2026-11-01, re-verified 2026-11-03 | Removed recipient addresses from the queued event and the console, disabled and logging-sender lifecycle events. Email-shaped error text is redacted before logging, including unexpected worker, persistence and worker-pass failures. Delivery ID, template, provider, attempt and failure category remain. The 2026-11-03 audit also removed a leftover rate-limit URL debug log and added shared redaction for invitation, webhook and authentication tokens in request and error logs. New unit, security and PostgreSQL integration tests pass; the Phase 4 database suite passed with 21 subtests, the full suite after merging `main` passes 248 tests with two intentionally skipped database suites (Phase 6 and Phase 7), and build, typecheck, lint and format check pass. |
+| 5 — Workspaces, memberships and invitations | 2026-10-22                         | 125 tests pass with every database integration suite enabled, covering the workspace lifecycle, the membership rules, the invitation flow and the audit trail. `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` pass. A timing-sensitive flaky test in the Phase 4 retry suite was fixed (50 ms sleep added between consecutive `processPending` calls). Verified across 4 consecutive runs with 0 failures.                                                                                                                                                                                                                                                                                                                                            |
+| 6 — Roles, permissions and authorization    | 2026-10-23                         | 97 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE6_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 44 new unit tests cover the full workspace, project and team capability matrices. DB integration tests cover cross-workspace access denial, role enforcement, owner-removal protection and ownership transfer with audit log.                                                                                                                                                                                                                                                                                                                                                                         |
+| 7 — Teams and organizational structure      | 2026-10-23                         | 136 tests pass (1 skipped — DB integration tests requiring `RUN_PHASE7_DB_TESTS=true`). `npm run build`, `npm run typecheck`, `npm run lint` and `npm run format:check` all pass. 35 new unit tests cover team capability matrices, all schema validators and audit constants. DB integration tests cover the full team lifecycle, member management, lead assignment, authorization enforcement, audit trail and notifications.                                                                                                                                                                                                                                                                                                                                                       |
 
 ---
 
