@@ -78,6 +78,7 @@ import {
   outlookResultUrl,
   verifyOutlookState,
 } from './outlook-calendar.oauth';
+import { onedriveOAuth, outlookMailOAuth } from './microsoft-graph.oauth';
 
 export interface IntegrationRouterOptions {
   config: AppConfig;
@@ -157,6 +158,20 @@ export function createIntegrationRouter({
           400,
           'USE_OUTLOOK_CALENDAR_OAUTH',
           'Connect Outlook Calendar through the Microsoft authorization flow',
+        );
+      }
+      if (body.provider === 'ONEDRIVE') {
+        throw new AppError(
+          400,
+          'USE_ONEDRIVE_OAUTH',
+          'Connect OneDrive through the Microsoft authorization flow',
+        );
+      }
+      if (body.provider === 'OUTLOOK') {
+        throw new AppError(
+          400,
+          'USE_OUTLOOK_MAIL_OAUTH',
+          'Connect Outlook through the Microsoft authorization flow',
         );
       }
       if (body.provider === 'GMAIL') {
@@ -527,6 +542,47 @@ export function createIntegrationRouter({
       return done('error');
     }
   });
+
+  // OneDrive and Outlook Mail: personal connections (workspaceId null).
+  const microsoftProviders = [
+    { path: 'onedrive', provider: 'ONEDRIVE' as const, oauth: onedriveOAuth, log: 'onedrive_oauth_failed' },
+    { path: 'outlook-mail', provider: 'OUTLOOK' as const, oauth: outlookMailOAuth, log: 'outlook_mail_oauth_failed' },
+  ];
+  for (const p of microsoftProviders) {
+    router.get(
+      `/${p.path}/authorize`,
+      requireAuth,
+      requireActive,
+      validate({ query: p.oauth.authorizeQuerySchema }),
+      async (req, res) => {
+        sendSuccess(res, { url: await p.oauth.buildAuthorizeUrl({ userId: userId(req) }) });
+      },
+    );
+
+    router.get(`/${p.path}/callback`, async (req, res) => {
+      const done = (status: 'connected' | 'denied' | 'error') =>
+        res.redirect(302, p.oauth.resultUrl(status));
+      const parsed = p.oauth.callbackQuerySchema.safeParse(req.query);
+      if (!parsed.success) return done('error');
+      const { code, state, error } = parsed.data;
+      if (error) return done('denied');
+      if (!code) return done('error');
+      try {
+        const claims = await p.oauth.verifyState(state);
+        const token = await p.oauth.exchangeCode(code);
+        await service.connect({
+          userId: claims.userId,
+          provider: p.provider,
+          workspaceId: null,
+          ...token,
+        });
+        return done('connected');
+      } catch (err) {
+        logger.warn(p.log, { error: err });
+        return done('error');
+      }
+    });
+  }
 
   return router;
 }

@@ -6,6 +6,7 @@ import { refreshGmailToken } from './gmail.oauth';
 import { refreshCalendarToken } from './google-calendar.oauth';
 import { refreshOutlookToken } from './outlook-calendar.oauth';
 import { refreshDriveToken } from './google-drive.oauth';
+import { onedriveOAuth, outlookMailOAuth } from './microsoft-graph.oauth';
 
 /**
  * Provider lifecycle adapter for Phase 19.
@@ -115,6 +116,10 @@ async function defaultRefresh(
       return refreshCalendarToken(refreshToken);
     case 'OUTLOOK_CALENDAR':
       return refreshOutlookToken(refreshToken);
+    case 'ONEDRIVE':
+      return onedriveOAuth.refreshToken(refreshToken);
+    case 'OUTLOOK':
+      return outlookMailOAuth.refreshToken(refreshToken);
     case 'DROPBOX':
       return refreshDropboxToken(refreshToken);
     case 'GITHUB':
