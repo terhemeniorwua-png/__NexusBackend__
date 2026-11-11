@@ -147,10 +147,7 @@ describe('AI service client', () => {
           content: 'An answer [workspace:ws-1]',
           model: 'test-model',
           usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-          references: [
-            { type: 'workspace', id: 'ws-1', title: 'Demo' },
-            { type: 'workspace' },
-          ],
+          references: [{ type: 'workspace', id: 'ws-1', title: 'Demo' }, { type: 'workspace' }],
         });
       }) as typeof fetch,
     });
@@ -177,9 +174,7 @@ describe('AI service client', () => {
     await assert.rejects(
       () => client.chat({ messages: [{ role: 'user', content: 'hi' }], operation: 'chat' }),
       (error: unknown) =>
-        error instanceof AiProviderError &&
-        error.code === 'UPSTREAM' &&
-        error.statusCode === 500,
+        error instanceof AiProviderError && error.code === 'UPSTREAM' && error.statusCode === 500,
     );
   });
 

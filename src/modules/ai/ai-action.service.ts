@@ -222,6 +222,7 @@ export function createAiActionService(
             projectId,
             taskId,
             body,
+            mentionedUserIds: [],
             ...(parentId ? { parentId } : {}),
           },
           context,
