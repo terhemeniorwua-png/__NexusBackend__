@@ -46,6 +46,7 @@ import { createAutomationRouter } from '../modules/automation/automation.routes'
 import { createWebhookRouter } from '../modules/webhooks/webhook.routes';
 import { createAiRouter } from '../modules/ai/ai.routes';
 import { createAuditRouter } from '../modules/audit/audit.routes';
+import { createAnalyticsRouter } from '../modules/analytics/analytics.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -137,6 +138,9 @@ export function createApiRouter({
     '/workspaces/:workspaceId/teams',
     createTeamRouter({ config, service: teamService, invitationService }),
   );
+
+  // Analytics are user-scoped and permission-filtered by workspace access.
+  router.use('/analytics', createAnalyticsRouter({ config }));
 
   return router;
 }

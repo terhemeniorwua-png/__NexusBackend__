@@ -992,6 +992,8 @@ model Task {
   @@index([parentTaskId])
   @@index([creatorId])
   @@index([dueDate])
+  @@index([createdAt])
+  @@index([completedAt])
   @@index([status, dueDate])
 }
 
@@ -1304,6 +1306,7 @@ model FileAttachment {
   @@index([commentId])
   @@index([uploadedById])
   @@index([storageKey])
+  @@index([workspaceId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
