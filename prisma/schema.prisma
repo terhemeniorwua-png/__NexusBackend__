@@ -722,6 +722,7 @@ model NotificationPreference {
   userId       String
   type         NotificationType
   inAppEnabled Boolean          @default(true)
+  emailEnabled Boolean          @default(true)
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 

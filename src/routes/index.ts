@@ -22,6 +22,8 @@ import {
 import { createTeamRouter } from '../modules/teams/team.routes';
 import { createTeamService, type TeamService } from '../modules/teams/team.service';
 import type { ReadinessProbe } from '../services/health';
+import type { QueueStatusProbe } from '../services/workers/queue-status';
+import type { WorkerHealthRegistry } from '../services/workers/worker-health';
 import { createHealthRouter } from './health';
 import { createBillingRouter } from '../modules/billing/billing.routes';
 import { createBillingService, type BillingService } from '../modules/billing/billing.service';
@@ -48,6 +50,8 @@ import { createAuditRouter } from '../modules/audit/audit.routes';
 interface ApiRouterOptions {
   config: AppConfig;
   readinessProbe: ReadinessProbe;
+  workerHealth?: WorkerHealthRegistry;
+  queueStatusProbe?: QueueStatusProbe;
   authService?: AuthService;
   usersService?: UsersService;
   workspaceService?: WorkspaceService;
@@ -60,6 +64,8 @@ interface ApiRouterOptions {
 export function createApiRouter({
   config,
   readinessProbe,
+  workerHealth,
+  queueStatusProbe,
   authService = createAuthService(config),
   usersService,
   workspaceService = createWorkspaceService(config),
@@ -70,7 +76,10 @@ export function createApiRouter({
 }: ApiRouterOptions): Router {
   const router = Router();
 
-  router.use('/health', createHealthRouter({ config, readinessProbe }));
+  router.use(
+    '/health',
+    createHealthRouter({ config, readinessProbe, workerHealth, queueStatusProbe }),
+  );
   router.use('/billing', createBillingRouter({ config, service: billingService }));
   router.use('/privacy-requests', createPrivacyRouter({ config }));
   router.use('/auth', createAuthRouter({ config, service: authService }));

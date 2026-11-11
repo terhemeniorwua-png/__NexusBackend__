@@ -90,9 +90,15 @@ export const updateNotificationPreferencesSchema = z
         z
           .object({
             type: z.enum(NotificationType),
-            inAppEnabled: z.boolean(),
+            inAppEnabled: z.boolean().optional(),
+            emailEnabled: z.boolean().optional(),
           })
-          .strict(),
+          .strict()
+          .refine(
+            (preference) =>
+              preference.inAppEnabled !== undefined || preference.emailEnabled !== undefined,
+            { message: 'Provide at least one channel preference' },
+          ),
       )
       .min(1)
       .max(Object.keys(NotificationType).length)

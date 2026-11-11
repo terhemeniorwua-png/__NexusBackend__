@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import type { WorkerHealthRecorder } from '../../services/workers/worker-health';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import { createIntegrationService, type ProcessSyncJobsResult } from './integration.service';
 
@@ -25,6 +26,8 @@ export interface IntegrationSyncWorkerDependencies {
   logger?: Logger;
   pollIntervalMs?: number;
   now?: () => Date;
+  /** Optional liveness recorder for `GET /health/workers`. */
+  health?: WorkerHealthRecorder;
 }
 
 export function createIntegrationSyncWorker(
@@ -50,10 +53,13 @@ export function createIntegrationSyncWorker(
   async function tick(): Promise<void> {
     if (stopped) return;
     running = true;
+    deps.health?.passStarted();
     try {
       await runOnce();
+      deps.health?.succeeded();
     } catch (error) {
       log.error('integration_sync_pass_failed', { error });
+      deps.health?.failed(error);
     } finally {
       running = false;
       if (!stopped) {
@@ -67,6 +73,7 @@ export function createIntegrationSyncWorker(
     start(): void {
       if (!stopped) return;
       stopped = false;
+      deps.health?.started();
       timer = setTimeout(() => void tick(), 0);
       timer.unref();
     },
@@ -75,6 +82,7 @@ export function createIntegrationSyncWorker(
       if (timer) clearTimeout(timer);
       timer = null;
       while (running) await new Promise((resolve) => setTimeout(resolve, 25));
+      deps.health?.stopped();
     },
     runOnce,
   };

@@ -59,7 +59,7 @@ export function createNotificationService(prisma: PrismaClient = getPrismaClient
         readAt: n.readAt?.toISOString() ?? null,
         createdAt: n.createdAt.toISOString(),
       }));
-      const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+      const nextCursor = hasMore ? (items[items.length - 1]?.id ?? null) : null;
 
       return { items, nextCursor, unreadCount };
     },
@@ -93,17 +93,26 @@ export function createNotificationService(prisma: PrismaClient = getPrismaClient
 
     async listPreferences(
       input: Input & { workspaceId: string },
-    ): Promise<Array<{ type: string; inAppEnabled: boolean }>> {
+    ): Promise<Array<{ type: string; inAppEnabled: boolean; emailEnabled: boolean }>> {
       const prefs = await prisma.notificationPreference.findMany({
         where: { workspaceId: input.workspaceId, userId: input.userId },
-        select: { type: true, inAppEnabled: true },
+        select: { type: true, inAppEnabled: true, emailEnabled: true },
         orderBy: { type: 'asc' },
       });
-      return prefs.map((p) => ({ type: p.type as string, inAppEnabled: p.inAppEnabled }));
+      return prefs.map((p) => ({
+        type: p.type as string,
+        inAppEnabled: p.inAppEnabled,
+        emailEnabled: p.emailEnabled,
+      }));
     },
 
     async updatePreference(
-      input: Input & { workspaceId: string; type: NotificationType; inAppEnabled: boolean },
+      input: Input & {
+        workspaceId: string;
+        type: NotificationType;
+        inAppEnabled?: boolean;
+        emailEnabled?: boolean;
+      },
     ): Promise<void> {
       // Verify the user is a member of the workspace
       const membership = await prisma.workspaceMembership.findUnique({
@@ -113,8 +122,23 @@ export function createNotificationService(prisma: PrismaClient = getPrismaClient
         select: { id: true },
       });
       if (!membership) {
-        throw new AppError(403, 'WORKSPACE_ACCESS_DENIED', 'You are not a member of this workspace');
+        throw new AppError(
+          403,
+          'WORKSPACE_ACCESS_DENIED',
+          'You are not a member of this workspace',
+        );
       }
+
+      const existing = await prisma.notificationPreference.findUnique({
+        where: {
+          workspaceId_userId_type: {
+            workspaceId: input.workspaceId,
+            userId: input.userId,
+            type: input.type,
+          },
+        },
+        select: { inAppEnabled: true, emailEnabled: true },
+      });
 
       await prisma.notificationPreference.upsert({
         where: {
@@ -128,15 +152,30 @@ export function createNotificationService(prisma: PrismaClient = getPrismaClient
           workspaceId: input.workspaceId,
           userId: input.userId,
           type: input.type,
-          inAppEnabled: input.inAppEnabled,
+          inAppEnabled: input.inAppEnabled ?? existing?.inAppEnabled ?? true,
+          emailEnabled: input.emailEnabled ?? existing?.emailEnabled ?? true,
         },
-        update: { inAppEnabled: input.inAppEnabled },
+        update: {
+          ...(input.inAppEnabled !== undefined ? { inAppEnabled: input.inAppEnabled } : {}),
+          ...(input.emailEnabled !== undefined ? { emailEnabled: input.emailEnabled } : {}),
+        },
       });
     },
 
     async listActivity(
       input: Input & { workspaceId: string; cursor?: string; limit: number },
-    ): Promise<{ items: Array<{ id: string; action: string; actorId: string | null; targetType: string; targetId: string; metadata: Record<string, unknown> | null; createdAt: string }>; nextCursor: string | null }> {
+    ): Promise<{
+      items: Array<{
+        id: string;
+        action: string;
+        actorId: string | null;
+        targetType: string;
+        targetId: string;
+        metadata: Record<string, unknown> | null;
+        createdAt: string;
+      }>;
+      nextCursor: string | null;
+    }> {
       const entries = await prisma.auditLog.findMany({
         where: { workspaceId: input.workspaceId },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -159,7 +198,7 @@ export function createNotificationService(prisma: PrismaClient = getPrismaClient
         metadata: e.metadata as Record<string, unknown> | null,
         createdAt: e.createdAt.toISOString(),
       }));
-      const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+      const nextCursor = hasMore ? (items[items.length - 1]?.id ?? null) : null;
 
       return { items, nextCursor };
     },

@@ -1,4 +1,5 @@
 import type { AppConfig } from '../../config/env';
+import type { WorkerHealthRecorder } from '../../services/workers/worker-health';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import type { DeliveryPassResult, EmailDeliveryService } from './delivery.service';
 import { summarizeErrorForLog } from './log-privacy';
@@ -25,6 +26,8 @@ export interface EmailWorkerDependencies {
   service: EmailDeliveryService;
   config: AppConfig;
   logger?: Logger;
+  /** Optional liveness recorder for `GET /health/workers`. */
+  health?: WorkerHealthRecorder;
 }
 
 export function createEmailWorker(deps: EmailWorkerDependencies): EmailWorker {
@@ -43,6 +46,7 @@ export function createEmailWorker(deps: EmailWorkerDependencies): EmailWorker {
     }
 
     running = true;
+    deps.health?.passStarted();
 
     try {
       const result = await runOnce();
@@ -56,8 +60,11 @@ export function createEmailWorker(deps: EmailWorkerDependencies): EmailWorker {
           suppressed: result.suppressed,
         });
       }
+
+      deps.health?.succeeded();
     } catch (error) {
       log.error('email_worker_pass_failed', { error: summarizeErrorForLog(error) });
+      deps.health?.failed(error);
     } finally {
       running = false;
       schedule();
@@ -84,6 +91,7 @@ export function createEmailWorker(deps: EmailWorkerDependencies): EmailWorker {
       }
 
       stopped = false;
+      deps.health?.started();
       log.info('email_worker_started', {
         pollIntervalMs: deps.config.emailWorkerPollIntervalMs,
         batchSize: deps.config.emailWorkerBatchSize,
@@ -106,6 +114,7 @@ export function createEmailWorker(deps: EmailWorkerDependencies): EmailWorker {
       }
 
       log.info('email_worker_stopped');
+      deps.health?.stopped();
     },
 
     runOnce,

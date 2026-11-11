@@ -9,6 +9,18 @@ import type { AppConfig } from '../../config/env';
 import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
 import {
+  buildBillingPaymentFailedEmail,
+  buildBillingReceiptEmail,
+  buildBillingSubscriptionCancelledEmail,
+  buildBillingSubscriptionNotRenewingEmail,
+  buildEmailBrand,
+  sendEmail,
+  type EmailMessage,
+  type EmailSender,
+} from '../../services/email';
+import { summarizeErrorForLog } from '../../services/email/log-privacy';
+import { logger as defaultLogger, type Logger } from '../../utils/logger';
+import {
   getWorkspaceBillableMemberIds,
   getRecurringSubscriptionChargeCents,
 } from './membership-billing';
@@ -113,11 +125,83 @@ export interface BillingService {
 
 export function createBillingService(
   config: AppConfig,
-  options: { prisma?: PrismaClient; paystack?: PaystackClient; now?: () => Date } = {},
+  options: {
+    prisma?: PrismaClient;
+    paystack?: PaystackClient;
+    now?: () => Date;
+    send?: EmailSender['send'];
+    logger?: Logger;
+  } = {},
 ): BillingService {
   const prisma = options.prisma ?? getPrismaClient();
   const paystack = options.paystack ?? createPaystackClient(config);
   const now = options.now ?? (() => new Date());
+  const log = options.logger ?? defaultLogger;
+  const send = options.send ?? sendEmail;
+  const emailBrand = buildEmailBrand(config);
+
+  function billingUrl(workspaceId: string): string {
+    return `${config.frontendUrl.replace(/\/+$/, '')}/workspaces/${workspaceId}/billing`;
+  }
+
+  /**
+   * Billing notices are transactional and go to the workspace owner.
+   *
+   * They are not controlled by notification preferences: a receipt or a
+   * failed-payment warning must still reach the payer. Delivery is optional,
+   * so an email failure never rolls back billing state that the provider has
+   * already confirmed.
+   */
+  async function notifyWorkspaceOwner(
+    workspaceId: string,
+    eventKey: string,
+    build: (base: {
+      to: string;
+      name: string;
+      brand: typeof emailBrand;
+      workspaceName: string;
+      billingUrl: string;
+      idempotencyKey: string;
+    }) => EmailMessage,
+  ): Promise<void> {
+    try {
+      const workspace = await prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: {
+          name: true,
+          owner: {
+            select: { name: true, email: true, status: true, deletedAt: true },
+          },
+        },
+      });
+
+      if (
+        !workspace ||
+        workspace.owner.status !== 'ACTIVE' ||
+        workspace.owner.deletedAt ||
+        !workspace.owner.email
+      ) {
+        return;
+      }
+
+      const message = build({
+        to: workspace.owner.email,
+        name: workspace.owner.name,
+        brand: emailBrand,
+        workspaceName: workspace.name,
+        billingUrl: billingUrl(workspaceId),
+        idempotencyKey: `billing:${eventKey}`,
+      });
+
+      await send(message);
+    } catch (error) {
+      log.warn('billing_email_failed', {
+        workspaceId,
+        eventKey,
+        error: summarizeErrorForLog(error),
+      });
+    }
+  }
 
   function assertUsdAvailable(): void {
     if (!config.paystackSecretKey || !config.paystackUsdEnabled || !config.paystackEncryptionKey) {
@@ -1193,6 +1277,33 @@ export function createBillingService(
           }
         }
       }
+      if (event === 'charge.success' && reference) {
+        const payment = await prisma.billingPayment.findUnique({
+          where: { providerReference: reference },
+          select: {
+            workspaceId: true,
+            amountSubunit: true,
+            currency: true,
+            paidAt: true,
+            periodEnd: true,
+            status: true,
+            subscription: { select: { plan: true } },
+          },
+        });
+
+        if (payment && payment.status === 'SUCCESS') {
+          await notifyWorkspaceOwner(payment.workspaceId, eventKey, (base) =>
+            buildBillingReceiptEmail({
+              ...base,
+              amountSubunit: payment.amountSubunit,
+              currency: payment.currency,
+              paidAt: payment.paidAt ?? now(),
+              ...(payment.subscription?.plan ? { plan: payment.subscription.plan } : {}),
+              ...(payment.periodEnd ? { periodEnd: payment.periodEnd } : {}),
+            }),
+          );
+        }
+      }
       if (
         (event === 'subscription.disable' || event === 'subscription.not_renew') &&
         subscriptionCode
@@ -1243,6 +1354,20 @@ export function createBillingService(
                 : {}),
             },
           });
+
+          const accessEndsAt = subscription.currentPeriodEnd;
+          const nonRenewing = Boolean(accessEndsAt && accessEndsAt > now());
+          await notifyWorkspaceOwner(subscription.workspaceId, eventKey, (base) =>
+            nonRenewing
+              ? buildBillingSubscriptionNotRenewingEmail({
+                  ...base,
+                  ...(accessEndsAt ? { accessEndsAt } : {}),
+                })
+              : buildBillingSubscriptionCancelledEmail({
+                  ...base,
+                  ...(accessEndsAt ? { accessEndsAt } : {}),
+                }),
+          );
         }
       }
       await prisma.billingWebhookEvent
@@ -1283,6 +1408,14 @@ export function createBillingService(
               update: {},
             });
           }
+
+          await notifyWorkspaceOwner(subscription.workspaceId, eventKey, (base) =>
+            buildBillingPaymentFailedEmail({
+              ...base,
+              ...(amount !== undefined ? { amountSubunit: amount } : {}),
+              ...(currency ? { currency } : {}),
+            }),
+          );
         }
       }
     },

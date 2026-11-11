@@ -13,6 +13,11 @@ import { createGoogleOAuthCallbackRouter } from './modules/auth/google-oauth.rou
 import { createApiRouter } from './routes';
 import type { RateLimitRedisClient } from './services/cache/rate-limit-store';
 import { createReadinessProbe, type ReadinessProbe } from './services/health';
+import type { QueueStatusProbe } from './services/workers/queue-status';
+import {
+  createWorkerHealthRegistry,
+  type WorkerHealthRegistry,
+} from './services/workers/worker-health';
 import { logger as defaultLogger, type Logger } from './utils/logger';
 
 export interface CreateAppOptions {
@@ -21,12 +26,19 @@ export interface CreateAppOptions {
   logger?: Logger;
   /** Injectable for tests. Production uses the shared Redis client. */
   rateLimitClient?: RateLimitRedisClient;
+  /** Process-local worker liveness. A fresh empty registry is used by default. */
+  workerHealth?: WorkerHealthRegistry;
+  /** Durable queue depth. Production wires the Prisma probe in `server.ts`. */
+  queueStatusProbe?: QueueStatusProbe;
 }
 
 export function createApp(options: CreateAppOptions = {}): Express {
   const config = options.config ?? loadEnv();
   const appLogger = options.logger ?? defaultLogger;
   const readinessProbe = options.readinessProbe ?? createReadinessProbe(config);
+  const workerHealth =
+    options.workerHealth ??
+    createWorkerHealthRegistry({ staleAfterMs: config.workerHealthStaleMs });
 
   appLogger.setLevel(config.logLevel);
 
@@ -72,7 +84,15 @@ export function createApp(options: CreateAppOptions = {}): Express {
   );
   app.use(express.urlencoded({ extended: false, limit: config.requestBodyLimit }));
 
-  app.use(config.apiPrefix, createApiRouter({ config, readinessProbe }));
+  app.use(
+    config.apiPrefix,
+    createApiRouter({
+      config,
+      readinessProbe,
+      workerHealth,
+      ...(options.queueStatusProbe ? { queueStatusProbe: options.queueStatusProbe } : {}),
+    }),
+  );
 
   app.use(notFoundHandler);
   app.use(createErrorHandler(appLogger, config));

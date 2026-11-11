@@ -11,6 +11,7 @@ import {
 } from './email';
 import { redactEmailAddresses, summarizeErrorForLog } from './email/log-privacy';
 import { isAddressSuppressed } from './email/suppression.service';
+import { isEmailNotificationEnabled } from './notification-preferences';
 
 /**
  * Comment mention email notifier.
@@ -27,7 +28,8 @@ import { isAddressSuppressed } from './email/suppression.service';
  * row instead of sending another email.
  */
 
-export type MentionNoticeStatus = 'queued' | 'suppressed' | 'not_found' | 'ineligible' | 'failed';
+export type MentionNoticeStatus =
+  'queued' | 'suppressed' | 'not_found' | 'ineligible' | 'preference_disabled' | 'failed';
 
 export interface MentionNoticeResult {
   status: MentionNoticeStatus;
@@ -42,6 +44,7 @@ export interface MentionEmailNotifierDependencies {
   logger?: Logger;
   send?: MentionEmailSender;
   isSuppressed?: (client: PrismaClient, address: string) => Promise<boolean>;
+  isEmailEnabled?: typeof isEmailNotificationEnabled;
 }
 
 export interface NotifyMentionInput {
@@ -93,6 +96,7 @@ export function createMentionEmailNotifier(
   const log = deps.logger ?? defaultLogger;
   const send = deps.send ?? sendEmail;
   const suppressed = deps.isSuppressed ?? isAddressSuppressed;
+  const emailEnabled = deps.isEmailEnabled ?? isEmailNotificationEnabled;
   const brand = buildEmailBrand(config);
 
   return {
@@ -192,6 +196,16 @@ export function createMentionEmailNotifier(
 
         if (await suppressed(client, recipient.email)) {
           return { status: 'suppressed', accepted: false };
+        }
+
+        if (
+          !(await emailEnabled(client, {
+            workspaceId: workspace.id,
+            userId: recipient.id,
+            type: 'MENTION',
+          }))
+        ) {
+          return { status: 'preference_disabled', accepted: false };
         }
 
         const message = buildMentionEmail({
