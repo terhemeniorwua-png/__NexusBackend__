@@ -116,6 +116,41 @@ export type AiTaskPreview = z.infer<typeof aiTaskPreviewSchema>;
 export type AiTaskConfirmBody = z.infer<typeof aiTaskConfirmSchema>;
 
 // ---------------------------------------------------------------------------
+// AI summarization (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiSummarizeSchema = z
+  .object({
+    workspaceId: uuid,
+    contextType: z.enum(['channel', 'project', 'task', 'document', 'meeting']),
+    contextId: uuid.optional(),
+    channelId: uuid.optional(),
+    from: dateInput.optional(),
+    to: dateInput.optional(),
+    maxMessages: z.coerce.number().int().min(1).max(500).default(200),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.contextType === 'channel'
+        ? Boolean(value.channelId)
+        : Boolean(value.contextId),
+    {
+      message: 'channelId is required for channels; contextId is required for other context types',
+      path: ['contextId'],
+    },
+  )
+  .refine(
+    (value) => !value.from || !value.to || new Date(value.from) <= new Date(value.to),
+    {
+      message: 'from must be on or before to',
+      path: ['to'],
+    },
+  );
+
+export type AiSummarizeBody = z.infer<typeof aiSummarizeSchema>;
+
+// ---------------------------------------------------------------------------
 // AI action proposals (Phase 23)
 // ---------------------------------------------------------------------------
 

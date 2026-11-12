@@ -115,6 +115,8 @@ function runTests(rawDbUrl: string): void {
   let limitUser: TestUser;
   let workspaceId: string;
   let projectId: string;
+  let channelId: string;
+  let documentId: string;
   const userIds: string[] = [];
   const workspaceIds: string[] = [];
   const tag = `${process.pid}-${Date.now()}`;
@@ -213,6 +215,41 @@ function runTests(rawDbUrl: string): void {
       },
     });
     projectId = project.id;
+
+    const channel = await database.prisma.channel.create({
+      data: {
+        workspaceId,
+        type: 'WORKSPACE',
+        name: 'AI summarization channel',
+        createdById: owner.id,
+      },
+    });
+    channelId = channel.id;
+
+    await database.prisma.channelMembership.create({
+      data: { channelId: channel.id, userId: owner.id, role: 'MEMBER' },
+    });
+
+    await database.prisma.message.createMany({
+      data: [
+        { channelId: channel.id, authorId: owner.id, body: 'We agreed to ship the feature by Friday.' },
+        { channelId: channel.id, authorId: owner.id, body: 'The design review is scheduled for Thursday.' },
+        { channelId: channel.id, authorId: owner.id, body: 'Remaining work: update the docs and run QA.' },
+      ],
+    });
+
+    const document = await database.prisma.document.create({
+      data: {
+        workspaceId,
+        projectId,
+        title: 'AI summarization document',
+        content:
+          'This document describes the summarization feature. It covers project, task, document and channel summarization. ' +
+          'All retrieved context is permission-checked before being sent to the model.',
+        authorId: owner.id,
+      },
+    });
+    documentId = document.id;
   });
 
   after(async () => {
@@ -650,4 +687,121 @@ function runTests(rawDbUrl: string): void {
       (error: unknown) => error instanceof AppError && error.statusCode === 404,
     );
   });
+
+  test('summarizing a project returns a model summary through permission-checked context', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Project summary result.'),
+    });
+
+    const result = await service.summarize({
+      userId: owner.id,
+      workspaceId,
+      contextType: 'project',
+      contextId: projectId,
+    });
+
+    assert.equal(result.summary, 'Project summary result.');
+    assert.ok(result.usage.totalTokens >= 0);
+  });
+
+  test('summarizing a document returns a model summary through permission-checked context', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Document summary result.'),
+    });
+
+    const result = await service.summarize({
+      userId: owner.id,
+      workspaceId,
+      contextType: 'document',
+      contextId: documentId,
+    });
+
+    assert.equal(result.summary, 'Document summary result.');
+  });
+
+  test('summarizing a channel returns a model summary of its messages', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Channel summary result.'),
+    });
+
+    const result = await service.summarize({
+      userId: owner.id,
+      workspaceId,
+      contextType: 'channel',
+      channelId,
+      maxMessages: 50,
+    });
+
+    assert.equal(result.summary, 'Channel summary result.');
+  });
+
+  test('channel summarization is rejected for a caller without channel access', async () => {
+    const privateChannel = await database.prisma.channel.create({
+      data: {
+        workspaceId,
+        type: 'PRIVATE',
+        name: 'private summarization channel',
+        createdById: owner.id,
+      },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    await assert.rejects(
+      () =>
+        service.summarize({
+          userId: member.id,
+          workspaceId,
+          contextType: 'channel',
+          channelId: privateChannel.id,
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('channel summarization requires a channelId', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+
+    await assert.rejects(
+      () =>
+        service.summarize({
+          userId: owner.id,
+          workspaceId,
+          contextType: 'channel',
+        }),
+      (error: unknown) => error instanceof AppError && error.code === 'CHANNEL_ID_REQUIRED',
+    );
+  });
+
+  function summarizeClient(summary: string): AiClient {
+    return {
+      isConfigured: () => true,
+      async chat() {
+        return { content: summary, model: 'stub-model', usage: taskUsage, references: [] };
+      },
+      async *streamChat() {
+        yield {
+          type: 'done',
+          response: { content: summary, model: 'stub', usage: taskUsage, references: [] },
+        };
+      },
+      async analyzeWriting() {
+        return { suggestions: [], detectedTone: null, summary: null, model: 'stub', usage: taskUsage };
+      },
+      async rewrite() {
+        return { text: summary, explanation: null, model: 'stub', usage: taskUsage };
+      },
+      async health() {
+        return { status: 'up', latencyMs: 1, version: 'stub' };
+      },
+    };
+  }
 }
+

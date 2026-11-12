@@ -13,6 +13,7 @@ import {
   aiChatBodySchema,
   aiConversationParamsSchema,
   aiConversationQuerySchema,
+  aiSummarizeSchema,
   aiTaskConfirmSchema,
   aiTaskGenerateSchema,
   aiUsageQuerySchema,
@@ -21,6 +22,7 @@ import {
   aiWritingRewriteSchema,
   aiWritingSessionParamsSchema,
   type AiChatBody,
+  type AiSummarizeBody,
   type AiTaskConfirmBody,
   type AiTaskGenerateBody,
   type AiWritingAnalyzeBody,
@@ -312,6 +314,33 @@ export function createAiRouter({
           { userId: userId(req), ...body },
           requestMeta(req),
         ),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI summarization (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.post(
+    '/summarize',
+    requireAuth,
+    requireActive,
+    validate({ body: aiSummarizeSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiSummarizeBody;
+      sendSuccess(
+        res,
+        await service.summarize({
+          userId: userId(req),
+          workspaceId: body.workspaceId ?? null,
+          contextType: body.contextType,
+          contextId: body.contextId ?? null,
+          channelId: body.channelId ?? null,
+          from: body.from ?? null,
+          to: body.to ?? null,
+          maxMessages: body.maxMessages,
+        }),
       );
     },
   );
