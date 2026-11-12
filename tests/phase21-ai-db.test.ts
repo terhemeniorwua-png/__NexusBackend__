@@ -927,5 +927,21 @@ function runTests(rawDbUrl: string): void {
     const result = await service.weeklyReport({ userId: owner.id, workspaceId });
     assert.equal(result.report, 'You completed one task this week.');
   });
+
+  test('knowledge search answers from permission-filtered search results', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('The summarization feature covers project, task and channel summarization.'),
+    });
+
+    const result = await service.knowledgeSearch({
+      userId: owner.id,
+      workspaceId,
+      query: 'summarization feature',
+    });
+
+    assert.ok(result.answer.includes('summarization'));
+    assert.ok(Array.isArray(result.sources));
+  });
 }
 

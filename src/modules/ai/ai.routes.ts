@@ -14,6 +14,7 @@ import {
   aiConversationParamsSchema,
   aiConversationQuerySchema,
   aiDailyPlanSchema,
+  aiKnowledgeSearchSchema,
   aiPersonalTasksSchema,
   aiProjectIntelligenceSchema,
   aiSummarizeSchema,
@@ -27,6 +28,7 @@ import {
   aiWritingSessionParamsSchema,
   type AiChatBody,
   type AiDailyPlanBody,
+  type AiKnowledgeSearchBody,
   type AiProjectIntelligenceBody,
   type AiSummarizeBody,
   type AiTaskConfirmBody,
@@ -416,6 +418,26 @@ export function createAiRouter({
       sendSuccess(
         res,
         await service.weeklyReport({ userId: userId(req), workspaceId: body.workspaceId }),
+      );
+    },
+  );
+
+  router.post(
+    '/knowledge/search',
+    requireAuth,
+    requireActive,
+    validate({ body: aiKnowledgeSearchSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiKnowledgeSearchBody;
+      sendSuccess(
+        res,
+        await service.knowledgeSearch({
+          userId: userId(req),
+          workspaceId: body.workspaceId,
+          query: body.query,
+          category: body.category ?? null,
+          limit: body.limit,
+        }),
       );
     },
   );

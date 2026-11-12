@@ -178,6 +178,21 @@ export type AiDailyPlanBody = z.infer<typeof aiDailyPlanSchema>;
 export type AiWeeklyReportBody = z.infer<typeof aiWeeklyReportSchema>;
 
 // ---------------------------------------------------------------------------
+// AI knowledge search (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiKnowledgeSearchSchema = z
+  .object({
+    workspaceId: uuid,
+    query: z.string().trim().min(1).max(1_000),
+    category: z.string().trim().max(60).optional(),
+    limit: z.coerce.number().int().min(1).max(20).default(10),
+  })
+  .strict();
+
+export type AiKnowledgeSearchBody = z.infer<typeof aiKnowledgeSearchSchema>;
+
+// ---------------------------------------------------------------------------
 // AI action proposals (Phase 23)
 // ---------------------------------------------------------------------------
 
