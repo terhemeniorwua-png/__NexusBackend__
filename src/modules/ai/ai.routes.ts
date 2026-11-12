@@ -13,6 +13,7 @@ import {
   aiChatBodySchema,
   aiConversationParamsSchema,
   aiConversationQuerySchema,
+  aiProjectIntelligenceSchema,
   aiSummarizeSchema,
   aiTaskConfirmSchema,
   aiTaskGenerateSchema,
@@ -22,6 +23,7 @@ import {
   aiWritingRewriteSchema,
   aiWritingSessionParamsSchema,
   type AiChatBody,
+  type AiProjectIntelligenceBody,
   type AiSummarizeBody,
   type AiTaskConfirmBody,
   type AiTaskGenerateBody,
@@ -340,6 +342,28 @@ export function createAiRouter({
           from: body.from ?? null,
           to: body.to ?? null,
           maxMessages: body.maxMessages,
+        }),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI project intelligence (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.post(
+    '/projects/intelligence',
+    requireAuth,
+    requireActive,
+    validate({ body: aiProjectIntelligenceSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiProjectIntelligenceBody;
+      sendSuccess(
+        res,
+        await service.projectIntelligence({
+          userId: userId(req),
+          workspaceId: body.workspaceId,
+          projectId: body.projectId,
         }),
       );
     },

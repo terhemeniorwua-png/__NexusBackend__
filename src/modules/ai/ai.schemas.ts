@@ -151,6 +151,19 @@ export const aiSummarizeSchema = z
 export type AiSummarizeBody = z.infer<typeof aiSummarizeSchema>;
 
 // ---------------------------------------------------------------------------
+// AI project intelligence (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiProjectIntelligenceSchema = z
+  .object({
+    workspaceId: uuid,
+    projectId: uuid,
+  })
+  .strict();
+
+export type AiProjectIntelligenceBody = z.infer<typeof aiProjectIntelligenceSchema>;
+
+// ---------------------------------------------------------------------------
 // AI action proposals (Phase 23)
 // ---------------------------------------------------------------------------
 

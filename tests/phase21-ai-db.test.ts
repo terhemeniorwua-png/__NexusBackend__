@@ -250,6 +250,57 @@ function runTests(rawDbUrl: string): void {
       },
     });
     documentId = document.id;
+
+    const past = new Date(Date.now() - 86_400_000).toISOString();
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+
+    const taskOverdue = await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-OVR',
+        title: 'Overdue unassigned task',
+        status: 'ASSIGNED',
+        dueDate: past,
+        creatorId: owner.id,
+      },
+    });
+
+    await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-INP',
+        title: 'In progress task',
+        status: 'IN_PROGRESS',
+        dueDate: future,
+        creatorId: owner.id,
+        assignees: { create: [{ userId: owner.id, assignedBy: owner.id }] },
+      },
+    });
+
+    await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-BLK',
+        title: 'Blocked task',
+        status: 'ASSIGNED',
+        dueDate: future,
+        creatorId: owner.id,
+        assignees: { create: [{ userId: owner.id, assignedBy: owner.id }] },
+        dependencies: { create: { dependsOnTaskId: taskOverdue.id } },
+      },
+    });
+
+    await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-DONE',
+        title: 'Completed task',
+        status: 'APPROVED',
+        completedAt: new Date(),
+        creatorId: owner.id,
+        assignees: { create: [{ userId: owner.id, assignedBy: owner.id }] },
+      },
+    });
   });
 
   after(async () => {
@@ -803,5 +854,47 @@ function runTests(rawDbUrl: string): void {
       },
     };
   }
+
+  test('project intelligence returns DB-computed numbers and a model explanation', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('These numbers show one overdue task and an uneven workload.'),
+    });
+
+    const result = await service.projectIntelligence({
+      userId: owner.id,
+      workspaceId,
+      projectId,
+    });
+
+    assert.ok(result.numbers.totalTasks >= 4);
+    assert.ok(result.numbers.overdueTasks >= 1);
+    assert.ok(result.numbers.blockedTasks >= 1);
+    assert.ok(result.numbers.completedTasks >= 1);
+    assert.ok(
+      result.numbers.workloadByAssignee.some(
+        (w) => w.assigneeId === owner.id && w.incompleteTasks >= 2,
+      ),
+    );
+    assert.equal(result.explanation, 'These numbers show one overdue task and an uneven workload.');
+  });
+
+  test('project intelligence is rejected for a caller without project access', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    await assert.rejects(
+      () =>
+        service.projectIntelligence({
+          userId: member.id,
+          workspaceId,
+          projectId,
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
 }
 

@@ -571,6 +571,178 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
       };
     },
 
+    async projectIntelligence(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+    }): Promise<{
+      projectId: string;
+      numbers: {
+        totalTasks: number;
+        overdueTasks: number;
+        unassignedTasks: number;
+        blockedTasks: number;
+        completedTasks: number;
+        workloadByAssignee: Array<{
+          assigneeId: string;
+          assigneeName: string | null;
+          incompleteTasks: number;
+        }>;
+      };
+      explanation: string;
+      model: string;
+      usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+    }> {
+      ensureConfigured();
+
+      const workspace = await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const access = await requireProjectAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        workspaceRole: workspace.effectiveRole,
+        capability: ProjectCapability.ViewProject,
+      });
+
+      const now = new Date();
+      const tasks = await prisma.task.findMany({
+        where: { projectId: input.projectId, deletedAt: null },
+        include: {
+          assignees: { select: { userId: true, user: { select: { name: true } } } },
+          dependencies: { select: { dependsOnTaskId: true } },
+        },
+        orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+      });
+
+      const incompleteStatuses = new Set([
+        'ASSIGNED',
+        'IN_PROGRESS',
+        'SUBMITTED',
+        'UNDER_REVIEW',
+        'APPROVED',
+      ]);
+      const isIncomplete = (taskStatus: string, completedAt: Date | null) =>
+        completedAt === null && incompleteStatuses.has(taskStatus);
+      const incompleteTaskIds = new Set(
+        tasks
+          .filter((task) => isIncomplete(task.status, task.completedAt))
+          .map((task) => task.id),
+      );
+
+      let overdueTasks = 0;
+      let unassignedTasks = 0;
+      let blockedTasks = 0;
+      let completedTasks = 0;
+      const workloadMap = new Map<
+        string,
+        { assigneeId: string; assigneeName: string | null; incompleteTasks: number }
+      >();
+
+      for (const task of tasks) {
+        if (task.completedAt !== null) completedTasks++;
+        if (
+          task.dueDate &&
+          task.dueDate < now &&
+          isIncomplete(task.status, task.completedAt)
+        )
+          overdueTasks++;
+        if (task.assignees.length === 0) unassignedTasks++;
+        const hasIncompleteDependency = task.dependencies.some(
+          (dependency) => incompleteTaskIds.has(dependency.dependsOnTaskId),
+        );
+        if (hasIncompleteDependency) blockedTasks++;
+        if (isIncomplete(task.status, task.completedAt)) {
+          for (const assignee of task.assignees) {
+            const existing =
+              workloadMap.get(assignee.userId) ?? {
+                assigneeId: assignee.userId,
+                assigneeName: assignee.user.name ?? null,
+                incompleteTasks: 0,
+              };
+            existing.incompleteTasks += 1;
+            workloadMap.set(assignee.userId, existing);
+          }
+        }
+      }
+
+      const numbers = {
+        totalTasks: tasks.length,
+        overdueTasks,
+        unassignedTasks,
+        blockedTasks,
+        completedTasks,
+        workloadByAssignee: [...workloadMap.values()].sort(
+          (a, b) => b.incompleteTasks - a.incompleteTasks,
+        ),
+      };
+
+      const startedAt = performance.now();
+      let response: AiChatResponse;
+      try {
+        response = await client.chat({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are Nexus AI. You are given PROJECT INTELLIGENCE NUMBERS that were computed ' +
+                'by the backend from the real database. The model must NOT recompute or invent ' +
+                'numbers. Explain what the numbers mean in plain language, highlight risks ' +
+                '(overdue, blocked, unassigned, uneven workload), and suggest next steps. Keep ' +
+                'it concise. Do not fabricate additional metrics.',
+            },
+            {
+              role: 'user',
+              content: `Project: ${access.project.name} (${access.project.key})\nNumbers:\n${JSON.stringify(numbers)}`,
+            },
+          ],
+          operation: 'ai_project_intelligence',
+        });
+      } catch (error) {
+        await usageService
+          .record({
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            operation: 'ai_project_intelligence',
+            status: 'FAILURE',
+            errorCode:
+              error instanceof AiProviderError || error instanceof AiUnavailableError
+                ? error.code
+                : 'AI_PROVIDER_ERROR',
+            latencyMs: Math.round(performance.now() - startedAt),
+          })
+          .catch(() => undefined);
+        mapProviderError(error);
+      }
+
+      await usageService.record({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        operation: 'ai_project_intelligence',
+        model: response.model,
+        usage: response.usage,
+        latencyMs: Math.round(performance.now() - startedAt),
+        status: 'SUCCESS',
+      });
+
+      logger.info('ai_project_intelligence_completed', {
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        tokens: response.usage.totalTokens,
+      });
+
+      return {
+        projectId: input.projectId,
+        numbers,
+        explanation: response.content,
+        model: response.model,
+        usage: response.usage,
+      };
+    },
+
     async chat(input: AiChatInput, meta: AiRequestMeta = {}) {
       const startedAt = performance.now();
       const prepared = await prepare(input);
