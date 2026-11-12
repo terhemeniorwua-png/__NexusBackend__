@@ -391,9 +391,14 @@ It is responsible for:
 - Audit logging.
 - API access control.
 
-## 8.2 Python AI Service Responsibilities
+## 8.2 AI Processing Responsibilities
 
-Python/FastAPI is responsible for AI-related processing, including:
+AI processing can run either in-process in this backend (`AI_PROVIDER=openrouter`, calling OpenRouter
+directly) or in the optional independently deployable Python/FastAPI service (`AI_PROVIDER=service`).
+The Express backend owns authentication, authorisation, user identity, workspace context preparation
+and all application mutations regardless of which AI provider is active.
+
+AI-related processing includes:
 
 - AI conversations.
 - Retrieval-augmented generation.
@@ -412,16 +417,19 @@ The Python service must remain independently deployable.
 
 Do not move ordinary application business logic into Python.
 
-## 8.3 Express and Python Communication
+## 8.3 Express and AI Provider Communication
 
 - Express authenticates users.
 - Express verifies user permissions.
 - Express prepares authorised context.
-- Express communicates with Python through controlled service interfaces.
-- Python must not independently bypass application authorisation.
-- Python must not directly modify the main application database by default.
+- Express communicates with the AI provider through controlled service interfaces.
+- The AI provider must not independently bypass application authorisation.
+- The AI provider must not directly modify the main application database by default.
 - Express remains responsible for application mutations.
 - AI actions must be validated and authorised again by Express.
+- `AI_PROVIDER=openrouter` runs AI in-process via OpenRouter; `AI_PROVIDER=service` keeps the
+  Python/FastAPI service optional. Core Nexus features continue working when no AI provider is
+  configured.
 
 ## 8.4 Database Rules
 

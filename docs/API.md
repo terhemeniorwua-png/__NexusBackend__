@@ -584,7 +584,7 @@ request and response fields. Paths below are relative to `/api/v1`.
 | Integrations | `/integrations` | List/manage personal and workspace integrations, OAuth connections, enable/disable, token refresh, provider revocation on disconnect, and durable sync jobs. Live connections require provider credentials and callback configuration. |
 | Outbound webhooks | `/workspaces/{workspaceId}/webhooks` | Manage workspace webhook subscriptions and inspect/retry durable HMAC-signed deliveries. |
 | Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; read execution history; retry a failed run. Event triggers (task created, task completed, member joined) and daily/weekly schedules are executed by the background automation worker with conditions, bounded retries, idempotency, and workspace-scoped permissions. |
-| AI | `/ai` | Conversations and streamed answers, workspace-aware authorised context, usage limits, writing analysis/rewrite, and approval-gated AI actions. Requires `AI_ENABLED` plus service URL/token; degrades with a clear 503 when unconfigured. |
+| AI | `/ai` | Conversations and streamed answers, workspace-aware authorised context, usage limits, writing analysis/rewrite/summarize/translate, task generation with preview/confirm, summarization, project intelligence, personal productivity, knowledge search, meeting transcript summarization, and approval-gated AI actions. Runs in-process via OpenRouter when `AI_ENABLED=true` and `AI_PROVIDER=openrouter` (requires `AI_MODEL` and `OPENROUTER_API_KEY`); `AI_PROVIDER=service` keeps the optional Python/FastAPI service. Degrades with a clear 503 when unconfigured. |
 | Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. Use `?securityEvent=true` to show only security-relevant changes. |
 | Analytics | `/analytics` | Return permission-filtered aggregated workspace metrics (activity, projects, tasks, members, meetings, files, subscription). Results are cached for a short TTL. |
 
@@ -722,6 +722,15 @@ Nexus database and never executes a mutation itself.
 | GET | `/ai/conversations/{conversationId}` | Read one owned conversation and its messages. |
 | DELETE | `/ai/conversations/{conversationId}` | Delete an owned conversation and its messages. |
 | GET | `/ai/usage?workspaceId=` | Daily request and monthly token usage against configured limits. |
+| POST | `/ai/tasks/generate` | Return a validated task preview (title, description, status, priority, category, labels, dueDate) for a project. Saves nothing; confirm separately. Body: `{workspaceId,projectId,prompt}`. |
+| POST | `/ai/tasks/generate/confirm` | Create a task from a preview through the existing task service after re-checking permissions. Body: `{workspaceId,projectId,preview:{...}}`. |
+| POST | `/ai/summarize` | Summarise a channel (with optional `from`/`to` date range), project, task, document or meeting. Context is permission-checked before any text reaches the AI service. Body: `{workspaceId,contextType,contextId?,channelId?,from?,to?,maxMessages?}`. |
+| POST | `/ai/projects/intelligence` | Return DB-computed project health numbers (overdue, blocked, unassigned, completed tasks and per-assignee workload) plus a model explanation. Body: `{workspaceId,projectId}`. |
+| GET | `/ai/personal/tasks` | Tasks assigned to the caller in a workspace. Query: `?workspaceId=`. |
+| POST | `/ai/personal/daily-plan` | Propose a concise daily plan from the caller's assigned tasks. Body: `{workspaceId}`. |
+| POST | `/ai/personal/weekly-report` | Write a weekly report from the caller's tasks. Body: `{workspaceId}`. |
+| POST | `/ai/knowledge/search` | Answer a question from permission-filtered search results, citing sources as `[type:id]`. Body: `{workspaceId,query,category?,limit?}`. |
+| POST | `/ai/meetings/{meetingId}/summarize` | Summarize an existing meeting transcript for a participant or creator. Path: `meetingId`. |
 
 Context is limited to workspaces, projects, tasks, documents and meetings the
 caller may currently access. Private projects, hidden documents and meetings

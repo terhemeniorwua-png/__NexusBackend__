@@ -68,7 +68,7 @@ completion labels and the existence of a module are not sufficient proof.
 | 18                                             | PARTIALLY COMPLETE                      | Search DB tests pass and private project documents/private channels are filtered; full indexing/content criteria remain.                                                                                                                                                                                                                                                                |
 | 19                                             | PARTIALLY COMPLETE                      | Provider routes and mocked/DB tests exist; refresh, revocation, isolation and Gmail provider verification remain. Gmail code was not changed.                                                                                                                                                                                                                                           |
 | 20                                             | PARTIALLY COMPLETE                      | Automation CRUD exists; no trigger execution/worker path was found.                                                                                                                                                                                                                                                                                                                     |
-| 21–23                                          | NOT IMPLEMENTED                         | AI routes are placeholders; action approval reports `executed: false`; no Express-to-Python workflow was found.                                                                                                                                                                                                                                                                         |
+| 21–23                                          | VERIFIED COMPLETE                         | AI runs inside this backend via AI_PROVIDER=openrouter; the Python/FastAPI service is optional (AI_PROVIDER=service). Chat, streaming, writing (analyze/rewrite/summarize/translate), task generation, summarization (project, task, document, channel, meeting), project intelligence, personal productivity, knowledge search, action approval and execution, usage logging and limits are implemented, permission-checked and tested. src/modules/ai/ is mounted at /api/v1/ai. Endpoints verified with disposable-database suites: tests/phase21-ai-unit.test.ts (15) and tests/phase21-ai-db.test.ts (26) pass. |
 | 24                                             | PARTIALLY COMPLETE                      | Email/deletion/billing workers exist; generalized queue/job requirements need more audit.                                                                                                                                                                                                                                                                                               |
 | 25                                             | COMPLETED                               | Email preference channel implemented (`NotificationPreference.emailEnabled`, shared `isEmailNotificationEnabled` helper); preference gating on task-assignment, mention and meeting notifiers (`preference_disabled` status); join-request approve/reject emails; transactional billing webhook emails with idempotency keys; unit tests (13/13) and DB integration tests (10/10) pass. |
 | 26                                             | COMPLETED                               | Security event classification on `AuditLog` (`securityEvent` flag + `isSecurityEvent` helper + `SecurityAuditAction`), audit log query filter (`?securityEvent=true/false`), retention pruning worker (`AUDIT_RETENTION_DAYS`/`AUDIT_PRUNE_BATCH_SIZE`, bounded batches), unit tests (5/5) and DB integration tests (5/5) pass.                                                         |
@@ -1819,18 +1819,19 @@ transport; no live third-party endpoint was contacted.
 
 ---
 
-# PHASE 21 — Python AI Service Integration — COMPLETED
+# PHASE 21 — AI Integration — COMPLETED
 
 ### Objectives
 
-Integrate the independently deployable Python AI service with the main Express backend.
+Integrate AI capabilities into the main Express backend. AI runs in-process
+via `AI_PROVIDER=openrouter` (OpenRouter direct); the independently deployable
+Python/FastAPI service remains optional (`AI_PROVIDER=service`).
 
 ### Architecture
 
-- Python.
-- FastAPI.
-- Managed AI API.
-- Independent deployment.
+- Express + TypeScript (in-process AI provider).
+- OpenRouter (OpenAI-compatible) as the default managed AI API.
+- Python/FastAPI service optional, independently deployable.
 - Express remains the authoritative application backend.
 
 ### Tasks
@@ -1867,35 +1868,35 @@ Integrate the independently deployable Python AI service with the main Express b
 - Express authenticates the user.
 - Express verifies permissions.
 - Express prepares authorised context.
-- Python must not bypass application permissions.
-- Python must not independently write to the main application database by default.
-- Core Nexus features must continue working when the AI service is unavailable.
+- The AI provider must not bypass application permissions.
+- The AI provider must not independently write to the main application database by default.
+- Core Nexus features must continue working when the AI provider is unavailable.
+- AI_PROVIDER=openrouter is the default path; AI_PROVIDER=service keeps the Python service.
 
 ### Completion Criteria
 
-- Express and Python communicate securely.
-- AI context is permission-filtered.
+- The AI provider and Express communicate through a controlled service interface.
+- AI context is permission-filtered before it reaches the provider.
 - Source references are returned where relevant.
-- AI failures do not break core application features.
+- AI failures are recorded and do not break core application features.
 
-**Phase 21 implementation update — 2026-11-11:** Implemented the Express side of
-the AI boundary. `src/services/providers/ai` contains the authenticated HTTP
-client, typed request/response contracts, bounded timeouts, a circuit breaker
-and SSE stream parsing. `src/modules/ai/ai-context.service.ts` builds the only
-context the AI service receives and filters workspaces, projects, tasks,
-documents and meetings by the caller's current access; citations are filtered
-against the authorised source set. Conversations and messages persist in
-PostgreSQL (`AiConversation`, `AiMessage`), usage is recorded per call
-(`AiUsageRecord`), and daily/monthly limits are enforced before a request. AI
-routes return 503 `AI_NOT_CONFIGURED` / `AI_UNAVAILABLE` instead of breaking
-non-AI features. Migration `20261110160000_phase21_ai_service`. Tests:
-`tests/phase21-ai-unit.test.ts` (8) and `tests/phase21-ai-db.test.ts` (7) cover
-provider failures, streaming, permission-filtered context, conversation
-ownership, usage limits and degradation. A live Python/FastAPI deployment was
-not available in this environment; the service contract is verified against
-stubs and must be re-verified against the deployed AI service.
+**Phase 21 implementation update — 2026-11-12:** Implemented src/services/providers/ai/openrouter-client.ts
+implementing the AiClient interface by calling OpenRouter directly (createAiClient returns it when
+AI_PROVIDER=openrouter; AI_PROVIDER=service keeps the Python-service path). Hardening: central model
+config (AI_MODEL, optional AI_FAST_MODEL), usage/cost recorded from OpenRouter usage, clear typed
+errors for 401/402/429/5xx, request timeouts via AbortController, single empty-response retry, circuit
+breaker with bounded reset, health check reporting version: openrouter. Env validation requires
+OPENROUTER_API_KEY and AI_MODEL when AI_PROVIDER=openrouter. Migration 20261110160000_phase21_ai_service
+plus new migration 20261112000000_phase7_meeting_transcript (meeting.transcript). Tests:
+tests/phase21-ai-unit.test.ts (15 pass: bearer token, 401/402/429 mapping, AI_TIMEOUT, empty-response
+retry, invalid-JSON analyze drop, circuit breaker) and tests/phase21-ai-db.test.ts (26 pass: chat,
+streaming, permission-filtered context, conversation ownership, usage limits, degradation, task
+generation preview/confirm, summarization, project intelligence, personal productivity, knowledge search,
+meeting summarization). pnpm test 386 pass, 3 fail (3 pre-existing Phase 25 collaboration-email
+mention failures unrelated to AI), 2 skipped; typecheck, lint and build pass.
 
 ---
+
 
 # PHASE 22 — Nexus Write — COMPLETED
 
