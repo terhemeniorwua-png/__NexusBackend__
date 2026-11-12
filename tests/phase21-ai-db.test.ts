@@ -896,5 +896,36 @@ function runTests(rawDbUrl: string): void {
         error instanceof AppError && error.statusCode === 404,
     );
   });
+
+  test('my tasks returns tasks assigned to the caller', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+    const result = await service.myTasks({ userId: owner.id, workspaceId });
+
+    const keys = new Set(result.tasks.map((task) => task.key));
+    assert.ok(keys.has('AI-INP'), 'in progress task should be assigned');
+    assert.ok(keys.has('AI-BLK'), 'blocked task should be assigned');
+    assert.ok(keys.has('AI-DONE'), 'completed task should be assigned');
+    assert.ok(!keys.has('AI-OVR'), 'unassigned task should not appear');
+  });
+
+  test('daily plan returns a model plan', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Do the in-progress task first.'),
+    });
+
+    const result = await service.dailyPlan({ userId: owner.id, workspaceId });
+    assert.equal(result.plan, 'Do the in-progress task first.');
+  });
+
+  test('weekly report returns a model report', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('You completed one task this week.'),
+    });
+
+    const result = await service.weeklyReport({ userId: owner.id, workspaceId });
+    assert.equal(result.report, 'You completed one task this week.');
+  });
 }
 

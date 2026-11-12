@@ -164,6 +164,20 @@ export const aiProjectIntelligenceSchema = z
 export type AiProjectIntelligenceBody = z.infer<typeof aiProjectIntelligenceSchema>;
 
 // ---------------------------------------------------------------------------
+// AI personal productivity (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiPersonalTasksSchema = z.object({ workspaceId: uuid }).strict();
+
+export const aiDailyPlanSchema = z.object({ workspaceId: uuid }).strict();
+
+export const aiWeeklyReportSchema = z.object({ workspaceId: uuid }).strict();
+
+export type AiPersonalTasksBody = z.infer<typeof aiPersonalTasksSchema>;
+export type AiDailyPlanBody = z.infer<typeof aiDailyPlanSchema>;
+export type AiWeeklyReportBody = z.infer<typeof aiWeeklyReportSchema>;
+
+// ---------------------------------------------------------------------------
 // AI action proposals (Phase 23)
 // ---------------------------------------------------------------------------
 

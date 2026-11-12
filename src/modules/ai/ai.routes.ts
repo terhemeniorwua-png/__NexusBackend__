@@ -13,20 +13,25 @@ import {
   aiChatBodySchema,
   aiConversationParamsSchema,
   aiConversationQuerySchema,
+  aiDailyPlanSchema,
+  aiPersonalTasksSchema,
   aiProjectIntelligenceSchema,
   aiSummarizeSchema,
   aiTaskConfirmSchema,
   aiTaskGenerateSchema,
   aiUsageQuerySchema,
+  aiWeeklyReportSchema,
   aiWritingAcceptSchema,
   aiWritingAnalyzeSchema,
   aiWritingRewriteSchema,
   aiWritingSessionParamsSchema,
   type AiChatBody,
+  type AiDailyPlanBody,
   type AiProjectIntelligenceBody,
   type AiSummarizeBody,
   type AiTaskConfirmBody,
   type AiTaskGenerateBody,
+  type AiWeeklyReportBody,
   type AiWritingAnalyzeBody,
   type AiWritingRewriteBody,
 } from './ai.schemas';
@@ -365,6 +370,52 @@ export function createAiRouter({
           workspaceId: body.workspaceId,
           projectId: body.projectId,
         }),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI personal productivity (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.get(
+    '/personal/tasks',
+    requireAuth,
+    requireActive,
+    validate({ query: aiPersonalTasksSchema }),
+    async (req, res) => {
+      const query = req.validated!.query as { workspaceId: string };
+      sendSuccess(
+        res,
+        await service.myTasks({ userId: userId(req), workspaceId: query.workspaceId }),
+      );
+    },
+  );
+
+  router.post(
+    '/personal/daily-plan',
+    requireAuth,
+    requireActive,
+    validate({ body: aiDailyPlanSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiDailyPlanBody;
+      sendSuccess(
+        res,
+        await service.dailyPlan({ userId: userId(req), workspaceId: body.workspaceId }),
+      );
+    },
+  );
+
+  router.post(
+    '/personal/weekly-report',
+    requireAuth,
+    requireActive,
+    validate({ body: aiWeeklyReportSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiWeeklyReportBody;
+      sendSuccess(
+        res,
+        await service.weeklyReport({ userId: userId(req), workspaceId: body.workspaceId }),
       );
     },
   );

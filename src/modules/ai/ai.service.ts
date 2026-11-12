@@ -743,6 +743,217 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
       };
     },
 
+    async myTasks(input: {
+      userId: string;
+      workspaceId: string;
+    }): Promise<{
+      tasks: Array<{
+        id: string;
+        key: string;
+        title: string;
+        status: string;
+        priority: string;
+        dueDate: string | null;
+        projectId: string;
+        projectName: string;
+        projectKey: string;
+      }>;
+    }> {
+      await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      const tasks = await prisma.task.findMany({
+        where: {
+          project: { workspaceId: input.workspaceId, deletedAt: null },
+          assignees: { some: { userId: input.userId } },
+          deletedAt: null,
+        },
+        include: { project: { select: { id: true, name: true, key: true } } },
+        orderBy: [{ dueDate: 'asc' }, { updatedAt: 'desc' }],
+        take: 100,
+      });
+
+      return {
+        tasks: tasks.map((task) => ({
+          id: task.id,
+          key: task.key,
+          title: task.title,
+          status: task.status,
+          priority: task.priority,
+          dueDate: task.dueDate?.toISOString() ?? null,
+          projectId: task.project.id,
+          projectName: task.project.name,
+          projectKey: task.project.key,
+        })),
+      };
+    },
+
+    async dailyPlan(input: {
+      userId: string;
+      workspaceId: string;
+    }): Promise<{ plan: string; model: string; usage: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+      ensureConfigured();
+      await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today.getTime() + 86_400_000);
+
+      const tasks = await prisma.task.findMany({
+        where: {
+          project: { workspaceId: input.workspaceId, deletedAt: null },
+          assignees: { some: { userId: input.userId } },
+          deletedAt: null,
+          OR: [
+            { dueDate: { gte: today, lt: tomorrow } },
+            { status: 'IN_PROGRESS' },
+            { status: 'ASSIGNED' },
+          ],
+        },
+        include: { project: { select: { id: true, name: true, key: true } } },
+        orderBy: [{ dueDate: 'asc' }, { priority: 'desc' }],
+        take: 50,
+      });
+
+      const startedAt = performance.now();
+      let response: AiChatResponse;
+      try {
+        response = await client.chat({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are Nexus AI. Given the user\u2019s assigned tasks, propose a concise daily plan: ' +
+                'what to do first, what can wait, and any risks. Base the plan only on the listed tasks; ' +
+                'do not invent tasks or dates. Keep it short and actionable.',
+            },
+            {
+              role: 'user',
+              content: `Today is ${today.toISOString().slice(0, 10)}. Tasks:\n${JSON.stringify(tasks)}`,
+            },
+          ],
+          operation: 'ai_daily_plan',
+        });
+      } catch (error) {
+        await usageService
+          .record({
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            operation: 'ai_daily_plan',
+            status: 'FAILURE',
+            errorCode:
+              error instanceof AiProviderError || error instanceof AiUnavailableError
+                ? error.code
+                : 'AI_PROVIDER_ERROR',
+            latencyMs: Math.round(performance.now() - startedAt),
+          })
+          .catch(() => undefined);
+        mapProviderError(error);
+      }
+
+      await usageService.record({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        operation: 'ai_daily_plan',
+        model: response.model,
+        usage: response.usage,
+        latencyMs: Math.round(performance.now() - startedAt),
+        status: 'SUCCESS',
+      });
+
+      return { plan: response.content, model: response.model, usage: response.usage };
+    },
+
+    async weeklyReport(input: {
+      userId: string;
+      workspaceId: string;
+    }): Promise<{ report: string; model: string; usage: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+      ensureConfigured();
+      await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      const now = new Date();
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(weekStart.getTime() + 7 * 86_400_000);
+
+      const tasks = await prisma.task.findMany({
+        where: {
+          project: { workspaceId: input.workspaceId, deletedAt: null },
+          assignees: { some: { userId: input.userId } },
+          deletedAt: null,
+          OR: [
+            { createdAt: { gte: weekStart, lt: weekEnd } },
+            { completedAt: { gte: weekStart, lt: weekEnd } },
+            { dueDate: { gte: weekStart, lt: weekEnd } },
+            { status: 'IN_PROGRESS' },
+          ],
+        },
+        include: { project: { select: { id: true, name: true, key: true } } },
+        orderBy: [{ createdAt: 'desc' }],
+        take: 100,
+      });
+
+      const startedAt = performance.now();
+      let response: AiChatResponse;
+      try {
+        response = await client.chat({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are Nexus AI. Given the user\u2019s tasks from the past week, write a concise ' +
+                'weekly report: what was completed, what is in progress, what is due next week, and any ' +
+                'risks. Base the report only on the listed tasks; do not invent tasks or dates.',
+            },
+            {
+              role: 'user',
+              content: `Week starting ${weekStart.toISOString().slice(0, 10)}. Tasks:\n${JSON.stringify(tasks)}`,
+            },
+          ],
+          operation: 'ai_weekly_report',
+        });
+      } catch (error) {
+        await usageService
+          .record({
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            operation: 'ai_weekly_report',
+            status: 'FAILURE',
+            errorCode:
+              error instanceof AiProviderError || error instanceof AiUnavailableError
+                ? error.code
+                : 'AI_PROVIDER_ERROR',
+            latencyMs: Math.round(performance.now() - startedAt),
+          })
+          .catch(() => undefined);
+        mapProviderError(error);
+      }
+
+      await usageService.record({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        operation: 'ai_weekly_report',
+        model: response.model,
+        usage: response.usage,
+        latencyMs: Math.round(performance.now() - startedAt),
+        status: 'SUCCESS',
+      });
+
+      return { report: response.content, model: response.model, usage: response.usage };
+    },
+
     async chat(input: AiChatInput, meta: AiRequestMeta = {}) {
       const startedAt = performance.now();
       const prepared = await prepare(input);
