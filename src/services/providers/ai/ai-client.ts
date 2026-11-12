@@ -1,6 +1,7 @@
 import type { AppConfig } from '../../../config/env';
 import { logger as defaultLogger, type Logger } from '../../../utils/logger';
 import { CircuitBreaker } from './circuit-breaker';
+import { createOpenRouterClient } from './openrouter-client';
 import {
   AiProviderError,
   AiUnavailableError,
@@ -26,6 +27,10 @@ export type AiClientConfig = Pick<
   | 'aiStreamTimeoutMs'
   | 'aiCircuitBreakerFailures'
   | 'aiCircuitBreakerResetMs'
+  | 'aiProvider'
+  | 'openrouterApiKey'
+  | 'aiFastModel'
+  | 'emailAppUrl'
 >;
 
 export interface AiClientOptions {
@@ -192,6 +197,8 @@ function errorCode(body: unknown, fallback: string): string {
  * and Express has already evaluated all permissions before calling it.
  */
 export function createAiClient(config: AiClientConfig, options: AiClientOptions = {}): AiClient {
+  if (config.aiProvider === 'openrouter') return createOpenRouterClient(config, options);
+
   const logger = options.logger ?? defaultLogger;
   const fetchImpl = options.fetchImpl ?? fetch;
   const breaker = new CircuitBreaker(

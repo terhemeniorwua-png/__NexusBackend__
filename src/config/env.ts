@@ -326,6 +326,9 @@ const envSchema = z
         'AI_SERVICE_TOKEN must be at least 32 characters',
       ),
     AI_MODEL: z.string().trim().default(''),
+    AI_FAST_MODEL: z.string().trim().default(''),
+    AI_PROVIDER: z.enum(['service', 'openrouter']).default('service'),
+    OPENROUTER_API_KEY: z.string().trim().default(''),
     AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(120_000).default(20_000),
     AI_STREAM_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(90_000),
     AI_MAX_INPUT_CHARS: z.coerce.number().int().min(1_000).max(200_000).default(50_000),
@@ -569,7 +572,7 @@ const envSchema = z
       }
     }
 
-    if (values.AI_ENABLED && !values.AI_SERVICE_URL) {
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'service' && !values.AI_SERVICE_URL) {
       ctx.addIssue({
         code: 'custom',
         path: ['AI_SERVICE_URL'],
@@ -577,11 +580,27 @@ const envSchema = z
       });
     }
 
-    if (values.AI_ENABLED && !values.AI_SERVICE_TOKEN) {
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'service' && !values.AI_SERVICE_TOKEN) {
       ctx.addIssue({
         code: 'custom',
         path: ['AI_SERVICE_TOKEN'],
         message: 'AI_SERVICE_TOKEN is required when AI_ENABLED=true',
+      });
+    }
+
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'openrouter' && !values.OPENROUTER_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OPENROUTER_API_KEY'],
+        message: 'OPENROUTER_API_KEY is required when AI_ENABLED=true and AI_PROVIDER=openrouter',
+      });
+    }
+
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'openrouter' && !values.AI_MODEL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AI_MODEL'],
+        message: 'AI_MODEL is required when AI_ENABLED=true and AI_PROVIDER=openrouter',
       });
     }
 
@@ -718,6 +737,9 @@ export interface AppConfig {
   aiServiceUrl: string;
   aiServiceToken: string;
   aiModel: string;
+  aiProvider: 'service' | 'openrouter';
+  openrouterApiKey: string;
+  aiFastModel: string;
   aiRequestTimeoutMs: number;
   aiStreamTimeoutMs: number;
   aiMaxInputChars: number;
@@ -895,6 +917,9 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     aiServiceUrl: values.AI_SERVICE_URL.replace(/\/+$/, ''),
     aiServiceToken: values.AI_SERVICE_TOKEN,
     aiModel: values.AI_MODEL,
+    aiProvider: values.AI_PROVIDER,
+    openrouterApiKey: values.OPENROUTER_API_KEY,
+    aiFastModel: values.AI_FAST_MODEL,
     aiRequestTimeoutMs: values.AI_REQUEST_TIMEOUT_MS,
     aiStreamTimeoutMs: values.AI_STREAM_TIMEOUT_MS,
     aiMaxInputChars: values.AI_MAX_INPUT_CHARS,
