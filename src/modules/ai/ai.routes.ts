@@ -15,6 +15,7 @@ import {
   aiConversationQuerySchema,
   aiDailyPlanSchema,
   aiKnowledgeSearchSchema,
+  aiMeetingSummarizeSchema,
   aiPersonalTasksSchema,
   aiProjectIntelligenceSchema,
   aiSummarizeSchema,
@@ -438,6 +439,20 @@ export function createAiRouter({
           category: body.category ?? null,
           limit: body.limit,
         }),
+      );
+    },
+  );
+
+  router.post(
+    '/meetings/:meetingId/summarize',
+    requireAuth,
+    requireActive,
+    validate({ params: aiMeetingSummarizeSchema }),
+    async (req, res) => {
+      const { meetingId } = req.validated!.params as { meetingId: string };
+      sendSuccess(
+        res,
+        await service.meetingSummarize({ userId: userId(req), meetingId }),
       );
     },
   );

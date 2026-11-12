@@ -1067,6 +1067,110 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
       };
     },
 
+    async meetingSummarize(input: {
+      userId: string;
+      meetingId: string;
+    }): Promise<{
+      meetingId: string;
+      summary: string;
+      model: string;
+      usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+    }> {
+      ensureConfigured();
+
+      const meeting = await prisma.meeting.findFirst({
+        where: { id: input.meetingId, deletedAt: null },
+        include: { participants: { select: { userId: true } } },
+      });
+      if (!meeting) {
+        throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
+      }
+
+      if (meeting.workspaceId) {
+        await requireWorkspaceAccess(prisma, {
+          userId: input.userId,
+          workspaceId: meeting.workspaceId,
+          capability: WorkspaceCapability.ViewWorkspace,
+        });
+      }
+
+      const isParticipant = meeting.participants.some(
+        (participant) => participant.userId === input.userId,
+      );
+      if (meeting.createdById !== input.userId && !isParticipant) {
+        throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
+      }
+
+      const transcript = meeting.transcript;
+      if (!transcript?.trim()) {
+        return {
+          meetingId: input.meetingId,
+          summary: 'This meeting has no transcript to summarize.',
+          model: config.aiModel,
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        };
+      }
+
+      const startedAt = performance.now();
+      let response: AiChatResponse;
+      try {
+        response = await client.chat({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are Nexus AI. Summarize the following meeting transcript concisely. ' +
+                'Cover key decisions, owners, dates and next steps. Base the summary only on the ' +
+                'transcript; do not invent statements or action items.',
+            },
+            {
+              role: 'user',
+              content: `Meeting: ${meeting.title}\n${meeting.description ? `Description: ${meeting.description}\n` : ''}Transcript:\n${transcript}`,
+            },
+          ],
+          operation: 'ai_meeting_summarize',
+        });
+      } catch (error) {
+        await usageService
+          .record({
+            userId: input.userId,
+            workspaceId: meeting.workspaceId ?? null,
+            operation: 'ai_meeting_summarize',
+            status: 'FAILURE',
+            errorCode:
+              error instanceof AiProviderError || error instanceof AiUnavailableError
+                ? error.code
+                : 'AI_PROVIDER_ERROR',
+            latencyMs: Math.round(performance.now() - startedAt),
+          })
+          .catch(() => undefined);
+        mapProviderError(error);
+      }
+
+      await usageService.record({
+        userId: input.userId,
+        workspaceId: meeting.workspaceId ?? null,
+        operation: 'ai_meeting_summarize',
+        model: response.model,
+        usage: response.usage,
+        latencyMs: Math.round(performance.now() - startedAt),
+        status: 'SUCCESS',
+      });
+
+      logger.info('ai_meeting_summarize_completed', {
+        meetingId: input.meetingId,
+        workspaceId: meeting.workspaceId,
+        tokens: response.usage.totalTokens,
+      });
+
+      return {
+        meetingId: input.meetingId,
+        summary: response.content,
+        model: response.model,
+        usage: response.usage,
+      };
+    },
+
     async chat(input: AiChatInput, meta: AiRequestMeta = {}) {
       const startedAt = performance.now();
       const prepared = await prepare(input);

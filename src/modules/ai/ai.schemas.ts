@@ -193,6 +193,14 @@ export const aiKnowledgeSearchSchema = z
 export type AiKnowledgeSearchBody = z.infer<typeof aiKnowledgeSearchSchema>;
 
 // ---------------------------------------------------------------------------
+// AI meeting assistant (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiMeetingSummarizeSchema = z.object({ meetingId: uuid }).strict();
+
+export type AiMeetingSummarizeBody = z.infer<typeof aiMeetingSummarizeSchema>;
+
+// ---------------------------------------------------------------------------
 // AI action proposals (Phase 23)
 // ---------------------------------------------------------------------------
 

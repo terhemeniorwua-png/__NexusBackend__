@@ -943,5 +943,71 @@ function runTests(rawDbUrl: string): void {
     assert.ok(result.answer.includes('summarization'));
     assert.ok(Array.isArray(result.sources));
   });
+
+  test('meeting summarization summarizes the transcript for a participant', async () => {
+    const meeting = await database.prisma.meeting.create({
+      data: {
+        workspaceId,
+        title: 'Quarterly planning',
+        status: 'ENDED',
+        createdById: owner.id,
+        transcript:
+          'Alice: We should launch the beta by October. Bob: I will handle the documentation. Alice: agreed, and we need a QA pass before launch.',
+      },
+    });
+    await database.prisma.meetingParticipant.create({
+      data: { meetingId: meeting.id, userId: owner.id, status: 'JOINED' },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Launch beta by October; Bob to document; QA before launch.'),
+    });
+
+    const result = await service.meetingSummarize({ userId: owner.id, meetingId: meeting.id });
+    assert.equal(result.summary, 'Launch beta by October; Bob to document; QA before launch.');
+  });
+
+  test('meeting summarization is rejected for a non-participant', async () => {
+    const meeting = await database.prisma.meeting.create({
+      data: {
+        workspaceId,
+        title: 'Private meeting',
+        status: 'ENDED',
+        createdById: owner.id,
+        transcript: 'confidential transcript',
+      },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    await assert.rejects(
+      () => service.meetingSummarize({ userId: member.id, meetingId: meeting.id }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('meeting summarization returns a no-transcript message when absent', async () => {
+    const meeting = await database.prisma.meeting.create({
+      data: {
+        workspaceId,
+        title: 'Empty meeting',
+        status: 'SCHEDULED',
+        createdById: owner.id,
+      },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    const result = await service.meetingSummarize({ userId: owner.id, meetingId: meeting.id });
+    assert.equal(result.summary, 'This meeting has no transcript to summarize.');
+  });
 }
 
