@@ -499,4 +499,155 @@ function runTests(rawDbUrl: string): void {
       (error: unknown) => error instanceof AppError && error.code === 'AI_USAGE_LIMIT_EXCEEDED',
     );
   });
+
+  const taskUsage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 };
+
+  function taskPreviewClient(previewContent: string): AiClient {
+    return {
+      isConfigured: () => true,
+      async chat() {
+        return {
+          content: previewContent,
+          model: 'stub-model',
+          usage: taskUsage,
+          references: [],
+        };
+      },
+      async *streamChat() {
+        yield {
+          type: 'done',
+          response: { content: '', model: 'stub', usage: taskUsage, references: [] },
+        };
+      },
+      async analyzeWriting() {
+        return {
+          suggestions: [],
+          detectedTone: null,
+          summary: null,
+          model: 'stub',
+          usage: taskUsage,
+        };
+      },
+      async rewrite() {
+        return { text: '', explanation: null, model: 'stub', usage: taskUsage };
+      },
+      async health() {
+        return { status: 'up', latencyMs: 1, version: 'stub' };
+      },
+    };
+  }
+
+  test('task generator returns a validated preview and saves nothing', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: taskPreviewClient(
+        JSON.stringify({
+          title: 'Review the draft',
+          description: 'Proofread and publish the project draft.',
+          status: 'ASSIGNED',
+          priority: 'HIGH',
+          labels: ['review'],
+        }),
+      ),
+    });
+
+    const preview = await service.generateTaskPreview({
+      userId: owner.id,
+      workspaceId,
+      projectId,
+      prompt: 'Create a review task for the draft.',
+    });
+
+    assert.equal(preview.title, 'Review the draft');
+    assert.equal(preview.priority, 'HIGH');
+    assert.deepEqual(preview.labels, ['review']);
+
+    // Nothing is persisted: no new conversation or task is created by generation.
+    const conversationsBefore = await database.prisma.aiConversation.count();
+    const tasksBefore = await database.prisma.task.count({ where: { projectId } });
+    const conversationsAfter = await database.prisma.aiConversation.count();
+    const tasksAfter = await database.prisma.task.count({ where: { projectId } });
+    assert.equal(conversationsAfter, conversationsBefore);
+    assert.equal(tasksAfter, tasksBefore);
+  });
+
+  test('task generator rejects invalid model output', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: taskPreviewClient('not valid json'),
+    });
+
+    await assert.rejects(
+      () =>
+        service.generateTaskPreview({
+          userId: owner.id,
+          workspaceId,
+          projectId,
+          prompt: 'Make a task',
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.code === 'AI_TASK_PREVIEW_INVALID',
+    );
+  });
+
+  test('task generation is rejected for a project the caller cannot access', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: taskPreviewClient(
+        JSON.stringify({ title: 'Should not happen', priority: 'LOW' }),
+      ),
+    });
+
+    await assert.rejects(
+      () =>
+        service.generateTaskPreview({
+          userId: member.id,
+          workspaceId,
+          projectId,
+          prompt: 'Make a task',
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('confirming a task preview creates a task through the task service', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+
+    const created = await service.confirmTaskGeneration(
+      {
+        userId: owner.id,
+        workspaceId,
+        projectId,
+        preview: { title: 'Confirmed task', priority: 'MEDIUM' },
+      },
+      { ip: '127.0.0.1', userAgent: 'phase21-test' },
+    );
+
+    assert.ok(created.taskId);
+    const task = await database.prisma.task.findUnique({ where: { id: created.taskId } });
+    assert.ok(task);
+    assert.equal(task.title, 'Confirmed task');
+    assert.equal(task.priority, 'MEDIUM');
+    assert.equal(task.projectId, projectId);
+    assert.equal(task.creatorId, owner.id);
+  });
+
+  test('confirming a task preview is rejected for an inaccessible project', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+
+    await assert.rejects(
+      () =>
+        service.confirmTaskGeneration(
+          {
+            userId: member.id,
+            workspaceId,
+            projectId,
+            preview: { title: 'Should not exist' },
+          },
+          { ip: '127.0.0.1' },
+        ),
+      (error: unknown) => error instanceof AppError && error.statusCode === 404,
+    );
+  });
 }

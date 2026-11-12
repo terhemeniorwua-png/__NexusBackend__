@@ -71,6 +71,51 @@ export const aiWritingAcceptSchema = z
   .strict();
 
 // ---------------------------------------------------------------------------
+// AI task generator (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiTaskGenerateSchema = z
+  .object({
+    workspaceId: uuid,
+    projectId: uuid,
+    prompt: z.string().trim().min(1).max(2_000),
+  })
+  .strict();
+
+export const aiTaskPreviewSchema = z
+  .object({
+    title: z.string().trim().min(2).max(200),
+    description: z.string().trim().max(10_000).optional(),
+    status: z
+      .enum([
+        'ASSIGNED',
+        'IN_PROGRESS',
+        'SUBMITTED',
+        'UNDER_REVIEW',
+        'APPROVED',
+        'CHANGES_REQUESTED',
+      ])
+      .optional(),
+    priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+    category: z.string().trim().max(80).optional(),
+    labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
+    dueDate: z.string().datetime({ offset: true }).optional().nullable(),
+  })
+  .strict();
+
+export const aiTaskConfirmSchema = z
+  .object({
+    workspaceId: uuid,
+    projectId: uuid,
+    preview: aiTaskPreviewSchema,
+  })
+  .strict();
+
+export type AiTaskGenerateBody = z.infer<typeof aiTaskGenerateSchema>;
+export type AiTaskPreview = z.infer<typeof aiTaskPreviewSchema>;
+export type AiTaskConfirmBody = z.infer<typeof aiTaskConfirmSchema>;
+
+// ---------------------------------------------------------------------------
 // AI action proposals (Phase 23)
 // ---------------------------------------------------------------------------
 

@@ -13,9 +13,22 @@ import {
 } from '../../services/providers/ai';
 import { AppError } from '../../utils/errors';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import {
+  ProjectCapability,
+  requireProjectAccess,
+  requireWorkspaceAccess,
+  WorkspaceCapability,
+} from '../authorization';
+import { createTaskService } from '../tasks/task.service';
+import type { RequestContext } from '../auth/auth.types';
 import { createAiContextService } from './ai-context.service';
 import { createAiUsageService } from './ai-usage.service';
+import {
+  aiTaskPreviewSchema,
+  type AiTaskConfirmBody,
+  type AiTaskGenerateBody,
+  type AiTaskPreview,
+} from './ai.schemas';
 
 /**
  * AI conversations (Phase 21).
@@ -33,6 +46,7 @@ export interface AiServiceDependencies {
   logger?: Logger;
   contextService?: ReturnType<typeof createAiContextService>;
   usageService?: ReturnType<typeof createAiUsageService>;
+  taskService?: ReturnType<typeof createTaskService>;
 }
 
 export interface AiChatInput {
@@ -127,6 +141,61 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
   const client = dependencies.client ?? createAiClient(config);
   const contextService = dependencies.contextService ?? createAiContextService(config, prisma);
   const usageService = dependencies.usageService ?? createAiUsageService(config, prisma);
+  const taskService = dependencies.taskService ?? createTaskService(prisma);
+
+  function parseTaskPreview(content: string): AiTaskPreview {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      throw new AppError(
+        400,
+        'AI_TASK_PREVIEW_INVALID',
+        'The AI provider did not return a valid task preview',
+      );
+    }
+    const result = aiTaskPreviewSchema.safeParse(parsed);
+    if (!result.success) {
+      throw new AppError(
+        400,
+        'AI_TASK_PREVIEW_INVALID',
+        'The AI provider returned an invalid task preview',
+        { details: result.error.issues.map((issue) => ({ path: issue.path, message: issue.message })) },
+      );
+    }
+    return result.data;
+  }
+
+  async function buildTaskGenerationContext(input: {
+    userId: string;
+    workspaceId: string;
+    projectId: string;
+  }): Promise<string> {
+    const workspace = await requireWorkspaceAccess(prisma, {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      capability: WorkspaceCapability.ViewWorkspace,
+    });
+    const access = await requireProjectAccess(prisma, {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+      workspaceRole: workspace.effectiveRole,
+      capability: ProjectCapability.ViewProject,
+    });
+    if (access.project.status === 'ARCHIVED') {
+      throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+    }
+
+    return [
+      `Project: ${access.project.name} (${access.project.key})`,
+      `Status: ${access.project.status}`,
+      access.project.description ? `Description: ${access.project.description}` : '',
+      access.project.dueDate ? `Due: ${access.project.dueDate.toISOString().slice(0, 10)}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
 
   function ensureConfigured(): void {
     if (!client.isConfigured()) {
@@ -299,6 +368,69 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
 
     async health() {
       return client.health();
+    },
+
+    async generateTaskPreview(input: AiTaskGenerateBody & { userId: string }): Promise<AiTaskPreview> {
+      ensureConfigured();
+      const context = await buildTaskGenerationContext({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+      });
+
+      const response = await client.chat({
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are Nexus AI. Given a user request and project context, propose a single task. ' +
+              'Return ONLY a JSON object with fields: title (string), description (string, optional), ' +
+              'status (one of ASSIGNED, IN_PROGRESS, SUBMITTED, UNDER_REVIEW, APPROVED, CHANGES_REQUESTED, optional), ' +
+              'priority (one of LOW, MEDIUM, HIGH, URGENT, optional), category (string, optional), ' +
+              'labels (array of strings, optional), dueDate (ISO datetime string, optional). ' +
+              'Do not invent assignees. Do not include markdown fences or commentary outside the JSON object.',
+          },
+          {
+            role: 'user',
+            content: `Project context:\n${context}\n\nRequest:\n${input.prompt}`,
+          },
+        ],
+        operation: 'ai_task_generate',
+      });
+
+      return parseTaskPreview(response.content);
+    },
+
+    async confirmTaskGeneration(
+      input: AiTaskConfirmBody & { userId: string },
+      context: RequestContext = {},
+    ): Promise<{ taskId: string; key: string; title: string }> {
+      await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      const createInput = {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        title: input.preview.title,
+        ...(input.preview.description !== undefined
+          ? { description: input.preview.description }
+          : {}),
+        ...(input.preview.status !== undefined ? { status: input.preview.status } : {}),
+        ...(input.preview.priority !== undefined ? { priority: input.preview.priority } : {}),
+        ...(input.preview.category !== undefined ? { category: input.preview.category } : {}),
+        ...(input.preview.labels !== undefined ? { labels: input.preview.labels } : {}),
+        ...(input.preview.dueDate ? { dueDate: input.preview.dueDate } : {}),
+      };
+
+      const task = await taskService.create(
+        createInput as unknown as Parameters<typeof taskService.create>[0],
+        context,
+      );
+      return { taskId: task.id, key: task.key, title: task.title };
     },
 
     async chat(input: AiChatInput, meta: AiRequestMeta = {}) {

@@ -13,12 +13,16 @@ import {
   aiChatBodySchema,
   aiConversationParamsSchema,
   aiConversationQuerySchema,
+  aiTaskConfirmSchema,
+  aiTaskGenerateSchema,
   aiUsageQuerySchema,
   aiWritingAcceptSchema,
   aiWritingAnalyzeSchema,
   aiWritingRewriteSchema,
   aiWritingSessionParamsSchema,
   type AiChatBody,
+  type AiTaskConfirmBody,
+  type AiTaskGenerateBody,
   type AiWritingAnalyzeBody,
   type AiWritingRewriteBody,
 } from './ai.schemas';
@@ -274,6 +278,41 @@ export function createAiRouter({
     async (req, res) => {
       const { sessionId } = req.validated!.params as { sessionId: string };
       sendSuccess(res, await writingService.dismissSession(userId(req), sessionId));
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI task generation (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.post(
+    '/tasks/generate',
+    requireAuth,
+    requireActive,
+    validate({ body: aiTaskGenerateSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiTaskGenerateBody;
+      sendSuccess(
+        res,
+        await service.generateTaskPreview({ userId: userId(req), ...body }),
+      );
+    },
+  );
+
+  router.post(
+    '/tasks/generate/confirm',
+    requireAuth,
+    requireActive,
+    validate({ body: aiTaskConfirmSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiTaskConfirmBody;
+      sendSuccess(
+        res,
+        await service.confirmTaskGeneration(
+          { userId: userId(req), ...body },
+          requestMeta(req),
+        ),
+      );
     },
   );
 
