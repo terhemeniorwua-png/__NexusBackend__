@@ -50,6 +50,9 @@ function notifierFixture(options: { suppressed?: boolean; failed?: boolean } = {
           : null,
     },
     workspaceMembership: { findUnique: async () => ({ id: 'membership-1' }) },
+    notificationPreference: {
+      findUnique: async () => ({ emailEnabled: true }),
+    },
   } as unknown as PrismaClient;
   const notifier = createCollaborationEmailNotifier(config, {
     prisma: client,
