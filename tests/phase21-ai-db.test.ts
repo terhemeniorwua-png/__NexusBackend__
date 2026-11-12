@@ -115,6 +115,8 @@ function runTests(rawDbUrl: string): void {
   let limitUser: TestUser;
   let workspaceId: string;
   let projectId: string;
+  let channelId: string;
+  let documentId: string;
   const userIds: string[] = [];
   const workspaceIds: string[] = [];
   const tag = `${process.pid}-${Date.now()}`;
@@ -213,6 +215,92 @@ function runTests(rawDbUrl: string): void {
       },
     });
     projectId = project.id;
+
+    const channel = await database.prisma.channel.create({
+      data: {
+        workspaceId,
+        type: 'WORKSPACE',
+        name: 'AI summarization channel',
+        createdById: owner.id,
+      },
+    });
+    channelId = channel.id;
+
+    await database.prisma.channelMembership.create({
+      data: { channelId: channel.id, userId: owner.id, role: 'MEMBER' },
+    });
+
+    await database.prisma.message.createMany({
+      data: [
+        { channelId: channel.id, authorId: owner.id, body: 'We agreed to ship the feature by Friday.' },
+        { channelId: channel.id, authorId: owner.id, body: 'The design review is scheduled for Thursday.' },
+        { channelId: channel.id, authorId: owner.id, body: 'Remaining work: update the docs and run QA.' },
+      ],
+    });
+
+    const document = await database.prisma.document.create({
+      data: {
+        workspaceId,
+        projectId,
+        title: 'AI summarization document',
+        content:
+          'This document describes the summarization feature. It covers project, task, document and channel summarization. ' +
+          'All retrieved context is permission-checked before being sent to the model.',
+        authorId: owner.id,
+      },
+    });
+    documentId = document.id;
+
+    const past = new Date(Date.now() - 86_400_000).toISOString();
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+
+    const taskOverdue = await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-OVR',
+        title: 'Overdue unassigned task',
+        status: 'ASSIGNED',
+        dueDate: past,
+        creatorId: owner.id,
+      },
+    });
+
+    await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-INP',
+        title: 'In progress task',
+        status: 'IN_PROGRESS',
+        dueDate: future,
+        creatorId: owner.id,
+        assignees: { create: [{ userId: owner.id, assignedBy: owner.id }] },
+      },
+    });
+
+    await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-BLK',
+        title: 'Blocked task',
+        status: 'ASSIGNED',
+        dueDate: future,
+        creatorId: owner.id,
+        assignees: { create: [{ userId: owner.id, assignedBy: owner.id }] },
+        dependencies: { create: { dependsOnTaskId: taskOverdue.id } },
+      },
+    });
+
+    await database.prisma.task.create({
+      data: {
+        projectId,
+        key: 'AI-DONE',
+        title: 'Completed task',
+        status: 'APPROVED',
+        completedAt: new Date(),
+        creatorId: owner.id,
+        assignees: { create: [{ userId: owner.id, assignedBy: owner.id }] },
+      },
+    });
   });
 
   after(async () => {
@@ -499,4 +587,427 @@ function runTests(rawDbUrl: string): void {
       (error: unknown) => error instanceof AppError && error.code === 'AI_USAGE_LIMIT_EXCEEDED',
     );
   });
+
+  const taskUsage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 };
+
+  function taskPreviewClient(previewContent: string): AiClient {
+    return {
+      isConfigured: () => true,
+      async chat() {
+        return {
+          content: previewContent,
+          model: 'stub-model',
+          usage: taskUsage,
+          references: [],
+        };
+      },
+      async *streamChat() {
+        yield {
+          type: 'done',
+          response: { content: '', model: 'stub', usage: taskUsage, references: [] },
+        };
+      },
+      async analyzeWriting() {
+        return {
+          suggestions: [],
+          detectedTone: null,
+          summary: null,
+          model: 'stub',
+          usage: taskUsage,
+        };
+      },
+      async rewrite() {
+        return { text: '', explanation: null, model: 'stub', usage: taskUsage };
+      },
+      async health() {
+        return { status: 'up', latencyMs: 1, version: 'stub' };
+      },
+    };
+  }
+
+  test('task generator returns a validated preview and saves nothing', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: taskPreviewClient(
+        JSON.stringify({
+          title: 'Review the draft',
+          description: 'Proofread and publish the project draft.',
+          status: 'ASSIGNED',
+          priority: 'HIGH',
+          labels: ['review'],
+        }),
+      ),
+    });
+
+    const preview = await service.generateTaskPreview({
+      userId: owner.id,
+      workspaceId,
+      projectId,
+      prompt: 'Create a review task for the draft.',
+    });
+
+    assert.equal(preview.title, 'Review the draft');
+    assert.equal(preview.priority, 'HIGH');
+    assert.deepEqual(preview.labels, ['review']);
+
+    // Nothing is persisted: no new conversation or task is created by generation.
+    const conversationsBefore = await database.prisma.aiConversation.count();
+    const tasksBefore = await database.prisma.task.count({ where: { projectId } });
+    const conversationsAfter = await database.prisma.aiConversation.count();
+    const tasksAfter = await database.prisma.task.count({ where: { projectId } });
+    assert.equal(conversationsAfter, conversationsBefore);
+    assert.equal(tasksAfter, tasksBefore);
+  });
+
+  test('task generator rejects invalid model output', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: taskPreviewClient('not valid json'),
+    });
+
+    await assert.rejects(
+      () =>
+        service.generateTaskPreview({
+          userId: owner.id,
+          workspaceId,
+          projectId,
+          prompt: 'Make a task',
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.code === 'AI_TASK_PREVIEW_INVALID',
+    );
+  });
+
+  test('task generation is rejected for a project the caller cannot access', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: taskPreviewClient(
+        JSON.stringify({ title: 'Should not happen', priority: 'LOW' }),
+      ),
+    });
+
+    await assert.rejects(
+      () =>
+        service.generateTaskPreview({
+          userId: member.id,
+          workspaceId,
+          projectId,
+          prompt: 'Make a task',
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('confirming a task preview creates a task through the task service', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+
+    const created = await service.confirmTaskGeneration(
+      {
+        userId: owner.id,
+        workspaceId,
+        projectId,
+        preview: { title: 'Confirmed task', priority: 'MEDIUM' },
+      },
+      { ip: '127.0.0.1', userAgent: 'phase21-test' },
+    );
+
+    assert.ok(created.taskId);
+    const task = await database.prisma.task.findUnique({ where: { id: created.taskId } });
+    assert.ok(task);
+    assert.equal(task.title, 'Confirmed task');
+    assert.equal(task.priority, 'MEDIUM');
+    assert.equal(task.projectId, projectId);
+    assert.equal(task.creatorId, owner.id);
+  });
+
+  test('confirming a task preview is rejected for an inaccessible project', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+
+    await assert.rejects(
+      () =>
+        service.confirmTaskGeneration(
+          {
+            userId: member.id,
+            workspaceId,
+            projectId,
+            preview: { title: 'Should not exist' },
+          },
+          { ip: '127.0.0.1' },
+        ),
+      (error: unknown) => error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('summarizing a project returns a model summary through permission-checked context', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Project summary result.'),
+    });
+
+    const result = await service.summarize({
+      userId: owner.id,
+      workspaceId,
+      contextType: 'project',
+      contextId: projectId,
+    });
+
+    assert.equal(result.summary, 'Project summary result.');
+    assert.ok(result.usage.totalTokens >= 0);
+  });
+
+  test('summarizing a document returns a model summary through permission-checked context', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Document summary result.'),
+    });
+
+    const result = await service.summarize({
+      userId: owner.id,
+      workspaceId,
+      contextType: 'document',
+      contextId: documentId,
+    });
+
+    assert.equal(result.summary, 'Document summary result.');
+  });
+
+  test('summarizing a channel returns a model summary of its messages', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Channel summary result.'),
+    });
+
+    const result = await service.summarize({
+      userId: owner.id,
+      workspaceId,
+      contextType: 'channel',
+      channelId,
+      maxMessages: 50,
+    });
+
+    assert.equal(result.summary, 'Channel summary result.');
+  });
+
+  test('channel summarization is rejected for a caller without channel access', async () => {
+    const privateChannel = await database.prisma.channel.create({
+      data: {
+        workspaceId,
+        type: 'PRIVATE',
+        name: 'private summarization channel',
+        createdById: owner.id,
+      },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    await assert.rejects(
+      () =>
+        service.summarize({
+          userId: member.id,
+          workspaceId,
+          contextType: 'channel',
+          channelId: privateChannel.id,
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('channel summarization requires a channelId', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+
+    await assert.rejects(
+      () =>
+        service.summarize({
+          userId: owner.id,
+          workspaceId,
+          contextType: 'channel',
+        }),
+      (error: unknown) => error instanceof AppError && error.code === 'CHANNEL_ID_REQUIRED',
+    );
+  });
+
+  function summarizeClient(summary: string): AiClient {
+    return {
+      isConfigured: () => true,
+      async chat() {
+        return { content: summary, model: 'stub-model', usage: taskUsage, references: [] };
+      },
+      async *streamChat() {
+        yield {
+          type: 'done',
+          response: { content: summary, model: 'stub', usage: taskUsage, references: [] },
+        };
+      },
+      async analyzeWriting() {
+        return { suggestions: [], detectedTone: null, summary: null, model: 'stub', usage: taskUsage };
+      },
+      async rewrite() {
+        return { text: summary, explanation: null, model: 'stub', usage: taskUsage };
+      },
+      async health() {
+        return { status: 'up', latencyMs: 1, version: 'stub' };
+      },
+    };
+  }
+
+  test('project intelligence returns DB-computed numbers and a model explanation', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('These numbers show one overdue task and an uneven workload.'),
+    });
+
+    const result = await service.projectIntelligence({
+      userId: owner.id,
+      workspaceId,
+      projectId,
+    });
+
+    assert.ok(result.numbers.totalTasks >= 4);
+    assert.ok(result.numbers.overdueTasks >= 1);
+    assert.ok(result.numbers.blockedTasks >= 1);
+    assert.ok(result.numbers.completedTasks >= 1);
+    assert.ok(
+      result.numbers.workloadByAssignee.some(
+        (w) => w.assigneeId === owner.id && w.incompleteTasks >= 2,
+      ),
+    );
+    assert.equal(result.explanation, 'These numbers show one overdue task and an uneven workload.');
+  });
+
+  test('project intelligence is rejected for a caller without project access', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    await assert.rejects(
+      () =>
+        service.projectIntelligence({
+          userId: member.id,
+          workspaceId,
+          projectId,
+        }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('my tasks returns tasks assigned to the caller', async () => {
+    const service = createAiService(aiConfig(), { prisma: database.prisma });
+    const result = await service.myTasks({ userId: owner.id, workspaceId });
+
+    const keys = new Set(result.tasks.map((task) => task.key));
+    assert.ok(keys.has('AI-INP'), 'in progress task should be assigned');
+    assert.ok(keys.has('AI-BLK'), 'blocked task should be assigned');
+    assert.ok(keys.has('AI-DONE'), 'completed task should be assigned');
+    assert.ok(!keys.has('AI-OVR'), 'unassigned task should not appear');
+  });
+
+  test('daily plan returns a model plan', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Do the in-progress task first.'),
+    });
+
+    const result = await service.dailyPlan({ userId: owner.id, workspaceId });
+    assert.equal(result.plan, 'Do the in-progress task first.');
+  });
+
+  test('weekly report returns a model report', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('You completed one task this week.'),
+    });
+
+    const result = await service.weeklyReport({ userId: owner.id, workspaceId });
+    assert.equal(result.report, 'You completed one task this week.');
+  });
+
+  test('knowledge search answers from permission-filtered search results', async () => {
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('The summarization feature covers project, task and channel summarization.'),
+    });
+
+    const result = await service.knowledgeSearch({
+      userId: owner.id,
+      workspaceId,
+      query: 'summarization feature',
+    });
+
+    assert.ok(result.answer.includes('summarization'));
+    assert.ok(Array.isArray(result.sources));
+  });
+
+  test('meeting summarization summarizes the transcript for a participant', async () => {
+    const meeting = await database.prisma.meeting.create({
+      data: {
+        workspaceId,
+        title: 'Quarterly planning',
+        status: 'ENDED',
+        createdById: owner.id,
+        transcript:
+          'Alice: We should launch the beta by October. Bob: I will handle the documentation. Alice: agreed, and we need a QA pass before launch.',
+      },
+    });
+    await database.prisma.meetingParticipant.create({
+      data: { meetingId: meeting.id, userId: owner.id, status: 'JOINED' },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Launch beta by October; Bob to document; QA before launch.'),
+    });
+
+    const result = await service.meetingSummarize({ userId: owner.id, meetingId: meeting.id });
+    assert.equal(result.summary, 'Launch beta by October; Bob to document; QA before launch.');
+  });
+
+  test('meeting summarization is rejected for a non-participant', async () => {
+    const meeting = await database.prisma.meeting.create({
+      data: {
+        workspaceId,
+        title: 'Private meeting',
+        status: 'ENDED',
+        createdById: owner.id,
+        transcript: 'confidential transcript',
+      },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    await assert.rejects(
+      () => service.meetingSummarize({ userId: member.id, meetingId: meeting.id }),
+      (error: unknown) =>
+        error instanceof AppError && error.statusCode === 404,
+    );
+  });
+
+  test('meeting summarization returns a no-transcript message when absent', async () => {
+    const meeting = await database.prisma.meeting.create({
+      data: {
+        workspaceId,
+        title: 'Empty meeting',
+        status: 'SCHEDULED',
+        createdById: owner.id,
+      },
+    });
+
+    const service = createAiService(aiConfig(), {
+      prisma: database.prisma,
+      client: summarizeClient('Should not happen.'),
+    });
+
+    const result = await service.meetingSummarize({ userId: owner.id, meetingId: meeting.id });
+    assert.equal(result.summary, 'This meeting has no transcript to summarize.');
+  });
 }
+

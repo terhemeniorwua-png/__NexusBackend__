@@ -1464,6 +1464,7 @@ model Meeting {
   createdById String
   title       String
   description String?
+  transcript  String?
   providerMeetingId String?
   providerHostToken String?
   status      MeetingStatus  @default(SCHEDULED)

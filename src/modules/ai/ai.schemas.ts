@@ -71,6 +71,136 @@ export const aiWritingAcceptSchema = z
   .strict();
 
 // ---------------------------------------------------------------------------
+// AI task generator (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiTaskGenerateSchema = z
+  .object({
+    workspaceId: uuid,
+    projectId: uuid,
+    prompt: z.string().trim().min(1).max(2_000),
+  })
+  .strict();
+
+export const aiTaskPreviewSchema = z
+  .object({
+    title: z.string().trim().min(2).max(200),
+    description: z.string().trim().max(10_000).optional(),
+    status: z
+      .enum([
+        'ASSIGNED',
+        'IN_PROGRESS',
+        'SUBMITTED',
+        'UNDER_REVIEW',
+        'APPROVED',
+        'CHANGES_REQUESTED',
+      ])
+      .optional(),
+    priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+    category: z.string().trim().max(80).optional(),
+    labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
+    dueDate: z.string().datetime({ offset: true }).optional().nullable(),
+  })
+  .strict();
+
+export const aiTaskConfirmSchema = z
+  .object({
+    workspaceId: uuid,
+    projectId: uuid,
+    preview: aiTaskPreviewSchema,
+  })
+  .strict();
+
+export type AiTaskGenerateBody = z.infer<typeof aiTaskGenerateSchema>;
+export type AiTaskPreview = z.infer<typeof aiTaskPreviewSchema>;
+export type AiTaskConfirmBody = z.infer<typeof aiTaskConfirmSchema>;
+
+// ---------------------------------------------------------------------------
+// AI summarization (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiSummarizeSchema = z
+  .object({
+    workspaceId: uuid,
+    contextType: z.enum(['channel', 'project', 'task', 'document', 'meeting']),
+    contextId: uuid.optional(),
+    channelId: uuid.optional(),
+    from: dateInput.optional(),
+    to: dateInput.optional(),
+    maxMessages: z.coerce.number().int().min(1).max(500).default(200),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.contextType === 'channel'
+        ? Boolean(value.channelId)
+        : Boolean(value.contextId),
+    {
+      message: 'channelId is required for channels; contextId is required for other context types',
+      path: ['contextId'],
+    },
+  )
+  .refine(
+    (value) => !value.from || !value.to || new Date(value.from) <= new Date(value.to),
+    {
+      message: 'from must be on or before to',
+      path: ['to'],
+    },
+  );
+
+export type AiSummarizeBody = z.infer<typeof aiSummarizeSchema>;
+
+// ---------------------------------------------------------------------------
+// AI project intelligence (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiProjectIntelligenceSchema = z
+  .object({
+    workspaceId: uuid,
+    projectId: uuid,
+  })
+  .strict();
+
+export type AiProjectIntelligenceBody = z.infer<typeof aiProjectIntelligenceSchema>;
+
+// ---------------------------------------------------------------------------
+// AI personal productivity (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiPersonalTasksSchema = z.object({ workspaceId: uuid }).strict();
+
+export const aiDailyPlanSchema = z.object({ workspaceId: uuid }).strict();
+
+export const aiWeeklyReportSchema = z.object({ workspaceId: uuid }).strict();
+
+export type AiPersonalTasksBody = z.infer<typeof aiPersonalTasksSchema>;
+export type AiDailyPlanBody = z.infer<typeof aiDailyPlanSchema>;
+export type AiWeeklyReportBody = z.infer<typeof aiWeeklyReportSchema>;
+
+// ---------------------------------------------------------------------------
+// AI knowledge search (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiKnowledgeSearchSchema = z
+  .object({
+    workspaceId: uuid,
+    query: z.string().trim().min(1).max(1_000),
+    category: z.string().trim().max(60).optional(),
+    limit: z.coerce.number().int().min(1).max(20).default(10),
+  })
+  .strict();
+
+export type AiKnowledgeSearchBody = z.infer<typeof aiKnowledgeSearchSchema>;
+
+// ---------------------------------------------------------------------------
+// AI meeting assistant (Phase 22)
+// ---------------------------------------------------------------------------
+
+export const aiMeetingSummarizeSchema = z.object({ meetingId: uuid }).strict();
+
+export type AiMeetingSummarizeBody = z.infer<typeof aiMeetingSummarizeSchema>;
+
+// ---------------------------------------------------------------------------
 // AI action proposals (Phase 23)
 // ---------------------------------------------------------------------------
 

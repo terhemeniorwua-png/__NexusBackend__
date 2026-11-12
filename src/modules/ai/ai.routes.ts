@@ -13,12 +13,28 @@ import {
   aiChatBodySchema,
   aiConversationParamsSchema,
   aiConversationQuerySchema,
+  aiDailyPlanSchema,
+  aiKnowledgeSearchSchema,
+  aiMeetingSummarizeSchema,
+  aiPersonalTasksSchema,
+  aiProjectIntelligenceSchema,
+  aiSummarizeSchema,
+  aiTaskConfirmSchema,
+  aiTaskGenerateSchema,
   aiUsageQuerySchema,
+  aiWeeklyReportSchema,
   aiWritingAcceptSchema,
   aiWritingAnalyzeSchema,
   aiWritingRewriteSchema,
   aiWritingSessionParamsSchema,
   type AiChatBody,
+  type AiDailyPlanBody,
+  type AiKnowledgeSearchBody,
+  type AiProjectIntelligenceBody,
+  type AiSummarizeBody,
+  type AiTaskConfirmBody,
+  type AiTaskGenerateBody,
+  type AiWeeklyReportBody,
   type AiWritingAnalyzeBody,
   type AiWritingRewriteBody,
 } from './ai.schemas';
@@ -274,6 +290,170 @@ export function createAiRouter({
     async (req, res) => {
       const { sessionId } = req.validated!.params as { sessionId: string };
       sendSuccess(res, await writingService.dismissSession(userId(req), sessionId));
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI task generation (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.post(
+    '/tasks/generate',
+    requireAuth,
+    requireActive,
+    validate({ body: aiTaskGenerateSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiTaskGenerateBody;
+      sendSuccess(
+        res,
+        await service.generateTaskPreview({ userId: userId(req), ...body }),
+      );
+    },
+  );
+
+  router.post(
+    '/tasks/generate/confirm',
+    requireAuth,
+    requireActive,
+    validate({ body: aiTaskConfirmSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiTaskConfirmBody;
+      sendSuccess(
+        res,
+        await service.confirmTaskGeneration(
+          { userId: userId(req), ...body },
+          requestMeta(req),
+        ),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI summarization (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.post(
+    '/summarize',
+    requireAuth,
+    requireActive,
+    validate({ body: aiSummarizeSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiSummarizeBody;
+      sendSuccess(
+        res,
+        await service.summarize({
+          userId: userId(req),
+          workspaceId: body.workspaceId ?? null,
+          contextType: body.contextType,
+          contextId: body.contextId ?? null,
+          channelId: body.channelId ?? null,
+          from: body.from ?? null,
+          to: body.to ?? null,
+          maxMessages: body.maxMessages,
+        }),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI project intelligence (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.post(
+    '/projects/intelligence',
+    requireAuth,
+    requireActive,
+    validate({ body: aiProjectIntelligenceSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiProjectIntelligenceBody;
+      sendSuccess(
+        res,
+        await service.projectIntelligence({
+          userId: userId(req),
+          workspaceId: body.workspaceId,
+          projectId: body.projectId,
+        }),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // AI personal productivity (Phase 22)
+  // -------------------------------------------------------------------------
+
+  router.get(
+    '/personal/tasks',
+    requireAuth,
+    requireActive,
+    validate({ query: aiPersonalTasksSchema }),
+    async (req, res) => {
+      const query = req.validated!.query as { workspaceId: string };
+      sendSuccess(
+        res,
+        await service.myTasks({ userId: userId(req), workspaceId: query.workspaceId }),
+      );
+    },
+  );
+
+  router.post(
+    '/personal/daily-plan',
+    requireAuth,
+    requireActive,
+    validate({ body: aiDailyPlanSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiDailyPlanBody;
+      sendSuccess(
+        res,
+        await service.dailyPlan({ userId: userId(req), workspaceId: body.workspaceId }),
+      );
+    },
+  );
+
+  router.post(
+    '/personal/weekly-report',
+    requireAuth,
+    requireActive,
+    validate({ body: aiWeeklyReportSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiWeeklyReportBody;
+      sendSuccess(
+        res,
+        await service.weeklyReport({ userId: userId(req), workspaceId: body.workspaceId }),
+      );
+    },
+  );
+
+  router.post(
+    '/knowledge/search',
+    requireAuth,
+    requireActive,
+    validate({ body: aiKnowledgeSearchSchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiKnowledgeSearchBody;
+      sendSuccess(
+        res,
+        await service.knowledgeSearch({
+          userId: userId(req),
+          workspaceId: body.workspaceId,
+          query: body.query,
+          category: body.category ?? null,
+          limit: body.limit,
+        }),
+      );
+    },
+  );
+
+  router.post(
+    '/meetings/:meetingId/summarize',
+    requireAuth,
+    requireActive,
+    validate({ params: aiMeetingSummarizeSchema }),
+    async (req, res) => {
+      const { meetingId } = req.validated!.params as { meetingId: string };
+      sendSuccess(
+        res,
+        await service.meetingSummarize({ userId: userId(req), meetingId }),
+      );
     },
   );
 

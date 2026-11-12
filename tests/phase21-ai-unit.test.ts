@@ -14,6 +14,10 @@ const baseConfig: AiClientConfig = {
   aiServiceUrl: 'https://ai.test',
   aiServiceToken: 'x'.repeat(40),
   aiModel: 'test-model',
+  aiFastModel: '',
+  aiProvider: 'openrouter',
+  openrouterApiKey: 'test-key',
+  emailAppUrl: 'http://localhost:3000',
   aiRequestTimeoutMs: 1_000,
   aiStreamTimeoutMs: 1_000,
   aiCircuitBreakerFailures: 2,
@@ -138,16 +142,16 @@ describe('AI service client', () => {
     );
   });
 
-  test('sends the service bearer token and normalizes the response', async () => {
+  test('sends the OpenRouter bearer token and normalizes the response', async () => {
     let captured: { url: string; init: RequestInit } | null = null;
     const client = createAiClient(baseConfig, {
       fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
         captured = { url: String(url), init: init ?? {} };
         return jsonResponse({
-          content: 'An answer [workspace:ws-1]',
+          id: 'chatcmpl-1',
           model: 'test-model',
+          choices: [{ message: { role: 'assistant', content: 'An answer [workspace:ws-1]' } }],
           usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-          references: [{ type: 'workspace', id: 'ws-1', title: 'Demo' }, { type: 'workspace' }],
         });
       }) as typeof fetch,
     });
@@ -159,10 +163,10 @@ describe('AI service client', () => {
 
     assert.equal(response.content, 'An answer [workspace:ws-1]');
     assert.equal(response.usage.totalTokens, 15);
-    assert.equal(response.references.length, 1);
+    assert.equal(response.references.length, 0);
     const headers = captured!.init.headers as Record<string, string>;
-    assert.equal(headers.authorization, `Bearer ${baseConfig.aiServiceToken}`);
-    assert.equal(captured!.url, 'https://ai.test/v1/chat');
+    assert.equal(headers.authorization, `Bearer ${baseConfig.openrouterApiKey}`);
+    assert.equal(captured!.url, 'https://openrouter.ai/api/v1/chat/completions');
   });
 
   test('maps an HTTP failure to AiProviderError', async () => {
@@ -178,13 +182,13 @@ describe('AI service client', () => {
     );
   });
 
-  test('parses a streamed response and yields a final result', async () => {
+  test('parses an OpenRouter streamed response and yields a final result', async () => {
     const client = createAiClient(baseConfig, {
       fetchImpl: (async () =>
         sseResponse([
-          'data: {"type":"token","content":"Hello "}\n\n',
-          'data: {"type":"token","content":"world"}\n\n',
-          'data: {"type":"done","response":{"content":"Hello world","model":"test-model","usage":{"totalTokens":3},"references":[]}}\n\n',
+          'data: {"choices":[{"delta":{"content":"Hello "}}]}\n\n',
+          'data: {"choices":[{"delta":{"content":"world"}}]}\n\n',
+          'data: [DONE]\n\n',
         ])) as typeof fetch,
     });
 
@@ -202,12 +206,166 @@ describe('AI service client', () => {
     assert.equal(finalContent, 'Hello world');
   });
 
-  test('reports health for a configured service', async () => {
+  test('reports health for a configured provider', async () => {
     const client = createAiClient(baseConfig, {
-      fetchImpl: (async () => jsonResponse({ version: '1.2.3' })) as typeof fetch,
+      fetchImpl: (async () => jsonResponse({})) as typeof fetch,
     });
     const health = await client.health();
     assert.equal(health.status, 'up');
-    assert.equal(health.version, '1.2.3');
+    assert.equal(health.version, 'openrouter');
+  });
+});
+
+describe('OpenRouter client', () => {
+  function errorResponse(code: unknown, message: unknown, status: number): Response {
+    return jsonResponse({ error: { code, message } }, status);
+  }
+
+  function emptyChatResponse(): Response {
+    return jsonResponse({
+      id: 'chatcmpl-empty',
+      model: 'test-model',
+      choices: [{ message: { role: 'assistant', content: '' } }],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    });
+  }
+
+  function successChatResponse(content: string): Response {
+    return jsonResponse({
+      id: 'chatcmpl-ok',
+      model: 'test-model',
+      choices: [{ message: { role: 'assistant', content } }],
+      usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+    });
+  }
+
+  test('returns 401 as AiProviderError', async () => {
+    const client = createAiClient(baseConfig, {
+      fetchImpl: (async () => errorResponse('invalid_key', 'Invalid API key', 401)) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'hi' }], operation: 'chat' }),
+      (error: unknown) =>
+        error instanceof AiProviderError &&
+        error.code === 'invalid_key' &&
+        error.statusCode === 401,
+    );
+  });
+
+  test('returns 402 as AiProviderError', async () => {
+    const client = createAiClient(baseConfig, {
+      fetchImpl: (async () =>
+        errorResponse('insufficient_credits', 'Insufficient credits', 402)) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'hi' }], operation: 'chat' }),
+      (error: unknown) =>
+        error instanceof AiProviderError &&
+        error.code === 'insufficient_credits' &&
+        error.statusCode === 402,
+    );
+  });
+
+  test('returns 429 as AiProviderError', async () => {
+    const client = createAiClient(baseConfig, {
+      fetchImpl: (async () =>
+        errorResponse('rate_limit', 'Rate limited', 429)) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'hi' }], operation: 'chat' }),
+      (error: unknown) =>
+        error instanceof AiProviderError &&
+        error.code === 'rate_limit' &&
+        error.statusCode === 429,
+    );
+  });
+
+  test('times out and reports AI_TIMEOUT', async () => {
+    const client = createAiClient(
+      { ...baseConfig, aiRequestTimeoutMs: 50 },
+      {
+        fetchImpl: (async (_url: string, init?: RequestInit) => {
+          return new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal as AbortSignal | undefined;
+            const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+            signal?.addEventListener('abort', onAbort, { once: true });
+            // never resolves on its own; the client's timeout aborts the signal
+          });
+        }) as typeof fetch,
+      },
+    );
+
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'hi' }], operation: 'chat' }),
+      (error: unknown) =>
+        error instanceof AiUnavailableError && error.code === 'AI_TIMEOUT',
+    );
+  });
+
+  test('retries once on an empty response', async () => {
+    let calls = 0;
+    const client = createAiClient(baseConfig, {
+      fetchImpl: (async () => {
+        calls += 1;
+        if (calls === 1) return emptyChatResponse();
+        return successChatResponse('Retry succeeded');
+      }) as typeof fetch,
+    });
+
+    const response = await client.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      operation: 'chat',
+    });
+    assert.equal(response.content, 'Retry succeeded');
+    assert.equal(calls, 2);
+  });
+
+  test('drops suggestions on invalid JSON and does not crash', async () => {
+    const client = createAiClient(baseConfig, {
+      fetchImpl: (async () =>
+        jsonResponse({
+          id: 'chatcmpl-badjson',
+          model: 'test-model',
+          choices: [{ message: { role: 'assistant', content: 'not json at all' } }],
+          usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+        })) as typeof fetch,
+    });
+
+    const result = await client.analyzeWriting({
+      text: 'hello',
+      features: ['SPELLING'],
+      operation: 'writing_analyze',
+    });
+    assert.equal(result.suggestions.length, 0);
+    assert.equal(result.model, 'test-model');
+  });
+
+  test('opens the circuit breaker after the failure threshold', async () => {
+    const failingConfig = {
+      ...baseConfig,
+      aiCircuitBreakerFailures: 2,
+      aiCircuitBreakerResetMs: 60_000,
+    };
+    const client = createAiClient(failingConfig, {
+      fetchImpl: (async () =>
+        errorResponse('upstream', 'Down', 500)) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'a' }], operation: 'chat' }),
+      (error: unknown) => error instanceof AiProviderError,
+    );
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'b' }], operation: 'chat' }),
+      (error: unknown) => error instanceof AiProviderError,
+    );
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'c' }], operation: 'chat' }),
+      (error: unknown) =>
+        error instanceof AiUnavailableError && error.code === 'AI_CIRCUIT_OPEN',
+    );
   });
 });
