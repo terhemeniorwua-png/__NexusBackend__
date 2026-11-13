@@ -3,6 +3,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireChannelAccess, ChannelCapability } from '../authorization/channel.policy';
+import { emitToChannel } from '../../realtime/io-registry';
 
 export interface MessageSummary {
   id: string;
@@ -133,7 +134,9 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         metadata: { channelId: input.channelId },
       });
 
-      return toSummary(message);
+      const summary = toSummary(message);
+      if (!summary.parentId) emitToChannel(input.channelId, 'message:new', { channelId: input.channelId, message: summary });
+      return summary;
     },
 
     async sendVoice(
@@ -171,7 +174,9 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         targetId: message.id,
         metadata: { channelId: input.channelId, voice: true },
       });
-      return toSummary(message);
+      const summary = toSummary(message);
+      emitToChannel(input.channelId, 'message:new', { channelId: input.channelId, message: summary });
+      return summary;
     },
 
     async getAudio(

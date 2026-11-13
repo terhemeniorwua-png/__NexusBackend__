@@ -2,6 +2,8 @@ import type { Server as HttpServer } from 'node:http';
 import type { AppConfig } from '../config/env';
 import { AppError } from '../utils/errors';
 import { setIo } from './io-registry';
+import { getPrismaClient } from '../db/prisma';
+import { ChannelCapability, requireChannelAccess } from '../modules/authorization/channel.policy';
 
 /**
  * Socket.IO server factory.
@@ -88,12 +90,26 @@ export async function createSocketServer(
     });
 
     // Join channel room — the client must prove membership
-    socket.on('channel:join', (channelId: string) => {
-      // Membership is verified via the REST API; the socket room is
-      // only a delivery channel. The server does not re-verify on join
-      // because the REST endpoint that sent the message already checked
-      // channel access before emitting the event.
-      socket.join(`channel:${channelId}`);
+    socket.on('channel:join', async (channelId: string, ack?: (result: { ok: boolean }) => void) => {
+      try {
+        if (typeof channelId !== 'string') throw new Error('invalid channel id');
+        const prisma = getPrismaClient();
+        const channel = await prisma.channel.findFirst({
+          where: { id: channelId, deletedAt: null },
+          select: { workspaceId: true },
+        });
+        if (!channel) throw new Error('not found');
+        await requireChannelAccess(prisma, {
+          userId,
+          workspaceId: channel.workspaceId,
+          channelId,
+          capability: ChannelCapability.View,
+        });
+        await socket.join(`channel:${channelId}`);
+        ack?.({ ok: true });
+      } catch {
+        ack?.({ ok: false });
+      }
     });
 
     // Leave channel room

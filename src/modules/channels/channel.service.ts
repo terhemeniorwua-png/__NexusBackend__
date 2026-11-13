@@ -16,7 +16,8 @@ function summary(row: Channel & { _count: { memberships: number } }) {
   return { id: row.id, workspaceId: row.workspaceId, type: row.type, name: row.name, description: row.description,
     teamId: row.teamId, departmentId: row.departmentId, projectId: row.projectId,
     archivedAt: row.archivedAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
-    memberCount: row.type === 'PRIVATE' ? row._count.memberships : null };
+    memberCount: row.type === 'PRIVATE' ? row._count.memberships : null,
+    postPolicy: row.postPolicy, isDefault: row.isDefault };
 }
 function validateParent(type: ChannelType, i: CreateInput) {
   const count = Number(Boolean(i.teamId)) + Number(Boolean(i.departmentId)) + Number(Boolean(i.projectId));
