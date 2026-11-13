@@ -55,6 +55,13 @@ function toSummary(row: {
 
 type Input = { userId: string; workspaceId: string };
 
+// Managers are workspace owners and project managers, matching requireChannelAccess.
+export function assertCanPost(access: { channel: { postPolicy: string }; workspaceRole: string }): void {
+  if (access.channel.postPolicy === 'MANAGERS_ONLY' && !['OWNER', 'PROJECT_MANAGER'].includes(access.workspaceRole)) {
+    throw new AppError(403, 'CHANNEL_READ_ONLY', 'Only workspace managers can post in this channel');
+  }
+}
+
 export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
   const messageInclude = {
     author: { select: { name: true } },
@@ -76,6 +83,8 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
       if (access.channel.archivedAt) {
         throw new AppError(409, 'CHANNEL_ARCHIVED', 'Cannot send messages to an archived channel');
       }
+
+      assertCanPost(access);
 
       // Validate parent message if provided
       if (input.parentId) {
