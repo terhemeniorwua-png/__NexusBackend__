@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from 'node:http';
 import type { AppConfig } from '../config/env';
 import { AppError } from '../utils/errors';
+import { setIo } from './io-registry';
 
 /**
  * Socket.IO server factory.
@@ -49,6 +50,8 @@ export async function createSocketServer(
     }
   }
 
+  setIo(io);
+
   // Authentication middleware
   io.use(async (socket, next) => {
     try {
@@ -70,6 +73,8 @@ export async function createSocketServer(
 
   io.on('connection', (socket) => {
     const userId = socket.data.userId as string;
+    // Private room so a single user can be reached (incoming calls).
+    void socket.join(`user:${userId}`);
 
     // Join workspace room
     socket.on('workspace:join', (workspaceId: string) => {

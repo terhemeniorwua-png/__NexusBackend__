@@ -12,6 +12,10 @@ import {
 } from './meeting.schemas';
 import { createCollaborationEmailNotifier } from '../../services/collaboration-email-notifier';
 import { createMeetingService } from './meeting.service';
+import { emitToUser } from '../../realtime/io-registry';
+import { getPrismaClient } from '../../db/prisma';
+
+const RING_TIMEOUT_MS = 30_000;
 import { createLivekitToken, livekitConfig } from '../../lib/livekit';
 
 export interface MeetingRouterOptions { config: AppConfig; service?: ReturnType<typeof createMeetingService> }
@@ -43,7 +47,45 @@ export function createMeetingRouter({ config, service = createMeetingService(und
   router.patch('/:meetingId', requireAuth, requireActive, validate({ params: meetingParamsSchema, body: updateMeetingSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
     const body = req.validated!.body as UpdateMeetingInput;
-    sendSuccess(res, await service.update({ userId: userId(req), workspaceId, meetingId, ...body }));
+    const callerId = userId(req);
+    const meeting = await service.update({ userId: callerId, workspaceId, meetingId, ...body });
+    if (body.status === 'LIVE') {
+      try {
+        const people = await service.listParticipants({ userId: callerId, workspaceId, meetingId });
+        for (const p of people) {
+          if (p.userId !== callerId && p.status === 'INVITED') {
+            emitToUser(p.userId, 'call:incoming', {
+              workspaceId,
+              meetingId,
+              title: meeting.title,
+              callerId,
+              callerName: req.auth?.name ?? 'Someone',
+            });
+            const inviteeId = p.userId;
+            const timer = setTimeout(() => {
+              void (async () => {
+                try {
+                  const still = await getPrismaClient().meetingParticipant.findFirst({
+                    where: { meetingId, userId: inviteeId, status: 'INVITED' },
+                    select: { userId: true },
+                  });
+                  if (!still) return; // accepted or declined in time
+                  const payload = { workspaceId, meetingId, title: meeting.title, callerId, calleeId: inviteeId };
+                  emitToUser(inviteeId, 'call:missed', payload);
+                  emitToUser(callerId, 'call:missed', payload);
+                } catch {
+                  // best-effort
+                }
+              })();
+            }, RING_TIMEOUT_MS);
+            timer.unref();
+          }
+        }
+      } catch {
+        // Ringing is best-effort and must never fail the update.
+      }
+    }
+    sendSuccess(res, meeting);
   });
 
   router.delete('/:meetingId', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
@@ -70,6 +112,27 @@ export function createMeetingRouter({ config, service = createMeetingService(und
       throw new AppError(503, 'CALLS_UNAVAILABLE', 'Calls are not available right now');
     }
     sendSuccess(res, { token, url, room });
+  });
+
+  router.post('/:meetingId/decline', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
+    const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
+    const uid = userId(req);
+    // Throws 403/404 unless this user may see the meeting.
+    const meeting = await service.get({ userId: uid, workspaceId, meetingId });
+    const result = await getPrismaClient().meetingParticipant.updateMany({
+      where: { meetingId, userId: uid, status: 'INVITED' },
+      data: { status: 'DECLINED' },
+    });
+    if (result.count > 0 && meeting.createdById !== uid) {
+      emitToUser(meeting.createdById, 'call:declined', {
+        workspaceId,
+        meetingId,
+        title: meeting.title,
+        userId: uid,
+        userName: req.auth?.name ?? 'Someone',
+      });
+    }
+    sendSuccess(res, { ok: true });
   });
 
   router.post('/:meetingId/join', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
