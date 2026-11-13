@@ -12,6 +12,7 @@ import {
 } from './meeting.schemas';
 import { createCollaborationEmailNotifier } from '../../services/collaboration-email-notifier';
 import { createMeetingService } from './meeting.service';
+import { createLivekitToken, livekitConfig } from '../../lib/livekit';
 
 export interface MeetingRouterOptions { config: AppConfig; service?: ReturnType<typeof createMeetingService> }
 
@@ -49,6 +50,26 @@ export function createMeetingRouter({ config, service = createMeetingService(und
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
     await service.delete({ userId: userId(req), workspaceId, meetingId });
     sendSuccess(res, { ok: true });
+  });
+
+  router.post('/:meetingId/token', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
+    const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
+    const uid = userId(req);
+    // Throws 403/404 unless this user may access the meeting.
+    const meeting = await service.get({ userId: uid, workspaceId, meetingId });
+    if (meeting.status === 'ENDED' || meeting.status === 'CANCELLED') {
+      throw new AppError(409, 'MEETING_NOT_JOINABLE', 'This meeting is no longer available to join');
+    }
+    const room = `ws:${workspaceId}:meeting:${meetingId}`;
+    let token: string;
+    let url: string;
+    try {
+      token = await createLivekitToken({ userId: uid, displayName: req.auth!.name, room });
+      url = livekitConfig.url;
+    } catch {
+      throw new AppError(503, 'CALLS_UNAVAILABLE', 'Calls are not available right now');
+    }
+    sendSuccess(res, { token, url, room });
   });
 
   router.post('/:meetingId/join', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
