@@ -1,3 +1,4 @@
+import multer from 'multer';
 import { Router, type Request } from 'express';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
@@ -35,6 +36,65 @@ export function createMessageRouter({
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);
   const requireActiveAccount = createRequireActiveAccount();
+
+  const ALLOWED_AUDIO = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg'];
+  const MAX_VOICE_MS = 5 * 60 * 1000;
+  const voiceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 2, parts: 3 },
+  }).single('audio');
+
+  router.post(
+    '/:channelId/voice',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: channelMessageParamsSchema }),
+    (req, res, next) => {
+      voiceUpload(req, res, (error: unknown) => {
+        if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+          next(new AppError(413, 'VOICE_TOO_LARGE', 'The voice message is too large'));
+        } else if (error) {
+          next(new AppError(400, 'VOICE_UPLOAD_INVALID', 'Upload exactly one file in the audio field'));
+        } else {
+          next();
+        }
+      });
+    },
+    async (req, res) => {
+      const { workspaceId, channelId } = req.validated!.params as { workspaceId: string; channelId: string };
+      const file = req.file;
+      if (!file) throw new AppError(400, 'VOICE_REQUIRED', 'An audio file is required');
+      const mime = (file.mimetype.split(';')[0] ?? '').trim();
+      if (!ALLOWED_AUDIO.includes(mime)) {
+        throw new AppError(415, 'VOICE_TYPE_UNSUPPORTED', 'Unsupported audio type');
+      }
+      const durationMs = Math.round(Number(req.body?.durationMs));
+      if (!Number.isFinite(durationMs) || durationMs < 500 || durationMs > MAX_VOICE_MS + 2000) {
+        throw new AppError(400, 'VOICE_DURATION_INVALID', 'Voice messages must be between 0.5 seconds and 5 minutes');
+      }
+      const message = await service.sendVoice({
+        userId: userId(req), workspaceId, channelId, audio: file.buffer, mime, durationMs,
+      });
+      sendSuccess(res, message, 201);
+    },
+  );
+
+  router.get(
+    '/:channelId/messages/:messageId/audio',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: messageParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, channelId, messageId } = req.validated!.params as {
+        workspaceId: string; channelId: string; messageId: string;
+      };
+      const audio = await service.getAudio({ userId: userId(req), workspaceId, channelId, messageId });
+      res.setHeader('Content-Type', audio.mime);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.send(audio.data);
+    },
+  );
 
   router.post(
     '/:channelId/messages',

@@ -1,3 +1,4 @@
+import { ensureDefaultChannels } from '../channels/default-channels';
 import type {
   Prisma,
   PrismaClient,
@@ -416,6 +417,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             organizationRole: ownerOrganizationRole(created.type),
           },
         });
+
+        await ensureDefaultChannels(tx, created.id, input.userId);
 
         if (created.type === 'COMPANY') {
           await tx.companyProfile.create({ data: { workspaceId: created.id, name: created.name } });

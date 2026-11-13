@@ -60,6 +60,9 @@ export async function requireChannelAccess(client: PrismaClient, input: {
     if (!manager && channel.type === 'PROJECT') throw new AppError(403, 'CHANNEL_ACCESS_DENIED', 'Workspace managers manage project channels');
     if (!manager && channel.type === 'WORKSPACE') throw new AppError(403, 'CHANNEL_ACCESS_DENIED', 'Workspace managers manage workspace channels');
   }
+  if (channel.isDefault && ([ChannelCapability.Update, ChannelCapability.Archive, ChannelCapability.Delete] as string[]).includes(input.capability)) {
+    throw new AppError(403, 'DEFAULT_CHANNEL_PROTECTED', 'Default channels cannot be renamed, archived or deleted');
+  }
   return { channel, membership, workspaceRole };
 }
 

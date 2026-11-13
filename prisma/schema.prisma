@@ -320,8 +320,8 @@ model User {
   documentRevisions           DocumentRevision[]           @relation("DocumentRevisionAuthor")
   documentComments            DocumentComment[]            @relation("DocumentCommentAuthor")
   calendarEventsCreated       CalendarEvent[]              @relation("EventCreatedBy")
-  formsCreated               Form[]                   @relation("FormCreatedBy")
-  formResponses              FormResponse[]           @relation("FormSubmitter")
+  formsCreated                Form[]                       @relation("FormCreatedBy")
+  formResponses               FormResponse[]               @relation("FormSubmitter")
   calendarInvitations         EventInvitation[]            @relation("EventInvitations")
   integrations                Integration[]                @relation("UserIntegrations")
   automationsCreated          Automation[]                 @relation("AutomationCreatedBy")
@@ -485,37 +485,37 @@ model Workspace {
   updatedAt           DateTime            @updatedAt
   deletedAt           DateTime?
 
-  owner               User                         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members             WorkspaceMembership[]
-  teams               Team[]
-  projects            Project[]
-  departments         Department[]
-  channels            Channel[]
-  companyProfile      CompanyProfile?
-  institutionProfile  InstitutionProfile?
-  institutionGroups   InstitutionGroup[]
-  invitations         Invitation[]
-  joinRequests        JoinRequest[]
-  files               FileAttachment[]
-  documents           Document[]
-  calendarEvents      CalendarEvent[]
-  forms              Form[]
-  integrations       Integration[]                @relation("WorkspaceIntegrations")
-  automations        Automation[]                 @relation("WorkspaceAutomations")
-  meetings            Meeting[]
-  auditLogs           AuditLog[]
-  subscription        Subscription?
-  billingPayments     BillingPayment[]
-  billingCheckouts    BillingCheckout[]
-  billingSeatSync     BillingSeatSync?
-  billingCancellation BillingCancellation?
-  ownershipTransfers  WorkspaceOwnershipTransfer[]
-  searchHistory       SearchHistory[]
+  owner                User                         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members              WorkspaceMembership[]
+  teams                Team[]
+  projects             Project[]
+  departments          Department[]
+  channels             Channel[]
+  companyProfile       CompanyProfile?
+  institutionProfile   InstitutionProfile?
+  institutionGroups    InstitutionGroup[]
+  invitations          Invitation[]
+  joinRequests         JoinRequest[]
+  files                FileAttachment[]
+  documents            Document[]
+  calendarEvents       CalendarEvent[]
+  forms                Form[]
+  integrations         Integration[]                @relation("WorkspaceIntegrations")
+  automations          Automation[]                 @relation("WorkspaceAutomations")
+  meetings             Meeting[]
+  auditLogs            AuditLog[]
+  subscription         Subscription?
+  billingPayments      BillingPayment[]
+  billingCheckouts     BillingCheckout[]
+  billingSeatSync      BillingSeatSync?
+  billingCancellation  BillingCancellation?
+  ownershipTransfers   WorkspaceOwnershipTransfer[]
+  searchHistory        SearchHistory[]
   webhookSubscriptions WebhookSubscription[]
-  aiConversations     AiConversation[]
-  aiUsageRecords      AiUsageRecord[]
-  aiActionProposals   AiActionProposal[]
-  aiWritingSessions   AiWritingSession[]
+  aiConversations      AiConversation[]
+  aiUsageRecords       AiUsageRecord[]
+  aiActionProposals    AiActionProposal[]
+  aiWritingSessions    AiWritingSession[]
 
   @@index([ownerId])
   @@index([status])
@@ -1067,7 +1067,10 @@ model CommentMention {
 // ---------------------------------------------------------------------------
 
 model Channel {
-  id           String      @id @default(uuid())
+  id           String            @id @default(uuid())
+  isDefault    Boolean           @default(false)
+  systemKey    String?
+  postPolicy   ChannelPostPolicy @default(ALL_MEMBERS)
   workspaceId  String
   type         ChannelType
   name         String
@@ -1078,8 +1081,8 @@ model Channel {
   createdById  String
   archivedAt   DateTime?
   deletedAt    DateTime?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
 
   workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   team         Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -1090,6 +1093,7 @@ model Channel {
   messages     Message[]
   readReceipts MessageReadReceipt[]
 
+  @@unique([workspaceId, systemKey])
   // A unique channel name per workspace among non-deleted channels cannot be
   // expressed in Prisma. It is added as a partial unique index in the
   // migration SQL (see the Phase 7 channel migration).
@@ -1121,16 +1125,20 @@ model ChannelMembership {
 // ---------------------------------------------------------------------------
 
 model Message {
-  id        String    @id @default(uuid())
-  channelId String
-  authorId  String
-  body      String
-  parentId  String?
-  editedAt  DateTime?
-  pinnedAt  DateTime?
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id              String             @id @default(uuid())
+  type            MessageContentType @default(TEXT)
+  audioMime       String?
+  audioDurationMs Int?
+  audio           MessageAudio?
+  channelId       String
+  authorId        String
+  body            String
+  parentId        String?
+  editedAt        DateTime?
+  pinnedAt        DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   channel      Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
   author       User                 @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
@@ -1275,24 +1283,24 @@ model JoinRequest {
 }
 
 model FileAttachment {
-  id           String    @id @default(uuid())
-  workspaceId  String
-  projectId    String?
-  taskId       String?
-  commentId    String?
-  uploadedById String
-  fileName     String
-  mimeType     String
-  sizeBytes    Int
-  storageKey   String    @unique
+  id              String    @id @default(uuid())
+  workspaceId     String
+  projectId       String?
+  taskId          String?
+  commentId       String?
+  uploadedById    String
+  fileName        String
+  mimeType        String
+  sizeBytes       Int
+  storageKey      String    @unique
   /// Best-effort plain text extracted at upload time for search. Supports text
   /// formats, DOCX and PDF content streams; legacy binary and image-only files
   /// are not parsed. Extraction failure never fails the upload.
-  extractedText String?
+  extractedText   String?
   textExtractedAt DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   project   Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -1457,29 +1465,29 @@ enum MeetingParticipantStatus {
 }
 
 model Meeting {
-  id          String        @id @default(uuid())
-  workspaceId String?
-  projectId   String?
-  calendarEventId String?
-  createdById String
-  title       String
-  description String?
-  transcript  String?
+  id                String        @id @default(uuid())
+  workspaceId       String?
+  projectId         String?
+  calendarEventId   String?
+  createdById       String
+  title             String
+  description       String?
+  transcript        String?
   providerMeetingId String?
   providerHostToken String?
-  status      MeetingStatus  @default(SCHEDULED)
-  scheduledAt DateTime?
-  startedAt   DateTime?
-  endedAt     DateTime?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  deletedAt   DateTime?
+  status            MeetingStatus @default(SCHEDULED)
+  scheduledAt       DateTime?
+  startedAt         DateTime?
+  endedAt           DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  deletedAt         DateTime?
 
-  workspace    Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project      Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  calendarEvent CalendarEvent?      @relation(fields: [calendarEventId], references: [id], onDelete: SetNull)
-  createdBy    User                 @relation("MeetingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  participants MeetingParticipant[]
+  workspace     Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project       Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  calendarEvent CalendarEvent?       @relation(fields: [calendarEventId], references: [id], onDelete: SetNull)
+  createdBy     User                 @relation("MeetingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  participants  MeetingParticipant[]
 
   @@index([workspaceId, status])
   @@index([projectId])
@@ -1488,14 +1496,14 @@ model Meeting {
 }
 
 model MeetingParticipant {
-  id        String                  @id @default(uuid())
+  id        String                   @id @default(uuid())
   meetingId String
   userId    String
   status    MeetingParticipantStatus @default(INVITED)
   joinedAt  DateTime?
   leftAt    DateTime?
-  createdAt DateTime                @default(now())
-  updatedAt DateTime                @updatedAt
+  createdAt DateTime                 @default(now())
+  updatedAt DateTime                 @updatedAt
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   user    User    @relation("MeetingParticipants", fields: [userId], references: [id], onDelete: Cascade)
@@ -1541,10 +1549,10 @@ model Form {
   updatedAt   DateTime   @updatedAt
   deletedAt   DateTime?
 
-  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy  User          @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  fields     FormField[]
-  responses  FormResponse[]
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  fields    FormField[]
+  responses FormResponse[]
 
   @@index([workspaceId, status])
   @@index([createdById])
@@ -1562,8 +1570,8 @@ model FormField {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  form      Form           @relation(fields: [formId], references: [id], onDelete: Cascade)
-  answers   FormAnswer[]
+  form    Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers FormAnswer[]
 
   @@index([formId, position])
 }
@@ -1574,9 +1582,9 @@ model FormResponse {
   submittedBy String
   createdAt   DateTime @default(now())
 
-  form     Form          @relation(fields: [formId], references: [id], onDelete: Cascade)
-  submitter User          @relation("FormSubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
-  answers  FormAnswer[]
+  form      Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  submitter User         @relation("FormSubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  answers   FormAnswer[]
 
   @@index([formId, createdAt])
   @@index([submittedBy])
@@ -1619,27 +1627,27 @@ enum IntegrationStatus {
 }
 
 model Integration {
-  id          String              @id @default(uuid())
-  userId      String
-  workspaceId String?
-  provider    IntegrationProvider
-  status      IntegrationStatus   @default(ACTIVE)
-  enabled     Boolean             @default(true)
+  id                     String              @id @default(uuid())
+  userId                 String
+  workspaceId            String?
+  provider               IntegrationProvider
+  status                 IntegrationStatus   @default(ACTIVE)
+  enabled                Boolean             @default(true)
   accessTokenCiphertext  String
   refreshTokenCiphertext String?
-  tokenExpiresAt DateTime?
-  scopes      String[]            @default([])
-  externalUserId String?
-  externalEmail  String?
-  lastError   String?
-  lastRefreshedAt DateTime?
-  lastSyncedAt DateTime?
-  revokedAt   DateTime?
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  tokenExpiresAt         DateTime?
+  scopes                 String[]            @default([])
+  externalUserId         String?
+  externalEmail          String?
+  lastError              String?
+  lastRefreshedAt        DateTime?
+  lastSyncedAt           DateTime?
+  revokedAt              DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
 
-  user      User       @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
-  workspace Workspace? @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User                 @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace?           @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
   syncJobs  IntegrationSyncJob[]
 
   @@unique([userId, provider, workspaceId])
@@ -1701,22 +1709,22 @@ enum AutomationRunStatus {
 }
 
 model Automation {
-  id          String            @id @default(uuid())
-  workspaceId String
-  createdById String
-  name        String
-  trigger     AutomationTrigger
-  condition   Json?
-  action      AutomationActionType
+  id           String               @id @default(uuid())
+  workspaceId  String
+  createdById  String
+  name         String
+  trigger      AutomationTrigger
+  condition    Json?
+  action       AutomationActionType
   actionConfig Json
-  enabled     Boolean           @default(true)
-  maxRetries  Int               @default(3)
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  deletedAt   DateTime?
+  enabled      Boolean              @default(true)
+  maxRetries   Int                  @default(3)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  deletedAt    DateTime?
 
-  workspace Workspace      @relation("WorkspaceAutomations", fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy User           @relation("AutomationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  workspace Workspace       @relation("WorkspaceAutomations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User            @relation("AutomationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   runs      AutomationRun[]
 
   @@index([workspaceId, enabled])
@@ -1749,17 +1757,17 @@ model AutomationRun {
 }
 
 model AuditLog {
-  id          String   @id @default(uuid())
-  workspaceId String?
-  actorId     String?
-  action      String
-  targetType  String
-  targetId    String
-  metadata    Json?
-  ip          String?
-  userAgent   String?
-  securityEvent Boolean @default(false)
-  createdAt   DateTime @default(now())
+  id            String   @id @default(uuid())
+  workspaceId   String?
+  actorId       String?
+  action        String
+  targetType    String
+  targetId      String
+  metadata      Json?
+  ip            String?
+  userAgent     String?
+  securityEvent Boolean  @default(false)
+  createdAt     DateTime @default(now())
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor     User?      @relation(fields: [actorId], references: [id], onDelete: SetNull)
@@ -1905,22 +1913,22 @@ enum WebhookDeliveryStatus {
 }
 
 model WebhookSubscription {
-  id          String   @id @default(uuid())
-  workspaceId String
-  createdById String
-  url         String
+  id               String    @id @default(uuid())
+  workspaceId      String
+  createdById      String
+  url              String
   /// AES-256-GCM encrypted signing secret. Never returned by the API.
   secretCiphertext String
-  events      String[] @default([])
-  description String?
-  enabled     Boolean  @default(true)
-  lastDeliveryAt DateTime?
-  lastError   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  events           String[]  @default([])
+  description      String?
+  enabled          Boolean   @default(true)
+  lastDeliveryAt   DateTime?
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy User      @relation("WebhookSubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy  User              @relation("WebhookSubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   deliveries WebhookDelivery[]
 
   @@index([workspaceId, enabled])
@@ -2011,9 +2019,9 @@ model AiConversation {
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
-  user           User               @relation("AiConversationOwner", fields: [userId], references: [id], onDelete: Cascade)
-  workspace      Workspace?         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  messages       AiMessage[]
+  user            User               @relation("AiConversationOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace       Workspace?         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages        AiMessage[]
   actionProposals AiActionProposal[]
 
   @@index([userId, updatedAt])
@@ -2155,3 +2163,19 @@ model AiWritingSession {
 //
 // Documented field-level stubs live in docs/planned-models.md.
 // ---------------------------------------------------------------------------
+
+enum ChannelPostPolicy {
+  ALL_MEMBERS
+  MANAGERS_ONLY
+}
+
+enum MessageContentType {
+  TEXT
+  VOICE
+}
+
+model MessageAudio {
+  messageId String  @id
+  data      Bytes
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
