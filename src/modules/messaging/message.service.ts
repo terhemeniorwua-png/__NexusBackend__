@@ -18,6 +18,9 @@ export interface MessageSummary {
   deletedAt: string | null;
   replyCount: number;
   reactionCount: number;
+  type: 'TEXT' | 'VOICE';
+  audioMime: string | null;
+  audioDurationMs: number | null;
 }
 
 function toSummary(row: {
@@ -35,6 +38,9 @@ function toSummary(row: {
   _count?: { replies: number; reactions: number };
   replies?: { id: string }[];
   reactions?: { id: string }[];
+  type?: string;
+  audioMime?: string | null;
+  audioDurationMs?: number | null;
 }): MessageSummary {
   return {
     id: row.id,
@@ -50,6 +56,9 @@ function toSummary(row: {
     deletedAt: row.deletedAt?.toISOString() ?? null,
     replyCount: row._count?.replies ?? row.replies?.length ?? 0,
     reactionCount: row._count?.reactions ?? row.reactions?.length ?? 0,
+    type: row.type === 'VOICE' ? 'VOICE' : 'TEXT',
+    audioMime: row.audioMime ?? null,
+    audioDurationMs: row.audioDurationMs ?? null,
   };
 }
 
@@ -125,6 +134,61 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
       });
 
       return toSummary(message);
+    },
+
+    async sendVoice(
+      input: Input & { channelId: string; audio: Buffer; mime: string; durationMs: number },
+    ): Promise<MessageSummary> {
+      const access = await requireChannelAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        channelId: input.channelId,
+        capability: ChannelCapability.View,
+      });
+      if (access.channel.archivedAt) {
+        throw new AppError(409, 'CHANNEL_ARCHIVED', 'Cannot send messages to an archived channel');
+      }
+      assertCanPost(access);
+
+      const message = await prisma.message.create({
+        data: {
+          channelId: input.channelId,
+          authorId: input.userId,
+          body: 'Voice message',
+          type: 'VOICE',
+          audioMime: input.mime,
+          audioDurationMs: input.durationMs,
+          audio: { create: { data: new Uint8Array(input.audio) } },
+        },
+        include: messageInclude,
+      });
+
+      await recordAuditEvent(prisma, {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        action: 'message.created',
+        targetType: 'Message',
+        targetId: message.id,
+        metadata: { channelId: input.channelId, voice: true },
+      });
+      return toSummary(message);
+    },
+
+    async getAudio(
+      input: Input & { channelId: string; messageId: string },
+    ): Promise<{ data: Buffer; mime: string }> {
+      await requireChannelAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        channelId: input.channelId,
+        capability: ChannelCapability.View,
+      });
+      const row = await prisma.message.findFirst({
+        where: { id: input.messageId, channelId: input.channelId, type: 'VOICE', deletedAt: null },
+        select: { audioMime: true, audio: { select: { data: true } } },
+      });
+      if (!row?.audio) throw new AppError(404, 'MESSAGE_NOT_FOUND', 'That voice message does not exist');
+      return { data: Buffer.from(row.audio.data), mime: row.audioMime ?? 'audio/webm' };
     },
 
     async list(
