@@ -24,7 +24,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
       redis:
         image: redis:7
         ports:
@@ -37,9 +36,9 @@ jobs:
 
     env:
       NODE_ENV: test
+      DATABASE_URL: postgresql://nexus:nexus_test_pw@localhost:5432/nexus_test?connection_limit=10&pool_timeout=30
+      TEST_DATABASE_URL: postgresql://nexus:nexus_test_pw@localhost:5432/nexus_test?connection_limit=10&pool_timeout=30
       REDIS_URL: redis://localhost:6379
-      DATABASE_URL: postgresql://nexus:nexus_test_pw@localhost:5432/nexus_test
-      TEST_DATABASE_URL: postgresql://nexus:nexus_test_pw@localhost:5432/nexus_test
       RUN_PHASE3_DB_TESTS: "true"
       RUN_PHASE4_DB_TESTS: "true"
       RUN_PHASE5_DB_TESTS: "true"
@@ -51,4 +50,30 @@ jobs:
       RUN_BILLING_DB_TESTS: "true"
 
     steps:
-      # ...keep your steps exactly as they are
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (fails if lockfile is out of sync)
+        run: npm ci --include=dev
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
