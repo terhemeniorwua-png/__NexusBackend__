@@ -431,6 +431,8 @@ export function createMeetingService(
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
       if (m.status === 'CANCELLED')
         throw new AppError(409, 'MEETING_CANCELLED', 'This meeting has been cancelled');
+      if (m.status === 'ENDED')
+        throw new AppError(409, 'MEETING_ENDED', 'This meeting has ended and can no longer be joined');
       await prisma.meetingParticipant.upsert({
         where: { meetingId_userId: { meetingId: input.meetingId, userId: input.userId } },
         create: {
