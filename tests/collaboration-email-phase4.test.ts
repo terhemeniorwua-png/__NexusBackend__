@@ -50,9 +50,7 @@ function notifierFixture(options: { suppressed?: boolean; failed?: boolean } = {
           : null,
     },
     workspaceMembership: { findUnique: async () => ({ id: 'membership-1' }) },
-    notificationPreference: {
-      findUnique: async () => ({ emailEnabled: true }),
-    },
+    notificationPreference: { findUnique: async () => ({ emailEnabled: true }) },
   } as unknown as PrismaClient;
   const notifier = createCollaborationEmailNotifier(config, {
     prisma: client,
@@ -99,6 +97,7 @@ function teamNotifierFixture(
         options.team === null ? null : (options.team ?? { id: 'team-1', name: 'Runtime' }),
     },
     user: { findFirst: async () => ({ id: 'bound-user' }) },
+    notificationPreference: { findUnique: async () => ({ emailEnabled: true }) },
   } as unknown as PrismaClient;
   const notifier = createCollaborationEmailNotifier(config, {
     prisma: client,
@@ -148,6 +147,7 @@ function projectNotifierFixture(
           : (options.project ?? { id: 'project-1', name: 'Compiler Runtime' }),
     },
     user: { findFirst: async () => ({ id: 'bound-user', name: 'Grace Hopper' }) },
+    notificationPreference: { findUnique: async () => ({ emailEnabled: true }) },
   } as unknown as PrismaClient;
   const notifier = createCollaborationEmailNotifier(config, {
     prisma: client,
