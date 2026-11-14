@@ -30,6 +30,7 @@ import { createBillingService, type BillingService } from '../modules/billing/bi
 import { createOrganizationRouter } from '../modules/organizations/organization.routes';
 import { createProjectOrganizationRouter } from '../modules/projects/organization-access.routes';
 import { createProjectRouter } from '../modules/projects/project.routes';
+import { createProjectRolesRouter } from '../modules/projects/project-roles.routes';
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 import { createChannelRouter } from '../modules/channels/channel.routes';
 import { createTaskRouter } from '../modules/tasks/task.routes';
@@ -98,6 +99,7 @@ export function createApiRouter({
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
   router.use('/workspaces/:workspaceId/projects', createProjectOrganizationRouter({ config }));
   router.use('/workspaces/:workspaceId/projects', createProjectRouter({ config }));
+  router.use('/workspaces/:workspaceId/project-roles', createProjectRolesRouter({ config }));
   // Tasks are nested under projects:
   // /workspaces/:workspaceId/projects/:projectId/tasks/…
   // The task router uses mergeParams to access workspaceId and projectId.

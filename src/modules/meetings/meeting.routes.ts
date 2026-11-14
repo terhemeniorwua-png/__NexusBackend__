@@ -52,6 +52,7 @@ export function createMeetingRouter({ config, service = createMeetingService(und
     if (body.status === 'LIVE') {
       try {
         const people = await service.listParticipants({ userId: callerId, workspaceId, meetingId });
+        const ws = await getPrismaClient().workspace.findUnique({ where: { id: workspaceId }, select: { name: true } });
         for (const p of people) {
           if (p.userId !== callerId && p.status === 'INVITED') {
             emitToUser(p.userId, 'call:incoming', {
@@ -60,6 +61,7 @@ export function createMeetingRouter({ config, service = createMeetingService(und
               title: meeting.title,
               callerId,
               callerName: req.auth?.name ?? 'Someone',
+              workspaceName: ws?.name ?? 'a workspace',
             });
             const inviteeId = p.userId;
             const timer = setTimeout(() => {

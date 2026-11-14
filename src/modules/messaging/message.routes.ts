@@ -113,8 +113,9 @@ export function createMessageRouter({
         channelId,
         body: body.body,
         parentId: body.parentId,
+        clientTempId: body.clientTempId,
       });
-      sendSuccess(res, message, 201);
+      sendSuccess(res, { ...message, clientTempId: body.clientTempId }, 201);
     },
   );
 

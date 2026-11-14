@@ -604,45 +604,92 @@ route families and is incomplete relative to the running router.
 
 ## Projects and project visibility (Phase 8 — in progress)
 
-Project records are workspace-scoped. `WORKSPACE` projects are visible to
-active workspace members. `DEPARTMENT_TEAM` projects inherit access from their
-active department membership, or from active team membership when assigned to
-a team; a team association narrows access over department membership. `PRIVATE`
-projects require explicit project membership or ownership, even when a team or
-department is associated with them. Organization roles
-do not independently grant private-project access. Project-level `VIEWER`
-members can read but cannot mutate; `MEMBER` can perform project contribution
-actions; `PROJECT_MANAGER` can manage project metadata and members, subject to
-the workspace-role ceiling. Project managers/owners are assigned by the server.
-All project and milestone reads use the same authorization policy. Cross-
-workspace and inaccessible restricted project IDs are returned as 404.
+Project records are workspace-scoped. All project-scoped routes enforce access
+in this order: authenticate → active workspace membership → effective project
+access/visibility → project permission → resource-specific special rules.
 
-`DEPARTMENT_TEAM` creation/update requires an active same-workspace team or
-department. Projects expose `category`, `labels`, dates, status, visibility,
-owner, member/task counts, and the caller's explicit project role. Listing is
-cursor-paginated (`cursor` is the last project ID, `limit` defaults to 25 and
-is capped at 100) and applies visibility in the database query. Archived
-projects are excluded by default and may be requested with
-`includeArchived=true`. Project deletion is a soft deletion; restore applies
-to archived projects.
+### Visibility and access sources
+
+- `WORKSPACE`: visible to active workspace members. Members without explicit
+  project membership receive read-only base access (`project.view`,
+  `task.view`) with `accessSource = "workspace_member"`; writes require an
+  explicit project membership.
+- `DEPARTMENT_TEAM`: inherited base read access comes from active team
+  membership when a team is linked, otherwise from active department
+  membership. Team linkage narrows scope over department membership. Inherited
+  access is read-only with `accessSource = "team_member"` or
+  `"department_member"` unless the caller has explicit project membership.
+- `PRIVATE`: requires explicit project membership or project ownership. No
+  inherited visibility.
+
+Cross-workspace, missing, or inaccessible restricted project IDs return
+`404 PROJECT_NOT_FOUND` (no existence leak). When a caller can see the project
+but lacks the required permission, the server returns
+`403 PERMISSION_DENIED` with the standard error envelope and
+`error.requiredPermission` set to the missing permission.
+
+### Project roles and permission catalog
+
+Project roles: `PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, `VIEWER`.
+`project.delete` is not granted by the project-manager role; project deletion
+is reserved for workspace administrators and the project owner.
+
+- **Workspace administrators (legacy implicit access):** workspace `OWNER` or
+  `PROJECT_MANAGER` memberships **without** an organization role receive
+  implicit full project permissions for workspace projects, including
+  `project.delete`, with `accessSource = "workspace_admin"` and effective
+  project role `PROJECT_MANAGER`. Organization owners/admins (organization-role
+  members) do **not** receive implicit private-project access and must hold
+  explicit project membership.
+- **Explicit project members / project owners:** permissions come from the
+  project role (`accessSource = "project_member"`). The project owner always
+  holds the `PROJECT_MANAGER` role.
+- **Institution role mapping (single source):** Department Head and
+  Lecturer/Staff are project-manager capable (ceiling `PROJECT_MANAGER`);
+  Student ceiling `MEMBER`; Collaborator/Viewer ceilings match their roles.
+- **Role ceiling:** workspace `VIEWER` → `VIEWER` only; `COLLABORATOR` →
+  `COLLABORATOR`/`VIEWER`; `MEMBER` and above → any role up to their ceiling.
+  Actors cannot grant roles above their own effective project role or above the
+  target member’s ceiling, and users cannot change their own project role.
+
+Special rules enforced in authorization/services: no self approval/review/
+reject/request-revision of own submissions; a project must retain at least one
+project manager; project owners cannot be removed or demoted below
+`PROJECT_MANAGER` (transfer ownership first); added members must be active
+workspace members. `task.update` never implies submission approval/review.
+Submission permissions exist in the catalog/matrix for future submission
+resources; task status transitions to `APPROVED`/`UNDER_REVIEW`/
+`CHANGES_REQUESTED` currently enforce the corresponding submission permissions
+and self-review protection.
 
 | Method | Path | Access | Purpose |
 | --- | --- | --- | --- |
 | GET | `/workspaces/{workspaceId}/projects` | Active workspace member | Cursor-paginated visible projects; supports `status`, `visibility`, `teamId`, `departmentId`, `search`, and `includeArchived`. |
 | POST | `/workspaces/{workspaceId}/projects` | Workspace role with project creation capability | Create project; body includes `name`, `key`, optional `description`, `category`, `labels`, `visibility`, `teamId`, `departmentId`, `startDate`, `dueDate`. Owner and initial PROJECT_MANAGER membership are server-assigned. |
-| GET | `/workspaces/{workspaceId}/projects/{projectId}` | Project reader | Read an authorized project. |
-| PATCH | `/workspaces/{workspaceId}/projects/{projectId}` | Project manager | Update metadata, scope, visibility, category/labels, lifecycle status (excluding ARCHIVED), and dates. |
+| GET | `/workspaces/{workspaceId}/project-roles` | Active workspace member | Project role catalog: `{ items: [{ role, label, description, permissions }] }`. |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}` | Project reader (`project.view`) | Read an authorized project. |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/permissions` | Active workspace member with project visibility | Effective permissions: `{ projectId, workspaceRole, projectRole, accessSource, permissions: string[], assignableRoles: string[] }`. |
+| PATCH | `/workspaces/{workspaceId}/projects/{projectId}` | `project.update` | Update metadata, scope, visibility, category/labels, lifecycle status (excluding ARCHIVED), and dates. |
 | POST | `/workspaces/{workspaceId}/projects/{projectId}/transfer-ownership` | Current project owner or workspace OWNER/PROJECT_MANAGER (including organization owner/admin) | Immediately transfer ownership. Body: `{newOwnerId, previousOwnerRole?}` where prior role is `MANAGER` (default), `MEMBER`, or `REMOVE`. No notification is sent. |
-| DELETE | `/workspaces/{workspaceId}/projects/{projectId}` | Authorized project manager/owner | Soft-delete project. |
-| POST | `/workspaces/{workspaceId}/projects/{projectId}/archive` | Project manager | Archive project. |
-| POST | `/workspaces/{workspaceId}/projects/{projectId}/restore` | Project manager | Restore archived project to its prior status (or PLANNING if no archive record exists). |
-| GET | `/workspaces/{workspaceId}/projects/{projectId}/members` | Project member manager | List project members. |
-| POST | `/workspaces/{workspaceId}/projects/{projectId}/members` | Project member manager | Add/update member role (`PROJECT_MANAGER`, `MEMBER`, `VIEWER`) for an active workspace member. |
-| PATCH | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | Project member manager | Change project role. |
-| DELETE | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | Project member manager | Remove project membership (owner cannot be removed). |
-| GET | `/workspaces/{workspaceId}/projects/{projectId}/activity` | Project reader | Read cursor-paginated project audit activity. |
-| GET/POST | `/workspaces/{workspaceId}/projects/{projectId}/milestones` | Project reader / project manager | List milestones or create one (`name`, optional `description`, `dueDate`, `position`). |
-| PATCH/DELETE | `/workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}` | Project manager | Update or delete a milestone. Completion is represented by `completedAt`; update accepts `completed: boolean`. |
+| DELETE | `/workspaces/{workspaceId}/projects/{projectId}` | `project.delete` (workspace admin or project owner) | Soft-delete project. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/archive` | `project.archive` | Archive project. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/restore` | `project.archive` | Restore archived project to its prior status (or PLANNING if no archive record exists). |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/members` | `project.view` | List project members. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/members` | `project.member.manage` | Add/update member role (`PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, `VIEWER`) for an active workspace member (audited). |
+| PATCH | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | `project.member.manage` | Change project role (audited). |
+| DELETE | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | `project.member.manage` | Remove project membership (audited; owner/last manager safeguards apply). |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/activity` | `project.view` | Read cursor-paginated project audit activity. |
+| GET/POST | `/workspaces/{workspaceId}/projects/{projectId}/milestones` | `project.view` / `project.update` | List milestones or create one (`name`, optional `description`, `dueDate`, `position`). |
+| PATCH/DELETE | `/workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}` | `project.update` | Update or delete a milestone. Completion is represented by `completedAt`; update accepts `completed: boolean`. |
+
+Project mutations and membership/milestone changes write audit records in the
+same database transaction. Membership addition/role change/removal, archive,
+delete and relevant task submission decisions are audited with actor, target,
+before/after metadata and project/workspace context. Project-level settings
+remain deferred; no settings API is invented. Task, file and other project-
+scoped routes must enforce the shared project authorization policy. Phase 8
+remains in progress until all roadmap settings and related-resource
+integration criteria are verified.
 
 Project mutations and membership/milestone changes write audit records in the
 same database transaction. Membership addition also creates an in-app

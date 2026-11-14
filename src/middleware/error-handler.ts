@@ -108,6 +108,9 @@ export function createErrorHandler(
         code: normalized.code,
         message,
         ...(normalized.details !== undefined ? { details: normalized.details } : {}),
+        ...(normalized.requiredPermission !== undefined
+          ? { requiredPermission: normalized.requiredPermission }
+          : {}),
         requestId: req.requestId,
       },
     });

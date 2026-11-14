@@ -5,7 +5,11 @@ import { recordAuditEvent } from '../../services/audit';
 import type { PrivateObjectStorage } from '../../services/storage/private-object-storage';
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
-import { requireProjectAccess, ProjectCapability } from '../authorization/project.policy';
+import {
+  ProjectPermission,
+  authorizeProject,
+  getProjectAuthorization,
+} from '../authorization';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { extractTextFromUpload } from './text-extraction';
 
@@ -80,12 +84,14 @@ export function createFileService(
 
       // If uploading to a project, verify project access
       if (input.projectId) {
-        await requireProjectAccess(prisma, {
-          userId: input.userId,
-          workspaceId: input.workspaceId,
+        await authorizeProject(prisma, {
+          actor: {
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            workspaceRole: workspace.effectiveRole,
+          },
           projectId: input.projectId,
-          workspaceRole: workspace.effectiveRole,
-          capability: ProjectCapability.ManageFiles,
+          permission: ProjectPermission.FileUpload,
         });
       }
 
@@ -156,12 +162,14 @@ export function createFileService(
 
       // Enforce project-level access if the file belongs to a project
       if (file.projectId) {
-        await requireProjectAccess(prisma, {
-          userId: input.userId,
-          workspaceId: input.workspaceId,
+        await authorizeProject(prisma, {
+          actor: {
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            workspaceRole: workspace.effectiveRole,
+          },
           projectId: file.projectId,
-          workspaceRole: workspace.effectiveRole,
-          capability: ProjectCapability.ViewFiles,
+          permission: ProjectPermission.View,
         });
       }
 
@@ -184,12 +192,14 @@ export function createFileService(
       });
 
       if (input.projectId) {
-        await requireProjectAccess(prisma, {
-          userId: input.userId,
-          workspaceId: input.workspaceId,
+        await authorizeProject(prisma, {
+          actor: {
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            workspaceRole: workspace.effectiveRole,
+          },
           projectId: input.projectId,
-          workspaceRole: workspace.effectiveRole,
-          capability: ProjectCapability.ViewFiles,
+          permission: ProjectPermission.View,
         });
       }
 
@@ -238,12 +248,38 @@ export function createFileService(
         throw new AppError(404, 'FILE_NOT_FOUND', 'That file does not exist');
       }
 
-      // Only the uploader, project manager, or workspace owner/admin can delete
-      const isUploader = file.uploadedById === input.userId;
-      const isAdmin =
-        workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
-      if (!isUploader && !isAdmin) {
-        throw new AppError(403, 'FILE_DELETE_FORBIDDEN', 'You can only delete your own files');
+      const actor = {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        workspaceRole: workspace.effectiveRole,
+      };
+
+      if (file.projectId) {
+        // Project files: a project manager (or workspace administrator) may
+        // delete any file, otherwise only the uploader may delete their own.
+        const authorization = await getProjectAuthorization(prisma, actor, file.projectId);
+        const permission = authorization.permissions.includes(ProjectPermission.FileDeleteAny)
+          ? ProjectPermission.FileDeleteAny
+          : ProjectPermission.FileDeleteOwn;
+        await authorizeProject(prisma, {
+          actor,
+          projectId: file.projectId,
+          permission,
+          resource: { kind: 'file', fileId: file.id },
+        });
+      } else {
+        // Workspace-level files keep the legacy rule: uploader or workspace
+        // administrator.
+        const isUploader = file.uploadedById === input.userId;
+        const isAdmin =
+          workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
+        if (!isUploader && !isAdmin) {
+          throw new AppError(
+            403,
+            'FILE_DELETE_FORBIDDEN',
+            'You can only delete your own files',
+          );
+        }
       }
 
       await prisma.$transaction(async (tx) => {
