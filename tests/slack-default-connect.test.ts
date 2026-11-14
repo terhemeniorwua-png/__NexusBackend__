@@ -127,6 +127,7 @@ function runTests(rawDbUrl: string): void {
     process.env.SLACK_REDIRECT_URI = `${baseUrl}/api/v1/integrations/slack/callback`;
     process.env.SLACK_BOT_TOKEN = 'xoxb-test-not-a-real-token';
     process.env.SLACK_DEFAULT_CONNECT = 'true';
+    process.env.JWT_ACCESS_SECRET ??= `test-secret-${tag}-padding-padding-padding`;
 
     owner = await register('SD Owner', 'owner');
     member = await register('SD Member', 'member');
