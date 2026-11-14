@@ -46,6 +46,41 @@ export {
 } from './project.policy';
 export type { ProjectCapabilityValue, ProjectAccess } from './project.policy';
 
+// Project permission catalog and central project authorization
+export {
+  ProjectPermission,
+  ALL_PROJECT_PERMISSIONS,
+  PROJECT_ROLE_RANK,
+  PROJECT_ROLE_PERMISSIONS,
+  PROJECT_ROLE_DEFINITIONS,
+  WORKSPACE_ADMIN_PROJECT_PERMISSIONS,
+  assignableProjectRoles,
+  assertMayManageProjectMember,
+  assertNotSelfReview,
+  capProjectRole,
+  maximumProjectRoleForMember,
+  maximumProjectRoleForWorkspaceRole,
+  projectPermissionsForRole,
+  projectRoleExceedsCeiling,
+  projectRoleHasPermission,
+} from './project.permissions';
+export type { ProjectPermissionValue, ProjectRoleDefinition } from './project.permissions';
+export {
+  authorizeProject,
+  getProjectAuthorization,
+  projectAssignableRoles,
+  projectRoleDefinitions,
+  requireProjectPermission,
+  resolveProjectAuthorization,
+} from './project.authorization';
+export type {
+  ProjectAccessSource,
+  ProjectActor,
+  ProjectAuthorization,
+  ProjectAuthorizationClient,
+  ProjectAuthorizationResource,
+} from './project.authorization';
+
 // Channel
 export { ChannelCapability, requireChannelAccess } from './channel.policy';
 export type { ChannelCapabilityValue, ChannelAccess } from './channel.policy';

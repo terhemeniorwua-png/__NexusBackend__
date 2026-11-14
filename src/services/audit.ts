@@ -77,6 +77,9 @@ export const TaskAuditAction = {
   TaskRestored: 'task.restored',
   TaskCompleted: 'task.completed',
   TaskReopened: 'task.reopened',
+  TaskReviewed: 'task.reviewed',
+  TaskApproved: 'task.approved',
+  TaskChangesRequested: 'task.changes_requested',
   AssigneeAdded: 'task.assignee_added',
   AssigneeRemoved: 'task.assignee_removed',
   DependencyAdded: 'task.dependency_added',
@@ -87,6 +90,29 @@ export const TaskAuditAction = {
 } as const;
 
 export type TaskAuditActionValue = (typeof TaskAuditAction)[keyof typeof TaskAuditAction];
+
+/**
+ * Project-scoped audit actions. These cover project settings, ownership,
+ * membership (including role changes), archive/delete and milestones.
+ */
+export const ProjectAuditAction = {
+  ProjectCreated: 'project.created',
+  ProjectUpdated: 'project.updated',
+  ProjectArchived: 'project.archived',
+  ProjectRestored: 'project.restored',
+  ProjectDeleted: 'project.deleted',
+  OwnershipTransferred: 'project.ownership_transferred',
+  MemberAdded: 'project.member_added',
+  MemberRoleChanged: 'project.member_role_changed',
+  MemberRemoved: 'project.member_removed',
+  MilestoneCreated: 'project.milestone_created',
+  MilestoneUpdated: 'project.milestone_updated',
+  MilestoneDeleted: 'project.milestone_deleted',
+  OrganizationAccessUpdated: 'project.organization_access_updated',
+} as const;
+
+export type ProjectAuditActionValue =
+  (typeof ProjectAuditAction)[keyof typeof ProjectAuditAction];
 
 /**
  * Audit actions that represent a security-relevant change to a workspace or

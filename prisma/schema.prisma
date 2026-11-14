@@ -131,6 +131,7 @@ enum ProjectVisibility {
 enum ProjectRole {
   PROJECT_MANAGER
   MEMBER
+  COLLABORATOR
   VIEWER
 }
 

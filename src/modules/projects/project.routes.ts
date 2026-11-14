@@ -21,10 +21,13 @@ import {
   updateProjectSchema,
   type CreateProjectInput,
   type ListProjectsQuery,
-  type UpdateProjectInput,
   type TransferProjectOwnershipInput,
+  type UpdateProjectInput,
 } from './project.schemas';
 import { createProjectService } from './project.service';
+import { getProjectAuthorization, projectAssignableRoles } from '../authorization';
+import { getPrismaClient } from '../../db/prisma';
+import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 
 export interface ProjectRouterOptions {
   config: AppConfig;
@@ -74,6 +77,41 @@ export function createProjectRouter({
         await service.create({ userId: userId(req), workspaceId, ...body }, context(req)),
         201,
       );
+    },
+  );
+
+  router.get(
+    '/:projectId/permissions',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as { workspaceId: string; projectId: string };
+      const currentUserId = userId(req);
+      const client = getPrismaClient();
+      const workspace = await requireWorkspaceAccess(client, {
+        userId: currentUserId,
+        workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const authorization = await getProjectAuthorization(
+        client,
+        {
+          userId: currentUserId,
+          workspaceId,
+          workspaceRole: workspace.effectiveRole,
+        },
+        projectId,
+      );
+      const assignable = projectAssignableRoles(authorization);
+      sendSuccess(res, {
+        projectId: authorization.project.id,
+        workspaceRole: authorization.workspaceRole,
+        projectRole: authorization.projectRole,
+        accessSource: authorization.accessSource,
+        permissions: authorization.permissions,
+        assignableRoles: assignable,
+      });
     },
   );
 

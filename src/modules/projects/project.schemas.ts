@@ -82,15 +82,37 @@ export const updateProjectSchema = z
 export const projectMemberSchema = z
   .object({
     userId: uuid,
-    role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'VIEWER']).default('MEMBER'),
+    role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'COLLABORATOR', 'VIEWER']).default('MEMBER'),
   })
   .strict();
 
 export const updateProjectMemberSchema = z
   .object({
-    role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'VIEWER']),
+    role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'COLLABORATOR', 'VIEWER']),
   })
   .strict();
+
+export const projectRoleEnum = z.enum([
+  'PROJECT_MANAGER',
+  'MEMBER',
+  'COLLABORATOR',
+  'VIEWER',
+]);
+
+export const projectPermissionsResponseSchema = z.object({
+  projectId: uuid,
+  workspaceRole: z.string(),
+  projectRole: projectRoleEnum.nullable(),
+  accessSource: z.enum([
+    'workspace_admin',
+    'project_member',
+    'workspace_member',
+    'team_member',
+    'department_member',
+  ]),
+  permissions: z.array(z.string()),
+  assignableRoles: z.array(projectRoleEnum),
+});
 
 export const projectActivityQuerySchema = z.object({
   cursor: z.string().datetime({ offset: true }).optional(),
@@ -131,3 +153,4 @@ export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 export type ListProjectsQuery = z.infer<typeof listProjectsQuerySchema>;
 export type TransferProjectOwnershipInput = z.infer<typeof transferProjectOwnershipSchema>;
+export type ProjectPermissionsResponse = z.infer<typeof projectPermissionsResponseSchema>;

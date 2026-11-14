@@ -7,9 +7,9 @@ import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
   DepartmentCapability,
-  ProjectCapability,
+  ProjectPermission,
+  authorizeProject,
   requireDepartmentAccess,
-  requireProjectAccess,
   requireTeamAccess,
   requireWorkspaceAccess,
   TeamCapability,
@@ -59,12 +59,10 @@ export function createProjectOrganizationRouter({
         workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      const { project } = await requireProjectAccess(prisma, {
-        userId,
-        workspaceId,
+      const { project } = await authorizeProject(prisma, {
+        actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
         projectId,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.UpdateProject,
+        permission: ProjectPermission.Update,
       });
 
       const teamId = input.teamId !== undefined ? input.teamId : project.teamId;

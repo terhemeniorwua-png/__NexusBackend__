@@ -7,10 +7,13 @@ import { createNotification } from '../../services/notifications';
 import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { AppError } from '../../utils/errors';
 import {
-  ProjectCapability,
-  requireProjectAccess,
+  ProjectPermission,
+  assertNotSelfReview,
+  authorizeProject,
   requireWorkspaceAccess,
   WorkspaceCapability,
+  type ProjectAuthorizationResource,
+  type ProjectPermissionValue,
 } from '../authorization';
 import type { RequestContext } from '../auth/auth.types';
 import type {
@@ -159,21 +162,35 @@ export function createTaskService(
   prisma: PrismaClient = getPrismaClient(),
   deps: TaskServiceDependencies = {},
 ) {
+  const authorize = async (
+    input: Input & { projectId: string },
+    permission: ProjectPermissionValue,
+    resource?: ProjectAuthorizationResource,
+  ) => {
+    const workspace = await requireWorkspaceAccess(prisma, {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      capability: WorkspaceCapability.ViewWorkspace,
+    });
+    return authorizeProject(prisma, {
+      actor: {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        workspaceRole: workspace.effectiveRole,
+      },
+      projectId: input.projectId,
+      permission,
+      ...(resource ? { resource } : {}),
+    });
+  };
+
   return {
     // -------------------------------------------------------------------------
     // List
     // -------------------------------------------------------------------------
 
     async list(input: Input & { projectId: string } & ListTasksQuery) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewTasks,
-      });
+      const access = await authorize(input, ProjectPermission.TaskView);
 
       const orderBy: Prisma.TaskOrderByWithRelationInput[] = (() => {
         switch (input.sortBy) {
@@ -198,6 +215,9 @@ export function createTaskService(
         where: {
           projectId: input.projectId,
           deletedAt: null,
+          ...(access.projectRole === 'COLLABORATOR'
+            ? { assignees: { some: { userId: input.userId } } }
+            : {}),
           ...(input.status ? { status: input.status } : {}),
           ...(input.priority ? { priority: input.priority } : {}),
           ...(input.assigneeId
@@ -249,17 +269,20 @@ export function createTaskService(
       input: Input & { projectId: string } & CreateTaskInput,
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.CreateTask,
-      });
+      const access = await authorize(input, ProjectPermission.TaskCreate);
       if (access.project.status === 'ARCHIVED')
         throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+      if (
+        input.assigneeIds?.length &&
+        !access.permissions.includes(ProjectPermission.TaskAssign)
+      ) {
+        throw new AppError(
+          403,
+          'PERMISSION_DENIED',
+          'Your project role does not allow assigning tasks',
+          { requiredPermission: ProjectPermission.TaskAssign },
+        );
+      }
 
       const projectKey = access.project.key;
 
@@ -363,14 +386,9 @@ export function createTaskService(
     // -------------------------------------------------------------------------
 
     async get(input: Input & { projectId: string; taskId: string }) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewTasks,
+      const access = await authorize(input, ProjectPermission.TaskView, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -392,14 +410,9 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string } & UpdateTaskInput,
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskUpdate, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const existing = await prisma.task.findFirst({
         where: {
@@ -407,9 +420,53 @@ export function createTaskService(
           projectId: access.project.id,
           deletedAt: null,
         },
-        select: { id: true, title: true, key: true, status: true },
+        select: {
+          id: true,
+          title: true,
+          key: true,
+          status: true,
+          creatorId: true,
+          assignees: { select: { userId: true } },
+        },
       });
       if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      // A task status decision is a submission review action. `task.update`
+      // never implies the ability to approve, review or request changes.
+      const submissionAction: 'approve' | 'review' | 'request_revision' | null =
+        input.status === 'APPROVED'
+          ? 'approve'
+          : input.status === 'UNDER_REVIEW'
+            ? 'review'
+            : input.status === 'CHANGES_REQUESTED'
+              ? 'request_revision'
+              : null;
+      if (submissionAction) {
+        const requiredPermission =
+          submissionAction === 'approve'
+            ? ProjectPermission.SubmissionApprove
+            : submissionAction === 'review'
+              ? ProjectPermission.SubmissionReview
+              : ProjectPermission.SubmissionRequestRevision;
+        if (!access.permissions.includes(requiredPermission)) {
+          throw new AppError(
+            403,
+            'PERMISSION_DENIED',
+            'Your project role does not allow this submission decision',
+            { requiredPermission },
+          );
+        }
+        const isSelf =
+          existing.creatorId === input.userId ||
+          existing.assignees.some((assignee) => assignee.userId === input.userId);
+        if (isSelf) {
+          assertNotSelfReview({
+            actorId: input.userId,
+            subjectUserId: input.userId,
+            action: submissionAction,
+          });
+        }
+      }
 
       // Verify parent task if changing.
       if (input.parentTaskId !== undefined && input.parentTaskId) {
@@ -466,6 +523,23 @@ export function createTaskService(
           },
           ...context,
         });
+        if (submissionAction === 'approve' || submissionAction === 'request_revision') {
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action:
+              submissionAction === 'approve' ? 'task.approved' : 'task.changes_requested',
+            targetType: 'Task',
+            targetId: row.id,
+            metadata: {
+              key: row.key,
+              projectId: access.project.id,
+              previousStatus: existing.status,
+              status: row.status,
+            },
+            ...context,
+          });
+        }
         return toSummary(row);
       });
     },
@@ -475,14 +549,9 @@ export function createTaskService(
     // -------------------------------------------------------------------------
 
     async remove(input: Input & { projectId: string; taskId: string }, context: RequestContext) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskDelete, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const existing = await prisma.task.findFirst({
         where: {
@@ -517,14 +586,9 @@ export function createTaskService(
     // -------------------------------------------------------------------------
 
     async archive(input: Input & { projectId: string; taskId: string }, context: RequestContext) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskDelete, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const existing = await prisma.task.findFirst({
         where: {
@@ -556,14 +620,9 @@ export function createTaskService(
     },
 
     async restore(input: Input & { projectId: string; taskId: string }, context: RequestContext) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskDelete, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const existing = await prisma.task.findFirst({
         where: {
@@ -602,14 +661,9 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskComplete, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const existing = await prisma.task.findFirst({
         where: {
@@ -666,14 +720,9 @@ export function createTaskService(
     },
 
     async reopen(input: Input & { projectId: string; taskId: string }, context: RequestContext) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskUpdate, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const existing = await prisma.task.findFirst({
         where: {
@@ -719,14 +768,9 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string } & AddAssigneeInput,
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskAssign, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -818,14 +862,9 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string; targetUserId: string },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskReassign, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -865,14 +904,9 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string } & AddDependencyInput,
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskUpdate, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -971,14 +1005,9 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string; dependsOnTaskId: string },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageTask,
+      const access = await authorize(input, ProjectPermission.TaskUpdate, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -1031,14 +1060,9 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string } & CreateCommentInput,
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewTasks,
+      const access = await authorize(input, ProjectPermission.TaskComment, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -1059,12 +1083,15 @@ export function createTaskService(
             workspaceId: input.workspaceId,
             capability: WorkspaceCapability.ViewWorkspace,
           });
-          await requireProjectAccess(prisma, {
-            userId: mentionedUserId,
-            workspaceId: input.workspaceId,
+          await authorizeProject(prisma, {
+            actor: {
+              userId: mentionedUserId,
+              workspaceId: input.workspaceId,
+              workspaceRole: mentionedWorkspace.effectiveRole,
+            },
             projectId: access.project.id,
-            workspaceRole: mentionedWorkspace.effectiveRole,
-            capability: ProjectCapability.ViewTasks,
+            permission: ProjectPermission.TaskView,
+            resource: { kind: 'task', taskId: task.id },
           });
         } catch (error) {
           if (error instanceof AppError && error.statusCode < 500) {
@@ -1162,14 +1189,10 @@ export function createTaskService(
       } & UpdateCommentInput,
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewTasks,
+      const access = await authorize(input, ProjectPermission.TaskComment, {
+        kind: 'comment',
+        taskId: input.taskId,
+        commentId: input.commentId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -1232,14 +1255,10 @@ export function createTaskService(
       input: Input & { projectId: string; taskId: string; commentId: string },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewTasks,
+      const access = await authorize(input, ProjectPermission.TaskComment, {
+        kind: 'comment',
+        taskId: input.taskId,
+        commentId: input.commentId,
       });
       const task = await prisma.task.findFirst({
         where: {
@@ -1265,19 +1284,13 @@ export function createTaskService(
       // Only the author or a project manager may delete a comment.
       const isAuthor = comment.authorId === input.userId;
       const isManager =
-        access.workspaceRole === 'OWNER' || access.workspaceRole === 'PROJECT_MANAGER';
+        access.isWorkspaceAdmin || access.projectRole === 'PROJECT_MANAGER';
       if (!isAuthor && !isManager) {
-        // Check explicit project membership role.
-        const membership = await prisma.projectMembership.findUnique({
-          where: { projectId_userId: { projectId: access.project.id, userId: input.userId } },
-          select: { role: true },
-        });
-        if (!membership || membership.role !== 'PROJECT_MANAGER')
-          throw new AppError(
-            403,
-            'COMMENT_DELETE_FORBIDDEN',
-            'You can only delete your own comments',
-          );
+        throw new AppError(
+          403,
+          'COMMENT_DELETE_FORBIDDEN',
+          'You can only delete your own comments',
+        );
       }
 
       await prisma.$transaction(async (tx) => {
@@ -1306,14 +1319,9 @@ export function createTaskService(
     async listComments(
       input: Input & { projectId: string; taskId: string; limit: number },
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewTasks,
+      const access = await authorize(input, ProjectPermission.TaskView, {
+        kind: 'task',
+        taskId: input.taskId,
       });
       const task = await prisma.task.findFirst({
         where: {

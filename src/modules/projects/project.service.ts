@@ -1,18 +1,21 @@
-import type { Prisma, PrismaClient, Project, ProjectRole, WorkspaceRole } from '@prisma/client';
+import type { Prisma, PrismaClient, Project, ProjectRole } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
 import {
   DepartmentCapability,
-  ProjectCapability,
+  ProjectPermission,
+  assertMayManageProjectMember,
+  authorizeProject,
+  maximumProjectRoleForMember,
   organizationRoleCanOwnProjects,
   requireDepartmentAccess,
-  requireProjectAccess,
   requireTeamAccess,
   requireWorkspaceAccess,
   TeamCapability,
   WorkspaceCapability,
+  type ProjectPermissionValue,
 } from '../authorization';
 import {
   effectiveWorkspaceRole,
@@ -61,17 +64,6 @@ function toSummary(
   return { ...project, memberCount: _count.members, taskCount: _count.tasks, myRole };
 }
 
-function effectiveProjectRole(
-  workspaceRole: WorkspaceRole,
-  membership: ProjectRole | null,
-  isOwner: boolean,
-): ProjectRole | null {
-  if (isOwner) return 'PROJECT_MANAGER';
-  if (membership) return membership;
-  if (workspaceRole === 'OWNER' || workspaceRole === 'PROJECT_MANAGER') return 'PROJECT_MANAGER';
-  return null;
-}
-
 function mapConflict(error: unknown): never {
   if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
     throw new AppError(
@@ -88,6 +80,26 @@ function dateOrNull(value: string | null | undefined): Date | null | undefined {
 }
 
 export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
+  const authorize = async (
+    input: Input & { projectId: string },
+    permission: ProjectPermissionValue,
+  ) => {
+    const workspace = await requireWorkspaceAccess(prisma, {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      capability: WorkspaceCapability.ViewWorkspace,
+    });
+    return authorizeProject(prisma, {
+      actor: {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        workspaceRole: workspace.effectiveRole,
+      },
+      projectId: input.projectId,
+      permission,
+    });
+  };
+
   return {
     async list(input: Input & ListProjectsQuery) {
       const access = await requireWorkspaceAccess(prisma, {
@@ -231,27 +243,12 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async get(input: Input & { projectId: string }) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewProject,
-      });
+      const access = await authorize(input, ProjectPermission.View);
       const row = await prisma.project.findUniqueOrThrow({
         where: { id: access.project.id },
         include: projectInclude,
       });
-      return toSummary(
-        row,
-        effectiveProjectRole(
-          access.workspaceRole,
-          access.projectMembership?.role ?? null,
-          row.ownerId === input.userId,
-        ),
-      );
+      return toSummary(row, access.projectRole);
     },
 
     async transferOwnership(
@@ -263,15 +260,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       context: RequestContext,
     ) {
       const requestStartedAt = new Date();
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const initialAccess = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewProject,
-      });
+      const initialAccess = await authorize(input, ProjectPermission.ManageMembers);
       if (input.newOwnerId === initialAccess.project.ownerId)
         throw new AppError(
           400,
@@ -281,7 +270,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
 
       const initiallyOwner = initialAccess.project.ownerId === input.userId;
       const initiallyAdmin =
-        workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
+        initialAccess.workspaceRole === 'OWNER' ||
+        initialAccess.workspaceRole === 'PROJECT_MANAGER';
       if (!initiallyOwner && !initiallyAdmin) {
         const racingTransfer = await prisma.auditLog.findFirst({
           where: {
@@ -363,12 +353,14 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
             'Only the project owner or a workspace administrator can transfer ownership',
           );
 
-        await requireProjectAccess(tx, {
-          userId: input.userId,
-          workspaceId: input.workspaceId,
+        await authorizeProject(tx, {
+          actor: {
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            workspaceRole: actorRole,
+          },
           projectId: input.projectId,
-          workspaceRole: actorRole,
-          capability: ProjectCapability.ViewProject,
+          permission: ProjectPermission.ManageMembers,
         });
 
         await tx.$queryRaw<Array<{ id: string }>>`
@@ -556,15 +548,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       input: Input & { projectId: string } & UpdateProjectInput,
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.UpdateProject,
-      });
+      const access = await authorize(input, ProjectPermission.Update);
       if (access.project.status === 'ARCHIVED')
         throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
       const teamId = input.teamId === undefined ? access.project.teamId : input.teamId;
@@ -574,7 +558,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
         const team = await requireTeamAccess(prisma, {
           ...input,
           teamId,
-          workspaceRole: workspace.effectiveRole,
+          workspaceRole: access.workspaceRole,
           capability: TeamCapability.ViewTeam,
         });
         if (team.team.status !== 'ACTIVE' || team.team.deletedAt)
@@ -646,11 +630,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           });
           return toSummary(
             row,
-            effectiveProjectRole(
-              access.workspaceRole,
-              myMembership?.role ?? null,
-              row.ownerId === input.userId,
-            ),
+            access.projectRole ??
+              (myMembership?.role ?? null),
           );
         });
       } catch (error) {
@@ -659,15 +640,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async archive(input: Input & { projectId: string }, context: RequestContext) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ArchiveProject,
-      });
+      const access = await authorize(input, ProjectPermission.Archive);
       if (access.project.status === 'ARCHIVED')
         return { id: access.project.id, status: access.project.status };
       return prisma.$transaction(async (tx) => {
@@ -689,15 +662,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async restore(input: Input & { projectId: string }, context: RequestContext) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ArchiveProject,
-      });
+      const access = await authorize(input, ProjectPermission.Archive);
       if (access.project.status !== 'ARCHIVED')
         return { id: access.project.id, status: access.project.status };
       const previous = await prisma.auditLog.findFirst({
@@ -730,15 +695,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async remove(input: Input & { projectId: string }, context: RequestContext) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.DeleteProject,
-      });
+      const access = await authorize(input, ProjectPermission.Delete);
       await prisma.$transaction(async (tx) => {
         await tx.project.update({
           where: { id: access.project.id },
@@ -757,15 +714,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async listMembers(input: Input & { projectId: string }) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageMembers,
-      });
+      const access = await authorize(input, ProjectPermission.View);
       return prisma.projectMembership.findMany({
         where: { projectId: access.project.id },
         orderBy: [{ createdAt: 'asc' }, { userId: 'asc' }],
@@ -782,21 +731,14 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       input: Input & { projectId: string; targetUserId: string; role: ProjectRole },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageMembers,
-      });
+      const access = await authorize(input, ProjectPermission.ManageMembers);
       if (access.project.status === 'ARCHIVED')
         throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
       const target = await prisma.workspaceMembership.findUnique({
         where: {
           workspaceId_userId: { workspaceId: input.workspaceId, userId: input.targetUserId },
         },
+        include: { workspace: { select: { type: true } } },
       });
       if (!target || target.status !== 'ACTIVE')
         throw new AppError(
@@ -804,13 +746,46 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           'WORKSPACE_MEMBER_NOT_FOUND',
           'That active workspace member does not exist',
         );
-      if (input.targetUserId === access.project.ownerId && input.role !== 'PROJECT_MANAGER')
-        throw new AppError(
-          409,
-          'PROJECT_OWNER_ROLE_REQUIRED',
-          'The project owner must retain the project manager role',
-        );
+
+      const existing = await prisma.projectMembership.findUnique({
+        where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
+        select: { role: true },
+      });
+      const targetCeiling = maximumProjectRoleForMember({
+        workspaceType: target.workspace.type,
+        workspaceRole: effectiveWorkspaceRole(
+          target.workspace.type,
+          target.role,
+          target.organizationRole,
+        ),
+        organizationRole: target.organizationRole,
+      });
+      assertMayManageProjectMember({
+        actorId: input.userId,
+        actorIsWorkspaceAdmin: access.isWorkspaceAdmin,
+        actorProjectRole: access.projectRole,
+        targetUserId: input.targetUserId,
+        targetProjectRole: existing?.role ?? input.role,
+        targetIsOwner: input.targetUserId === access.project.ownerId,
+        targetCeiling,
+        requestedRole: input.role,
+        action: existing ? 'update' : 'add',
+      });
+
       return prisma.$transaction(async (tx) => {
+        const managers =
+          existing?.role === 'PROJECT_MANAGER' && input.role !== 'PROJECT_MANAGER'
+            ? await tx.projectMembership.count({
+                where: { projectId: access.project.id, role: 'PROJECT_MANAGER' },
+              })
+            : null;
+        if (managers !== null && managers <= 1)
+          throw new AppError(
+            409,
+            'PROJECT_LAST_MANAGER',
+            'A project must retain at least one project manager',
+          );
+
         const membership = await tx.projectMembership.upsert({
           where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
           create: { projectId: access.project.id, userId: input.targetUserId, role: input.role },
@@ -820,18 +795,24 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: 'project.member_added',
+          action: existing ? 'project.member_role_changed' : 'project.member_added',
           targetType: 'ProjectMembership',
           targetId: membership.userId,
-          metadata: { projectId: access.project.id, role: membership.role },
+          metadata: {
+            projectId: access.project.id,
+            ...(existing ? { previousRole: existing.role } : {}),
+            role: membership.role,
+          },
           ...context,
         });
-        await createNotification(tx, {
-          userId: input.targetUserId,
-          type: 'MEMBERSHIP_CHANGED',
-          title: 'Added to a project',
-          data: { workspaceId: input.workspaceId, projectId: access.project.id },
-        });
+        if (!existing) {
+          await createNotification(tx, {
+            userId: input.targetUserId,
+            type: 'MEMBERSHIP_CHANGED',
+            title: 'Added to a project',
+            data: { workspaceId: input.workspaceId, projectId: access.project.id },
+          });
+        }
         return membership;
       });
     },
@@ -840,27 +821,57 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       input: Input & { projectId: string; targetUserId: string; role: ProjectRole },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageMembers,
-      });
-      if (access.project.ownerId === input.targetUserId && input.role !== 'PROJECT_MANAGER')
-        throw new AppError(
-          409,
-          'PROJECT_OWNER_ROLE_REQUIRED',
-          'The project owner must retain the project manager role',
-        );
+      const access = await authorize(input, ProjectPermission.ManageMembers);
       const existing = await prisma.projectMembership.findUnique({
         where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
       });
       if (!existing)
         throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
+      const target = await prisma.workspaceMembership.findUnique({
+        where: {
+          workspaceId_userId: { workspaceId: input.workspaceId, userId: input.targetUserId },
+        },
+        include: { workspace: { select: { type: true } } },
+      });
+      if (!target || target.status !== 'ACTIVE')
+        throw new AppError(
+          404,
+          'WORKSPACE_MEMBER_NOT_FOUND',
+          'That active workspace member does not exist',
+        );
+      const targetCeiling = maximumProjectRoleForMember({
+        workspaceType: target.workspace.type,
+        workspaceRole: effectiveWorkspaceRole(
+          target.workspace.type,
+          target.role,
+          target.organizationRole,
+        ),
+        organizationRole: target.organizationRole,
+      });
+      assertMayManageProjectMember({
+        actorId: input.userId,
+        actorIsWorkspaceAdmin: access.isWorkspaceAdmin,
+        actorProjectRole: access.projectRole,
+        targetUserId: input.targetUserId,
+        targetProjectRole: existing.role,
+        targetIsOwner: access.project.ownerId === input.targetUserId,
+        targetCeiling,
+        requestedRole: input.role,
+        action: 'update',
+      });
       return prisma.$transaction(async (tx) => {
+        const managers =
+          existing.role === 'PROJECT_MANAGER' && input.role !== 'PROJECT_MANAGER'
+            ? await tx.projectMembership.count({
+                where: { projectId: access.project.id, role: 'PROJECT_MANAGER' },
+              })
+            : null;
+        if (managers !== null && managers <= 1)
+          throw new AppError(
+            409,
+            'PROJECT_LAST_MANAGER',
+            'A project must retain at least one project manager',
+          );
         const row = await tx.projectMembership.update({
           where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
           data: { role: input.role },
@@ -883,22 +894,53 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       input: Input & { projectId: string; targetUserId: string },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
+      const access = await authorize(input, ProjectPermission.ManageMembers);
+      const existing = await prisma.projectMembership.findUnique({
+        where: { projectId_userId: { projectId: access.project.id, userId: input.targetUserId } },
+        select: { role: true },
       });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageMembers,
+      if (!existing)
+        throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
+
+      const target = await prisma.workspaceMembership.findUnique({
+        where: {
+          workspaceId_userId: { workspaceId: input.workspaceId, userId: input.targetUserId },
+        },
+        include: { workspace: { select: { type: true } } },
       });
-      if (access.project.ownerId === input.targetUserId)
-        throw new AppError(
-          409,
-          'PROJECT_OWNER_CANNOT_BE_REMOVED',
-          'Transfer project ownership before removing the project owner',
-        );
+      assertMayManageProjectMember({
+        actorId: input.userId,
+        actorIsWorkspaceAdmin: access.isWorkspaceAdmin,
+        actorProjectRole: access.projectRole,
+        targetUserId: input.targetUserId,
+        targetProjectRole: existing.role,
+        targetIsOwner: access.project.ownerId === input.targetUserId,
+        targetCeiling: target
+          ? maximumProjectRoleForMember({
+              workspaceType: target.workspace.type,
+              workspaceRole: effectiveWorkspaceRole(
+                target.workspace.type,
+                target.role,
+                target.organizationRole,
+              ),
+              organizationRole: target.organizationRole,
+            })
+          : 'VIEWER',
+        action: 'remove',
+      });
+
       return prisma.$transaction(async (tx) => {
+        if (existing.role === 'PROJECT_MANAGER') {
+          const managers = await tx.projectMembership.count({
+            where: { projectId: access.project.id, role: 'PROJECT_MANAGER' },
+          });
+          if (managers <= 1)
+            throw new AppError(
+              409,
+              'PROJECT_LAST_MANAGER',
+              'A project must retain at least one project manager',
+            );
+        }
         const result = await tx.projectMembership.deleteMany({
           where: { projectId: access.project.id, userId: input.targetUserId },
         });
@@ -910,7 +952,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           action: 'project.member_removed',
           targetType: 'ProjectMembership',
           targetId: input.targetUserId,
-          metadata: { projectId: access.project.id },
+          metadata: { projectId: access.project.id, role: existing.role },
           ...context,
         });
         return { projectId: access.project.id, userId: input.targetUserId, removed: true };
@@ -918,15 +960,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async activity(input: Input & { projectId: string; cursor?: Date; limit: number }) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewProject,
-      });
+      const access = await authorize(input, ProjectPermission.View);
       const rows = await prisma.auditLog.findMany({
         where: {
           targetType: 'Project',
@@ -946,15 +980,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async listMilestones(input: Input & { projectId: string }) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ViewProject,
-      });
+      const access = await authorize(input, ProjectPermission.View);
       return prisma.projectMilestone.findMany({
         where: { projectId: access.project.id },
         orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
@@ -971,15 +997,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.UpdateProject,
-      });
+      const access = await authorize(input, ProjectPermission.Update);
       if (access.project.status === 'ARCHIVED')
         throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
       return prisma.$transaction(async (tx) => {
@@ -1017,15 +1035,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.UpdateProject,
-      });
+      const access = await authorize(input, ProjectPermission.Update);
       if (access.project.status === 'ARCHIVED')
         throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
       const existing = await prisma.projectMilestone.findFirst({
@@ -1067,15 +1077,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       input: Input & { projectId: string; milestoneId: string },
       context: RequestContext,
     ) {
-      const workspace = await requireWorkspaceAccess(prisma, {
-        ...input,
-        capability: WorkspaceCapability.ViewWorkspace,
-      });
-      const access = await requireProjectAccess(prisma, {
-        ...input,
-        workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.UpdateProject,
-      });
+      const access = await authorize(input, ProjectPermission.Update);
       if (access.project.status === 'ARCHIVED')
         throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
       const existing = await prisma.projectMilestone.findFirst({
