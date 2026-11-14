@@ -80,7 +80,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
 
   return {
     async send(
-      input: Input & { channelId: string; body: string; parentId?: string | null },
+      input: Input & { channelId: string; body: string; parentId?: string | null; clientTempId?: string },
     ): Promise<MessageSummary> {
       const access = await requireChannelAccess(prisma, {
         userId: input.userId,
@@ -135,7 +135,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
       });
 
       const summary = toSummary(message);
-      if (!summary.parentId) emitToChannel(input.channelId, 'message:new', { channelId: input.channelId, message: summary });
+      if (!summary.parentId) emitToChannel(input.channelId, 'message:new', { channelId: input.channelId, message: { ...summary, clientTempId: input.clientTempId } });
       return summary;
     },
 
