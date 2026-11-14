@@ -124,7 +124,7 @@ function runTests(rawDbUrl: string): void {
       method: 'POST',
       headers: auth(owner),
       body: JSON.stringify({
-        provider: 'ONEDRIVE',
+        provider: 'GITLAB',
         accessToken: 'route-test-token',
         scopes: ['read'],
       }),

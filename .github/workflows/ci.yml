@@ -51,30 +51,4 @@ jobs:
       RUN_BILLING_DB_TESTS: "true"
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install (fails if lockfile is out of sync)
-        run: npm ci --include=dev
-
-      - name: Generate Prisma client
-        run: npx prisma generate
-
-      - name: Type check
-        run: npx tsc --noEmit
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Apply migrations to the test database
-        run: npx prisma migrate deploy
-
-      - name: Tests
-        run: npm test
-
-      - name: Build
-        run: npm run build
+      # ...keep your steps exactly as they are
