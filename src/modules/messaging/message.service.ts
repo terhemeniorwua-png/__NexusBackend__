@@ -19,6 +19,7 @@ export interface MessageSummary {
   deletedAt: string | null;
   replyCount: number;
   reactionCount: number;
+  reactions: { emoji: string; userIds: string[] }[];
   type: 'TEXT' | 'VOICE';
   audioMime: string | null;
   audioDurationMs: number | null;
@@ -38,7 +39,7 @@ function toSummary(row: {
   author: { name: string };
   _count?: { replies: number; reactions: number };
   replies?: { id: string }[];
-  reactions?: { id: string }[];
+  reactions?: { emoji: string; userId: string }[];
   type?: string;
   audioMime?: string | null;
   audioDurationMs?: number | null;
@@ -57,6 +58,12 @@ function toSummary(row: {
     deletedAt: row.deletedAt?.toISOString() ?? null,
     replyCount: row._count?.replies ?? row.replies?.length ?? 0,
     reactionCount: row._count?.reactions ?? row.reactions?.length ?? 0,
+    reactions: Object.entries(
+      (row.reactions ?? []).reduce<Record<string, string[]>>((acc, r) => {
+        (acc[r.emoji] ??= []).push(r.userId);
+        return acc;
+      }, {}),
+    ).map(([emoji, userIds]) => ({ emoji, userIds })),
     type: row.type === 'VOICE' ? 'VOICE' : 'TEXT',
     audioMime: row.audioMime ?? null,
     audioDurationMs: row.audioDurationMs ?? null,
@@ -76,6 +83,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
   const messageInclude = {
     author: { select: { name: true } },
     _count: { select: { replies: true, reactions: true } },
+    reactions: { select: { emoji: true, userId: true } },
   } as const;
 
   return {
@@ -456,6 +464,9 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         update: {},
       });
 
+      emitToChannel(input.channelId, 'message:reaction', {
+        channelId: input.channelId, messageId: input.messageId, userId: input.userId, emoji: input.emoji, action: 'add',
+      });
       return { id: reaction.id };
     },
 
@@ -475,6 +486,9 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
           userId: input.userId,
           emoji: input.emoji,
         },
+      });
+      emitToChannel(input.channelId, 'message:reaction', {
+        channelId: input.channelId, messageId: input.messageId, userId: input.userId, emoji: input.emoji, action: 'remove',
       });
     },
 

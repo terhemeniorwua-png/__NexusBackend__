@@ -17,6 +17,7 @@ import { getPrismaClient } from '../../db/prisma';
 
 const RING_TIMEOUT_MS = 30_000;
 import { createLivekitToken, livekitConfig } from '../../lib/livekit';
+import { RoomServiceClient, TrackType } from 'livekit-server-sdk';
 
 export interface MeetingRouterOptions { config: AppConfig; service?: ReturnType<typeof createMeetingService> }
 
@@ -114,6 +115,67 @@ export function createMeetingRouter({ config, service = createMeetingService(und
       throw new AppError(503, 'CALLS_UNAVAILABLE', 'Calls are not available right now');
     }
     sendSuccess(res, { token, url, room });
+  });
+
+  // ---- Host controls ------------------------------------------------------
+  const roomNameFor = (workspaceId: string, meetingId: string) => `ws:${workspaceId}:meeting:${meetingId}`;
+  const roomClient = () => new RoomServiceClient(livekitConfig.httpUrl, livekitConfig.apiKey, livekitConfig.apiSecret);
+  async function requireHost(uid: string, workspaceId: string, meetingId: string) {
+    const meeting = await service.get({ userId: uid, workspaceId, meetingId });
+    if (meeting.createdById !== uid) throw new AppError(403, 'HOST_ONLY', 'Only the host can do this');
+    return meeting;
+  }
+
+  router.post('/:meetingId/host/end', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
+    const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
+    const uid = userId(req);
+    await requireHost(uid, workspaceId, meetingId);
+    const meeting = await service.update({ userId: uid, workspaceId, meetingId, status: 'ENDED' });
+    try {
+      // Closing the room disconnects everyone currently in the call.
+      await roomClient().deleteRoom(roomNameFor(workspaceId, meetingId));
+    } catch {
+      // Room may not exist (nobody connected); the meeting is already ENDED.
+    }
+    sendSuccess(res, meeting);
+  });
+
+  router.post('/:meetingId/host/mute-all', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
+    const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
+    const uid = userId(req);
+    await requireHost(uid, workspaceId, meetingId);
+    const room = roomNameFor(workspaceId, meetingId);
+    let muted = 0;
+    try {
+      const client = roomClient();
+      const people = await client.listParticipants(room);
+      for (const person of people) {
+        if (person.identity === uid) continue;
+        for (const track of person.tracks) {
+          if (track.type === TrackType.AUDIO && !track.muted) {
+            await client.mutePublishedTrack(room, person.identity, track.sid, true);
+            muted += 1;
+          }
+        }
+      }
+    } catch {
+      throw new AppError(503, 'CALLS_UNAVAILABLE', 'Calls are not available right now');
+    }
+    sendSuccess(res, { muted });
+  });
+
+  router.post('/:meetingId/host/remove', requireAuth, requireActive, validate({ params: meetingParamsSchema, body: z.object({ userId: z.string().uuid() }) }), async (req, res) => {
+    const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
+    const { userId: targetId } = req.validated!.body as { userId: string };
+    const uid = userId(req);
+    await requireHost(uid, workspaceId, meetingId);
+    if (targetId === uid) throw new AppError(400, 'CANNOT_REMOVE_SELF', 'You cannot remove yourself');
+    try {
+      await roomClient().removeParticipant(roomNameFor(workspaceId, meetingId), targetId);
+    } catch {
+      // Already gone from the room.
+    }
+    sendSuccess(res, { ok: true });
   });
 
   router.post('/:meetingId/decline', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
