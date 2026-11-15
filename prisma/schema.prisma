@@ -980,6 +980,7 @@ model Task {
   completedAt         DateTime?
   position            Int          @default(0)
   parentTaskId        String?
+  weight              Int          @default(1)
   creatorId           String
   requiresApproval    Boolean      @default(false)
   expectedDeliverables Json?
