@@ -1,6 +1,6 @@
 import type { TaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import type { MentionEmailNotifier } from '../../services/mention-email-notifier';
-import type { Prisma, PrismaClient, TaskStatus } from '@prisma/client';
+import { Prisma, type PrismaClient, type TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
@@ -19,9 +19,12 @@ import type { RequestContext } from '../auth/auth.types';
 import type {
   AddAssigneeInput,
   AddDependencyInput,
+  CompleteSubtaskInput,
   CreateCommentInput,
   CreateTaskInput,
   ListTasksQuery,
+  ReviewTaskInput,
+  SubmitTaskInput,
   UpdateCommentInput,
   UpdateTaskInput,
 } from './task.schemas';
@@ -30,6 +33,8 @@ type Input = { userId: string; workspaceId: string };
 
 const taskInclude = {
   creator: { select: { id: true, name: true } },
+  submittedBy: { select: { id: true, name: true } },
+  reviewedBy: { select: { id: true, name: true } },
   assignees: {
     include: { user: { select: { id: true, name: true, email: true } } },
   },
@@ -62,6 +67,28 @@ function toSummary(row: TaskRow): TaskSummary {
     commentCount: _count.comments,
     attachmentCount: _count.attachments,
   };
+}
+
+function isSubtaskApproved(status: TaskStatus): boolean {
+  return status === 'APPROVED';
+}
+
+function computeProgress(
+  subtasks: Array<{ status: TaskStatus }>,
+): { percent: number; completed: number; total: number } {
+  const total = subtasks.length;
+  const completed = subtasks.filter((task) => isSubtaskApproved(task.status)).length;
+  const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+  return { percent, completed, total };
+}
+
+function getRequiredDeliverables(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is { label?: string; required?: boolean } => Boolean(item) && typeof item === 'object')
+    .filter((item) => item.required !== false)
+    .map((item) => (typeof item.label === 'string' ? item.label.trim() : ''))
+    .filter(Boolean);
 }
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -318,6 +345,13 @@ export function createTaskService(
             position: input.position ?? 0,
             parentTaskId: input.parentTaskId ?? null,
             creatorId: input.userId,
+            requiresApproval: input.requiresApproval ?? false,
+            expectedDeliverables:
+              input.expectedDeliverables === undefined
+                ? undefined
+                : input.expectedDeliverables === null
+                  ? Prisma.JsonNull
+                  : (input.expectedDeliverables as Prisma.InputJsonValue),
             ...(input.assigneeIds?.length
               ? {
                   assignees: {
@@ -359,7 +393,7 @@ export function createTaskService(
           }
         }
 
-        return toSummary(task);
+        return toSummary(task as TaskRow);
       });
 
       await enqueueAutomationRunsSafely({
@@ -489,6 +523,22 @@ export function createTaskService(
       }
 
       return prisma.$transaction(async (tx) => {
+        const statusChanging = input.status !== undefined && input.status !== existing.status;
+        const submissionFields: Prisma.TaskUpdateInput = {};
+        if (statusChanging && input.status === 'SUBMITTED') {
+          submissionFields.submittedAt = new Date();
+          submissionFields.submittedBy = { connect: { id: input.userId } };
+          submissionFields.reviewFeedback = null;
+          submissionFields.reviewedAt = null;
+          submissionFields.reviewedBy = { disconnect: true };
+        }
+        if (submissionAction === 'approve' || submissionAction === 'request_revision') {
+          submissionFields.reviewedAt = new Date();
+          submissionFields.reviewedBy = { connect: { id: input.userId } };
+          if (submissionAction === 'request_revision' && input.description === undefined) {
+            // keep existing reviewFeedback unless explicitly managed via dedicated endpoints
+          }
+        }
         const row = await tx.task.update({
           where: { id: existing.id },
           data: {
@@ -504,7 +554,19 @@ export function createTaskService(
             ...(input.parentTaskId !== undefined
               ? { parentTaskId: input.parentTaskId }
               : {}),
-          },
+            ...(input.requiresApproval !== undefined
+              ? { requiresApproval: input.requiresApproval }
+              : {}),
+            ...(input.expectedDeliverables !== undefined
+              ? {
+                  expectedDeliverables:
+                    input.expectedDeliverables === null
+                      ? Prisma.JsonNull
+                      : (input.expectedDeliverables as Prisma.InputJsonValue),
+                }
+              : {}),
+            ...(submissionFields as Prisma.TaskUpdateInput),
+          } as Prisma.TaskUpdateInput,
           include: taskInclude,
         });
         await recordAuditEvent(tx, {
@@ -540,7 +602,7 @@ export function createTaskService(
             ...context,
           });
         }
-        return toSummary(row);
+        return toSummary(row as TaskRow);
       });
     },
 
@@ -1353,6 +1415,363 @@ export function createTaskService(
       });
 
       return { items: comments };
+    },
+
+    async getWorkspace(input: Input & { projectId: string; taskId: string }) {
+      const access = await authorize(input, ProjectPermission.TaskView, {
+        kind: 'task',
+        taskId: input.taskId,
+      });
+      const task = await prisma.task.findFirst({
+        where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+        include: taskInclude,
+      });
+      if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      const subtasks = await prisma.task.findMany({
+        where: { projectId: access.project.id, parentTaskId: task.id, deletedAt: null },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        include: taskInclude,
+      });
+      const subtaskSummaries = subtasks.map(toSummary);
+      const progress = computeProgress(subtasks);
+
+      const recent = await prisma.auditLog.findMany({
+        where: {
+          OR: [
+            { targetType: 'Task', targetId: task.id },
+            { targetType: 'Comment', metadata: { path: ['taskId'], equals: task.id } },
+            { targetType: 'TaskAssignee', metadata: { path: ['taskId'], equals: task.id } },
+            { targetType: 'TaskDependency', metadata: { path: ['taskId'], equals: task.id } },
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 5,
+        select: { id: true, action: true, actorId: true, metadata: true, createdAt: true },
+      });
+
+      const taskSummary = toSummary(task);
+      const assignedBy =
+        taskSummary.assignees.length === 1 ? taskSummary.assignees[0]?.assignedBy ?? null : null;
+      return {
+        task: taskSummary,
+        subtasks: subtaskSummaries,
+        progress,
+        people: {
+          assignees: taskSummary.assignees,
+          assignedBy,
+          reviewer: taskSummary.reviewedBy
+            ? { id: taskSummary.reviewedBy.id, name: taskSummary.reviewedBy.name }
+            : null,
+        },
+        schedule: {
+          startDate: taskSummary.startDate,
+          dueDate: taskSummary.dueDate,
+          overdue:
+            Boolean(taskSummary.dueDate) &&
+            taskSummary.status !== 'APPROVED' &&
+            new Date(taskSummary.dueDate as Date).getTime() < Date.now(),
+        },
+        recentActivity: recent,
+      };
+    },
+
+    async listActivity(
+      input: Input & { projectId: string; taskId: string; cursor?: string; limit: number },
+    ) {
+      const access = await authorize(input, ProjectPermission.TaskView, {
+        kind: 'task',
+        taskId: input.taskId,
+      });
+      const task = await prisma.task.findFirst({
+        where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      let cursorFilter: Prisma.AuditLogWhereInput | undefined;
+      if (input.cursor) {
+        const cursorRow = await prisma.auditLog.findUnique({
+          where: { id: input.cursor },
+          select: { id: true, createdAt: true },
+        });
+        if (cursorRow) {
+          cursorFilter = {
+            OR: [
+              { createdAt: { lt: cursorRow.createdAt } },
+              { createdAt: cursorRow.createdAt, id: { lt: cursorRow.id } },
+            ],
+          };
+        }
+      }
+
+      const rows = await prisma.auditLog.findMany({
+        where: {
+          AND: [
+            {
+              OR: [
+                { targetType: 'Task', targetId: task.id },
+                { targetType: 'Comment', metadata: { path: ['taskId'], equals: task.id } },
+                { targetType: 'TaskAssignee', metadata: { path: ['taskId'], equals: task.id } },
+                { targetType: 'TaskDependency', metadata: { path: ['taskId'], equals: task.id } },
+              ],
+            },
+            ...(cursorFilter ? [cursorFilter] : []),
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+        select: { id: true, action: true, actorId: true, metadata: true, createdAt: true },
+      });
+      const hasMore = rows.length > input.limit;
+      const items = rows.slice(0, input.limit);
+      return { items, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null };
+    },
+
+    async submit(
+      input: Input & { projectId: string; taskId: string } & SubmitTaskInput,
+      context: RequestContext,
+    ) {
+      const access = await authorize(input, ProjectPermission.SubmissionSubmit, {
+        kind: 'task',
+        taskId: input.taskId,
+      });
+      const existing = await prisma.task.findFirst({
+        where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+        include: taskInclude,
+      });
+      if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      if (!['ASSIGNED', 'IN_PROGRESS', 'CHANGES_REQUESTED', 'SUBMITTED', 'UNDER_REVIEW'].includes(existing.status)) {
+        throw new AppError(409, 'TASK_SUBMIT_NOT_ALLOWED', 'This task cannot be submitted in its current state');
+      }
+      const isAssignee = existing.assignees.some((a) => a.userId === input.userId);
+      const canSubmitAsManager = access.permissions.includes(ProjectPermission.TaskUpdate);
+      if (!isAssignee && !canSubmitAsManager) {
+        throw new AppError(403, 'PERMISSION_DENIED', 'Only an assignee or authorized member can submit this task', {
+          requiredPermission: ProjectPermission.SubmissionSubmit,
+        });
+      }
+      const required = getRequiredDeliverables(existing.expectedDeliverables);
+      if (required.length && !input.workSummary.trim()) {
+        throw new AppError(400, 'DELIVERABLES_REQUIRED', 'A work summary is required for tasks with deliverables');
+      }
+
+      const row = await prisma.$transaction(async (tx) => {
+        const updated = await tx.task.update({
+          where: { id: existing.id },
+          data: {
+            status: 'SUBMITTED',
+            submissionSummary: input.workSummary.trim(),
+            submittedAt: new Date(),
+            submittedBy: { connect: { id: input.userId } },
+            reviewFeedback: null,
+            reviewedAt: null,
+            reviewedBy: { disconnect: true },
+          },
+          include: taskInclude,
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'task.updated',
+          targetType: 'Task',
+          targetId: updated.id,
+          metadata: {
+            key: updated.key,
+            projectId: access.project.id,
+            submitted: true,
+            status: updated.status,
+          },
+          ...context,
+        });
+        return toSummary(updated);
+      });
+      return row;
+    },
+
+    async review(
+      input: Input & { projectId: string; taskId: string } & ReviewTaskInput,
+      context: RequestContext,
+    ) {
+      const actionPermission =
+        input.decision === 'APPROVE'
+          ? ProjectPermission.SubmissionApprove
+          : input.decision === 'START_REVIEW'
+            ? ProjectPermission.SubmissionReview
+            : ProjectPermission.SubmissionRequestRevision;
+      const access = await authorize(input, actionPermission, {
+        kind: 'task',
+        taskId: input.taskId,
+      });
+      const existing = await prisma.task.findFirst({
+        where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+        include: taskInclude,
+      });
+      if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      const isSubmitter = existing.submittedById === input.userId || existing.assignees.some((a) => a.userId === input.userId);
+      if (isSubmitter && input.decision !== 'START_REVIEW') {
+        throw new AppError(403, 'SELF_REVIEW_NOT_ALLOWED', 'You cannot review your own submission');
+      }
+
+      let nextStatus: TaskStatus;
+      if (input.decision === 'START_REVIEW') nextStatus = 'UNDER_REVIEW';
+      else if (input.decision === 'APPROVE') nextStatus = 'APPROVED';
+      else nextStatus = 'CHANGES_REQUESTED';
+
+      const row = await prisma.$transaction(async (tx) => {
+        const updated = await tx.task.update({
+          where: { id: existing.id },
+          data: {
+            status: nextStatus,
+            reviewFeedback:
+              input.decision === 'REQUEST_CHANGES'
+                ? (input.feedback?.trim() ?? null)
+                : input.decision === 'APPROVE'
+                  ? (input.feedback?.trim() ?? null)
+                  : existing.reviewFeedback,
+            reviewedAt: input.decision === 'START_REVIEW' ? existing.reviewedAt : new Date(),
+            reviewedBy:
+              input.decision === 'START_REVIEW'
+                ? existing.reviewedById
+                  ? { connect: { id: existing.reviewedById } }
+                  : undefined
+                : { connect: { id: input.userId } },
+            completedAt: nextStatus === 'APPROVED' ? new Date() : nextStatus === 'CHANGES_REQUESTED' ? null : existing.completedAt,
+          },
+          include: taskInclude,
+        });
+        const auditAction =
+          input.decision === 'APPROVE'
+            ? 'task.approved'
+            : input.decision === 'REQUEST_CHANGES'
+              ? 'task.changes_requested'
+              : 'task.reviewed';
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: auditAction,
+          targetType: 'Task',
+          targetId: updated.id,
+          metadata: {
+            key: updated.key,
+            projectId: access.project.id,
+            decision: input.decision,
+            status: updated.status,
+            feedback: input.feedback?.trim() ?? null,
+          },
+          ...context,
+        });
+        return toSummary(updated);
+      });
+      return row;
+    },
+
+    async completeSubtask(
+      input: Input & { projectId: string; taskId: string; subtaskId: string } & CompleteSubtaskInput,
+      context: RequestContext,
+    ) {
+      const access = await authorize(input, ProjectPermission.TaskComplete, {
+        kind: 'task',
+        taskId: input.subtaskId,
+      });
+      const parent = await prisma.task.findFirst({
+        where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+        select: { id: true, key: true, requiresApproval: true },
+      });
+      if (!parent) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+      const subtask = await prisma.task.findFirst({
+        where: { id: input.subtaskId, projectId: access.project.id, parentTaskId: input.taskId, deletedAt: null },
+        include: taskInclude,
+      });
+      if (!subtask) throw new AppError(404, 'SUBTASK_NOT_FOUND', 'That subtask does not exist');
+
+      const isAssignee = subtask.assignees.some((a) => a.userId === input.userId);
+      const isAuthorizedCollaborator =
+        access.projectRole === 'PROJECT_MANAGER' ||
+        access.projectRole === 'MEMBER' ||
+        access.projectRole === 'COLLABORATOR' ||
+        access.isWorkspaceAdmin;
+      if (!isAssignee && !isAuthorizedCollaborator) {
+        throw new AppError(403, 'PERMISSION_DENIED', 'Only an assignee or authorized collaborator can complete this subtask', {
+          requiredPermission: ProjectPermission.TaskComplete,
+        });
+      }
+      if (access.projectRole === 'COLLABORATOR' && !isAssignee) {
+        throw new AppError(403, 'PERMISSION_DENIED', 'Collaborators can only complete subtasks assigned to them', {
+          requiredPermission: ProjectPermission.TaskComplete,
+        });
+      }
+
+      const requiresApproval = subtask.requiresApproval || parent.requiresApproval;
+      const now = new Date();
+
+      const result = await prisma.$transaction(async (tx) => {
+        let updated;
+        if (requiresApproval) {
+          const summary = input.workSummary?.trim() || 'Subtask completion submitted for review.';
+          updated = await tx.task.update({
+            where: { id: subtask.id },
+            data: {
+              status: 'SUBMITTED',
+              submissionSummary: summary,
+              submittedAt: now,
+              submittedBy: { connect: { id: input.userId } },
+              reviewFeedback: null,
+              reviewedAt: null,
+              reviewedBy: { disconnect: true },
+              completedAt: null,
+            },
+            include: taskInclude,
+          });
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: 'task.updated',
+            targetType: 'Task',
+            targetId: updated.id,
+            metadata: {
+              key: updated.key,
+              projectId: access.project.id,
+              subtaskCompletion: true,
+              approvalRequired: true,
+              parentTaskId: parent.id,
+              status: updated.status,
+            },
+            ...context,
+          });
+        } else {
+          updated = await tx.task.update({
+            where: { id: subtask.id },
+            data: { status: 'APPROVED', completedAt: now },
+            include: taskInclude,
+          });
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: 'task.completed',
+            targetType: 'Task',
+            targetId: updated.id,
+            metadata: {
+              key: updated.key,
+              projectId: access.project.id,
+              subtaskCompletion: true,
+              parentTaskId: parent.id,
+              previousStatus: subtask.status,
+            },
+            ...context,
+          });
+        }
+
+        const siblings = await tx.task.findMany({
+          where: { projectId: access.project.id, parentTaskId: parent.id, deletedAt: null },
+          select: { status: true },
+        });
+        const progress = computeProgress(siblings);
+        return { subtask: toSummary(updated), progress, requiresApproval, submissionCreated: requiresApproval };
+      });
+      return result;
     },
   };
 }

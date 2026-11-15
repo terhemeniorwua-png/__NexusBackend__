@@ -822,6 +822,45 @@ minutes). Propose, approve, reject, execute and failure events are audited.
 Providing the same `idempotencyKey` for the same user and workspace returns the
 existing proposal instead of creating a duplicate.
 
+## Task working environment (Phase 3)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks`.
+Project/task access is enforced server-side through `authorizeProject` and the
+project permission catalog; hidden/inaccessible projects return 404. Permission
+denials return 403 `PERMISSION_DENIED` with `requiredPermission` where applicable.
+
+### Workspace aggregate
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/{taskId}/workspace` | Path params: `workspaceId`, `projectId`, `taskId` | `200 { success, data: { task, subtasks, progress, people, schedule, recentActivity } }`. `task`/`subtasks` are task summaries including `requiresApproval`, `expectedDeliverables`, `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`, `subTaskCount`, `commentCount`, `attachmentCount`, assignees/dependencies/blockers. `progress` is server-computed from subtasks as approved/total: `{ percent, completed, total }`. `people`: `{ assignees, assignedBy, reviewer }`. `schedule`: `{ startDate, dueDate, overdue }`. `recentActivity`: newest-first last 5 audit events for the task. | 401 unauthenticated, 403/404 project/task access denied or not found (`PROJECT_ACCESS_DENIED`/`PROJECT_NOT_FOUND`/`TASK_NOT_FOUND`) | `task.view` |
+
+### Task activity timeline
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/{taskId}/activity` | Query: `cursor?` (audit log id), `limit?` (1-100, default 25) | `200 { success, data: { items, nextCursor } }` newest-first, cursor-paginated audit events relevant to the task (task/comment/assignee/dependency actions). Each item: `{ id, action, actorId, metadata, createdAt }`. | 401, 403/404 access/not found | `task.view` |
+
+### Submission and review
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| POST | `/{taskId}/submit` | Body: `{ "workSummary": string(1-10000) }` | `200 { success, data: <task summary> }` with `status: SUBMITTED`, submission metadata set, review feedback cleared. Requires task in submittable state and (assignee or authorized updater); tasks with required deliverables must include work summary. | 400 `DELIVERABLES_REQUIRED`, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`, 409 `TASK_SUBMIT_NOT_ALLOWED` | `submission.submit` |
+| POST | `/{taskId}/review` | Body: `{ "decision": "START_REVIEW"|"APPROVE"|"REQUEST_CHANGES", "feedback"?: string }` (`feedback` required for `REQUEST_CHANGES`) | `200 { success, data: <task summary> }` with status `UNDER_REVIEW`/`APPROVED`/`CHANGES_REQUESTED` and review metadata/audit recorded. Self-review of own submission is forbidden. | 400 validation, 403 `PERMISSION_DENIED`/`SELF_REVIEW_NOT_ALLOWED`, 404 `TASK_NOT_FOUND` | `submission.review` (`START_REVIEW`), `submission.approve` (`APPROVE`), `submission.request_revision` (`REQUEST_CHANGES`) |
+
+### Subtask completion (approval-gated)
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| POST | `/{taskId}/subtasks/{subtaskId}/complete` | Body: `{ "workSummary"?: string }` | `200 { success, data: { subtask, progress, requiresApproval, submissionCreated } }`. If subtask or parent task `requiresApproval=true`, creates submission for review instead of immediate approval: subtask becomes `SUBMITTED` with submission metadata (`submissionCreated: true`); otherwise subtask becomes `APPROVED`/completed (`submissionCreated: false`). `progress` is recomputed server-side for the parent (`approved/total`). Allowed for assigned member or authorized collaborator (collaborators only for subtasks assigned to them). | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`SUBTASK_NOT_FOUND` | `task.complete` (on subtask context) |
+
+### Task model additions (additive)
+
+Tasks may include: `requiresApproval` (boolean, default false), `expectedDeliverables` (JSON array of `{id?,label,required?}` or null), `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`. Progress is always computed server-side from subtasks (`approved/total`); the frontend must not compute completion for approval-required flows.
+
+**Migration (proposed, not applied):** `20261115120000_task_workspace_approval_submission_flow` adds the above additive columns/relations to `Task`. Apply only on explicit request in a non-production environment.
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible
