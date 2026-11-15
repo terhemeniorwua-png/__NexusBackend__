@@ -6,6 +6,7 @@ import { logger } from '../../utils/logger';
 import { ProjectPermission, authorizeProject, requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
 import type { AppConfig } from '../../config/env';
 import { githubAppProvider } from './providers/github-app.provider';
+import { gitlabProvider } from './providers/gitlab.provider';
 import type { DevIntegrationProviderAdapter } from './provider.interface';
 import type {
   DevBranchSummary,
@@ -16,8 +17,8 @@ import type {
   TaskDevLinkSummary,
 } from './dev-integration.types';
 
-function providerFor(_provider: DevIntegrationProvider): DevIntegrationProviderAdapter {
-  // Feature A: GitHub only. GitLab will be added behind the same interface.
+function providerFor(provider: DevIntegrationProvider): DevIntegrationProviderAdapter {
+  if (provider === 'GITLAB') return gitlabProvider;
   return githubAppProvider;
 }
 
@@ -216,35 +217,42 @@ export function createDevIntegrationService(
   }
 
   return {
-    async startGithubConnect(input: { userId: string; workspaceId: string }) {
+    async startConnect(input: { userId: string; workspaceId: string; provider: DevIntegrationProvider }) {
       await requireWorkspaceManager(input.userId, input.workspaceId);
-      const provider = providerFor('GITHUB');
-      const result = await provider.startConnect({ config, userId: input.userId, workspaceId: input.workspaceId });
+      const providerImpl = providerFor(input.provider);
+      const result = await providerImpl.startConnect({ config, userId: input.userId, workspaceId: input.workspaceId });
       await recordAuditEvent(prisma, {
         workspaceId: input.workspaceId,
         actorId: input.userId,
         action: 'dev_integration.connect_started',
         targetType: 'IntegrationConnection',
         targetId: input.workspaceId,
-        metadata: { provider: 'GITHUB' },
+        metadata: { provider: input.provider },
       });
       return result;
     },
 
-    async handleGithubCallback(input: { query: Record<string, unknown> }) {
-      const provider = providerFor('GITHUB');
+    async startGithubConnect(input: { userId: string; workspaceId: string }) {
+      return this.startConnect({ ...input, provider: 'GITHUB' });
+    },
+
+    async startGitlabConnect(input: { userId: string; workspaceId: string }) {
+      return this.startConnect({ ...input, provider: 'GITLAB' });
+    },
+
+    async handleCallback(input: { provider: DevIntegrationProvider; query: Record<string, unknown> }) {
+      const providerImpl = providerFor(input.provider);
       const state = typeof input.query.state === 'string' ? input.query.state : '';
-      if (!state) throw new AppError(400, 'GITHUB_STATE_INVALID', 'Missing GitHub authorization state');
-      const claims = await provider.verifyAndConsumeState(state);
+      if (!state) throw new AppError(400, 'DEV_INTEGRATION_STATE_INVALID', 'Missing authorization state');
+      const claims = await providerImpl.verifyAndConsumeState(state);
       await requireWorkspaceManager(claims.userId, claims.workspaceId);
 
-      // If user cancelled/denied installation, GitHub may redirect with error params; caller handles redirect.
-      const result = await provider.handleCallback({ config, query: input.query, claims });
+      const result = await providerImpl.handleCallback({ config, query: input.query, claims });
 
       const connection = await prisma.integrationConnection.upsert({
-        where: { workspaceId_provider: { workspaceId: claims.workspaceId, provider: 'GITHUB' } },
+        where: { workspaceId_provider: { workspaceId: claims.workspaceId, provider: input.provider } },
         create: {
-          provider: 'GITHUB',
+          provider: input.provider,
           workspaceId: claims.workspaceId,
           status: 'ACTIVE',
           externalAccountId: result.externalAccount.id,
@@ -275,10 +283,18 @@ export function createDevIntegrationService(
         action: 'dev_integration.connected',
         targetType: 'IntegrationConnection',
         targetId: connection.id,
-        metadata: { provider: 'GITHUB', externalAccountLogin: result.externalAccount.login },
+        metadata: { provider: input.provider, externalAccountLogin: result.externalAccount.login },
       });
 
       return { connection: toConnectionSummary(connection), claims };
+    },
+
+    async handleGithubCallback(input: { query: Record<string, unknown> }) {
+      return this.handleCallback({ provider: 'GITHUB', query: input.query });
+    },
+
+    async handleGitlabCallback(input: { query: Record<string, unknown> }) {
+      return this.handleCallback({ provider: 'GITLAB', query: input.query });
     },
 
     async listConnections(input: { userId: string; workspaceId: string }): Promise<DevConnectionSummary[]> {
@@ -367,6 +383,9 @@ export function createDevIntegrationService(
         const repos = await provider.listAvailableRepositories({
           config,
           encryptedCredentials: connection.encryptedCredentials,
+          onCredentialsRefreshed: async (encryptedCredentials) => {
+            await prisma.integrationConnection.update({ where: { id: connection.id }, data: { encryptedCredentials, lastError: null } }).catch(() => undefined);
+          },
         });
         return repos;
       } catch (error) {
@@ -398,10 +417,10 @@ export function createDevIntegrationService(
     }): Promise<LinkedProjectRepository> {
       await requireProjectRepoManager(input.userId, input.workspaceId, input.projectId);
       const connection = await prisma.integrationConnection.findFirst({
-        where: { id: input.connectionId, workspaceId: input.workspaceId, provider: 'GITHUB', status: 'ACTIVE' },
+        where: { id: input.connectionId, workspaceId: input.workspaceId, status: 'ACTIVE' },
       });
       if (!connection) {
-        throw new AppError(404, 'DEV_INTEGRATION_NOT_FOUND', 'Active GitHub integration connection not found');
+        throw new AppError(404, 'DEV_INTEGRATION_NOT_FOUND', 'Active integration connection not found');
       }
       // Verify project belongs to workspace
       const project = await prisma.project.findFirst({ where: { id: input.projectId, workspaceId: input.workspaceId, deletedAt: null } });
@@ -477,6 +496,9 @@ export function createDevIntegrationService(
           search: input.search,
           page: input.page,
           perPage: input.perPage,
+          onCredentialsRefreshed: async (encryptedCredentials) => {
+            await prisma.integrationConnection.update({ where: { id: repo.connectionId }, data: { encryptedCredentials, lastError: null } }).catch(() => undefined);
+          },
         });
       } catch (error) {
         logger.warn('dev_integration_list_branches_failed', { error, repositoryId: repo.id });
@@ -505,6 +527,9 @@ export function createDevIntegrationService(
           page: input.page,
           perPage: input.perPage,
           state: input.state ?? 'open',
+          onCredentialsRefreshed: async (encryptedCredentials) => {
+            await prisma.integrationConnection.update({ where: { id: repo.connectionId }, data: { encryptedCredentials, lastError: null } }).catch(() => undefined);
+          },
         });
       } catch (error) {
         logger.warn('dev_integration_list_prs_failed', { error, repositoryId: repo.id });

@@ -62,6 +62,18 @@ export function createWorkspaceDevIntegrationRouter({
     },
   );
 
+  // GET /workspaces/:workspaceId/dev-integrations/gitlab/start -> { url }
+  router.get(
+    '/gitlab/start',
+    requireAuth,
+    requireActive,
+    validate({ params: workspaceParamsSchema }),
+    async (req, res) => {
+      const { workspaceId } = req.validated!.params as { workspaceId: string };
+      sendSuccess(res, await service.startGitlabConnect({ userId: userId(req), workspaceId }));
+    },
+  );
+
   // DELETE /workspaces/:workspaceId/dev-integrations/connections/:connectionId
   router.delete(
     '/connections/:connectionId',
@@ -220,7 +232,7 @@ function resultRedirectUrl(config: AppConfig, status: 'connected' | 'error' | 'd
   return `${origin}/app/integrations?devIntegration=${provider}&status=${status}`;
 }
 
-// Public callback router (mounted in API router; GitHub redirects browser here)
+// Public callback router (mounted in API router; provider redirects browser here)
 export function createDevIntegrationCallbackRouter({
   config,
   service = createDevIntegrationService(config),
@@ -243,10 +255,28 @@ export function createDevIntegrationCallbackRouter({
     }
     try {
       await service.handleGithubCallback({ query: req.query as Record<string, unknown> });
-      return res.redirect(302, resultRedirectUrl(config, 'connected'));
+      return res.redirect(302, resultRedirectUrl(config, 'connected', 'github'));
     } catch (error) {
       logger.warn('github_app_callback_failed', { error });
-      return res.redirect(302, resultRedirectUrl(config, 'error'));
+      return res.redirect(302, resultRedirectUrl(config, 'error', 'github'));
+    }
+  });
+
+  router.get('/gitlab/callback', async (req, res) => {
+    if ((req.query as any).error) {
+      return res.redirect(302, resultRedirectUrl(config, 'denied', 'gitlab'));
+    }
+    const state = typeof (req.query as any).state === 'string' ? (req.query as any).state : '';
+    const code = typeof (req.query as any).code === 'string' ? (req.query as any).code : '';
+    if (!state || !code) {
+      return res.redirect(302, resultRedirectUrl(config, 'error', 'gitlab'));
+    }
+    try {
+      await service.handleGitlabCallback({ query: req.query as Record<string, unknown> });
+      return res.redirect(302, resultRedirectUrl(config, 'connected', 'gitlab'));
+    } catch (error) {
+      logger.warn('gitlab_callback_failed', { error });
+      return res.redirect(302, resultRedirectUrl(config, 'error', 'gitlab'));
     }
   });
 

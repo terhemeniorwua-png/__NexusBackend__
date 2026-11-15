@@ -408,3 +408,164 @@ describe('GitHub webhook ingestion (Feature C)', () => {
   });
 });
 
+describe('GitLab dev-integration provider (Feature D)', () => {
+  const gitlabConfig: any = {
+    ...config,
+    gitlabClientId: 'gl-client',
+    gitlabClientSecret: 'gl-secret',
+    gitlabCallbackUrl: 'http://localhost:4000/api/v1/dev-integrations/gitlab/callback',
+    gitlabBaseUrl: 'https://gitlab.com',
+    gitlabScopes: 'read_api read_repository',
+    gitlabWebhookSecret: 'gl-hook-secret',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.JWT_ACCESS_SECRET = gitlabConfig.jwtAccessSecret;
+  });
+
+  it('creates GitLab OAuth URL with signed state and stores one-time nonce in redis', async () => {
+    const { gitlabProvider } = await import('./providers/gitlab.provider');
+    const redis = { set: vi.fn(async () => 'OK'), get: vi.fn(), del: vi.fn() };
+    (getRedisClient as any).mockReturnValue(redis);
+    const res = await gitlabProvider.startConnect({
+      config: gitlabConfig,
+      userId: '11111111-1111-1111-1111-111111111111',
+      workspaceId: '22222222-2222-2222-2222-222222222222',
+    });
+    const u = new URL(res.url);
+    expect(u.origin + u.pathname).toBe('https://gitlab.com/oauth/authorize');
+    expect(u.searchParams.get('client_id')).toBe('gl-client');
+    expect(u.searchParams.get('redirect_uri')).toBe(gitlabConfig.gitlabCallbackUrl);
+    expect(u.searchParams.get('response_type')).toBe('code');
+    expect(u.searchParams.get('scope')).toContain('read_api');
+    expect(u.searchParams.get('state')).toBeTruthy();
+    expect(redis.set).toHaveBeenCalledTimes(1);
+    expect(redis.set.mock.calls[0][0]).toMatch(/^devint:gitlab:state:[0-9a-f]{32}$/);
+  });
+
+  it('consumes valid GitLab state once and rejects invalid/tampered/reused state', async () => {
+    const { gitlabProvider } = await import('./providers/gitlab.provider');
+    const nonce = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const claims = { userId: 'u1', workspaceId: 'w1', provider: 'GITLAB', nonce, exp: Date.now() + 600000 };
+    const body = Buffer.from(JSON.stringify(claims)).toString('base64url');
+    const sig = createHmac('sha256', Buffer.from(gitlabConfig.jwtAccessSecret, 'utf8')).update(body).digest('base64url');
+    const state = `${body}.${sig}`;
+    const redis = {
+      get: vi.fn(async () => JSON.stringify({ userId: 'u1', workspaceId: 'w1' })),
+      del: vi.fn(async () => 1),
+      set: vi.fn(),
+    };
+    (getRedisClient as any).mockReturnValue(redis);
+    const out = await gitlabProvider.verifyAndConsumeState(state);
+    expect(out).toEqual({ userId: 'u1', workspaceId: 'w1', provider: 'GITLAB', nonce });
+    await expect(gitlabProvider.verifyAndConsumeState(state + 'x')).rejects.toMatchObject({ code: 'GITLAB_STATE_INVALID' });
+
+    redis.get.mockResolvedValueOnce(null);
+    redis.del.mockResolvedValueOnce(0);
+    await expect(gitlabProvider.verifyAndConsumeState(state)).rejects.toMatchObject({ code: 'GITLAB_STATE_INVALID' });
+  });
+
+  it('exchanges GitLab code for tokens, fetches user, and stores encrypted credentials without secrets', async () => {
+    const { gitlabProvider } = await import('./providers/gitlab.provider');
+    const fetchMock = vi.fn(async (url: string, init?: any) => {
+      if (String(url).endsWith('/oauth/token')) {
+        return new Response(JSON.stringify({ access_token: 'gl-at', refresh_token: 'gl-rt', token_type: 'Bearer', expires_in: 7200, scope: 'read_api read_repository' }), { status: 200 });
+      }
+      if (String(url).endsWith('/api/v4/user')) {
+        return new Response(JSON.stringify({ id: 77, username: 'gluser', name: 'GL User' }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const claims = { userId: 'u', workspaceId: 'w', provider: 'GITLAB' as const, nonce: 'n' };
+    const result = await gitlabProvider.handleCallback({ config: gitlabConfig, query: { code: 'abc', state: 'x' }, claims });
+    expect(result.externalAccount).toEqual({ id: '77', login: 'gluser', name: 'GL User', type: 'user' });
+    expect(result.encryptedCredentials).toMatch(/^enc:/);
+    expect(result.encryptedCredentials).not.toContain('gl-at');
+    expect(result.encryptedCredentials).not.toContain('gl-secret');
+    expect(JSON.stringify(result)).not.toContain(gitlabConfig.gitlabClientSecret);
+    const plain = JSON.parse(Buffer.from(result.encryptedCredentials.slice(4), 'base64url').toString('utf8'));
+    expect(plain.accessToken).toBe('gl-at');
+    expect(plain.baseUrl).toBe('https://gitlab.com');
+  });
+
+  it('requires authorization code for GitLab callback', async () => {
+    const { gitlabProvider } = await import('./providers/gitlab.provider');
+    const claims = { userId: 'u', workspaceId: 'w', provider: 'GITLAB' as const, nonce: 'n' };
+    await expect(gitlabProvider.handleCallback({ config: gitlabConfig, query: { state: 'x' }, claims })).rejects.toMatchObject({ code: 'GITLAB_CODE_REQUIRED' });
+  });
+
+  it('lists GitLab projects, branches, and merge requests via mocked API', async () => {
+    const { gitlabProvider } = await import('./providers/gitlab.provider');
+    const encCreds = 'enc:' + Buffer.from(JSON.stringify({ accessToken: 'tok', baseUrl: 'https://gitlab.com', expiresAt: Date.now() + 3600000 }), 'utf8').toString('base64url');
+    const fetchMock = vi.fn(async (url: string) => {
+      const s = String(url);
+      if (s.includes('/api/v4/projects?') || s.endsWith('/api/v4/projects')) {
+        return new Response(JSON.stringify([{ id: 101, path_with_namespace: 'group/proj', name: 'proj', namespace: { path: 'group' }, default_branch: 'main', visibility: 'private', web_url: 'https://gitlab.com/group/proj' }]), { status: 200 });
+      }
+      if (s.includes('/repository/branches')) {
+        return new Response(JSON.stringify([{ name: 'main', commit: { id: 'abc123' }, protected: true, web_url: 'https://gitlab.com/group/proj/-/tree/main' }]), { status: 200 });
+      }
+      if (s.includes('/merge_requests')) {
+        return new Response(JSON.stringify([{ id: 9001, iid: 7, title: 'Add feature', state: 'opened', web_url: 'https://gitlab.com/group/proj/-/merge_requests/7', source_branch: 'feat', target_branch: 'main', author: { username: 'dev' }, updated_at: '2026-01-01T00:00:00Z' }]), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const repos = await gitlabProvider.listAvailableRepositories({ config: gitlabConfig, encryptedCredentials: encCreds });
+    expect(repos[0]).toMatchObject({ externalRepoId: '101', fullName: 'group/proj', name: 'proj', ownerLogin: 'group' });
+    const branches = await gitlabProvider.listRepositoryBranches({ config: gitlabConfig, encryptedCredentials: encCreds, repositoryFullName: 'group/proj' });
+    expect(branches[0]).toMatchObject({ name: 'main', commitSha: 'abc123', protected: true });
+    const prs = await gitlabProvider.listRepositoryPullRequests({ config: gitlabConfig, encryptedCredentials: encCreds, repositoryFullName: 'group/proj', state: 'open' });
+    expect(prs[0]).toMatchObject({ externalId: '9001', number: 7, title: 'Add feature', state: 'open', headRef: 'feat', baseRef: 'main', authorLogin: 'dev' });
+  });
+});
+
+describe('GitLab webhook ingestion (Feature D)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('verifies GitLab webhook token and rejects unverified/invalid payloads', async () => {
+    const { verifyGitlabWebhookToken, processGitlabWebhook } = await import('./gitlab-webhook.service');
+    expect(verifyGitlabWebhookToken('secret', 'secret')).toBe(true);
+    expect(verifyGitlabWebhookToken('wrong', 'secret')).toBe(false);
+    expect(verifyGitlabWebhookToken(undefined, 'secret')).toBe(false);
+
+    const body = Buffer.from(JSON.stringify({ object_kind: 'merge_request' }));
+    const prisma: any = { gitLabWebhookDelivery: { create: vi.fn(), update: vi.fn() } };
+    await expect(processGitlabWebhook({ prisma, rawBody: body, token: undefined, secret: 's', event: 'Merge Request Hook', eventUuid: 'u1' })).resolves.toBe('unverified');
+    const bad = await processGitlabWebhook({ prisma, rawBody: Buffer.from('{nope'), token: 's', secret: 's', event: 'Merge Request Hook', eventUuid: 'u1' });
+    expect(bad).toBe('invalid');
+  });
+
+  it('is idempotent by delivery id for GitLab webhooks', async () => {
+    const { processGitlabWebhook } = await import('./gitlab-webhook.service');
+    const body = Buffer.from(JSON.stringify({ object_kind: 'merge_request', object_attributes: { id: 9001, iid: 7, title: 'MR', state: 'opened' } }));
+    const prisma: any = { gitLabWebhookDelivery: { create: vi.fn(async () => { const e: any = new Error('dup'); e.code = 'P2002'; throw e; }) } };
+    const out = await processGitlabWebhook({ prisma, rawBody: body, token: 's', secret: 's', event: 'Merge Request Hook', eventUuid: 'evt-1' });
+    expect(out).toBe('duplicate');
+  });
+
+  it('syncs merge_request state to linked GitLab TaskDevLink records', async () => {
+    const { processGitlabWebhook } = await import('./gitlab-webhook.service');
+    const body = Buffer.from(JSON.stringify({
+      object_kind: 'merge_request',
+      project: { id: 101 },
+      object_attributes: { id: 9001, iid: 7, title: 'Updated MR', state: 'merged', action: 'merge', url: 'https://gitlab.com/group/proj/-/merge_requests/7', source_branch: 'feat', target_branch: 'main' },
+    }));
+    const prisma: any = {
+      gitLabWebhookDelivery: { create: vi.fn(async () => ({})), update: vi.fn(async () => ({})) },
+      taskDevLink: { updateMany: vi.fn(async () => ({ count: 1 })) },
+    };
+    const out = await processGitlabWebhook({ prisma, rawBody: body, token: 's', secret: 's', event: 'Merge Request Hook', eventUuid: 'evt-2' });
+    expect(out).toBe('processed');
+    expect(prisma.taskDevLink.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { provider: 'GITLAB', externalType: 'PULL_REQUEST', externalId: '9001' },
+      data: expect.objectContaining({ state: 'merged', externalNumber: 7, title: 'Updated MR', headRef: 'feat', baseRef: 'main' }),
+    }));
+  });
+});
+

@@ -42,6 +42,8 @@ export interface DevIntegrationProviderAdapter {
   listAvailableRepositories(input: {
     config: AppConfig;
     encryptedCredentials: string;
+    /** Optional: called when provider rotates credentials (e.g. OAuth refresh). */
+    onCredentialsRefreshed?: (encryptedCredentials: string) => Promise<void> | void;
   }): Promise<DevRepositorySummary[]>;
 
   listRepositoryBranches(input: {
@@ -51,6 +53,7 @@ export interface DevIntegrationProviderAdapter {
     search?: string;
     page?: number;
     perPage?: number;
+    onCredentialsRefreshed?: (encryptedCredentials: string) => Promise<void> | void;
   }): Promise<DevBranchSummary[]>;
 
   listRepositoryPullRequests(input: {
@@ -61,6 +64,7 @@ export interface DevIntegrationProviderAdapter {
     search?: string;
     page?: number;
     perPage?: number;
+    onCredentialsRefreshed?: (encryptedCredentials: string) => Promise<void> | void;
   }): Promise<DevPullRequestSummary[]>;
 
   /** Best-effort revocation/cleanup on disconnect. Must not throw for non-fatal provider errors. */

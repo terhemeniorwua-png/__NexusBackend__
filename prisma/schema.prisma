@@ -1920,6 +1920,22 @@ model GitHubWebhookDelivery {
   @@index([createdAt])
 }
 
+model GitLabWebhookDelivery {
+  id                String    @id @default(uuid())
+  provider          String    @default("GITLAB")
+  deliveryId        String
+  event             String
+  projectIdExternal String?
+  status            String    @default("RECEIVED")
+  processedAt       DateTime?
+  error             String?
+  createdAt         DateTime  @default(now())
+
+  @@unique([provider, deliveryId])
+  @@index([event])
+  @@index([createdAt])
+}
+
 // ---------------------------------------------------------------------------
 // Automation (Phase 20)
 // ---------------------------------------------------------------------------

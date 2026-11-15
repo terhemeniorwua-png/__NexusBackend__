@@ -329,6 +329,14 @@ const envSchema = z
     GITHUB_APP_CALLBACK_URL: z.string().trim().default(''),
     GITHUB_APP_INSTALL_URL: z.string().trim().default(''),
 
+    // --- Dev/source-control integrations (Phase 5, GitLab OAuth) -----------
+    GITLAB_CLIENT_ID: z.string().trim().default(''),
+    GITLAB_CLIENT_SECRET: z.string().default(''),
+    GITLAB_CALLBACK_URL: z.string().trim().default(''),
+    GITLAB_BASE_URL: z.string().trim().default('https://gitlab.com'),
+    GITLAB_SCOPES: z.string().trim().default('read_api read_repository'),
+    GITLAB_WEBHOOK_SECRET: z.string().default(''),
+
     // --- AI service integration (Phases 21-23) ------------------------------
     //
     // The Python/FastAPI service is optional infrastructure. The Express
@@ -761,6 +769,12 @@ export interface AppConfig {
   githubAppWebhookSecret: string;
   githubAppCallbackUrl: string;
   githubAppInstallUrl: string;
+  gitlabClientId: string;
+  gitlabClientSecret: string;
+  gitlabCallbackUrl: string;
+  gitlabBaseUrl: string;
+  gitlabScopes: string;
+  gitlabWebhookSecret: string;
   aiEnabled: boolean;
   aiServiceUrl: string;
   aiServiceToken: string;
@@ -951,6 +965,12 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     githubAppWebhookSecret: values.GITHUB_APP_WEBHOOK_SECRET,
     githubAppCallbackUrl: values.GITHUB_APP_CALLBACK_URL,
     githubAppInstallUrl: values.GITHUB_APP_INSTALL_URL,
+    gitlabClientId: values.GITLAB_CLIENT_ID,
+    gitlabClientSecret: values.GITLAB_CLIENT_SECRET,
+    gitlabCallbackUrl: values.GITLAB_CALLBACK_URL,
+    gitlabBaseUrl: values.GITLAB_BASE_URL,
+    gitlabScopes: values.GITLAB_SCOPES,
+    gitlabWebhookSecret: values.GITLAB_WEBHOOK_SECRET,
     aiEnabled: values.AI_ENABLED,
     aiServiceUrl: values.AI_SERVICE_URL.replace(/\/+$/, ''),
     aiServiceToken: values.AI_SERVICE_TOKEN,
