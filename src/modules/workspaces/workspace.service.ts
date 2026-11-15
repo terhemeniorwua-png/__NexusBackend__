@@ -194,6 +194,7 @@ function toSummary(
     role,
     organizationRole,
     joinCodeEnabled: Boolean(workspace.joinCodeHash),
+    timeTrackingEnabled: workspace.timeTrackingEnabled,
     memberCount: counts.members,
     projectCount: counts.projects,
     teamCount: counts.teams,
@@ -521,6 +522,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+            ...(input.timeTrackingEnabled !== undefined
+              ? { timeTrackingEnabled: input.timeTrackingEnabled }
+              : {}),
           },
         });
 
@@ -534,6 +538,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+            ...(input.timeTrackingEnabled !== undefined
+              ? { timeTrackingEnabled: input.timeTrackingEnabled }
+              : {}),
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,

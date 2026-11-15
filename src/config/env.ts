@@ -279,6 +279,15 @@ const envSchema = z
     EMAIL_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),
     EMAIL_WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
 
+    // Background worker that notifies task assignees about approaching and
+    // overdue deadlines. Runs inside the API process (same pattern as other
+    // polling workers).
+    TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(300_000),
+
     // Paystack hosted checkout uses only the server secret. USD remains
     // disabled until the merchant account has been approved for USD.
     PAYSTACK_SECRET_KEY: z.string().trim().default(''),
@@ -719,6 +728,7 @@ export interface AppConfig {
   emailWorkerEnabled: boolean;
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
+  taskDeadlineNotificationPollIntervalMs: number;
   paystackSecretKey: string;
   paystackWebhookSecret: string;
   paystackWebhookPreviousSecret: string;
@@ -899,6 +909,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailWorkerEnabled: values.EMAIL_WORKER_ENABLED,
     emailWorkerPollIntervalMs: values.EMAIL_WORKER_POLL_INTERVAL_MS,
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
+    taskDeadlineNotificationPollIntervalMs:
+      values.TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS,
     paystackSecretKey: values.PAYSTACK_SECRET_KEY,
     paystackWebhookSecret: values.PAYSTACK_WEBHOOK_SECRET,
     paystackWebhookPreviousSecret: values.PAYSTACK_WEBHOOK_PREVIOUS_SECRET,

@@ -62,6 +62,7 @@ export const createTaskSchema = z
     dueDate: dateInput,
     position: z.number().int().min(0).optional(),
     parentTaskId: uuid.optional().nullable(),
+    weight: z.number().int().positive().optional(),
     assigneeIds: z.array(uuid).max(50).optional(),
     requiresApproval: z.boolean().optional(),
     expectedDeliverables: expectedDeliverablesSchema.optional().nullable(),
@@ -103,6 +104,7 @@ export const updateTaskSchema = z
     dueDate: dateInput,
     position: z.number().int().min(0).optional(),
     parentTaskId: uuid.optional().nullable(),
+    weight: z.number().int().positive().optional(),
     requiresApproval: z.boolean().optional(),
     expectedDeliverables: expectedDeliverablesSchema.optional().nullable(),
   })

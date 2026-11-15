@@ -48,8 +48,16 @@ const taskInclude = {
       task: { select: { id: true, key: true, title: true, status: true } },
     },
   },
+  reportedBlockers: {
+    orderBy: [{ createdAt: 'desc' as const }],
+    include: {
+      reportedBy: { select: { id: true, name: true } },
+      notifyUser: { select: { id: true, name: true } },
+      resolvedBy: { select: { id: true, name: true } },
+    },
+  },
   _count: { select: { subTasks: true, comments: true, attachments: true } },
-} as const;
+};
 
 type TaskRow = Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
 
@@ -57,15 +65,19 @@ interface TaskSummary extends Omit<TaskRow, '_count'> {
   subTaskCount: number;
   commentCount: number;
   attachmentCount: number;
+  hasOpenBlocker: boolean;
 }
 
 function toSummary(row: TaskRow): TaskSummary {
-  const { _count, ...task } = row;
+  const { _count, reportedBlockers, ...task } = row;
+  const hasOpenBlocker = reportedBlockers.some((b) => b.status === 'OPEN');
   return {
     ...task,
+    reportedBlockers,
     subTaskCount: _count.subTasks,
     commentCount: _count.comments,
     attachmentCount: _count.attachments,
+    hasOpenBlocker,
   };
 }
 
@@ -74,11 +86,17 @@ function isSubtaskApproved(status: TaskStatus): boolean {
 }
 
 function computeProgress(
-  subtasks: Array<{ status: TaskStatus }>,
+  subtasks: Array<{ status: TaskStatus; weight?: number | null }>,
 ): { percent: number; completed: number; total: number } {
   const total = subtasks.length;
   const completed = subtasks.filter((task) => isSubtaskApproved(task.status)).length;
-  const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+  if (total === 0) return { percent: 0, completed: 0, total: 0 };
+  const totalWeight = subtasks.reduce((sum, task) => sum + (task.weight ?? 1), 0);
+  const completedWeight = subtasks.reduce(
+    (sum, task) => sum + (isSubtaskApproved(task.status) ? (task.weight ?? 1) : 0),
+    0,
+  );
+  const percent = totalWeight === 0 ? 0 : Math.round((completedWeight / totalWeight) * 100);
   return { percent, completed, total };
 }
 
@@ -330,6 +348,14 @@ export function createTaskService(
             throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
         }
 
+        if (input.weight !== undefined && !input.parentTaskId) {
+          throw new AppError(
+            400,
+            'INVALID_REQUEST',
+            'Weight can only be set on subtasks',
+          );
+        }
+
         const task = await tx.task.create({
           data: {
             projectId: access.project.id,
@@ -344,6 +370,7 @@ export function createTaskService(
             dueDate: dateOrNull(input.dueDate) ?? null,
             position: input.position ?? 0,
             parentTaskId: input.parentTaskId ?? null,
+            ...(input.weight !== undefined ? { weight: input.weight } : {}),
             creatorId: input.userId,
             requiresApproval: input.requiresApproval ?? false,
             expectedDeliverables:
@@ -460,10 +487,19 @@ export function createTaskService(
           key: true,
           status: true,
           creatorId: true,
+          parentTaskId: true,
           assignees: { select: { userId: true } },
         },
       });
       if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      if (input.weight !== undefined && !existing.parentTaskId) {
+        throw new AppError(
+          400,
+          'INVALID_REQUEST',
+          'Weight can only be set on subtasks',
+        );
+      }
 
       // A task status decision is a submission review action. `task.update`
       // never implies the ability to approve, review or request changes.
@@ -554,6 +590,7 @@ export function createTaskService(
             ...(input.parentTaskId !== undefined
               ? { parentTaskId: input.parentTaskId }
               : {}),
+            ...(input.weight !== undefined ? { weight: input.weight } : {}),
             ...(input.requiresApproval !== undefined
               ? { requiresApproval: input.requiresApproval }
               : {}),
@@ -1443,6 +1480,7 @@ export function createTaskService(
             { targetType: 'Comment', metadata: { path: ['taskId'], equals: task.id } },
             { targetType: 'TaskAssignee', metadata: { path: ['taskId'], equals: task.id } },
             { targetType: 'TaskDependency', metadata: { path: ['taskId'], equals: task.id } },
+            { targetType: 'TaskBlocker', metadata: { path: ['taskId'], equals: task.id } },
           ],
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1514,6 +1552,7 @@ export function createTaskService(
                 { targetType: 'Comment', metadata: { path: ['taskId'], equals: task.id } },
                 { targetType: 'TaskAssignee', metadata: { path: ['taskId'], equals: task.id } },
                 { targetType: 'TaskDependency', metadata: { path: ['taskId'], equals: task.id } },
+                { targetType: 'TaskBlocker', metadata: { path: ['taskId'], equals: task.id } },
               ],
             },
             ...(cursorFilter ? [cursorFilter] : []),

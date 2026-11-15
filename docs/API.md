@@ -834,7 +834,7 @@ denials return 403 `PERMISSION_DENIED` with `requiredPermission` where applicabl
 
 | Method | Path | Request | Success response | Errors | Required permission |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/{taskId}/workspace` | Path params: `workspaceId`, `projectId`, `taskId` | `200 { success, data: { task, subtasks, progress, people, schedule, recentActivity } }`. `task`/`subtasks` are task summaries including `requiresApproval`, `expectedDeliverables`, `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`, `subTaskCount`, `commentCount`, `attachmentCount`, assignees/dependencies/blockers. `progress` is server-computed from subtasks as approved/total: `{ percent, completed, total }`. `people`: `{ assignees, assignedBy, reviewer }`. `schedule`: `{ startDate, dueDate, overdue }`. `recentActivity`: newest-first last 5 audit events for the task. | 401 unauthenticated, 403/404 project/task access denied or not found (`PROJECT_ACCESS_DENIED`/`PROJECT_NOT_FOUND`/`TASK_NOT_FOUND`) | `task.view` |
+| GET | `/{taskId}/workspace` | Path params: `workspaceId`, `projectId`, `taskId` | `200 { success, data: { task, subtasks, progress, people, schedule, recentActivity } }`. `task`/`subtasks` are task summaries including `weight` (positive integer, default 1; meaningful for subtasks), `requiresApproval`, `expectedDeliverables`, `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`, `subTaskCount`, `commentCount`, `attachmentCount`, assignees/dependencies/blockers. `progress` is **server-computed only** from subtasks: `{ percent, completed, total }` where `completed`/`total` are subtask counts and `percent = round((sum of weights of APPROVED subtasks / sum of weights of all subtasks) * 100)` (0% when there are no subtasks; only `APPROVED` subtasks contribute to completed progress; equal weights produce the same results as the Phase 3 count-based progress). `people`: `{ assignees, assignedBy, reviewer }`. `schedule`: `{ startDate, dueDate, overdue }`. `recentActivity`: newest-first last 5 audit events for the task. | 401 unauthenticated, 403/404 project/task access denied or not found (`PROJECT_ACCESS_DENIED`/`PROJECT_NOT_FOUND`/`TASK_NOT_FOUND`) | `task.view` |
 
 ### Task activity timeline
 
@@ -853,13 +853,171 @@ denials return 403 `PERMISSION_DENIED` with `requiredPermission` where applicabl
 
 | Method | Path | Request | Success response | Errors | Required permission |
 | --- | --- | --- | --- | --- | --- |
-| POST | `/{taskId}/subtasks/{subtaskId}/complete` | Body: `{ "workSummary"?: string }` | `200 { success, data: { subtask, progress, requiresApproval, submissionCreated } }`. If subtask or parent task `requiresApproval=true`, creates submission for review instead of immediate approval: subtask becomes `SUBMITTED` with submission metadata (`submissionCreated: true`); otherwise subtask becomes `APPROVED`/completed (`submissionCreated: false`). `progress` is recomputed server-side for the parent (`approved/total`). Allowed for assigned member or authorized collaborator (collaborators only for subtasks assigned to them). | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`SUBTASK_NOT_FOUND` | `task.complete` (on subtask context) |
+| POST | `/{taskId}/subtasks/{subtaskId}/complete` | Body: `{ "workSummary"?: string }` | `200 { success, data: { subtask, progress, requiresApproval, submissionCreated } }`. If subtask or parent task `requiresApproval=true`, creates submission for review instead of immediate approval: subtask becomes `SUBMITTED` with submission metadata (`submissionCreated: true`); otherwise subtask becomes `APPROVED`/completed (`submissionCreated: false`). `progress` is recomputed server-side for the parent from subtasks as `{ percent, completed, total }` using weighted approved progress: `percent = round((sum of weights of APPROVED subtasks / sum of weights of all subtasks) * 100)` (0% when none; only `APPROVED` counts as completed). Allowed for assigned member or authorized collaborator (collaborators only for subtasks assigned to them). | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`SUBTASK_NOT_FOUND` | `task.complete` (on subtask context) |
 
 ### Task model additions (additive)
 
-Tasks may include: `requiresApproval` (boolean, default false), `expectedDeliverables` (JSON array of `{id?,label,required?}` or null), `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`. Progress is always computed server-side from subtasks (`approved/total`); the frontend must not compute completion for approval-required flows.
+Tasks may include: `weight` (positive integer, default 1), `requiresApproval` (boolean, default false), `expectedDeliverables` (JSON array of `{id?,label,required?}` or null), `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`.
 
-**Migration (proposed, not applied):** `20261115120000_task_workspace_approval_submission_flow` adds the above additive columns/relations to `Task`. Apply only on explicit request in a non-production environment.
+**Subtask weight & progress (Phase 4D, additive):**
+- `weight` applies to **subtasks** (tasks with `parentTaskId`). It must be a positive integer (>=1); zero, negative, decimal, or invalid values are rejected. Default is 1.
+- Only users with appropriate task-management permissions (task create/update) may set or modify subtask weights. Ordinary assignees do not automatically receive weight-management privileges. Weight changes are rejected for non-subtask (parent) tasks.
+- Progress is **computed exclusively on the backend** from subtasks as `{ percent, completed, total }` where `completed`/`total` are subtask counts and `percent = round((sum of weights of APPROVED subtasks / sum of weights of all subtasks) * 100)`.
+- A subtask contributes to completed progress **only when its status is `APPROVED`** (per existing submission/review workflow). `SUBMITTED`/`UNDER_REVIEW`/merely completed-not-approved states do not count as approved.
+- When a task has **no subtasks**, progress is `0%` (`{ percent:0, completed:0, total:0 }`).
+- When all subtasks have **equal weights**, progress produces exactly the same results as the existing Phase 3 count-based implementation.
+- The frontend must display backend-calculated progress only (no separate client-side progress calculation).
+
+**Migration (Phase 3, not applied to production by this change):** `20261115120000_task_workspace_approval_submission_flow` adds earlier additive task columns/relations. Apply only in a controlled environment after verification.
+
+**Migration (Phase 4D, additive, local dev applied after verification; not applied to production):** `20261116180000_task_subtask_weight` adds `Task.weight INTEGER NOT NULL DEFAULT 1`. Production steps (ordered): 1) backup DB and verify migration state/order (including prior unapplied Phase 3/4A/4B/4C as applicable), 2) deploy code containing migration, 3) in a controlled maintenance window run `npx prisma migrate deploy` (or apply reviewed SQL in order) in staging then production after verification, 4) run `prisma generate` in build, restart, and smoke-test subtask weight create/update permissions/validation and weighted progress (approved-only, no-subtasks 0%, equal-weights parity). **Never `prisma migrate deploy` outside controlled rollout; never reset; never mutate applied migrations; never touch production outside this process.**
+
+### Task work documents (Phase 4A)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/work-documents`.
+Task/project access is enforced server-side (workspace membership + project/task
+visibility; collaborators must be assigned to the task where task resource scope
+requires it). Existing generic `Document`/`DocumentRevision` models and routes
+are unchanged.
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | Path: `workspaceId`, `projectId`, `taskId` | `200 { success, data: { items: TaskDocumentSummary[] } }` (non-deleted docs, newest updated first). `TaskDocumentSummary`: `{ id, taskId, title, createdById, createdBy:{id,name}, currentVersion, createdAt, updatedAt }`. | 401, 403/404 access denied or task not found | `task.view` (on task) |
+| POST | `/` | Body: `{ "title": string(1-200), "content"?: TipTapJSONDoc }` (content defaults to empty doc, sanitized) | `201 { success, data: { ...summary, content } }` (version 1 created). | 400 `VALIDATION_ERROR`/`DOCUMENT_TOO_LARGE`, 401, 403 `PERMISSION_DENIED`, 404 | `task.update` on task **or** task assignee |
+| GET | `/{documentId}` | Path includes `documentId` | `200 { success, data: { ...summary, content } }` (current version content). | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.view` |
+| PATCH | `/{documentId}` | Body: `{ "baseVersion": number>=1, "content": TipTapJSONDoc, "title"?: string(1-200), "mode"?: "autosave"|"manual" (default manual) }` | `200 { success, data: { ...summary, content, throttled?: boolean } }`. On success with version advance, persists sanitized content and creates a new version; updates title if provided. If `mode="autosave"` and the same user saved the current version within 60s, content/title are coalesced into the latest version (no new version number, `throttled:true`) to enforce ≤1 version/min/user/document while never discarding content. | 400 `DOCUMENT_TOO_LARGE`/validation, 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND`, 409 `WORK_DOCUMENT_CONFLICT` | `task.update` on task **or** task assignee |
+| GET | `/{documentId}/versions` | Path includes `documentId` | `200 { success, data: { items: {id,version,savedById,savedBy:{id,name},createdAt}[], currentVersion } }` newest-first. | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.view` |
+| GET | `/{documentId}/versions/{version}` | Path includes `documentId`, `version>=1` | `200 { success, data: { id, version, savedBy:{id,name}, createdAt, content } }`. | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND`/`WORK_DOCUMENT_VERSION_NOT_FOUND` | `task.view` |
+| POST | `/{documentId}/versions/{version}/restore` | Empty body `{}` | `200 { success, data: { ...summary, content } }` creates a new version with restored content (append-only history). | 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND`/`WORK_DOCUMENT_VERSION_NOT_FOUND` | `task.update` on task **or** task assignee |
+| DELETE | `/{documentId}` | — | `200 { success, data: { id, deleted: true } }` (soft delete). | 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.update` on task (permission-controlled; assignee-only without `task.update` cannot delete) |
+
+**Conflict handling:** if `baseVersion !== currentVersion`, the server returns
+`409 { success:false, error:{ code:"WORK_DOCUMENT_CONFLICT", message, details:{ currentVersion, latestContent, document } } }`
+and never overwrites silently. Clients must let the user reload latest or copy
+local content.
+
+**Content/security:** server sanitizes TipTap/ProseMirror JSON to an allowlist of
+nodes/marks (`doc, paragraph, text, heading, bulletList, orderedList, listItem,
+table, tableRow, tableCell, tableHeader, hardBreak, blockquote, codeBlock,
+horizontalRule` and `bold, italic, link, strike, code, underline`; links
+restricted to `http(s):`/`mailto:`). Maximum serialized content size is 2 MB
+(`DOCUMENT_TOO_LARGE`).
+
+**Audit:** create/update/restore/delete emit `task.work_document.{created,updated,restored,deleted}`
+audit events with task/project/document/version metadata.
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116120000_task_work_documents` creates `TaskDocument` and
+`TaskDocumentVersion` tables (+ indexes/foreign keys). Existing generic
+`Document`/`DocumentRevision` tables are untouched. Production steps (ordered):
+1) backup DB, 2) deploy code containing migration, 3) in a maintenance window run
+`npx prisma migrate deploy` (or apply the reviewed SQL) in staging then
+production after verification, 4) run `prisma generate` as part of build and
+smoke-test task work-document endpoints and permissions. Do not use
+`prisma migrate deploy` outside controlled rollout; never reset/mutate
+previously applied migrations.
+
+### Task blockers (Phase 4B)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/blockers`.
+These are **reported blockers/issues** (`TaskBlocker`, OPEN/RESOLVED) and are
+additive to existing dependency blockers (`task.blockers` / `TaskDependency`
+relations remain unchanged). Task summaries/workspace payloads now also include
+additive `reportedBlockers` and `hasOpenBlocker`.
+
+| Method | Path | Request | Success response | Errors | Required permission / rule |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: { items: ReportedBlocker[], hasOpenBlocker: boolean } }` (newest first). `ReportedBlocker`: `{ id, taskId, status:"OPEN"\|"RESOLVED", description, reportedById, reportedBy:{id,name}, notifyUserId, notifyUser, resolvedAt, resolvedById, resolvedBy, createdAt, updatedAt }`. | 401, 403/404 access/task not found | `task.view` |
+| POST | `/` | Body: `{ "description": string(1-2000), "notifyUserId"?: uuid\|null }` | `201 { success, data: <ReportedBlocker> }` (OPEN). Notifies task owner (task creator) and chosen `notifyUser` (if active workspace member, excluding reporter) with `TASK_BLOCKER_REPORTED`; records audit `task.blocker.reported`. | 400 validation, 401, 403 `PERMISSION_DENIED` (not an assigned member), 404 `TASK_NOT_FOUND`/`USER_NOT_FOUND` | **Assigned member only** (task assignee) with task view access |
+| POST | `/:blockerId/resolve` | Empty body `{}` | `200 { success, data: <ReportedBlocker> }` (RESOLVED, `resolvedAt`/`resolvedById` set). Notifies reporter (if different from resolver) with `TASK_BLOCKER_RESOLVED`; records audit `task.blocker.resolved`. Idempotent if already resolved. | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`TASK_BLOCKER_NOT_FOUND` | Reporter, task owner (task creator), or PM/admin with task management authority (`task.update`/manage or workspace admin) |
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116140000_task_blockers` creates enum `TaskBlockerStatus`, adds
+`NotificationType` values `TASK_BLOCKER_REPORTED`/`TASK_BLOCKER_RESOLVED`, and
+creates `TaskBlocker` table (+ indexes/FKs). Production steps (ordered):
+1) backup DB, 2) deploy code containing migration, 3) in a maintenance window run
+`npx prisma migrate deploy` (or apply the reviewed SQL) in staging then
+production after verification, 4) run `prisma generate` as part of build and
+smoke-test blocker list/report/resolve, permissions, notifications, and workspace
+blocked indicators. Never `prisma migrate deploy` outside controlled rollout.
+
+### Task time tracking (Phase 4C)
+
+Time tracking is gated by the workspace setting `timeTrackingEnabled` (default `false`).
+All time-entry endpoints are **rejected when time tracking is off** with
+`409 { code: "TIME_TRACKING_DISABLED" }`. `Workspace` responses now include
+additive `timeTrackingEnabled: boolean`; it can be toggled via the existing
+workspace update endpoint `PATCH /api/v1/workspaces/:workspaceId` with body
+`{ "timeTrackingEnabled": true|false }` (requires workspace update permission).
+
+Routes are mounted under
+`/api/v1/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/time-entries`
+and require an authenticated, active account.
+
+| Method | Path | Request | Success response | Errors | Required permission / rule |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: { items: TimeEntry[], totalMinutes: number } }` (newest first). `TimeEntry`: `{ id, taskId, userId, user:{id,name}, startedAt, durationMinutes, note, createdAt, updatedAt }`. | 401, 403/404 access/task not found, 409 `TIME_TRACKING_DISABLED` | `task.view` (and time tracking enabled) |
+| POST | `/` | Body: `{ "startedAt": ISO datetime, "durationMinutes": int(1..1440), "note"?: string\|null(max 2000) }` | `201 { success, data: <TimeEntry> }` (logged for current user). Audit `task.time_entry.logged`. | 400 validation, 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | Task assignee **or** user with task update/manage permission (logs own time); time tracking enabled |
+| PATCH | `/:entryId` | Body: `{ "startedAt"?, "durationMinutes"?, "note"? }` (at least one field) | `200 { success, data: <TimeEntry> }`. Audit `task.time_entry.updated`. | 400 validation, 401, 403 `PERMISSION_DENIED` (not owner), 404 `TIME_ENTRY_NOT_FOUND`/`TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | **Edit own only**; time tracking enabled |
+| DELETE | `/:entryId` | — | `200 { success, data: { id, deleted: true } }`. Audit `task.time_entry.deleted`. | 401, 403 `PERMISSION_DENIED` (not owner), 404 `TIME_ENTRY_NOT_FOUND`/`TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | **Delete own only**; time tracking enabled |
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116160000_task_time_tracking` adds `Workspace.timeTrackingEnabled` (boolean,
+default `false`) and creates `TaskTimeEntry` table (+ indexes/FKs). Production
+steps (ordered): 1) backup DB, 2) deploy code containing migration, 3) in a
+maintenance window run `npx prisma migrate deploy` (or apply the reviewed SQL)
+in staging then production after verification, 4) run `prisma generate` as part
+of build and smoke-test workspace toggle, time-entry log/list/edit/delete-own,
+and rejection when disabled. Never `prisma migrate deploy` outside controlled
+rollout.
+
+### Task deadline notifications (Phase 4E)
+
+A background polling worker (`task-deadline-notification`, in-process, same
+`start/stop/runOnce(now)` pattern as other workers) notifies **current task
+assignees** about approaching and overdue deadlines using existing in-app
+notification creation and notification preferences.
+
+**Notification types (additive):** `TASK_DUE_SOON`, `TASK_OVERDUE`.
+
+**Eligibility:** task must have `dueDate != null`, not be deleted or archived,
+have at least one assignee, and be actionable (`status != APPROVED` and
+`completedAt == null`). Submitted tasks awaiting review are not approved and may
+be eligible per existing workflow/status. Only current assignees are notified
+and existing in-app notification preferences are respected.
+
+**Rules:**
+- **Due soon (`TASK_DUE_SOON`)**: sent once per task when `now >= dueDate - 24h`
+  and `now < dueDate`.
+- **Overdue (`TASK_OVERDUE`)**: sent once per task when `now >= dueDate`.
+- A task may receive at most one due-soon and one overdue notification total
+  (tracked by additive task markers `dueSoonNotifiedAt`, `overdueNotifiedAt`);
+  never repeated across runs/restarts/concurrent executions. If a due date
+  changes after a notification type was sent, that same type is not resent.
+
+**Idempotency/concurrency:** each threshold is claimed atomically in a database
+transaction (conditional update on marker/eligibility) and notifications are
+created within the same transaction, so concurrent workers cannot duplicate and
+a crash cannot persist a sent marker without committed notifications.
+
+**Configuration:** `TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS` (default
+`300000` ms). Worker is registered with health monitoring and stopped cleanly
+on shutdown.
+
+**Migration (additive, local dev applied after verification; not applied to production):**
+`20261116200000_task_deadline_notifications` adds `NotificationType` values
+`TASK_DUE_SOON`, `TASK_OVERDUE` and `Task.dueSoonNotifiedAt` /
+`Task.overdueNotifiedAt` (nullable). Production steps (ordered): 1) backup DB
+and verify migration state/order and unapplied migrations, 2) deploy code
+containing migration, 3) in a controlled maintenance window run
+`npx prisma migrate deploy` (or apply reviewed SQL in order) in staging then
+production after verification, 4) run `prisma generate`, restart services, and
+smoke-test deadline notifications, preferences, and worker health. **Never
+`prisma migrate deploy` outside controlled rollout; never reset/drop/recreate
+DB; never mutate applied migrations; never touch production outside this
+process.**
 
 ## Updating this API reference
 
