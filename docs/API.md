@@ -859,7 +859,53 @@ denials return 403 `PERMISSION_DENIED` with `requiredPermission` where applicabl
 
 Tasks may include: `requiresApproval` (boolean, default false), `expectedDeliverables` (JSON array of `{id?,label,required?}` or null), `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`. Progress is always computed server-side from subtasks (`approved/total`); the frontend must not compute completion for approval-required flows.
 
-**Migration (proposed, not applied):** `20261115120000_task_workspace_approval_submission_flow` adds the above additive columns/relations to `Task`. Apply only on explicit request in a non-production environment.
+**Migration (Phase 3, not applied to production by this change):** `20261115120000_task_workspace_approval_submission_flow` adds the above additive columns/relations to `Task`. Apply only in a controlled environment after verification.
+
+### Task work documents (Phase 4A)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/work-documents`.
+Task/project access is enforced server-side (workspace membership + project/task
+visibility; collaborators must be assigned to the task where task resource scope
+requires it). Existing generic `Document`/`DocumentRevision` models and routes
+are unchanged.
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | Path: `workspaceId`, `projectId`, `taskId` | `200 { success, data: { items: TaskDocumentSummary[] } }` (non-deleted docs, newest updated first). `TaskDocumentSummary`: `{ id, taskId, title, createdById, createdBy:{id,name}, currentVersion, createdAt, updatedAt }`. | 401, 403/404 access denied or task not found | `task.view` (on task) |
+| POST | `/` | Body: `{ "title": string(1-200), "content"?: TipTapJSONDoc }` (content defaults to empty doc, sanitized) | `201 { success, data: { ...summary, content } }` (version 1 created). | 400 `VALIDATION_ERROR`/`DOCUMENT_TOO_LARGE`, 401, 403 `PERMISSION_DENIED`, 404 | `task.update` on task **or** task assignee |
+| GET | `/{documentId}` | Path includes `documentId` | `200 { success, data: { ...summary, content } }` (current version content). | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.view` |
+| PATCH | `/{documentId}` | Body: `{ "baseVersion": number>=1, "content": TipTapJSONDoc, "title"?: string(1-200), "mode"?: "autosave"|"manual" (default manual) }` | `200 { success, data: { ...summary, content, throttled?: boolean } }`. On success with version advance, persists sanitized content and creates a new version; updates title if provided. If `mode="autosave"` and the same user saved the current version within 60s, content/title are coalesced into the latest version (no new version number, `throttled:true`) to enforce ≤1 version/min/user/document while never discarding content. | 400 `DOCUMENT_TOO_LARGE`/validation, 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND`, 409 `WORK_DOCUMENT_CONFLICT` | `task.update` on task **or** task assignee |
+| GET | `/{documentId}/versions` | Path includes `documentId` | `200 { success, data: { items: {id,version,savedById,savedBy:{id,name},createdAt}[], currentVersion } }` newest-first. | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.view` |
+| GET | `/{documentId}/versions/{version}` | Path includes `documentId`, `version>=1` | `200 { success, data: { id, version, savedBy:{id,name}, createdAt, content } }`. | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND`/`WORK_DOCUMENT_VERSION_NOT_FOUND` | `task.view` |
+| POST | `/{documentId}/versions/{version}/restore` | Empty body `{}` | `200 { success, data: { ...summary, content } }` creates a new version with restored content (append-only history). | 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND`/`WORK_DOCUMENT_VERSION_NOT_FOUND` | `task.update` on task **or** task assignee |
+| DELETE | `/{documentId}` | — | `200 { success, data: { id, deleted: true } }` (soft delete). | 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.update` on task (permission-controlled; assignee-only without `task.update` cannot delete) |
+
+**Conflict handling:** if `baseVersion !== currentVersion`, the server returns
+`409 { success:false, error:{ code:"WORK_DOCUMENT_CONFLICT", message, details:{ currentVersion, latestContent, document } } }`
+and never overwrites silently. Clients must let the user reload latest or copy
+local content.
+
+**Content/security:** server sanitizes TipTap/ProseMirror JSON to an allowlist of
+nodes/marks (`doc, paragraph, text, heading, bulletList, orderedList, listItem,
+table, tableRow, tableCell, tableHeader, hardBreak, blockquote, codeBlock,
+horizontalRule` and `bold, italic, link, strike, code, underline`; links
+restricted to `http(s):`/`mailto:`). Maximum serialized content size is 2 MB
+(`DOCUMENT_TOO_LARGE`).
+
+**Audit:** create/update/restore/delete emit `task.work_document.{created,updated,restored,deleted}`
+audit events with task/project/document/version metadata.
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116120000_task_work_documents` creates `TaskDocument` and
+`TaskDocumentVersion` tables (+ indexes/foreign keys). Existing generic
+`Document`/`DocumentRevision` tables are untouched. Production steps (ordered):
+1) backup DB, 2) deploy code containing migration, 3) in a maintenance window run
+`npx prisma migrate deploy` (or apply the reviewed SQL) in staging then
+production after verification, 4) run `prisma generate` as part of build and
+smoke-test task work-document endpoints and permissions. Do not use
+`prisma migrate deploy` outside controlled rollout; never reset/mutate
+previously applied migrations.
 
 ## Updating this API reference
 

@@ -292,6 +292,8 @@ model User {
   createdTasks                Task[]                       @relation("TaskCreator")
   submittedTasks              Task[]                       @relation("TaskSubmittedBy")
   reviewedTasks               Task[]                       @relation("TaskReviewedBy")
+  createdTaskDocuments        TaskDocument[]               @relation("TaskDocumentCreator")
+  savedTaskDocumentVersions   TaskDocumentVersion[]        @relation("TaskDocumentVersionSaver")
   assignedTasks               TaskAssignee[]
   authoredComments            Comment[]
   commentMentions             CommentMention[]
@@ -994,9 +996,10 @@ model Task {
   assignees    TaskAssignee[]
   dependencies TaskDependency[] @relation("BlockedTask")
   blockers     TaskDependency[] @relation("BlockingTask")
-  comments     Comment[]
-  attachments  FileAttachment[]
-  documents    Document[]
+  comments      Comment[]
+  attachments   FileAttachment[]
+  documents     Document[]
+  workDocuments TaskDocument[]
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -1010,6 +1013,41 @@ model Task {
   @@index([createdAt])
   @@index([completedAt])
   @@index([status, dueDate])
+}
+
+model TaskDocument {
+  id             String    @id @default(uuid())
+  taskId         String
+  title          String
+  createdById    String
+  currentVersion Int       @default(1)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  task      Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdBy User                  @relation("TaskDocumentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  versions  TaskDocumentVersion[]
+
+  @@index([taskId])
+  @@index([taskId, deletedAt])
+  @@index([createdById])
+}
+
+model TaskDocumentVersion {
+  id         String   @id @default(uuid())
+  documentId String
+  version    Int
+  content    Json
+  savedById  String
+  createdAt  DateTime @default(now())
+
+  document TaskDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  savedBy  User         @relation("TaskDocumentVersionSaver", fields: [savedById], references: [id], onDelete: Restrict)
+
+  @@unique([documentId, version])
+  @@index([documentId, createdAt])
+  @@index([savedById])
 }
 
 model TaskAssignee {
