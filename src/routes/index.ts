@@ -36,6 +36,7 @@ import { createChannelRouter } from '../modules/channels/channel.routes';
 import { createTaskRouter } from '../modules/tasks/task.routes';
 import { createTaskWorkDocumentRouter } from '../modules/task-work-documents/task-work-document.routes';
 import { createTaskBlockerRouter } from '../modules/task-blockers/task-blocker.routes';
+import { createTaskTimeEntryRouter } from '../modules/task-time-entries/task-time-entry.routes';
 import { createMessageRouter } from '../modules/messaging/message.routes';
 import { createNotificationRouter } from '../modules/notifications/notification.routes';
 import { createFileRouter } from '../modules/files/file.routes';
@@ -113,6 +114,10 @@ export function createApiRouter({
   router.use(
     '/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/blockers',
     createTaskBlockerRouter({ config }),
+  );
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/time-entries',
+    createTaskTimeEntryRouter({ config }),
   );
   router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
   // Messages are nested under channels:

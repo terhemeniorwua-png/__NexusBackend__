@@ -299,6 +299,7 @@ model User {
   reportedTaskBlockers        TaskBlocker[]                @relation("TaskBlockerReporter")
   notifiedTaskBlockers        TaskBlocker[]                @relation("TaskBlockerNotifyUser")
   resolvedTaskBlockers        TaskBlocker[]                @relation("TaskBlockerResolver")
+  timeEntries                 TaskTimeEntry[]
   assignedTasks               TaskAssignee[]
   authoredComments            Comment[]
   commentMentions             CommentMention[]
@@ -487,6 +488,7 @@ model Workspace {
   visibility          WorkspaceVisibility @default(PRIVATE)
   status              WorkspaceStatus     @default(ACTIVE)
   deletionSuspendedAt DateTime?
+  timeTrackingEnabled Boolean             @default(false)
   ownerId             String
   /// SHA-256 digest of the join code. The plaintext code is only returned
   /// when an administrator generates or rotates it.
@@ -1006,6 +1008,7 @@ model Task {
   attachments      FileAttachment[]
   documents        Document[]
   workDocuments    TaskDocument[]
+  timeEntries      TaskTimeEntry[]
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -1066,6 +1069,25 @@ model TaskBlocker {
   @@index([taskId, status])
   @@index([reportedById])
   @@index([notifyUserId])
+}
+
+model TaskTimeEntry {
+  id              String   @id @default(uuid())
+  taskId          String
+  userId          String
+  startedAt       DateTime
+  durationMinutes Int
+  note            String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([taskId, userId])
+  @@index([userId])
+  @@index([startedAt])
 }
 
 model TaskDocumentVersion {

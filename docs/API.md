@@ -932,6 +932,36 @@ production after verification, 4) run `prisma generate` as part of build and
 smoke-test blocker list/report/resolve, permissions, notifications, and workspace
 blocked indicators. Never `prisma migrate deploy` outside controlled rollout.
 
+### Task time tracking (Phase 4C)
+
+Time tracking is gated by the workspace setting `timeTrackingEnabled` (default `false`).
+All time-entry endpoints are **rejected when time tracking is off** with
+`409 { code: "TIME_TRACKING_DISABLED" }`. `Workspace` responses now include
+additive `timeTrackingEnabled: boolean`; it can be toggled via the existing
+workspace update endpoint `PATCH /api/v1/workspaces/:workspaceId` with body
+`{ "timeTrackingEnabled": true|false }` (requires workspace update permission).
+
+Routes are mounted under
+`/api/v1/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/time-entries`
+and require an authenticated, active account.
+
+| Method | Path | Request | Success response | Errors | Required permission / rule |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: { items: TimeEntry[], totalMinutes: number } }` (newest first). `TimeEntry`: `{ id, taskId, userId, user:{id,name}, startedAt, durationMinutes, note, createdAt, updatedAt }`. | 401, 403/404 access/task not found, 409 `TIME_TRACKING_DISABLED` | `task.view` (and time tracking enabled) |
+| POST | `/` | Body: `{ "startedAt": ISO datetime, "durationMinutes": int(1..1440), "note"?: string\|null(max 2000) }` | `201 { success, data: <TimeEntry> }` (logged for current user). Audit `task.time_entry.logged`. | 400 validation, 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | Task assignee **or** user with task update/manage permission (logs own time); time tracking enabled |
+| PATCH | `/:entryId` | Body: `{ "startedAt"?, "durationMinutes"?, "note"? }` (at least one field) | `200 { success, data: <TimeEntry> }`. Audit `task.time_entry.updated`. | 400 validation, 401, 403 `PERMISSION_DENIED` (not owner), 404 `TIME_ENTRY_NOT_FOUND`/`TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | **Edit own only**; time tracking enabled |
+| DELETE | `/:entryId` | — | `200 { success, data: { id, deleted: true } }`. Audit `task.time_entry.deleted`. | 401, 403 `PERMISSION_DENIED` (not owner), 404 `TIME_ENTRY_NOT_FOUND`/`TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | **Delete own only**; time tracking enabled |
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116160000_task_time_tracking` adds `Workspace.timeTrackingEnabled` (boolean,
+default `false`) and creates `TaskTimeEntry` table (+ indexes/FKs). Production
+steps (ordered): 1) backup DB, 2) deploy code containing migration, 3) in a
+maintenance window run `npx prisma migrate deploy` (or apply the reviewed SQL)
+in staging then production after verification, 4) run `prisma generate` as part
+of build and smoke-test workspace toggle, time-entry log/list/edit/delete-own,
+and rejection when disabled. Never `prisma migrate deploy` outside controlled
+rollout.
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible

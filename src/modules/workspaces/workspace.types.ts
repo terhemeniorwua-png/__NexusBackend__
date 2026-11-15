@@ -33,6 +33,7 @@ export interface WorkspaceSummary {
   organizationRole: OrganizationRole | null;
   /** True when an administrator has enabled a join code. */
   joinCodeEnabled: boolean;
+  timeTrackingEnabled: boolean;
   memberCount: number;
   projectCount: number;
   teamCount: number;
