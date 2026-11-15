@@ -1081,6 +1081,30 @@ Mounted at `/api/v1/workspaces/:workspaceId/projects/:projectId/repositories` (a
 
 **Migration (additive, local dev applied after verification; not applied to production):** `20261117120000_phase5_dev_integration_connections` adds `DevIntegrationProvider`, `IntegrationConnectionStatus`, `IntegrationConnection`, `ProjectRepository` and relations/indexes/constraints. Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, set env vars, configure GitHub App, restart/verify.
 
+### Feature B — Task development links (branches/PRs, no webhooks)
+
+Builds on Feature A linked project repositories. On-demand GitHub reads (mocked in tests, timeouts, no secrets exposed) and persisted task-to-dev-resource links for display in task workspace.
+
+**Repository dev-resource browsing (project-scoped)**
+| Method | Path | Request | Success (data) | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/branches` | Query `search?`, `page?`, `perPage?` | `200 { success, data: { items: DevBranchSummary[] } }` | 401, 403/404, 409 no active connection, 502 provider unavailable | `project.view` (project access) |
+| GET | `/workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/pull-requests` | Query `state?` (`open|closed|all`), `search?`, `page?`, `perPage?` | `200 { success, data: { items: DevPullRequestSummary[] } }` | 401, 403/404, 409, 502 | `project.view` |
+
+**`DevBranchSummary`:** `{ name, commitSha?, protected?, url? }`  
+**`DevPullRequestSummary`:** `{ externalId, number, title, state, url, headRef, baseRef, authorLogin?, updatedAt? }`
+
+**Task dev links**
+| Method | Path | Request | Success (data) | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links` | — | `200 { success, data: TaskDevLink[] }` | 401, 403/404 | Project/task view (`project.view`) |
+| POST | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links` | Body `{ projectRepositoryId, externalType: "BRANCH"|"PULL_REQUEST"|"COMMIT", externalId, externalNumber?, title?, url?, ref?, headRef?, baseRef?, state? }` | `201 { success, data: TaskDevLink }` | 400, 401, 403, 404 task/repo not found, 409 duplicate (`TASK_DEV_LINK_ALREADY_EXISTS`) | Task update (`project.task.update`) |
+| DELETE | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links/:devLinkId` | — | `200 { success, data: { ok: true } }` | 401, 403, 404 | Task update (`project.task.update`) |
+
+**`TaskDevLink`:** `{ id, taskId, projectId, projectRepositoryId, provider, externalType, externalId, externalNumber, title, url, ref, headRef, baseRef, state, repositoryFullName, linkedById, createdAt, updatedAt }` (no secrets).
+
+**Migration (additive, local dev applied after verification; not applied to production):** `20261117130000_phase5b_task_dev_links` adds `DevLinkType` and `TaskDevLink` with relations/indexes/constraints (FKs to Task/Project/ProjectRepository/User). Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, restart/verify.
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible

@@ -1,6 +1,12 @@
 import type { DevIntegrationProvider } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
-import type { DevExternalAccount, DevRepositorySummary, StartConnectionResult } from './dev-integration.types';
+import type {
+  DevBranchSummary,
+  DevExternalAccount,
+  DevPullRequestSummary,
+  DevRepositorySummary,
+  StartConnectionResult,
+} from './dev-integration.types';
 
 export interface DevProviderStateClaims {
   userId: string;
@@ -37,6 +43,25 @@ export interface DevIntegrationProviderAdapter {
     config: AppConfig;
     encryptedCredentials: string;
   }): Promise<DevRepositorySummary[]>;
+
+  listRepositoryBranches(input: {
+    config: AppConfig;
+    encryptedCredentials: string;
+    repositoryFullName: string;
+    search?: string;
+    page?: number;
+    perPage?: number;
+  }): Promise<DevBranchSummary[]>;
+
+  listRepositoryPullRequests(input: {
+    config: AppConfig;
+    encryptedCredentials: string;
+    repositoryFullName: string;
+    state?: 'open' | 'closed' | 'all';
+    search?: string;
+    page?: number;
+    perPage?: number;
+  }): Promise<DevPullRequestSummary[]>;
 
   /** Best-effort revocation/cleanup on disconnect. Must not throw for non-fatal provider errors. */
   disconnect(input: {

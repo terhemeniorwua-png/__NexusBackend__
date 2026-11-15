@@ -211,4 +211,113 @@ describe('Dev integration service permissions and behavior', () => {
     const svc = createDevIntegrationService(config, { project: { findFirst: vi.fn() }, integrationConnection: { findFirst: vi.fn() } } as any);
     await expect(svc.linkRepository({ userId, workspaceId, projectId: 'p1', connectionId: 'c1', externalRepoId: '1', fullName: 'a/b' })).rejects.toMatchObject({ statusCode: 403 });
   });
+
+  it('lists repository branches and pull requests via mocked GitHub API (no network secrets)', async () => {
+    const encCreds = 'enc:' + Buffer.from(JSON.stringify({ installationId: 42, account: { id: '7', login: 'acme' } }), 'utf8').toString('base64url');
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/app/installations/42/access_tokens')) {
+        return new Response(JSON.stringify({ token: 'inst-token' }), { status: 200 });
+      }
+      if (String(url).includes('/repos/acme/app/branches')) {
+        return new Response(JSON.stringify([
+          { name: 'main', commit: { sha: 'abc123' }, protected: true },
+          { name: 'feat/x', commit: { sha: 'def456' }, protected: false },
+        ]), { status: 200 });
+      }
+      if (String(url).includes('/repos/acme/app/pulls')) {
+        return new Response(JSON.stringify([
+          { id: 99, number: 12, title: 'Add thing', state: 'open', html_url: 'https://github.com/acme/app/pull/12', head: { ref: 'feat/x' }, base: { ref: 'main' }, user: { login: 'dev' }, updated_at: '2026-01-01T00:00:00Z', merged_at: null, draft: false },
+        ]), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const branches = await githubAppProvider.listRepositoryBranches({ config, encryptedCredentials: encCreds, repositoryFullName: 'acme/app' });
+    expect(branches).toEqual([
+      { name: 'main', commitSha: 'abc123', protected: true, url: 'https://github.com/acme/app/tree/main' },
+      { name: 'feat/x', commitSha: 'def456', protected: false, url: 'https://github.com/acme/app/tree/feat%2Fx' },
+    ]);
+
+    const prs = await githubAppProvider.listRepositoryPullRequests({ config, encryptedCredentials: encCreds, repositoryFullName: 'acme/app', state: 'open' });
+    expect(prs[0]).toMatchObject({ externalId: '99', number: 12, title: 'Add thing', state: 'open', headRef: 'feat/x', baseRef: 'main', authorLogin: 'dev' });
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('rejects invalid repository names for dev resource browsing', async () => {
+    const encCreds = 'enc:' + Buffer.from(JSON.stringify({ installationId: 1 }), 'utf8').toString('base64url');
+    await expect(githubAppProvider.listRepositoryBranches({ config, encryptedCredentials: encCreds, repositoryFullName: 'badname' } as any)).rejects.toMatchObject({ code: 'INVALID_REPOSITORY_NAME' });
+  });
+});
+
+describe('Task dev links service (Feature B)', () => {
+  const workspaceId = '22222222-2222-2222-2222-222222222222';
+  const userId = '11111111-1111-1111-1111-111111111111';
+  const projectId = '33333333-3333-3333-3333-333333333333';
+  const taskId = '44444444-4444-4444-4444-444444444444';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('lists task dev links without leaking credentials and requires view access', async () => {
+    (requireWorkspaceAccess as any).mockResolvedValue({ effectiveRole: 'MEMBER' });
+    (authorizeProject as any).mockResolvedValue({});
+    const prisma: any = {
+      task: { findFirst: vi.fn(async () => ({ id: taskId, projectId })) },
+      taskDevLink: {
+        findMany: vi.fn(async () => ([{
+          id: 'l1', taskId, projectId, projectRepositoryId: 'r1', provider: 'GITHUB', externalType: 'BRANCH',
+          externalId: 'main', externalNumber: null, title: 'main', url: 'https://x', ref: 'main', headRef: null, baseRef: null, state: null,
+          repositoryFullName: 'acme/app', linkedById: userId, createdAt: new Date('2026-01-01T00:00:00Z'), updatedAt: new Date('2026-01-01T00:00:00Z'),
+        }])),
+      },
+    };
+    const svc = createDevIntegrationService(config, prisma);
+    const links = await svc.listTaskDevLinks({ userId, workspaceId, projectId, taskId });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({ externalType: 'BRANCH', externalId: 'main', repositoryFullName: 'acme/app' });
+    expect(JSON.stringify(links)).not.toContain('encryptedCredentials');
+  });
+
+  it('enforces task update permission when linking dev items', async () => {
+    (requireWorkspaceAccess as any).mockResolvedValue({ effectiveRole: 'MEMBER' });
+    (authorizeProject as any).mockRejectedValue(new AppError(403, 'PROJECT_PERMISSION_DENIED', 'no'));
+    const svc = createDevIntegrationService(config, { task: { findFirst: vi.fn(async () => ({ id: taskId, projectId })) } } as any);
+    await expect(svc.linkTaskDevLink({ userId, workspaceId, projectId, taskId, projectRepositoryId: 'r1', externalType: 'BRANCH', externalId: 'main' })).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('rejects duplicate task dev links', async () => {
+    (requireWorkspaceAccess as any).mockResolvedValue({ effectiveRole: 'MEMBER' });
+    (authorizeProject as any).mockResolvedValue({});
+    const prisma: any = {
+      task: { findFirst: vi.fn(async () => ({ id: taskId, projectId })) },
+      projectRepository: { findFirst: vi.fn(async () => ({ id: 'r1', projectId, provider: 'GITHUB', fullName: 'acme/app', connection: { status: 'ACTIVE' } })) },
+      taskDevLink: { create: vi.fn(async () => { const e: any = new Error('dup'); e.code = 'P2002'; throw e; }) },
+    };
+    const svc = createDevIntegrationService(config, prisma);
+    await expect(svc.linkTaskDevLink({ userId, workspaceId, projectId, taskId, projectRepositoryId: 'r1', externalType: 'BRANCH', externalId: 'main' })).rejects.toMatchObject({ code: 'TASK_DEV_LINK_ALREADY_EXISTS' });
+  });
+
+  it('links and unlinks task dev items with audit-safe behavior', async () => {
+    (requireWorkspaceAccess as any).mockResolvedValue({ effectiveRole: 'MEMBER' });
+    (authorizeProject as any).mockResolvedValue({});
+    const created = { id: 'l1', taskId, projectId, projectRepositoryId: 'r1', provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId: '99', externalNumber: 12, title: 'PR', url: 'https://x', ref: 'feat', headRef: 'feat', baseRef: 'main', state: 'open', repositoryFullName: 'acme/app', linkedById: userId, createdAt: new Date(), updatedAt: new Date() };
+    const prisma: any = {
+      task: { findFirst: vi.fn(async () => ({ id: taskId, projectId })) },
+      projectRepository: { findFirst: vi.fn(async () => ({ id: 'r1', projectId, provider: 'GITHUB', fullName: 'acme/app', connection: { status: 'ACTIVE' } })) },
+      taskDevLink: {
+        create: vi.fn(async () => created),
+        findFirst: vi.fn(async () => ({ id: 'l1', taskId, projectId, externalType: 'PULL_REQUEST', externalId: '99' })),
+        delete: vi.fn(async () => ({})),
+      },
+    };
+    const svc = createDevIntegrationService(config, prisma);
+    const link = await svc.linkTaskDevLink({ userId, workspaceId, projectId, taskId, projectRepositoryId: 'r1', externalType: 'PULL_REQUEST', externalId: '99', externalNumber: 12, title: 'PR' });
+    expect(link.externalType).toBe('PULL_REQUEST');
+    const out = await svc.unlinkTaskDevLink({ userId, workspaceId, projectId, taskId, devLinkId: 'l1' });
+    expect(out).toEqual({ ok: true });
+  });
+
+
 });

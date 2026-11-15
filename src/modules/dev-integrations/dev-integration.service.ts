@@ -7,7 +7,14 @@ import { ProjectPermission, authorizeProject, requireWorkspaceAccess, WorkspaceC
 import type { AppConfig } from '../../config/env';
 import { githubAppProvider } from './providers/github-app.provider';
 import type { DevIntegrationProviderAdapter } from './provider.interface';
-import type { DevConnectionSummary, DevRepositorySummary, LinkedProjectRepository } from './dev-integration.types';
+import type {
+  DevBranchSummary,
+  DevConnectionSummary,
+  DevPullRequestSummary,
+  DevRepositorySummary,
+  LinkedProjectRepository,
+  TaskDevLinkSummary,
+} from './dev-integration.types';
 
 function providerFor(_provider: DevIntegrationProvider): DevIntegrationProviderAdapter {
   // Feature A: GitHub only. GitLab will be added behind the same interface.
@@ -70,6 +77,48 @@ function toLinkedRepo(row: {
   };
 }
 
+function toTaskDevLink(row: {
+  id: string;
+  taskId: string;
+  projectId: string;
+  projectRepositoryId: string | null;
+  provider: DevIntegrationProvider;
+  externalType: string;
+  externalId: string;
+  externalNumber: number | null;
+  title: string | null;
+  url: string | null;
+  ref: string | null;
+  headRef: string | null;
+  baseRef: string | null;
+  state: string | null;
+  repositoryFullName: string | null;
+  linkedById: string;
+  createdAt: Date;
+  updatedAt: Date;
+}): TaskDevLinkSummary {
+  return {
+    id: row.id,
+    taskId: row.taskId,
+    projectId: row.projectId,
+    projectRepositoryId: row.projectRepositoryId,
+    provider: row.provider,
+    externalType: row.externalType as TaskDevLinkSummary['externalType'],
+    externalId: row.externalId,
+    externalNumber: row.externalNumber,
+    title: row.title,
+    url: row.url,
+    ref: row.ref,
+    headRef: row.headRef,
+    baseRef: row.baseRef,
+    state: row.state,
+    repositoryFullName: row.repositoryFullName,
+    linkedById: row.linkedById,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
 export function createDevIntegrationService(
   config: AppConfig,
   prisma: PrismaClient = getPrismaClient(),
@@ -108,6 +157,62 @@ export function createDevIntegrationService(
       permission: ProjectPermission.View,
     });
     return workspace;
+  }
+
+  async function requireTaskViewer(userId: string, workspaceId: string, projectId: string, taskId: string) {
+    const workspace = await requireWorkspaceAccess(prisma, {
+      userId,
+      workspaceId,
+      capability: WorkspaceCapability.ViewWorkspace,
+    });
+    await authorizeProject(prisma, {
+      actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
+      projectId,
+      permission: ProjectPermission.View,
+    });
+    const task = await prisma.task.findFirst({
+      where: { id: taskId, projectId, deletedAt: null, project: { workspaceId } },
+      select: { id: true, projectId: true },
+    });
+    if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'Task not found');
+    return { workspace, task };
+  }
+
+  async function requireTaskUpdater(userId: string, workspaceId: string, projectId: string, taskId: string) {
+    const workspace = await requireWorkspaceAccess(prisma, {
+      userId,
+      workspaceId,
+      capability: WorkspaceCapability.ViewWorkspace,
+    });
+    await authorizeProject(prisma, {
+      actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
+      projectId,
+      permission: ProjectPermission.TaskUpdate,
+    });
+    const task = await prisma.task.findFirst({
+      where: { id: taskId, projectId, deletedAt: null, project: { workspaceId } },
+      select: { id: true, projectId: true },
+    });
+    if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'Task not found');
+    return { workspace, task };
+  }
+
+  async function getActiveLinkedRepository(input: {
+    userId: string;
+    workspaceId: string;
+    projectId: string;
+    repositoryId: string;
+  }) {
+    await requireProjectViewer(input.userId, input.workspaceId, input.projectId);
+    const repo = await prisma.projectRepository.findFirst({
+      where: { id: input.repositoryId, projectId: input.projectId, project: { workspaceId: input.workspaceId } },
+      include: { connection: true },
+    });
+    if (!repo) throw new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+    if (repo.connection.status !== 'ACTIVE') {
+      throw new AppError(409, 'DEV_INTEGRATION_NOT_ACTIVE', 'Integration connection is not active');
+    }
+    return repo;
   }
 
   return {
@@ -349,6 +454,167 @@ export function createDevIntegrationService(
         targetType: 'ProjectRepository',
         targetId: repo.id,
         metadata: { projectId: input.projectId, fullName: repo.fullName },
+      });
+      return { ok: true };
+    },
+
+    async listRepositoryBranches(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      repositoryId: string;
+      search?: string;
+      page?: number;
+      perPage?: number;
+    }): Promise<DevBranchSummary[]> {
+      const repo = await getActiveLinkedRepository(input);
+      const provider = providerFor(repo.provider);
+      try {
+        return await provider.listRepositoryBranches({
+          config,
+          encryptedCredentials: repo.connection.encryptedCredentials,
+          repositoryFullName: repo.fullName,
+          search: input.search,
+          page: input.page,
+          perPage: input.perPage,
+        });
+      } catch (error) {
+        logger.warn('dev_integration_list_branches_failed', { error, repositoryId: repo.id });
+        throw error;
+      }
+    },
+
+    async listRepositoryPullRequests(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      repositoryId: string;
+      search?: string;
+      page?: number;
+      perPage?: number;
+      state?: 'open' | 'closed' | 'all';
+    }): Promise<DevPullRequestSummary[]> {
+      const repo = await getActiveLinkedRepository(input);
+      const provider = providerFor(repo.provider);
+      try {
+        return await provider.listRepositoryPullRequests({
+          config,
+          encryptedCredentials: repo.connection.encryptedCredentials,
+          repositoryFullName: repo.fullName,
+          search: input.search,
+          page: input.page,
+          perPage: input.perPage,
+          state: input.state ?? 'open',
+        });
+      } catch (error) {
+        logger.warn('dev_integration_list_prs_failed', { error, repositoryId: repo.id });
+        throw error;
+      }
+    },
+
+    async listTaskDevLinks(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      taskId: string;
+    }): Promise<TaskDevLinkSummary[]> {
+      await requireTaskViewer(input.userId, input.workspaceId, input.projectId, input.taskId);
+      const rows = await prisma.taskDevLink.findMany({
+        where: { taskId: input.taskId, projectId: input.projectId, task: { project: { workspaceId: input.workspaceId } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      return rows.map(toTaskDevLink);
+    },
+
+    async linkTaskDevLink(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      taskId: string;
+      projectRepositoryId: string;
+      externalType: 'BRANCH' | 'PULL_REQUEST' | 'COMMIT';
+      externalId: string;
+      externalNumber?: number | null;
+      title?: string | null;
+      url?: string | null;
+      ref?: string | null;
+      headRef?: string | null;
+      baseRef?: string | null;
+      state?: string | null;
+    }): Promise<TaskDevLinkSummary> {
+      await requireTaskUpdater(input.userId, input.workspaceId, input.projectId, input.taskId);
+      const repo = await prisma.projectRepository.findFirst({
+        where: { id: input.projectRepositoryId, projectId: input.projectId, project: { workspaceId: input.workspaceId } },
+        include: { connection: true },
+      });
+      if (!repo) throw new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+      if (repo.connection.status !== 'ACTIVE') {
+        throw new AppError(409, 'DEV_INTEGRATION_NOT_ACTIVE', 'Integration connection is not active');
+      }
+
+      try {
+        const created = await prisma.taskDevLink.create({
+          data: {
+            taskId: input.taskId,
+            projectId: input.projectId,
+            projectRepositoryId: repo.id,
+            provider: repo.provider,
+            externalType: input.externalType,
+            externalId: input.externalId,
+            externalNumber: input.externalNumber ?? null,
+            title: input.title ?? null,
+            url: input.url ?? null,
+            ref: input.ref ?? null,
+            headRef: input.headRef ?? null,
+            baseRef: input.baseRef ?? null,
+            state: input.state ?? null,
+            repositoryFullName: repo.fullName,
+            linkedById: input.userId,
+          },
+        });
+        await recordAuditEvent(prisma, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'dev_integration.task_dev_link_created',
+          targetType: 'TaskDevLink',
+          targetId: created.id,
+          metadata: {
+            taskId: input.taskId,
+            projectId: input.projectId,
+            repositoryFullName: repo.fullName,
+            externalType: input.externalType,
+            externalId: input.externalId,
+          },
+        });
+        return toTaskDevLink(created);
+      } catch (error: any) {
+        if (error?.code === 'P2002') {
+          throw new AppError(409, 'TASK_DEV_LINK_ALREADY_EXISTS', 'This development item is already linked to the task');
+        }
+        throw error;
+      }
+    },
+
+    async unlinkTaskDevLink(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      taskId: string;
+      devLinkId: string;
+    }) {
+      await requireTaskUpdater(input.userId, input.workspaceId, input.projectId, input.taskId);
+      const link = await prisma.taskDevLink.findFirst({
+        where: { id: input.devLinkId, taskId: input.taskId, projectId: input.projectId, task: { project: { workspaceId: input.workspaceId } } },
+      });
+      if (!link) throw new AppError(404, 'TASK_DEV_LINK_NOT_FOUND', 'Development link not found');
+      await prisma.taskDevLink.delete({ where: { id: link.id } });
+      await recordAuditEvent(prisma, {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        action: 'dev_integration.task_dev_link_deleted',
+        targetType: 'TaskDevLink',
+        targetId: link.id,
+        metadata: { taskId: input.taskId, externalType: link.externalType, externalId: link.externalId },
       });
       return { ok: true };
     },

@@ -49,6 +49,7 @@ import { createIntegrationRouter } from '../modules/integrations/integration.rou
 import {
   createDevIntegrationCallbackRouter,
   createProjectRepositoryRouter,
+  createTaskDevLinkRouter,
   createWorkspaceDevIntegrationRouter,
 } from '../modules/dev-integrations/dev-integration.routes';
 import { createAutomationRouter } from '../modules/automation/automation.routes';
@@ -139,6 +140,7 @@ export function createApiRouter({
   router.use('/dev-integrations', createDevIntegrationCallbackRouter({ config }));
   router.use('/workspaces/:workspaceId/dev-integrations', createWorkspaceDevIntegrationRouter({ config }));
   router.use('/workspaces/:workspaceId/projects/:projectId/repositories', createProjectRepositoryRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links', createTaskDevLinkRouter({ config }));
   // Automations are workspace-scoped
   router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));
   // Outbound webhook subscriptions are workspace-scoped

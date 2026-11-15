@@ -343,6 +343,7 @@ model User {
   searchHistory               SearchHistory[]
   webhookSubscriptions        WebhookSubscription[]        @relation("WebhookSubscriptionCreatedBy")
   integrationConnectionsCreated IntegrationConnection[]     @relation("IntegrationConnectionsCreatedBy")
+  taskDevLinksLinked          TaskDevLink[]                @relation("TaskDevLinksLinked")
   aiConversations             AiConversation[]             @relation("AiConversationOwner")
   aiUsageRecords              AiUsageRecord[]              @relation("AiUsageRecordOwner")
   aiActionProposals           AiActionProposal[]           @relation("AiActionProposalOwner")
@@ -927,6 +928,7 @@ model Project {
   calendarEvents CalendarEvent[]
   meetings       Meeting[]
   repositories   ProjectRepository[] @relation("ProjectRepositories")
+  taskDevLinks   TaskDevLink[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -1017,6 +1019,7 @@ model Task {
   documents        Document[]
   workDocuments    TaskDocument[]
   timeEntries      TaskTimeEntry[]
+  devLinks         TaskDevLink[]
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -1851,13 +1854,52 @@ model ProjectRepository {
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
 
-  project    Project               @relation("ProjectRepositories", fields: [projectId], references: [id], onDelete: Cascade)
-  connection IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  project     Project               @relation("ProjectRepositories", fields: [projectId], references: [id], onDelete: Cascade)
+  connection  IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  taskDevLinks TaskDevLink[]
 
   @@unique([projectId, provider, externalRepoId])
   @@unique([connectionId, externalRepoId])
   @@index([projectId])
   @@index([connectionId])
+}
+
+enum DevLinkType {
+  BRANCH
+  PULL_REQUEST
+  COMMIT
+}
+
+model TaskDevLink {
+  id                  String                 @id @default(uuid())
+  taskId              String
+  projectId           String
+  projectRepositoryId String?
+  provider            DevIntegrationProvider
+  externalType        DevLinkType
+  externalId          String
+  externalNumber      Int?
+  title               String?
+  url                 String?
+  ref                 String?
+  headRef             String?
+  baseRef             String?
+  state               String?
+  repositoryFullName  String?
+  linkedById          String
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  task              Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectRepository ProjectRepository? @relation(fields: [projectRepositoryId], references: [id], onDelete: SetNull)
+  linkedBy          User               @relation("TaskDevLinksLinked", fields: [linkedById], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, provider, externalType, externalId])
+  @@index([taskId])
+  @@index([projectId])
+  @@index([projectRepositoryId])
+  @@index([linkedById])
 }
 
 // ---------------------------------------------------------------------------

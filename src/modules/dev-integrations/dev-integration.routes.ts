@@ -9,9 +9,14 @@ import {
   connectionParamsSchema,
   githubCallbackQuerySchema,
   linkRepositorySchema,
+  listDevResourceQuerySchema,
   projectParamsSchema,
   projectRepoParamsSchema,
+  projectRepoResourceParamsSchema,
+  taskDevLinkParamsSchema,
+  taskParamsSchema,
   workspaceParamsSchema,
+  linkTaskDevLinkSchema,
 } from './dev-integration.schemas';
 import { createDevIntegrationService } from './dev-integration.service';
 
@@ -130,6 +135,79 @@ export function createProjectRepositoryRouter({
     async (req, res) => {
       const { workspaceId, projectId, repositoryId } = req.validated!.params as { workspaceId: string; projectId: string; repositoryId: string };
       sendSuccess(res, await service.unlinkRepository({ userId: userId(req), workspaceId, projectId, repositoryId }));
+    },
+  );
+
+  // GET /.../repositories/:repositoryId/branches
+  router.get(
+    '/:repositoryId/branches',
+    requireAuth,
+    requireActive,
+    validate({ params: projectRepoResourceParamsSchema, query: listDevResourceQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, repositoryId } = req.validated!.params as { workspaceId: string; projectId: string; repositoryId: string };
+      const query = (req.validated!.query ?? {}) as { search?: string; page?: number; perPage?: number };
+      const items = await service.listRepositoryBranches({ userId: userId(req), workspaceId, projectId, repositoryId, ...query });
+      sendSuccess(res, { items });
+    },
+  );
+
+  // GET /.../repositories/:repositoryId/pull-requests
+  router.get(
+    '/:repositoryId/pull-requests',
+    requireAuth,
+    requireActive,
+    validate({ params: projectRepoResourceParamsSchema, query: listDevResourceQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, repositoryId } = req.validated!.params as { workspaceId: string; projectId: string; repositoryId: string };
+      const query = (req.validated!.query ?? {}) as { search?: string; page?: number; perPage?: number; state?: 'open' | 'closed' | 'all' };
+      const items = await service.listRepositoryPullRequests({ userId: userId(req), workspaceId, projectId, repositoryId, ...query });
+      sendSuccess(res, { items });
+    },
+  );
+
+  return router;
+}
+
+export function createTaskDevLinkRouter({
+  config,
+  service = createDevIntegrationService(config),
+}: DevIntegrationRouterOptions): Router {
+  const router = Router({ mergeParams: true });
+  const requireAuth = createRequireAuth(config);
+  const requireActive = createRequireActiveAccount();
+
+  router.get(
+    '/',
+    requireAuth,
+    requireActive,
+    validate({ params: taskParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      sendSuccess(res, await service.listTaskDevLinks({ userId: userId(req), workspaceId, projectId, taskId }));
+    },
+  );
+
+  router.post(
+    '/',
+    requireAuth,
+    requireActive,
+    validate({ params: taskParamsSchema, body: linkTaskDevLinkSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      const body = req.validated!.body as any;
+      sendSuccess(res, await service.linkTaskDevLink({ userId: userId(req), workspaceId, projectId, taskId, ...body }), 201);
+    },
+  );
+
+  router.delete(
+    '/:devLinkId',
+    requireAuth,
+    requireActive,
+    validate({ params: taskDevLinkParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId, devLinkId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string; devLinkId: string };
+      sendSuccess(res, await service.unlinkTaskDevLink({ userId: userId(req), workspaceId, projectId, taskId, devLinkId }));
     },
   );
 

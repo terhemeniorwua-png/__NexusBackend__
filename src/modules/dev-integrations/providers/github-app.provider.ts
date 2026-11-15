@@ -9,7 +9,13 @@ import type {
   DevIntegrationProviderAdapter,
   DevProviderStateClaims,
 } from '../provider.interface';
-import type { DevExternalAccount, DevRepositorySummary, StartConnectionResult } from '../dev-integration.types';
+import type {
+  DevBranchSummary,
+  DevExternalAccount,
+  DevPullRequestSummary,
+  DevRepositorySummary,
+  StartConnectionResult,
+} from '../dev-integration.types';
 
 const STATE_TTL_SECONDS = 10 * 60;
 const GITHUB_API = 'https://api.github.com';
@@ -242,6 +248,94 @@ export const githubAppProvider: DevIntegrationProviderAdapter = {
       page += 1;
     }
     return repos;
+  },
+
+  async listRepositoryBranches(input): Promise<DevBranchSummary[]> {
+    const { config, encryptedCredentials, repositoryFullName, search, page = 1, perPage = 30 } = input;
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repositoryFullName)) {
+      throw new AppError(400, 'INVALID_REPOSITORY_NAME', 'Invalid repository name');
+    }
+    const creds = parseCredentials(encryptedCredentials);
+    const token = await getInstallationAccessToken(config, creds.installationId);
+    const [owner, repo] = repositoryFullName.split('/');
+    const url = new URL(`${GITHUB_API}/repos/${owner}/${repo}/branches`);
+    url.searchParams.set('per_page', String(Math.min(Math.max(perPage, 1), 100)));
+    url.searchParams.set('page', String(Math.min(Math.max(page, 1), 10)));
+    const res = await githubFetch(url.toString(), {
+      headers: { ...GITHUB_HEADERS, Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      if (res.status === 404 || res.status === 403 || res.status === 401) {
+        throw new AppError(502, 'GITHUB_RESOURCE_UNAVAILABLE', 'Unable to list branches for this repository');
+      }
+      throw new AppError(502, 'GITHUB_RESOURCE_UNAVAILABLE', `Failed to list branches (${res.status})`);
+    }
+    const data = (await res.json()) as Array<{ name: string; commit?: { sha?: string; url?: string }; protected?: boolean }>;
+    let branches = data.map((b) => ({
+      name: b.name,
+      commitSha: b.commit?.sha ?? null,
+      protected: b.protected ?? false,
+      url: `https://github.com/${repositoryFullName}/tree/${encodeURIComponent(b.name)}`,
+    }));
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      branches = branches.filter((b) => b.name.toLowerCase().includes(q));
+    }
+    return branches;
+  },
+
+  async listRepositoryPullRequests(input): Promise<DevPullRequestSummary[]> {
+    const { config, encryptedCredentials, repositoryFullName, state = 'open', search, page = 1, perPage = 30 } = input;
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repositoryFullName)) {
+      throw new AppError(400, 'INVALID_REPOSITORY_NAME', 'Invalid repository name');
+    }
+    const creds = parseCredentials(encryptedCredentials);
+    const token = await getInstallationAccessToken(config, creds.installationId);
+    const [owner, repo] = repositoryFullName.split('/');
+    const url = new URL(`${GITHUB_API}/repos/${owner}/${repo}/pulls`);
+    url.searchParams.set('state', state);
+    url.searchParams.set('per_page', String(Math.min(Math.max(perPage, 1), 100)));
+    url.searchParams.set('page', String(Math.min(Math.max(page, 1), 10)));
+    url.searchParams.set('sort', 'updated');
+    url.searchParams.set('direction', 'desc');
+    const res = await githubFetch(url.toString(), {
+      headers: { ...GITHUB_HEADERS, Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      if (res.status === 404 || res.status === 403 || res.status === 401) {
+        throw new AppError(502, 'GITHUB_RESOURCE_UNAVAILABLE', 'Unable to list pull requests for this repository');
+      }
+      throw new AppError(502, 'GITHUB_RESOURCE_UNAVAILABLE', `Failed to list pull requests (${res.status})`);
+    }
+    const data = (await res.json()) as Array<{
+      id: number;
+      number: number;
+      title: string;
+      state: string;
+      html_url?: string;
+      head?: { ref?: string };
+      base?: { ref?: string };
+      user?: { login?: string };
+      updated_at?: string;
+      merged_at?: string | null;
+      draft?: boolean;
+    }>;
+    let prs = data.map((pr) => ({
+      externalId: String(pr.id),
+      number: pr.number,
+      title: pr.title,
+      state: pr.merged_at ? 'merged' : pr.draft ? 'draft' : pr.state,
+      url: pr.html_url ?? null,
+      headRef: pr.head?.ref ?? null,
+      baseRef: pr.base?.ref ?? null,
+      authorLogin: pr.user?.login ?? null,
+      updatedAt: pr.updated_at ?? null,
+    }));
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      prs = prs.filter((p) => p.title.toLowerCase().includes(q) || String(p.number).includes(q) || (p.headRef ?? '').toLowerCase().includes(q));
+    }
+    return prs;
   },
 
   async disconnect(input): Promise<{ revoked: boolean; detail?: string }> {
