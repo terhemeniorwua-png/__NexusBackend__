@@ -342,6 +342,7 @@ model User {
   meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
   searchHistory               SearchHistory[]
   webhookSubscriptions        WebhookSubscription[]        @relation("WebhookSubscriptionCreatedBy")
+  integrationConnectionsCreated IntegrationConnection[]     @relation("IntegrationConnectionsCreatedBy")
   aiConversations             AiConversation[]             @relation("AiConversationOwner")
   aiUsageRecords              AiUsageRecord[]              @relation("AiUsageRecordOwner")
   aiActionProposals           AiActionProposal[]           @relation("AiActionProposalOwner")
@@ -515,6 +516,7 @@ model Workspace {
   calendarEvents       CalendarEvent[]
   forms                Form[]
   integrations         Integration[]                @relation("WorkspaceIntegrations")
+  integrationConnections IntegrationConnection[]     @relation("WorkspaceIntegrationConnections")
   automations          Automation[]                 @relation("WorkspaceAutomations")
   meetings             Meeting[]
   auditLogs            AuditLog[]
@@ -924,6 +926,7 @@ model Project {
   documents      Document[]
   calendarEvents CalendarEvent[]
   meetings       Meeting[]
+  repositories   ProjectRepository[] @relation("ProjectRepositories")
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -1794,6 +1797,67 @@ model IntegrationSyncJob {
 
   @@index([status, nextAttemptAt])
   @@index([integrationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Dev/source-control integrations (Phase 5)
+// ---------------------------------------------------------------------------
+
+enum DevIntegrationProvider {
+  GITHUB
+  GITLAB
+}
+
+enum IntegrationConnectionStatus {
+  PENDING
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+model IntegrationConnection {
+  id                   String                      @id @default(uuid())
+  provider             DevIntegrationProvider
+  workspaceId          String
+  status               IntegrationConnectionStatus @default(PENDING)
+  externalAccountId    String?
+  externalAccountLogin String?
+  externalAccountName  String?
+  encryptedCredentials String
+  scopes               String[]                    @default([])
+  createdById          String
+  lastError            String?
+  revokedAt            DateTime?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  workspace           Workspace           @relation("WorkspaceIntegrationConnections", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy           User                @relation("IntegrationConnectionsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  projectRepositories ProjectRepository[]
+
+  @@unique([workspaceId, provider])
+  @@index([workspaceId, status])
+  @@index([createdById])
+}
+
+model ProjectRepository {
+  id             String                 @id @default(uuid())
+  projectId      String
+  connectionId   String
+  provider       DevIntegrationProvider
+  externalRepoId String
+  fullName       String
+  defaultBranch  String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  project    Project               @relation("ProjectRepositories", fields: [projectId], references: [id], onDelete: Cascade)
+  connection IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, provider, externalRepoId])
+  @@unique([connectionId, externalRepoId])
+  @@index([projectId])
+  @@index([connectionId])
 }
 
 // ---------------------------------------------------------------------------

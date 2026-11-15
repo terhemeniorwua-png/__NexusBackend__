@@ -319,6 +319,16 @@ const envSchema = z
       .max(60_000)
       .default(15_000),
 
+    // --- Dev/source-control integrations (Phase 5, GitHub App) --------------
+    GITHUB_APP_ID: z.string().trim().default(''),
+    GITHUB_APP_SLUG: z.string().trim().default(''),
+    GITHUB_APP_CLIENT_ID: z.string().trim().default(''),
+    GITHUB_APP_CLIENT_SECRET: z.string().default(''),
+    GITHUB_APP_PRIVATE_KEY: z.string().default(''),
+    GITHUB_APP_WEBHOOK_SECRET: z.string().default(''),
+    GITHUB_APP_CALLBACK_URL: z.string().trim().default(''),
+    GITHUB_APP_INSTALL_URL: z.string().trim().default(''),
+
     // --- AI service integration (Phases 21-23) ------------------------------
     //
     // The Python/FastAPI service is optional infrastructure. The Express
@@ -743,6 +753,14 @@ export interface AppConfig {
   objectStorageAccessKeyId: string;
   objectStorageSecretAccessKey: string;
   objectStorageRequestTimeoutMs: number;
+  githubAppId: string;
+  githubAppSlug: string;
+  githubAppClientId: string;
+  githubAppClientSecret: string;
+  githubAppPrivateKey: string;
+  githubAppWebhookSecret: string;
+  githubAppCallbackUrl: string;
+  githubAppInstallUrl: string;
   aiEnabled: boolean;
   aiServiceUrl: string;
   aiServiceToken: string;
@@ -925,6 +943,14 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     objectStorageAccessKeyId: values.OBJECT_STORAGE_ACCESS_KEY_ID,
     objectStorageSecretAccessKey: values.OBJECT_STORAGE_SECRET_ACCESS_KEY,
     objectStorageRequestTimeoutMs: values.OBJECT_STORAGE_REQUEST_TIMEOUT_MS,
+    githubAppId: values.GITHUB_APP_ID,
+    githubAppSlug: values.GITHUB_APP_SLUG,
+    githubAppClientId: values.GITHUB_APP_CLIENT_ID,
+    githubAppClientSecret: values.GITHUB_APP_CLIENT_SECRET,
+    githubAppPrivateKey: values.GITHUB_APP_PRIVATE_KEY,
+    githubAppWebhookSecret: values.GITHUB_APP_WEBHOOK_SECRET,
+    githubAppCallbackUrl: values.GITHUB_APP_CALLBACK_URL,
+    githubAppInstallUrl: values.GITHUB_APP_INSTALL_URL,
     aiEnabled: values.AI_ENABLED,
     aiServiceUrl: values.AI_SERVICE_URL.replace(/\/+$/, ''),
     aiServiceToken: values.AI_SERVICE_TOKEN,

@@ -1,0 +1,261 @@
+import { createHmac, createSign, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { AppConfig } from '../../../config/env';
+import { getRedisClient } from '../../../db/redis';
+import { AppError } from '../../../utils/errors';
+import { logger } from '../../../utils/logger';
+import { decryptIntegrationToken, encryptIntegrationToken } from '../../integrations/token-crypto';
+import type {
+  DevConnectCallbackResult,
+  DevIntegrationProviderAdapter,
+  DevProviderStateClaims,
+} from '../provider.interface';
+import type { DevExternalAccount, DevRepositorySummary, StartConnectionResult } from '../dev-integration.types';
+
+const STATE_TTL_SECONDS = 10 * 60;
+const GITHUB_API = 'https://api.github.com';
+const GITHUB_HEADERS = {
+  Accept: 'application/vnd.github+json',
+  'X-GitHub-Api-Version': '2022-11-28',
+  'User-Agent': 'nexus-backend',
+};
+
+interface GithubCredentialsPayload {
+  installationId: number;
+  account?: DevExternalAccount & { type?: string | null };
+}
+
+function requireGithubAppConfig(config: AppConfig): {
+  appId: string;
+  clientId: string;
+  clientSecret: string;
+  privateKey: string;
+  callbackUrl: string;
+  slug: string;
+  installUrl: string;
+} {
+  const appId = config.githubAppId || process.env.GITHUB_APP_ID || '';
+  const clientId = config.githubAppClientId || process.env.GITHUB_APP_CLIENT_ID || '';
+  const clientSecret = config.githubAppClientSecret || process.env.GITHUB_APP_CLIENT_SECRET || '';
+  const privateKey = (config.githubAppPrivateKey || process.env.GITHUB_APP_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  const callbackUrl = config.githubAppCallbackUrl || process.env.GITHUB_APP_CALLBACK_URL || '';
+  const slug = config.githubAppSlug || process.env.GITHUB_APP_SLUG || '';
+  const installUrl = config.githubAppInstallUrl || process.env.GITHUB_APP_INSTALL_URL || '';
+  if (!appId || !clientId || !clientSecret || !privateKey) {
+    throw new AppError(503, 'GITHUB_APP_NOT_CONFIGURED', 'GitHub App integration is not configured');
+  }
+  return { appId, clientId, clientSecret, privateKey, callbackUrl, slug, installUrl };
+}
+
+function stateSigningKey(config: AppConfig): Buffer {
+  const secret = config.jwtAccessSecret || process.env.JWT_ACCESS_SECRET;
+  if (!secret) throw new AppError(503, 'AUTH_NOT_CONFIGURED', 'Authentication is not configured');
+  return Buffer.from(secret, 'utf8');
+}
+
+function signState(body: string, config: AppConfig): string {
+  return createHmac('sha256', stateSigningKey(config)).update(body).digest('base64url');
+}
+
+function encodeState(claims: Omit<DevProviderStateClaims, 'provider'> & { provider: 'GITHUB' }, config: AppConfig): string {
+  const payload = { ...claims, exp: Date.now() + STATE_TTL_SECONDS * 1000 };
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `${body}.${signState(body, config)}`;
+}
+
+async function githubFetch(url: string, init: RequestInit & { timeoutMs?: number } = {}) {
+  const { timeoutMs = 10_000, ...rest } = init;
+  const res = await fetch(url, { ...rest, signal: AbortSignal.timeout(timeoutMs) });
+  return res;
+}
+
+function createAppJwt(appId: string, privateKey: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const payload = { iat: now - 60, exp: now + 9 * 60, iss: appId };
+  const b64 = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const unsigned = `${b64(header)}.${b64(payload)}`;
+  const signer = createSign('RSA-SHA256');
+  signer.update(unsigned);
+  signer.end();
+  const sig = signer.sign(privateKey).toString('base64url');
+  return `${unsigned}.${sig}`;
+}
+
+async function getInstallationAccessToken(config: AppConfig, installationId: number): Promise<string> {
+  const { appId, privateKey } = requireGithubAppConfig(config);
+  const jwt = createAppJwt(appId, privateKey);
+  const res = await githubFetch(`${GITHUB_API}/app/installations/${installationId}/access_tokens`, {
+    method: 'POST',
+    headers: { ...GITHUB_HEADERS, Authorization: `Bearer ${jwt}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    logger.warn('github_app_token_request_failed', { status: res.status, body: text.slice(0, 200) });
+    throw new AppError(502, 'GITHUB_APP_TOKEN_FAILED', `Failed to obtain installation access token (${res.status})`);
+  }
+  const data = (await res.json()) as { token?: string };
+  if (!data.token) throw new AppError(502, 'GITHUB_APP_TOKEN_FAILED', 'Installation access token missing from GitHub response');
+  return data.token;
+}
+
+async function getInstallation(config: AppConfig, installationId: number): Promise<{ id: number; account?: { id: number; login: string; type: string; name?: string | null } | null; permissions?: Record<string, string> }> {
+  const { appId, privateKey } = requireGithubAppConfig(config);
+  const jwt = createAppJwt(appId, privateKey);
+  const res = await githubFetch(`${GITHUB_API}/app/installations/${installationId}`, {
+    headers: { ...GITHUB_HEADERS, Authorization: `Bearer ${jwt}` },
+  });
+  if (!res.ok) {
+    throw new AppError(502, 'GITHUB_APP_INSTALLATION_FAILED', `Failed to fetch GitHub installation (${res.status})`);
+  }
+  return (await res.json()) as { id: number; account?: { id: number; login: string; type: string; name?: string | null } | null; permissions?: Record<string, string> };
+}
+
+function parseCredentials(encryptedCredentials: string): GithubCredentialsPayload {
+  const plain = decryptIntegrationToken(encryptedCredentials);
+  const parsed = JSON.parse(plain) as GithubCredentialsPayload;
+  if (!parsed || typeof parsed.installationId !== 'number') {
+    throw new AppError(500, 'DEV_INTEGRATION_CREDENTIALS_INVALID', 'Stored integration credentials are invalid');
+  }
+  return parsed;
+}
+
+export const githubAppProvider: DevIntegrationProviderAdapter = {
+  provider: 'GITHUB',
+
+  async startConnect(input): Promise<StartConnectionResult> {
+    const { slug, installUrl } = requireGithubAppConfig(input.config);
+    const nonce = randomBytes(16).toString('hex');
+    await getRedisClient().set(
+      `devint:github:state:${nonce}`,
+      JSON.stringify({ userId: input.userId, workspaceId: input.workspaceId }),
+      { EX: STATE_TTL_SECONDS },
+    );
+    const state = encodeState(
+      { userId: input.userId, workspaceId: input.workspaceId, provider: 'GITHUB', nonce },
+      input.config,
+    );
+    const base = (installUrl || (slug ? `https://github.com/apps/${slug}/installations/new` : '')).trim();
+    if (!base) {
+      throw new AppError(503, 'GITHUB_APP_NOT_CONFIGURED', 'GitHub App installation URL is not configured');
+    }
+    const url = new URL(base);
+    url.searchParams.set('state', state);
+    return { url: url.toString() };
+  },
+
+  async verifyAndConsumeState(state: string): Promise<DevProviderStateClaims> {
+    // config not passed here; use env secret for verification same as encoding
+    const config = { jwtAccessSecret: process.env.JWT_ACCESS_SECRET } as AppConfig;
+    const [body, sig, extra] = state.split('.');
+    const bad = () => new AppError(400, 'GITHUB_STATE_INVALID', 'The GitHub authorization state is invalid or expired');
+    if (!body || !sig || extra !== undefined) throw bad();
+    const expected = Buffer.from(signState(body, config));
+    const given = Buffer.from(sig);
+    if (expected.length !== given.length || !timingSafeEqual(expected, given)) throw bad();
+    let claims: { userId?: string; workspaceId?: string; provider?: string; nonce?: string; exp?: number };
+    try {
+      claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    } catch {
+      throw bad();
+    }
+    if (
+      claims.provider !== 'GITHUB' ||
+      typeof claims.userId !== 'string' ||
+      typeof claims.workspaceId !== 'string' ||
+      typeof claims.nonce !== 'string' ||
+      typeof claims.exp !== 'number' ||
+      claims.exp < Date.now() ||
+      !/^[0-9a-f]{32}$/.test(claims.nonce)
+    ) {
+      throw bad();
+    }
+    const redis = getRedisClient();
+    const key = `devint:github:state:${claims.nonce}`;
+    const stored = await redis.get(key);
+    const consumed = await redis.del(key);
+    if (consumed !== 1 || !stored) throw bad();
+    try {
+      const parsed = JSON.parse(stored) as { userId: string; workspaceId: string };
+      if (parsed.userId !== claims.userId || parsed.workspaceId !== claims.workspaceId) throw bad();
+    } catch (e) {
+      if (e instanceof AppError) throw e;
+      throw bad();
+    }
+    return { userId: claims.userId, workspaceId: claims.workspaceId, provider: 'GITHUB', nonce: claims.nonce };
+  },
+
+  async handleCallback(input): Promise<DevConnectCallbackResult> {
+    const { config, query } = input;
+    const installationIdRaw = query.installation_id;
+    const installationId = typeof installationIdRaw === 'string' || typeof installationIdRaw === 'number' ? Number(installationIdRaw) : NaN;
+    if (!Number.isFinite(installationId) || installationId <= 0) {
+      throw new AppError(400, 'GITHUB_INSTALLATION_REQUIRED', 'A GitHub App installation is required to complete the connection');
+    }
+    const installation = await getInstallation(config, installationId);
+    const account = installation.account;
+    const externalAccount: DevExternalAccount = {
+      id: account?.id != null ? String(account.id) : String(installation.id),
+      login: account?.login ?? null,
+      name: (account?.name ?? account?.login) ?? null,
+      type: account?.type ?? null,
+    };
+    const scopes = installation.permissions ? Object.keys(installation.permissions) : [];
+    const payload: GithubCredentialsPayload = { installationId, account: externalAccount };
+    const encryptedCredentials = encryptIntegrationToken(JSON.stringify(payload));
+    return { externalAccount, scopes, encryptedCredentials };
+  },
+
+  async listAvailableRepositories(input): Promise<DevRepositorySummary[]> {
+    const { config, encryptedCredentials } = input;
+    const creds = parseCredentials(encryptedCredentials);
+    const token = await getInstallationAccessToken(config, creds.installationId);
+    const repos: DevRepositorySummary[] = [];
+    let page = 1;
+    // Paginate; cap to avoid unbounded fetch
+    while (page <= 10) {
+      const url = new URL(`${GITHUB_API}/installation/repositories`);
+      url.searchParams.set('per_page', '100');
+      url.searchParams.set('page', String(page));
+      const res = await githubFetch(url.toString(), {
+        headers: { ...GITHUB_HEADERS, Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          throw new AppError(502, 'GITHUB_REPOS_UNAVAILABLE', 'Unable to list repositories for this GitHub installation');
+        }
+        throw new AppError(502, 'GITHUB_REPOS_UNAVAILABLE', `Failed to list repositories (${res.status})`);
+      }
+      const data = (await res.json()) as { repositories?: Array<{ id: number; full_name: string; name: string; default_branch?: string | null; private?: boolean; html_url?: string; owner?: { login?: string } }> ; total_count?: number };
+      const batch = data.repositories ?? [];
+      for (const r of batch) {
+        repos.push({
+          externalRepoId: String(r.id),
+          fullName: r.full_name,
+          name: r.name,
+          ownerLogin: r.owner?.login ?? null,
+          defaultBranch: r.default_branch ?? null,
+          private: r.private,
+          htmlUrl: r.html_url ?? null,
+        });
+      }
+      if (batch.length < 100) break;
+      page += 1;
+    }
+    return repos;
+  },
+
+  async disconnect(input): Promise<{ revoked: boolean; detail?: string }> {
+    // Installation access tokens are short-lived and generated on demand; we do not persist them.
+    // Deleting stored credentials (installation binding) is performed by the service.
+    // Best-effort: nothing to revoke remotely here without broader app management permissions.
+    try {
+      const creds = parseCredentials(input.encryptedCredentials);
+      // validate parseable
+      void creds.installationId;
+      return { revoked: true, detail: 'Stored GitHub installation credentials removed' };
+    } catch (error) {
+      logger.warn('github_app_disconnect_cleanup_failed', { error });
+      return { revoked: false, detail: 'Stored credentials removed; provider cleanup could not be verified' };
+    }
+  },
+};
