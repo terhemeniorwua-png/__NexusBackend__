@@ -907,6 +907,31 @@ smoke-test task work-document endpoints and permissions. Do not use
 `prisma migrate deploy` outside controlled rollout; never reset/mutate
 previously applied migrations.
 
+### Task blockers (Phase 4B)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/blockers`.
+These are **reported blockers/issues** (`TaskBlocker`, OPEN/RESOLVED) and are
+additive to existing dependency blockers (`task.blockers` / `TaskDependency`
+relations remain unchanged). Task summaries/workspace payloads now also include
+additive `reportedBlockers` and `hasOpenBlocker`.
+
+| Method | Path | Request | Success response | Errors | Required permission / rule |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: { items: ReportedBlocker[], hasOpenBlocker: boolean } }` (newest first). `ReportedBlocker`: `{ id, taskId, status:"OPEN"\|"RESOLVED", description, reportedById, reportedBy:{id,name}, notifyUserId, notifyUser, resolvedAt, resolvedById, resolvedBy, createdAt, updatedAt }`. | 401, 403/404 access/task not found | `task.view` |
+| POST | `/` | Body: `{ "description": string(1-2000), "notifyUserId"?: uuid\|null }` | `201 { success, data: <ReportedBlocker> }` (OPEN). Notifies task owner (task creator) and chosen `notifyUser` (if active workspace member, excluding reporter) with `TASK_BLOCKER_REPORTED`; records audit `task.blocker.reported`. | 400 validation, 401, 403 `PERMISSION_DENIED` (not an assigned member), 404 `TASK_NOT_FOUND`/`USER_NOT_FOUND` | **Assigned member only** (task assignee) with task view access |
+| POST | `/:blockerId/resolve` | Empty body `{}` | `200 { success, data: <ReportedBlocker> }` (RESOLVED, `resolvedAt`/`resolvedById` set). Notifies reporter (if different from resolver) with `TASK_BLOCKER_RESOLVED`; records audit `task.blocker.resolved`. Idempotent if already resolved. | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`TASK_BLOCKER_NOT_FOUND` | Reporter, task owner (task creator), or PM/admin with task management authority (`task.update`/manage or workspace admin) |
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116140000_task_blockers` creates enum `TaskBlockerStatus`, adds
+`NotificationType` values `TASK_BLOCKER_REPORTED`/`TASK_BLOCKER_RESOLVED`, and
+creates `TaskBlocker` table (+ indexes/FKs). Production steps (ordered):
+1) backup DB, 2) deploy code containing migration, 3) in a maintenance window run
+`npx prisma migrate deploy` (or apply the reviewed SQL) in staging then
+production after verification, 4) run `prisma generate` as part of build and
+smoke-test blocker list/report/resolve, permissions, notifications, and workspace
+blocked indicators. Never `prisma migrate deploy` outside controlled rollout.
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible

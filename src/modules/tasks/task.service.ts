@@ -48,8 +48,16 @@ const taskInclude = {
       task: { select: { id: true, key: true, title: true, status: true } },
     },
   },
+  reportedBlockers: {
+    orderBy: [{ createdAt: 'desc' as const }],
+    include: {
+      reportedBy: { select: { id: true, name: true } },
+      notifyUser: { select: { id: true, name: true } },
+      resolvedBy: { select: { id: true, name: true } },
+    },
+  },
   _count: { select: { subTasks: true, comments: true, attachments: true } },
-} as const;
+};
 
 type TaskRow = Prisma.TaskGetPayload<{ include: typeof taskInclude }>;
 
@@ -57,15 +65,19 @@ interface TaskSummary extends Omit<TaskRow, '_count'> {
   subTaskCount: number;
   commentCount: number;
   attachmentCount: number;
+  hasOpenBlocker: boolean;
 }
 
 function toSummary(row: TaskRow): TaskSummary {
-  const { _count, ...task } = row;
+  const { _count, reportedBlockers, ...task } = row;
+  const hasOpenBlocker = reportedBlockers.some((b) => b.status === 'OPEN');
   return {
     ...task,
+    reportedBlockers,
     subTaskCount: _count.subTasks,
     commentCount: _count.comments,
     attachmentCount: _count.attachments,
+    hasOpenBlocker,
   };
 }
 
@@ -1443,6 +1455,7 @@ export function createTaskService(
             { targetType: 'Comment', metadata: { path: ['taskId'], equals: task.id } },
             { targetType: 'TaskAssignee', metadata: { path: ['taskId'], equals: task.id } },
             { targetType: 'TaskDependency', metadata: { path: ['taskId'], equals: task.id } },
+            { targetType: 'TaskBlocker', metadata: { path: ['taskId'], equals: task.id } },
           ],
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1514,6 +1527,7 @@ export function createTaskService(
                 { targetType: 'Comment', metadata: { path: ['taskId'], equals: task.id } },
                 { targetType: 'TaskAssignee', metadata: { path: ['taskId'], equals: task.id } },
                 { targetType: 'TaskDependency', metadata: { path: ['taskId'], equals: task.id } },
+                { targetType: 'TaskBlocker', metadata: { path: ['taskId'], equals: task.id } },
               ],
             },
             ...(cursorFilter ? [cursorFilter] : []),

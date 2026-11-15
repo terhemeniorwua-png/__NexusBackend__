@@ -184,6 +184,8 @@ enum NotificationType {
   MEETING_RESCHEDULED
   MEETING_CANCELLED
   PROJECT_UPDATE
+  TASK_BLOCKER_REPORTED
+  TASK_BLOCKER_RESOLVED
 }
 
 enum AuthTokenPurpose {
@@ -294,6 +296,9 @@ model User {
   reviewedTasks               Task[]                       @relation("TaskReviewedBy")
   createdTaskDocuments        TaskDocument[]               @relation("TaskDocumentCreator")
   savedTaskDocumentVersions   TaskDocumentVersion[]        @relation("TaskDocumentVersionSaver")
+  reportedTaskBlockers        TaskBlocker[]                @relation("TaskBlockerReporter")
+  notifiedTaskBlockers        TaskBlocker[]                @relation("TaskBlockerNotifyUser")
+  resolvedTaskBlockers        TaskBlocker[]                @relation("TaskBlockerResolver")
   assignedTasks               TaskAssignee[]
   authoredComments            Comment[]
   commentMentions             CommentMention[]
@@ -994,12 +999,13 @@ model Task {
   submittedBy  User?            @relation("TaskSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
   reviewedBy   User?            @relation("TaskReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   assignees    TaskAssignee[]
-  dependencies TaskDependency[] @relation("BlockedTask")
-  blockers     TaskDependency[] @relation("BlockingTask")
-  comments      Comment[]
-  attachments   FileAttachment[]
-  documents     Document[]
-  workDocuments TaskDocument[]
+  dependencies     TaskDependency[] @relation("BlockedTask")
+  blockers         TaskDependency[] @relation("BlockingTask")
+  reportedBlockers TaskBlocker[]
+  comments         Comment[]
+  attachments      FileAttachment[]
+  documents        Document[]
+  workDocuments    TaskDocument[]
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -1032,6 +1038,34 @@ model TaskDocument {
   @@index([taskId])
   @@index([taskId, deletedAt])
   @@index([createdById])
+}
+
+enum TaskBlockerStatus {
+  OPEN
+  RESOLVED
+}
+
+model TaskBlocker {
+  id           String            @id @default(uuid())
+  taskId       String
+  status       TaskBlockerStatus @default(OPEN)
+  description  String
+  reportedById String
+  notifyUserId String?
+  resolvedAt   DateTime?
+  resolvedById String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reportedBy User  @relation("TaskBlockerReporter", fields: [reportedById], references: [id], onDelete: Restrict)
+  notifyUser User? @relation("TaskBlockerNotifyUser", fields: [notifyUserId], references: [id], onDelete: SetNull)
+  resolvedBy User? @relation("TaskBlockerResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([taskId, status])
+  @@index([reportedById])
+  @@index([notifyUserId])
 }
 
 model TaskDocumentVersion {
