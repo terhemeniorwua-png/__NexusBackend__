@@ -973,6 +973,52 @@ of build and smoke-test workspace toggle, time-entry log/list/edit/delete-own,
 and rejection when disabled. Never `prisma migrate deploy` outside controlled
 rollout.
 
+### Task deadline notifications (Phase 4E)
+
+A background polling worker (`task-deadline-notification`, in-process, same
+`start/stop/runOnce(now)` pattern as other workers) notifies **current task
+assignees** about approaching and overdue deadlines using existing in-app
+notification creation and notification preferences.
+
+**Notification types (additive):** `TASK_DUE_SOON`, `TASK_OVERDUE`.
+
+**Eligibility:** task must have `dueDate != null`, not be deleted or archived,
+have at least one assignee, and be actionable (`status != APPROVED` and
+`completedAt == null`). Submitted tasks awaiting review are not approved and may
+be eligible per existing workflow/status. Only current assignees are notified
+and existing in-app notification preferences are respected.
+
+**Rules:**
+- **Due soon (`TASK_DUE_SOON`)**: sent once per task when `now >= dueDate - 24h`
+  and `now < dueDate`.
+- **Overdue (`TASK_OVERDUE`)**: sent once per task when `now >= dueDate`.
+- A task may receive at most one due-soon and one overdue notification total
+  (tracked by additive task markers `dueSoonNotifiedAt`, `overdueNotifiedAt`);
+  never repeated across runs/restarts/concurrent executions. If a due date
+  changes after a notification type was sent, that same type is not resent.
+
+**Idempotency/concurrency:** each threshold is claimed atomically in a database
+transaction (conditional update on marker/eligibility) and notifications are
+created within the same transaction, so concurrent workers cannot duplicate and
+a crash cannot persist a sent marker without committed notifications.
+
+**Configuration:** `TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS` (default
+`300000` ms). Worker is registered with health monitoring and stopped cleanly
+on shutdown.
+
+**Migration (additive, local dev applied after verification; not applied to production):**
+`20261116200000_task_deadline_notifications` adds `NotificationType` values
+`TASK_DUE_SOON`, `TASK_OVERDUE` and `Task.dueSoonNotifiedAt` /
+`Task.overdueNotifiedAt` (nullable). Production steps (ordered): 1) backup DB
+and verify migration state/order and unapplied migrations, 2) deploy code
+containing migration, 3) in a controlled maintenance window run
+`npx prisma migrate deploy` (or apply reviewed SQL in order) in staging then
+production after verification, 4) run `prisma generate`, restart services, and
+smoke-test deadline notifications, preferences, and worker health. **Never
+`prisma migrate deploy` outside controlled rollout; never reset/drop/recreate
+DB; never mutate applied migrations; never touch production outside this
+process.**
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible

@@ -19,6 +19,7 @@ import { createS3CompatibleObjectStorage } from './services/storage/private-obje
 import { createQueueStatusProbe } from './services/workers/queue-status';
 import { createWorkerHealthRegistry } from './services/workers/worker-health';
 import { createAuditPruneWorker } from './services/workers/audit-prune.worker';
+import { createTaskDeadlineNotificationWorker } from './services/workers/task-deadline-notification.worker';
 import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
 export interface RunningServer {
@@ -83,6 +84,7 @@ export async function startServer(): Promise<RunningServer> {
     integrationSync: workerHealth.register('integration-sync'),
     webhooks: workerHealth.register('webhooks'),
     auditPrune: workerHealth.register('audit-prune'),
+    taskDeadlineNotification: workerHealth.register('task-deadline-notification'),
   };
 
   const app = createApp({
@@ -171,6 +173,14 @@ export async function startServer(): Promise<RunningServer> {
   });
   auditPruneWorker.start();
 
+  const taskDeadlineNotificationWorker = createTaskDeadlineNotificationWorker({
+    prisma: getPrismaClient(),
+    logger,
+    pollIntervalMs: config.taskDeadlineNotificationPollIntervalMs,
+    health: workerRecorders.taskDeadlineNotification,
+  });
+  taskDeadlineNotificationWorker.start();
+
   try {
     await listen(server, config.port);
   } catch (error) {
@@ -182,6 +192,8 @@ export async function startServer(): Promise<RunningServer> {
       automationWorker.stop(),
       integrationSyncWorker.stop(),
       webhookWorker.stop(),
+      auditPruneWorker.stop(),
+      taskDeadlineNotificationWorker.stop(),
     ]);
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
@@ -230,6 +242,7 @@ export async function startServer(): Promise<RunningServer> {
       integrationSyncWorker.stop(),
       webhookWorker.stop(),
       auditPruneWorker.stop(),
+      taskDeadlineNotificationWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);

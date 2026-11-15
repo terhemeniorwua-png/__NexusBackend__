@@ -29,6 +29,10 @@ export const listNotificationsQuerySchema = z.object({
       'MEETING_RESCHEDULED',
       'MEETING_CANCELLED',
       'PROJECT_UPDATE',
+      'TASK_BLOCKER_REPORTED',
+      'TASK_BLOCKER_RESOLVED',
+      'TASK_DUE_SOON',
+      'TASK_OVERDUE',
     ])
     .optional(),
 });
@@ -58,6 +62,10 @@ export const updatePreferenceSchema = z
       'MEETING_RESCHEDULED',
       'MEETING_CANCELLED',
       'PROJECT_UPDATE',
+      'TASK_BLOCKER_REPORTED',
+      'TASK_BLOCKER_RESOLVED',
+      'TASK_DUE_SOON',
+      'TASK_OVERDUE',
     ]),
     inAppEnabled: z.boolean().optional(),
     emailEnabled: z.boolean().optional(),

@@ -186,6 +186,8 @@ enum NotificationType {
   PROJECT_UPDATE
   TASK_BLOCKER_REPORTED
   TASK_BLOCKER_RESOLVED
+  TASK_DUE_SOON
+  TASK_OVERDUE
 }
 
 enum AuthTokenPurpose {
@@ -994,6 +996,8 @@ model Task {
   updatedAt           DateTime     @default(now())
   archivedAt          DateTime?
   deletedAt           DateTime?
+  dueSoonNotifiedAt   DateTime?
+  overdueNotifiedAt   DateTime?
 
   project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   parentTask   Task?            @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
