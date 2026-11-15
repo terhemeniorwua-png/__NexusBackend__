@@ -321,3 +321,90 @@ describe('Task dev links service (Feature B)', () => {
 
 
 });
+
+
+describe('GitHub webhook ingestion (Feature C)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('verifies HMAC signatures (constant-time check behavior)', async () => {
+    const { verifyGithubWebhookSignature } = await import('./github-webhook.service');
+    const body = Buffer.from(JSON.stringify({ hello: 'world' }));
+    const sig = 'sha256=' + createHmac('sha256', 'topsecret').update(body).digest('hex');
+    expect(verifyGithubWebhookSignature(body, sig, 'topsecret')).toBe(true);
+    expect(verifyGithubWebhookSignature(body, sig, 'wrong')).toBe(false);
+    expect(verifyGithubWebhookSignature(body, 'sha256=' + '0'.repeat(64), 'topsecret')).toBe(false);
+    expect(verifyGithubWebhookSignature(body, undefined, 'topsecret')).toBe(false);
+  });
+
+  it('rejects unverified or invalid webhooks', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const body = Buffer.from(JSON.stringify({ action: 'opened' }));
+    const prisma: any = { gitHubWebhookDelivery: { create: vi.fn(), update: vi.fn(), findMany: vi.fn() } };
+    await expect(processGithubWebhook({ prisma, rawBody: body, signature: undefined, secret: 's', deliveryId: 'd1', event: 'pull_request' })).resolves.toBe('unverified');
+    const bad = await processGithubWebhook({ prisma, rawBody: Buffer.from('{nope'), signature: 'sha256=' + createHmac('sha256', 's').update(Buffer.from('{nope')).digest('hex'), secret: 's', deliveryId: 'd1', event: 'pull_request' });
+    expect(bad).toBe('invalid');
+  });
+
+  it('is idempotent by delivery id (duplicates do not reapply)', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const body = Buffer.from(JSON.stringify({ action: 'opened', pull_request: { id: 99, number: 12, title: 'PR', state: 'open', html_url: 'x', head: { ref: 'f' }, base: { ref: 'm' } } }));
+    const sig = 'sha256=' + createHmac('sha256', 's').update(body).digest('hex');
+    const prisma: any = {
+      gitHubWebhookDelivery: {
+        create: vi.fn(async () => { const e: any = new Error('dup'); e.code = 'P2002'; throw e; }),
+      },
+    };
+    const out = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'deliv-1', event: 'pull_request' });
+    expect(out).toBe('duplicate');
+  });
+
+  it('syncs pull_request state to linked TaskDevLink records', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const body = Buffer.from(JSON.stringify({ action: 'closed', pull_request: { id: 99, number: 12, title: 'New title', state: 'closed', merged: true, merged_at: '2026-01-01', html_url: 'https://pr/12', head: { ref: 'feat' }, base: { ref: 'main' } } }));
+    const sig = 'sha256=' + createHmac('sha256', 's').update(body).digest('hex');
+    const prisma: any = {
+      gitHubWebhookDelivery: {
+        create: vi.fn(async () => ({})),
+        update: vi.fn(async () => ({})),
+      },
+      taskDevLink: {
+        updateMany: vi.fn(async () => ({ count: 2 })),
+      },
+    };
+    const out = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'd2', event: 'pull_request' });
+    expect(out).toBe('processed');
+    expect(prisma.taskDevLink.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId: '99' },
+      data: expect.objectContaining({ state: 'merged', externalNumber: 12, title: 'New title', headRef: 'feat', baseRef: 'main' }),
+    }));
+    expect(prisma.gitHubWebhookDelivery.update).toHaveBeenCalled();
+  });
+
+  it('disconnects matching GitHub installation connections on installation deleted', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const body = Buffer.from(JSON.stringify({ action: 'deleted', installation: { id: 42 } }));
+    const sig = 'sha256=' + createHmac('sha256', 's').update(body).digest('hex');
+    const enc = 'enc:' + Buffer.from(JSON.stringify({ installationId: 42 }), 'utf8').toString('base64url');
+    const otherEnc = 'enc:' + Buffer.from(JSON.stringify({ installationId: 99 }), 'utf8').toString('base64url');
+    const prisma: any = {
+      gitHubWebhookDelivery: {
+        create: vi.fn(async () => ({})),
+        update: vi.fn(async () => ({})),
+      },
+      integrationConnection: {
+        findMany: vi.fn(async () => ([{ id: 'c1', encryptedCredentials: enc }, { id: 'c2', encryptedCredentials: otherEnc }])),
+        update: vi.fn(async () => ({})),
+      },
+    };
+    const out = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'd3', event: 'installation' });
+    expect(out).toBe('processed');
+    expect(prisma.integrationConnection.update).toHaveBeenCalledTimes(1);
+    expect(prisma.integrationConnection.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'c1' },
+      data: expect.objectContaining({ status: 'DISCONNECTED' }),
+    }));
+  });
+});
+

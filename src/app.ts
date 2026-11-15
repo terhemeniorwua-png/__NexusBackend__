@@ -11,6 +11,7 @@ import { createEmailWebhookRouter } from './modules/webhooks/email-webhook.route
 import { createPaystackWebhookRouter } from './modules/billing/paystack-webhook.routes';
 import { createGoogleOAuthCallbackRouter } from './modules/auth/google-oauth.routes';
 import { createDevIntegrationCallbackRouter } from './modules/dev-integrations/dev-integration.routes';
+import { createGithubWebhookRouter } from './modules/dev-integrations/github-webhook.routes';
 import { createApiRouter } from './routes';
 import type { RateLimitRedisClient } from './services/cache/rate-limit-store';
 import { createReadinessProbe, type ReadinessProbe } from './services/health';
@@ -71,6 +72,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // signature is calculated over the raw request body.
   app.use(`${config.apiPrefix}/webhooks`, createEmailWebhookRouter({ config }));
   app.use(`${config.apiPrefix}/webhooks`, createPaystackWebhookRouter({ config }));
+  app.use(`${config.apiPrefix}/webhooks`, createGithubWebhookRouter({ config }));
 
   if (config.googleCallbackUrl) {
     app.use(new URL(config.googleCallbackUrl).pathname, createGoogleOAuthCallbackRouter(config));

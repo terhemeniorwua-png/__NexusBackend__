@@ -1105,6 +1105,25 @@ Builds on Feature A linked project repositories. On-demand GitHub reads (mocked 
 
 **Migration (additive, local dev applied after verification; not applied to production):** `20261117130000_phase5b_task_dev_links` adds `DevLinkType` and `TaskDevLink` with relations/indexes/constraints (FKs to Task/Project/ProjectRepository/User). Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, restart/verify.
 
+### Feature C — GitHub App inbound webhooks (idempotent state sync)
+
+Raw-body endpoint (mounted before JSON parsing) for GitHub App webhooks. Verifies authenticity, deduplicates deliveries, and syncs linked development state. **No inbound auto-linking**; GitHub only.
+
+| Method | Path | Auth | Behavior |
+| --- | --- | --- | --- |
+| POST | `/api/v1/webhooks/github` | Webhook signature (public endpoint, not session-authenticated) | Verifies `X-Hub-Signature-256` (HMAC-SHA256 over raw body) against `GITHUB_APP_WEBHOOK_SECRET` (constant-time). Requires `X-GitHub-Delivery` and `X-GitHub-Event`. Returns 401 if unverified, 400 if invalid/missing payload/headers, 503 if not configured, else 200 `{ success, data: { received: true, outcome } }` (`processed|duplicate|ignored`). |
+
+**Idempotency:** each `(provider, deliveryId)` processed once (`GitHubWebhookDelivery` unique key); retries/duplicates acknowledged without reapplying side effects.
+
+**Handled events (current):**
+- `pull_request`: updates existing linked `TaskDevLink` records (`provider=GITHUB`, `externalType=PULL_REQUEST`, matching PR id) with `title`, `externalNumber`, `url`, `headRef`/`ref`, `baseRef`, `state` (`open|closed|merged|draft`). No-op if none linked.
+- `installation` (`deleted`/`suspend`): best-effort marks matching active GITHUB `IntegrationConnection`(s) for the installation as `DISCONNECTED`, revokes stored credentials marker, records reason. Other installation actions acknowledged/ignored.
+- Other events: acknowledged idempotently (`ignored`) for forward compatibility.
+
+**Env/config:** `GITHUB_APP_WEBHOOK_SECRET` required for webhook verification; configure GitHub App webhook URL to `https://<backend>/api/v1/webhooks/github` and subscribe to at least `pull_request` and `installation` (minimum permissions/events).
+
+**Migration (additive, local dev applied after verification; not applied to production):** `20261117140000_phase5c_github_webhook_deliveries` adds `GitHubWebhookDelivery` idempotency table (unique provider+deliveryId, indexes). Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, configure GitHub App webhook/secret, restart/verify delivery signatures and idempotency.
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible

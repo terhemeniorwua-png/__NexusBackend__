@@ -1902,6 +1902,24 @@ model TaskDevLink {
   @@index([linkedById])
 }
 
+model GitHubWebhookDelivery {
+  id                 String    @id @default(uuid())
+  provider           String    @default("GITHUB")
+  deliveryId         String
+  event              String
+  installationId     String?
+  repositoryFullName String?
+  status             String    @default("RECEIVED")
+  processedAt        DateTime?
+  error              String?
+  createdAt          DateTime  @default(now())
+
+  @@unique([provider, deliveryId])
+  @@index([event])
+  @@index([installationId])
+  @@index([createdAt])
+}
+
 // ---------------------------------------------------------------------------
 // Automation (Phase 20)
 // ---------------------------------------------------------------------------
