@@ -9,20 +9,29 @@ import {
   addDependencySchema,
   assigneeParamsSchema,
   commentParamsSchema,
+  completeSubtaskSchema,
   createCommentSchema,
   createTaskSchema,
   dependencyParamsSchema,
   listCommentsQuerySchema,
   listTasksQuerySchema,
+  reviewTaskSchema,
+  subtaskParamsSchema,
+  submitTaskSchema,
+  taskActivityQuerySchema,
   taskParamsSchema,
   taskWorkspaceProjectParamsSchema,
   updateCommentSchema,
   updateTaskSchema,
   type AddAssigneeInput,
   type AddDependencyInput,
+  type CompleteSubtaskInput,
   type CreateCommentInput,
   type CreateTaskInput,
+  type ListTaskActivityQuery,
   type ListTasksQuery,
+  type ReviewTaskInput,
+  type SubmitTaskInput,
   type UpdateCommentInput,
   type UpdateTaskInput,
 } from './task.schemas';
@@ -411,6 +420,114 @@ export function createTaskRouter({
           taskId,
           limit: query.limit,
         }),
+      );
+    },
+  );
+
+  router.get(
+    '/:taskId/workspace',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      sendSuccess(res, await service.getWorkspace({ userId: userId(req), workspaceId, projectId, taskId }));
+    },
+  );
+
+  router.get(
+    '/:taskId/activity',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, query: taskActivityQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const query = req.validated!.query as ListTaskActivityQuery;
+      sendSuccess(
+        res,
+        await service.listActivity({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          taskId,
+          cursor: query.cursor,
+          limit: query.limit,
+        }),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/submit',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: submitTaskSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const body = req.validated!.body as SubmitTaskInput;
+      sendSuccess(
+        res,
+        await service.submit(
+          { userId: userId(req), workspaceId, projectId, taskId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/review',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: reviewTaskSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const body = req.validated!.body as ReviewTaskInput;
+      sendSuccess(
+        res,
+        await service.review(
+          { userId: userId(req), workspaceId, projectId, taskId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/subtasks/:subtaskId/complete',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: subtaskParamsSchema, body: completeSubtaskSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId, subtaskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+        subtaskId: string;
+      };
+      const body = req.validated!.body as CompleteSubtaskInput;
+      sendSuccess(
+        res,
+        await service.completeSubtask(
+          { userId: userId(req), workspaceId, projectId, taskId, subtaskId, ...body },
+          context(req),
+        ),
       );
     },
   );
