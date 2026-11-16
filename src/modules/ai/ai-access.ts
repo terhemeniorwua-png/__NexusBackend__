@@ -1,5 +1,4 @@
 import type { PrismaClient } from '@prisma/client';
-import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
 
 /**

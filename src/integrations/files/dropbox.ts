@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { FileProvider } from './types';
 
 const RPC = 'https://api.dropboxapi.com/2';
