@@ -26,6 +26,7 @@ import { createSearchService } from '../search/search.service';
 import type { RequestContext } from '../auth/auth.types';
 import { createAiContextService } from './ai-context.service';
 import { createAiUsageService } from './ai-usage.service';
+import { assertAiWorkspaceEntitled } from './ai-access';
 import {
   aiTaskPreviewSchema,
   type AiTaskConfirmBody,
@@ -293,6 +294,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      await assertAiWorkspaceEntitled(prisma, workspaceId);
     }
 
     await usageService.assertWithinLimits(input.userId, workspaceId);
@@ -460,6 +462,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
           workspaceId: input.workspaceId as string,
           capability: WorkspaceCapability.ViewWorkspace,
         });
+        await assertAiWorkspaceEntitled(prisma, input.workspaceId as string);
         await requireChannelAccess(prisma, {
           userId: input.userId,
           workspaceId: input.workspaceId as string,
@@ -601,6 +604,8 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      await assertAiWorkspaceEntitled(prisma, input.workspaceId);
+      await usageService.assertWithinLimits(input.userId, input.workspaceId);
       const access = await requireProjectAccess(prisma, {
         userId: input.userId,
         workspaceId: input.workspaceId,
@@ -765,6 +770,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      await assertAiWorkspaceEntitled(prisma, input.workspaceId);
 
       const tasks = await prisma.task.findMany({
         where: {
@@ -802,6 +808,8 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      await assertAiWorkspaceEntitled(prisma, input.workspaceId);
+      await usageService.assertWithinLimits(input.userId, input.workspaceId);
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -882,6 +890,8 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      await assertAiWorkspaceEntitled(prisma, input.workspaceId);
+      await usageService.assertWithinLimits(input.userId, input.workspaceId);
 
       const now = new Date();
       const weekStart = new Date(now);
@@ -980,6 +990,8 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      await assertAiWorkspaceEntitled(prisma, input.workspaceId);
+      await usageService.assertWithinLimits(input.userId, input.workspaceId);
 
       const searchService = createSearchService(prisma);
       const results = await searchService.search(

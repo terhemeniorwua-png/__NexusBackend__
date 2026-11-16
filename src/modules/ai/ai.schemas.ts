@@ -262,12 +262,41 @@ const sendNotificationPayloadSchema = z
   })
   .strict();
 
+const postMessagePayloadSchema = z
+  .object({
+    channelId: uuid,
+    body: z.string().trim().min(1).max(10_000),
+    parentId: uuid.optional().nullable(),
+  })
+  .strict();
+
+const scheduleEventPayloadSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300),
+    description: z.string().max(5_000).optional().nullable(),
+    location: z.string().max(300).optional().nullable(),
+    startAt: z.string().datetime({ offset: true }),
+    endAt: z.string().datetime({ offset: true }),
+    allDay: z.boolean().optional().default(false),
+    status: z.enum(['CONFIRMED', 'TENTATIVE', 'CANCELLED']).optional().default('CONFIRMED'),
+    visibility: z.enum(['PUBLIC', 'PRIVATE']).optional().default('PUBLIC'),
+    projectId: uuid.optional().nullable(),
+    inviteeIds: z.array(uuid).max(100).optional().default([]),
+  })
+  .strict()
+  .refine((v) => new Date(v.startAt) <= new Date(v.endAt), {
+    message: 'startAt must be before or equal to endAt',
+    path: ['endAt'],
+  });
+
 export const aiActionTypeSchema = z.enum([
   'CREATE_TASK',
   'ADD_TASK_COMMENT',
   'COMPLETE_TASK',
   'CREATE_DOCUMENT',
   'SEND_NOTIFICATION',
+  'POST_MESSAGE',
+  'SCHEDULE_EVENT',
 ]);
 
 export type AiActionTypeValue = z.infer<typeof aiActionTypeSchema>;
@@ -278,6 +307,8 @@ const actionPayloadSchemas = {
   COMPLETE_TASK: completeTaskPayloadSchema,
   CREATE_DOCUMENT: createDocumentPayloadSchema,
   SEND_NOTIFICATION: sendNotificationPayloadSchema,
+  POST_MESSAGE: postMessagePayloadSchema,
+  SCHEDULE_EVENT: scheduleEventPayloadSchema,
 } as const;
 
 export type AiActionPayload = z.infer<
@@ -327,6 +358,12 @@ export const aiActionProposalSchema = z.discriminatedUnion('actionType', [
     .strict(),
   proposalBase
     .extend({ actionType: z.literal('SEND_NOTIFICATION'), payload: sendNotificationPayloadSchema })
+    .strict(),
+  proposalBase
+    .extend({ actionType: z.literal('POST_MESSAGE'), payload: postMessagePayloadSchema })
+    .strict(),
+  proposalBase
+    .extend({ actionType: z.literal('SCHEDULE_EVENT'), payload: scheduleEventPayloadSchema })
     .strict(),
 ]);
 

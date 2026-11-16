@@ -12,7 +12,7 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
     async create(input: Input & { title: string; description?: string | null; isPublic?: boolean }) {
       await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
       return prisma.$transaction(async (tx) => {
-        const form = await tx.form.create({ data: { workspaceId: input.workspaceId, createdById: input.userId, title: input.title, description: input.description ?? null, isPublic: input.isPublic ?? false }, include: { fields: { orderBy: { position: 'asc' } } } });
+        const form = await tx.form.create({ data: { workspaceId: input.workspaceId, createdById: input.userId, title: input.title, description: input.description ?? null, isPublic: input.isPublic ?? false }, include: { fields: { orderBy: { position: 'asc' } }, _count: { select: { responses: true } } } });
         await recordAuditEvent(tx, { workspaceId: input.workspaceId, actorId: input.userId, action: 'form.created', targetType: 'Form', targetId: form.id, metadata: { title: input.title } });
         return form;
       });
@@ -38,7 +38,7 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
       if (!form) throw new AppError(404, 'FORM_NOT_FOUND', 'That form does not exist');
       if (form.createdById !== input.userId && ws.effectiveRole !== 'OWNER' && ws.effectiveRole !== 'PROJECT_MANAGER') throw new AppError(403, 'FORM_EDIT_FORBIDDEN', 'Only the creator or a manager can edit');
       return prisma.$transaction(async (tx) => {
-        const updated = await tx.form.update({ where: { id: form.id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.isPublic !== undefined ? { isPublic: input.isPublic } : {}), ...(input.status !== undefined ? { status: input.status as 'DRAFT' | 'PUBLISHED' | 'CLOSED' | 'ARCHIVED' } : {}) }, include: { fields: { orderBy: { position: 'asc' } } } });
+        const updated = await tx.form.update({ where: { id: form.id }, data: { ...(input.title !== undefined ? { title: input.title } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.isPublic !== undefined ? { isPublic: input.isPublic } : {}), ...(input.status !== undefined ? { status: input.status as 'DRAFT' | 'PUBLISHED' | 'CLOSED' | 'ARCHIVED' } : {}) }, include: { fields: { orderBy: { position: 'asc' } }, _count: { select: { responses: true } } } });
         await recordAuditEvent(tx, { workspaceId: input.workspaceId, actorId: input.userId, action: 'form.updated', targetType: 'Form', targetId: form.id });
         return updated;
       });
@@ -49,8 +49,10 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
       const form = await prisma.form.findFirst({ where: { id: input.formId, workspaceId: input.workspaceId, deletedAt: null } });
       if (!form) throw new AppError(404, 'FORM_NOT_FOUND', 'That form does not exist');
       if (form.createdById !== input.userId && ws.effectiveRole !== 'OWNER' && ws.effectiveRole !== 'PROJECT_MANAGER') throw new AppError(403, 'FORM_DELETE_FORBIDDEN', 'Only the creator or a manager can delete');
-      await prisma.form.update({ where: { id: form.id }, data: { deletedAt: new Date() } });
-      await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'form.deleted', targetType: 'Form', targetId: form.id });
+      await prisma.$transaction(async (tx) => {
+        await tx.form.update({ where: { id: form.id }, data: { deletedAt: new Date() } });
+        await recordAuditEvent(tx, { workspaceId: input.workspaceId, actorId: input.userId, action: 'form.deleted', targetType: 'Form', targetId: form.id });
+      });
     },
 
     async addField(input: Input & { formId: string; label: string; type: string; required?: boolean; options?: string[]; placeholder?: string | null; position?: number }) {
@@ -58,12 +60,16 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
       const form = await prisma.form.findFirst({ where: { id: input.formId, workspaceId: input.workspaceId, deletedAt: null } });
       if (!form) throw new AppError(404, 'FORM_NOT_FOUND', 'That form does not exist');
       if (form.createdById !== input.userId && ws.effectiveRole !== 'OWNER' && ws.effectiveRole !== 'PROJECT_MANAGER') throw new AppError(403, 'FORM_EDIT_FORBIDDEN', 'Only the creator or a manager can add fields');
-      return prisma.formField.create({ data: { formId: input.formId, label: input.label, type: input.type as 'TEXT' | 'TEXTAREA' | 'NUMBER' | 'EMAIL' | 'SELECT' | 'MULTISELECT' | 'RADIO' | 'CHECKBOX' | 'DATE' | 'RATING' | 'SCALE', required: input.required ?? false, options: input.options ?? [], placeholder: input.placeholder ?? null, position: input.position ?? 0 } });
+      return prisma.$transaction(async (tx) => {
+        const field = await tx.formField.create({ data: { formId: input.formId, label: input.label, type: input.type as 'TEXT' | 'TEXTAREA' | 'NUMBER' | 'EMAIL' | 'SELECT' | 'MULTISELECT' | 'RADIO' | 'CHECKBOX' | 'DATE' | 'RATING' | 'SCALE', required: input.required ?? false, options: input.options ?? [], placeholder: input.placeholder ?? null, position: input.position ?? 0 } });
+        await recordAuditEvent(tx, { workspaceId: input.workspaceId, actorId: input.userId, action: 'form.field_added', targetType: 'Form', targetId: form.id, metadata: { fieldId: field.id } });
+        return field;
+      });
     },
 
     async submitResponse(input: Input & { formId: string; answers: Array<{ fieldId: string; value: string }> }) {
-      // For public forms, don't require workspace access
-      const form = await prisma.form.findFirst({ where: { id: input.formId, deletedAt: null }, include: { fields: true } });
+      // For public forms, don't require workspace membership access, but always enforce workspace/form scoping.
+      const form = await prisma.form.findFirst({ where: { id: input.formId, workspaceId: input.workspaceId, deletedAt: null }, include: { fields: true } });
       if (!form) throw new AppError(404, 'FORM_NOT_FOUND', 'That form does not exist');
       if (form.status !== 'PUBLISHED') throw new AppError(409, 'FORM_NOT_PUBLISHED', 'This form is not accepting responses');
       if (!form.isPublic) { await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: form.workspaceId, capability: WorkspaceCapability.ViewWorkspace }); }
@@ -77,18 +83,21 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
         }
       }
 
-      const response = await prisma.formResponse.create({
-        data: {
-          formId: input.formId,
-          submittedBy: input.userId,
-          answers: {
-            create: input.answers.map((a) => {
-              const f = fieldMap.get(a.fieldId);
-              if (!f) throw new AppError(400, 'FIELD_NOT_FOUND', 'Unknown field');
-              return { fieldId: a.fieldId, value: a.value };
-            }),
+      await prisma.$transaction(async (tx) => {
+        const response = await tx.formResponse.create({
+          data: {
+            formId: input.formId,
+            submittedBy: input.userId,
+            answers: {
+              create: input.answers.map((a) => {
+                const f = fieldMap.get(a.fieldId);
+                if (!f) throw new AppError(400, 'FIELD_NOT_FOUND', 'Unknown field');
+                return { fieldId: a.fieldId, value: a.value };
+              }),
+            },
           },
-        },
+        });
+        await recordAuditEvent(tx, { workspaceId: form.workspaceId, actorId: input.userId, action: 'form.response_submitted', targetType: 'Form', targetId: form.id, metadata: { responseId: response.id } });
       });
 
       await enqueueAutomationRunsSafely(

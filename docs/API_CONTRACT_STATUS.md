@@ -2,8 +2,8 @@
 
 Audit of routes registered in `src/routes/index.ts` and module route files versus `docs/openapi.yaml`.
 
-- Registered HTTP routes audited: **387**
-- Registered routes missing from OpenAPI (path+method): **180**
+- Registered HTTP routes audited: **411**
+- Registered routes missing from OpenAPI (path+method): **156**
 - OpenAPI entries not registered in current route mounts: **6** (see notes)
 - "implemented?" reflects route handler registration in code (yes = mounted/declared). "returns placeholder?" based on handler scan for 501/not-implemented/placeholder responses.
 
@@ -325,6 +325,24 @@ Audit of routes registered in `src/routes/index.ts` and module route files versu
 | dev-integrations | `GET /workspaces/:workspaceId/projects/:projectId/repositories/gitlab/callback` | no | yes | no | yes |
 | dev-integrations | `GET /workspaces/:workspaceId/projects/:projectId/repositories/gitlab/start` | no | yes | no | yes |
 | projects | `POST /workspaces/:workspaceId/projects/:projectId/restore` | yes | yes | no | yes |
+| tasks | `GET /workspaces/:workspaceId/projects/:projectId/custom-fields` | yes | yes | no | yes |
+| tasks | `POST /workspaces/:workspaceId/projects/:projectId/custom-fields` | yes | yes | no | yes |
+| tasks | `PATCH /workspaces/:workspaceId/projects/:projectId/custom-fields/:fieldId` | yes | yes | no | yes |
+| tasks | `DELETE /workspaces/:workspaceId/projects/:projectId/custom-fields/:fieldId` | yes | yes | no | yes |
+| tasks | `GET /workspaces/:workspaceId/projects/:projectId/task-views` | yes | yes | no | yes |
+| tasks | `POST /workspaces/:workspaceId/projects/:projectId/task-views` | yes | yes | no | yes |
+| tasks | `PATCH /workspaces/:workspaceId/projects/:projectId/task-views/:viewId` | yes | yes | no | yes |
+| tasks | `DELETE /workspaces/:workspaceId/projects/:projectId/task-views/:viewId` | yes | yes | no | yes |
+| tasks | `GET /workspaces/:workspaceId/projects/:projectId/task-templates` | yes | yes | no | yes |
+| tasks | `POST /workspaces/:workspaceId/projects/:projectId/task-templates` | yes | yes | no | yes |
+| tasks | `PATCH /workspaces/:workspaceId/projects/:projectId/task-templates/:templateId` | yes | yes | no | yes |
+| tasks | `DELETE /workspaces/:workspaceId/projects/:projectId/task-templates/:templateId` | yes | yes | no | yes |
+| tasks | `POST /workspaces/:workspaceId/projects/:projectId/task-templates/:templateId/create-task` | yes | yes | no | yes |
+| projects | `GET /workspaces/:workspaceId/project-templates` | yes | yes | no | yes |
+| projects | `POST /workspaces/:workspaceId/project-templates` | yes | yes | no | yes |
+| projects | `PATCH /workspaces/:workspaceId/project-templates/:templateId` | yes | yes | no | yes |
+| projects | `DELETE /workspaces/:workspaceId/project-templates/:templateId` | yes | yes | no | yes |
+| projects | `POST /workspaces/:workspaceId/project-templates/:templateId/create-project` | yes | yes | no | yes |
 | tasks | `GET /workspaces/:workspaceId/projects/:projectId/tasks` | no | yes | no | yes |
 | tasks | `POST /workspaces/:workspaceId/projects/:projectId/tasks` | no | yes | no | yes |
 | tasks | `DELETE /workspaces/:workspaceId/projects/:projectId/tasks/:taskId` | no | yes | no | yes |
@@ -342,6 +360,12 @@ Audit of routes registered in `src/routes/index.ts` and module route files versu
 | tasks | `DELETE /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/comments/:commentId` | no | yes | no | yes |
 | tasks | `PATCH /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/comments/:commentId` | no | yes | no | yes |
 | tasks | `POST /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/complete` | no | yes | no | yes |
+| tasks | `GET /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/custom-fields` | yes | yes | no | yes |
+| tasks | `PUT /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/custom-fields` | yes | yes | no | yes |
+| tasks | `DELETE /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/recurrence` | yes | yes | no | yes |
+| tasks | `GET /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/recurrence` | yes | yes | no | yes |
+| tasks | `PUT /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/recurrence` | yes | yes | no | yes |
+| tasks | `POST /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/recurrence/generate` | yes | yes | no | yes |
 | tasks | `POST /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dependencies` | no | yes | no | yes |
 | tasks | `DELETE /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dependencies/:dependsOnTaskId` | no | yes | no | yes |
 | dev-integrations | `GET /workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links` | no | yes | no | yes |

@@ -288,6 +288,11 @@ const envSchema = z
       .positive()
       .default(300_000),
 
+    // Background worker that generates due recurring task instances automatically.
+    // Runs inside the API process behind an env flag.
+    TASK_RECURRENCE_WORKER_ENABLED: booleanString.default(false),
+    TASK_RECURRENCE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+
     // Paystack hosted checkout uses only the server secret. USD remains
     // disabled until the merchant account has been approved for USD.
     PAYSTACK_SECRET_KEY: z.string().trim().default(''),
@@ -390,17 +395,44 @@ const envSchema = z
     WORKER_HEALTH_STALE_MS: z.coerce.number().int().positive().max(3_600_000).default(120_000),
   })
   .superRefine((values, ctx) => {
-    if (
-      values.NODE_ENV === 'production' &&
-      values.OTP_HMAC_SECRET === 'test-only-otp-hmac-secret-not-for-production'
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['OTP_HMAC_SECRET'],
-        message: 'OTP_HMAC_SECRET must be set in production',
-      });
+    if (values.NODE_ENV === 'production') {
+      if (!values.AUTH_COOKIE_SECURE) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_COOKIE_SECURE'],
+          message: 'AUTH_COOKIE_SECURE must be true in production',
+        });
+      }
+      if (!values.CORS_CREDENTIALS) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['CORS_CREDENTIALS'],
+          message: 'CORS_CREDENTIALS must be true in production',
+        });
+      }
+      if (!values.JWT_ACCESS_SECRET || values.JWT_ACCESS_SECRET.includes('change-me') || values.JWT_ACCESS_SECRET.includes('changeme')) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['JWT_ACCESS_SECRET'],
+          message: 'JWT_ACCESS_SECRET must be set to a non-placeholder secret in production',
+        });
+      }
+      if (!values.OTP_HMAC_SECRET || values.OTP_HMAC_SECRET === 'test-only-otp-hmac-secret-not-for-production') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OTP_HMAC_SECRET'],
+          message: 'OTP_HMAC_SECRET must be set in production',
+        });
+      }
+      if (!values.TOTP_ENCRYPTION_KEY) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['TOTP_ENCRYPTION_KEY'],
+          message: 'TOTP_ENCRYPTION_KEY must be set in production',
+        });
+      }
     }
-    if (values.NODE_ENV !== 'test' && !/^[A-Za-z0-9_-]{43}$/.test(values.TOTP_ENCRYPTION_KEY)) {
+    if (values.NODE_ENV !== 'test' && values.TOTP_ENCRYPTION_KEY && !/^[A-Za-z0-9_-]{43}$/.test(values.TOTP_ENCRYPTION_KEY)) {
       ctx.addIssue({
         code: 'custom',
         path: ['TOTP_ENCRYPTION_KEY'],
@@ -747,6 +779,8 @@ export interface AppConfig {
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
   taskDeadlineNotificationPollIntervalMs: number;
+  taskRecurrenceWorkerEnabled: boolean;
+  taskRecurrencePollIntervalMs: number;
   paystackSecretKey: string;
   paystackWebhookSecret: string;
   paystackWebhookPreviousSecret: string;
@@ -943,6 +977,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
     taskDeadlineNotificationPollIntervalMs:
       values.TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS,
+    taskRecurrenceWorkerEnabled: values.TASK_RECURRENCE_WORKER_ENABLED,
+    taskRecurrencePollIntervalMs: values.TASK_RECURRENCE_POLL_INTERVAL_MS,
     paystackSecretKey: values.PAYSTACK_SECRET_KEY,
     paystackWebhookSecret: values.PAYSTACK_WEBHOOK_SECRET,
     paystackWebhookPreviousSecret: values.PAYSTACK_WEBHOOK_PREVIOUS_SECRET,

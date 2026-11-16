@@ -22,6 +22,7 @@ import {
   type WorkerHealthRegistry,
 } from './services/workers/worker-health';
 import { logger as defaultLogger, type Logger } from './utils/logger';
+import { externalFilesRouter } from './integrations/files/routes';
 
 export interface CreateAppOptions {
   config?: AppConfig;
@@ -104,7 +105,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }),
   );
   app.use(express.urlencoded({ extended: false, limit: config.requestBodyLimit }));
-
+  app.use('/api/files', externalFilesRouter); // matches your existing API prefix
+  
   app.use(
     config.apiPrefix,
     createApiRouter({

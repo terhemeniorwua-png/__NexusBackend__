@@ -148,6 +148,36 @@ export function createAiUsageService(
           },
         );
       }
+
+      // Per-workspace rate limits: cap aggregate workspace AI usage.
+      if (workspaceId) {
+        const [wsDaily, wsMonthly] = await Promise.all([
+          prisma.aiUsageRecord.count({
+            where: { workspaceId, createdAt: { gte: startOfUtcDay(current) } },
+          }),
+          prisma.aiUsageRecord.aggregate({
+            where: { workspaceId, createdAt: { gte: startOfUtcMonth(current) } },
+            _sum: { totalTokens: true },
+          }),
+        ]);
+        if (wsDaily >= config.aiDailyRequestLimit) {
+          throw new AppError(
+            429,
+            'AI_WORKSPACE_LIMIT_EXCEEDED',
+            'This workspace has reached its daily AI request limit. Try again tomorrow.',
+            { details: { limit: config.aiDailyRequestLimit } },
+          );
+        }
+        const wsMonthlyTokens = wsMonthly._sum.totalTokens ?? 0;
+        if (wsMonthlyTokens >= config.aiMonthlyTokenLimit) {
+          throw new AppError(
+            429,
+            'AI_WORKSPACE_LIMIT_EXCEEDED',
+            'This workspace has reached its monthly AI token limit.',
+            { details: { limit: config.aiMonthlyTokenLimit, used: wsMonthlyTokens } },
+          );
+        }
+      }
     },
   };
 }

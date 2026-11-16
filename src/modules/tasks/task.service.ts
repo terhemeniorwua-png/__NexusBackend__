@@ -199,6 +199,114 @@ async function wouldCreateCycle(
   return false;
 }
 
+type DateLike = Date | string | null | undefined;
+function toDate(value: DateLike): Date | null {
+  if (value === null || value === undefined) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function effectiveStart(task: { startDate: Date | null; dueDate: Date | null }): Date | null {
+  return task.startDate ?? task.dueDate;
+}
+
+function effectiveEnd(task: { startDate: Date | null; dueDate: Date | null }): Date | null {
+  return task.dueDate ?? task.startDate;
+}
+
+export async function assertDependencyDateConsistency(
+  tx: Prisma.TransactionClient | PrismaClient,
+  projectId: string,
+  taskId: string,
+  dates: { startDate?: DateLike; dueDate?: DateLike },
+  options: { isCreate?: boolean } = {},
+): Promise<void> {
+  const current = await tx.task.findFirst({
+    where: { id: taskId, projectId, deletedAt: null },
+    select: {
+      id: true,
+      key: true,
+      startDate: true,
+      dueDate: true,
+      dependencies: {
+        select: {
+          dependsOnTask: { select: { id: true, key: true, startDate: true, dueDate: true, deletedAt: true } },
+        },
+      },
+      blockers: {
+        select: {
+          task: { select: { id: true, key: true, startDate: true, dueDate: true, deletedAt: true } },
+        },
+      },
+    },
+  });
+  if (!current && !options.isCreate) return;
+
+  const start = dates.startDate !== undefined ? toDate(dates.startDate) : (current?.startDate ?? null);
+  const due = dates.dueDate !== undefined ? toDate(dates.dueDate) : (current?.dueDate ?? null);
+  const candidate = { startDate: start, dueDate: due };
+  const candidateStart = effectiveStart(candidate);
+  const candidateEnd = effectiveEnd(candidate);
+
+  if (current) {
+    for (const dep of current.dependencies) {
+      const blocker = dep.dependsOnTask;
+      if (blocker.deletedAt) continue;
+      const blockerEnd = effectiveEnd(blocker);
+      if (candidateStart && blockerEnd && candidateStart.getTime() < blockerEnd.getTime()) {
+        throw new AppError(
+          400,
+          'TASK_DATE_CONFLICT',
+          `Task dates conflict with dependency ${blocker.key}: this task cannot start before its dependency ends`,
+          { details: { dependencyTaskId: blocker.id, dependencyKey: blocker.key } },
+        );
+      }
+    }
+    for (const rel of current.blockers) {
+      const dependent = rel.task;
+      if (dependent.deletedAt) continue;
+      const dependentStart = effectiveStart(dependent);
+      if (candidateEnd && dependentStart && dependentStart.getTime() < candidateEnd.getTime()) {
+        throw new AppError(
+          400,
+          'TASK_DATE_CONFLICT',
+          `Task dates conflict with dependent task ${dependent.key}: dependent tasks cannot start before this task ends`,
+          { details: { dependentTaskId: dependent.id, dependentKey: dependent.key } },
+        );
+      }
+    }
+  }
+}
+
+export async function assertDependencyPairDateConsistency(
+  tx: Prisma.TransactionClient | PrismaClient,
+  projectId: string,
+  taskId: string,
+  dependsOnTaskId: string,
+): Promise<void> {
+  const [task, blocker] = await Promise.all([
+    tx.task.findFirst({
+      where: { id: taskId, projectId, deletedAt: null },
+      select: { id: true, key: true, startDate: true, dueDate: true },
+    }),
+    tx.task.findFirst({
+      where: { id: dependsOnTaskId, projectId, deletedAt: null },
+      select: { id: true, key: true, startDate: true, dueDate: true },
+    }),
+  ]);
+  if (!task || !blocker) return;
+  const taskStart = effectiveStart(task);
+  const blockerEnd = effectiveEnd(blocker);
+  if (taskStart && blockerEnd && taskStart.getTime() < blockerEnd.getTime()) {
+    throw new AppError(
+      400,
+      'TASK_DATE_CONFLICT',
+      `Task ${task.key} cannot start before dependency ${blocker.key} ends`,
+      { details: { taskId: task.id, dependencyTaskId: blocker.id } },
+    );
+  }
+}
+
 export interface TaskServiceDependencies {
   assignmentNotifier?: TaskAssignmentNotifier;
   mentionNotifier?: MentionEmailNotifier;
@@ -591,6 +699,13 @@ export function createTaskService(
         });
         if (!parent)
           throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
+      }
+
+      if (input.startDate !== undefined || input.dueDate !== undefined) {
+        await assertDependencyDateConsistency(prisma, access.project.id, existing.id, {
+          ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
+          ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
+        });
       }
 
       const updatedTask = await prisma.$transaction(async (tx) => {
@@ -1186,6 +1301,8 @@ export function createTaskService(
           'CIRCULAR_DEPENDENCY',
           'Adding this dependency would create a circular reference',
         );
+
+      await assertDependencyPairDateConsistency(prisma, access.project.id, task.id, blockingTask.id);
 
       return prisma.$transaction(async (tx) => {
         const dependency = await tx.taskDependency.create({

@@ -6,6 +6,7 @@ import { logger } from '../../utils/logger';
 import type { PrivateObjectStorage } from '../../services/storage/private-object-storage';
 import { normalizeAvatarImage } from './avatar-image';
 import type { UpdateProfileInput } from './users.schemas';
+import { recordSecurityEvent, SecurityAction } from '../auth/security-events';
 
 /**
  * Profile reads and updates.
@@ -32,6 +33,11 @@ export interface ProfileView {
   };
 }
 
+/** Minimal response shape returned by the avatar upload and delete endpoints. */
+export interface AvatarResult {
+  avatarUrl: string | null;
+}
+
 export interface UsersService {
   getProfile(userId: string): Promise<ProfileView>;
   updateProfile(userId: string, input: UpdateProfileInput): Promise<ProfileView>;
@@ -39,8 +45,12 @@ export interface UsersService {
     userId: string,
     input: Buffer,
     limits: { maxDimension: number; maxPixels: number },
-  ): Promise<ProfileView>;
-  deleteAvatar(userId: string): Promise<ProfileView>;
+    context?: { ip?: string; userAgent?: string },
+  ): Promise<AvatarResult>;
+  deleteAvatar(
+    userId: string,
+    context?: { ip?: string; userAgent?: string },
+  ): Promise<AvatarResult>;
   getAvatar(userId: string): Promise<{ body: Buffer; contentType: string }>;
 }
 
@@ -68,6 +78,27 @@ export function createUsersService(
     }
   }
 
+  /**
+   * Derives the avatarUrl value that the API returns to the client.
+   *
+   * If the user has an uploaded avatar (stored via object storage), the
+   * response returns the backend-proxied path so that a signed request is
+   * always required to read the image. The path never changes between uploads;
+   * cache-busting is achieved by the random UUID embedded in the storage key.
+   *
+   * Legacy URL avatars (set before file-upload was introduced) are returned
+   * as-is until the user uploads or removes their avatar.
+   */
+  function resolveAvatarUrl(profile: {
+    avatarStorageKey: string | null;
+    avatarUrl: string | null;
+  } | null | undefined): string | null {
+    if (profile?.avatarStorageKey) {
+      return '/api/v1/users/me/avatar';
+    }
+    return profile?.avatarUrl ?? null;
+  }
+
   async function loadProfile(userId: string): Promise<ProfileView> {
     const user = await client.user.findUnique({
       where: { id: userId },
@@ -90,9 +121,7 @@ export function createUsersService(
       profile: {
         bio: user.profile?.bio ?? null,
         jobTitle: user.profile?.jobTitle ?? null,
-        avatarUrl: user.profile?.avatarStorageKey
-          ? '/api/v1/users/me/avatar'
-          : (user.profile?.avatarUrl ?? null),
+        avatarUrl: resolveAvatarUrl(user.profile),
         timeZone: user.profile?.timeZone ?? 'UTC',
         locale: user.profile?.locale ?? 'en',
       },
@@ -141,18 +170,25 @@ export function createUsersService(
       return loadProfile(userId);
     },
 
-    async uploadAvatar(userId, input, limits) {
+    async uploadAvatar(userId, input, limits, context): Promise<AvatarResult> {
+      // Normalise to WebP, strip EXIF, enforce dimension limits.
       const normalized = await normalizeAvatarImage(input, limits);
-      const objectKey = `avatars/${userId}/${randomUUID()}.${normalized.format === 'jpeg' ? 'jpg' : normalized.format}`;
+
+      // Always store as .webp — the normalizeAvatarImage function always
+      // re-encodes to WebP regardless of input format.
+      const objectKey = `avatars/${userId}/${randomUUID()}.webp`;
+
       const previous = await client.userProfile.findUnique({
         where: { userId },
         select: { avatarStorageKey: true },
       });
+
       await requireStorage().put({
         key: objectKey,
         body: normalized.body,
         contentType: normalized.contentType,
       });
+
       try {
         await client.userProfile.upsert({
           where: { userId },
@@ -160,25 +196,59 @@ export function createUsersService(
           create: { userId, avatarStorageKey: objectKey },
         });
       } catch (error) {
+        // Roll back the uploaded object so the bucket stays clean.
         await deleteStoredObject(objectKey);
         throw error;
       }
-      if (previous?.avatarStorageKey) await deleteStoredObject(previous.avatarStorageKey);
-      return loadProfile(userId);
+
+      // Best-effort: delete the previous avatar object after the DB row has
+      // been committed. A failed delete must never fail the request.
+      if (previous?.avatarStorageKey) {
+        await deleteStoredObject(previous.avatarStorageKey);
+      }
+
+      // Record a best-effort audit event. Failures must not fail the request.
+      await recordSecurityEvent(client, {
+        action: SecurityAction.ProfileAvatarUploaded,
+        targetType: 'User',
+        targetId: userId,
+        actorId: userId,
+        ip: context?.ip,
+        userAgent: context?.userAgent,
+      });
+
+      // Return the narrow shape the API contract specifies.
+      return { avatarUrl: '/api/v1/users/me/avatar' };
     },
 
-    async deleteAvatar(userId) {
+    async deleteAvatar(userId, context): Promise<AvatarResult> {
       const profile = await client.userProfile.findUnique({
         where: { userId },
         select: { avatarStorageKey: true },
       });
-      if (!profile) return loadProfile(userId);
+
+      if (!profile) return { avatarUrl: null };
+
       await client.userProfile.update({
         where: { userId },
         data: { avatarStorageKey: null, avatarUrl: null },
       });
-      if (profile.avatarStorageKey) await deleteStoredObject(profile.avatarStorageKey);
-      return loadProfile(userId);
+
+      if (profile.avatarStorageKey) {
+        await deleteStoredObject(profile.avatarStorageKey);
+      }
+
+      // Record a best-effort audit event.
+      await recordSecurityEvent(client, {
+        action: SecurityAction.ProfileAvatarDeleted,
+        targetType: 'User',
+        targetId: userId,
+        actorId: userId,
+        ip: context?.ip,
+        userAgent: context?.userAgent,
+      });
+
+      return { avatarUrl: null };
     },
 
     async getAvatar(userId) {
