@@ -386,16 +386,26 @@ export function createMeetingService(
         },
       });
       if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
-      await prisma.meetingParticipant.upsert({
-        where: { meetingId_userId: { meetingId: input.meetingId, userId: input.targetUserId } },
-        create: { meetingId: input.meetingId, userId: input.targetUserId },
-        update: {},
-      });
-      await createNotification(prisma, {
-        userId: input.targetUserId,
-        type: 'MEETING_INVITE',
-        title: `Meeting invitation: ${m.title}`,
-        data: { workspaceId: input.workspaceId, meetingId: m.id },
+      await prisma.$transaction(async (tx) => {
+        await tx.meetingParticipant.upsert({
+          where: { meetingId_userId: { meetingId: input.meetingId, userId: input.targetUserId } },
+          create: { meetingId: input.meetingId, userId: input.targetUserId },
+          update: {},
+        });
+        await createNotification(tx, {
+          userId: input.targetUserId,
+          type: 'MEETING_INVITE',
+          title: `Meeting invitation: ${m.title}`,
+          data: { workspaceId: input.workspaceId, meetingId: m.id },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'meeting.participant_added',
+          targetType: 'Meeting',
+          targetId: m.id,
+          metadata: { participantUserId: input.targetUserId },
+        });
       });
       await notifyInvitees(m, input.userId, [input.targetUserId]);
     },
@@ -403,14 +413,37 @@ export function createMeetingService(
     async removeParticipant(
       input: Input & { meetingId: string; targetUserId: string },
     ): Promise<void> {
-      await requireWorkspaceAccess(prisma, {
+      const ws = await requireWorkspaceAccess(prisma, {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
-      await assertMeetingVisible(prisma, input);
-      await prisma.meetingParticipant.deleteMany({
-        where: { meetingId: input.meetingId, userId: input.targetUserId },
+      const m = await prisma.meeting.findFirst({
+        where: {
+          id: input.meetingId,
+          workspaceId: input.workspaceId,
+          deletedAt: null,
+          ...(await meetingScopeFor(prisma, input)),
+        },
+        select: { id: true, createdById: true },
+      });
+      if (!m) throw new AppError(404, 'MEETING_NOT_FOUND', 'That meeting does not exist');
+      const isManager = ws.effectiveRole === 'OWNER' || ws.effectiveRole === 'PROJECT_MANAGER';
+      if (input.targetUserId !== input.userId && m.createdById !== input.userId && !isManager) {
+        throw new AppError(403, 'MEETING_PARTICIPANT_FORBIDDEN', 'You cannot remove this participant');
+      }
+      await prisma.$transaction(async (tx) => {
+        await tx.meetingParticipant.deleteMany({
+          where: { meetingId: input.meetingId, userId: input.targetUserId },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'meeting.participant_removed',
+          targetType: 'Meeting',
+          targetId: m.id,
+          metadata: { participantUserId: input.targetUserId },
+        });
       });
     },
 
@@ -433,15 +466,24 @@ export function createMeetingService(
         throw new AppError(409, 'MEETING_CANCELLED', 'This meeting has been cancelled');
       if (m.status === 'ENDED')
         throw new AppError(409, 'MEETING_ENDED', 'This meeting has ended and can no longer be joined');
-      await prisma.meetingParticipant.upsert({
-        where: { meetingId_userId: { meetingId: input.meetingId, userId: input.userId } },
-        create: {
-          meetingId: input.meetingId,
-          userId: input.userId,
-          status: 'JOINED',
-          joinedAt: new Date(),
-        },
-        update: { status: 'JOINED', joinedAt: new Date(), leftAt: null },
+      await prisma.$transaction(async (tx) => {
+        await tx.meetingParticipant.upsert({
+          where: { meetingId_userId: { meetingId: input.meetingId, userId: input.userId } },
+          create: {
+            meetingId: input.meetingId,
+            userId: input.userId,
+            status: 'JOINED',
+            joinedAt: new Date(),
+          },
+          update: { status: 'JOINED', joinedAt: new Date(), leftAt: null },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'meeting.joined',
+          targetType: 'Meeting',
+          targetId: m.id,
+        });
       });
     },
 
@@ -452,9 +494,18 @@ export function createMeetingService(
         capability: WorkspaceCapability.ViewWorkspace,
       });
       await assertMeetingVisible(prisma, input);
-      await prisma.meetingParticipant.updateMany({
-        where: { meetingId: input.meetingId, userId: input.userId },
-        data: { status: 'LEFT', leftAt: new Date() },
+      await prisma.$transaction(async (tx) => {
+        await tx.meetingParticipant.updateMany({
+          where: { meetingId: input.meetingId, userId: input.userId },
+          data: { status: 'LEFT', leftAt: new Date() },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'meeting.left',
+          targetType: 'Meeting',
+          targetId: input.meetingId,
+        });
       });
     },
 
