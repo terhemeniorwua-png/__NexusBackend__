@@ -1,4 +1,4 @@
-import type { DevIntegrationProvider, Prisma, PrismaClient } from '@prisma/client';
+import type { DevIntegrationProvider, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';

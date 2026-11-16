@@ -1,4 +1,4 @@
-// @ts-nocheck
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock dependencies before imports that use them
@@ -468,7 +468,7 @@ describe('GitLab dev-integration provider (Feature D)', () => {
 
   it('exchanges GitLab code for tokens, fetches user, and stores encrypted credentials without secrets', async () => {
     const { gitlabProvider } = await import('./providers/gitlab.provider');
-    const fetchMock = vi.fn(async (url: string, init?: any) => {
+    const fetchMock = vi.fn(async (url: string, _init?: any) => {
       if (String(url).endsWith('/oauth/token')) {
         return new Response(JSON.stringify({ access_token: 'gl-at', refresh_token: 'gl-rt', token_type: 'Bearer', expires_in: 7200, scope: 'read_api read_repository' }), { status: 200 });
       }

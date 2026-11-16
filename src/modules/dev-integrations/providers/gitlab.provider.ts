@@ -1,3 +1,4 @@
+import type { GitLabTokenResponse, GitLabUser } from '../gitlab-api.types';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AppConfig } from '../../../config/env';
 import { getRedisClient } from '../../../db/redis';
@@ -202,14 +203,14 @@ export const gitlabProvider: DevIntegrationProviderAdapter = {
       logger.warn('gitlab_token_exchange_failed', { status: tokenRes.status, body: text.slice(0, 200) });
       throw new AppError(502, 'GITLAB_TOKEN_EXCHANGE_FAILED', 'Failed to complete GitLab authorization');
     }
-    const tokenData = await tokenRes.json() as any;
+    const tokenData = await tokenRes.json() as GitLabTokenResponse;
     if (!tokenData.access_token) throw new AppError(502, 'GITLAB_TOKEN_EXCHANGE_FAILED', 'GitLab token response missing access token');
 
     const userRes = await gitlabFetch(`${cfg.baseUrl}/api/v4/user`, {
       headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: 'application/json' },
     });
     if (!userRes.ok) throw new AppError(502, 'GITLAB_USER_FETCH_FAILED', 'Failed to fetch GitLab account');
-    const user = await userRes.json() as any;
+    const user = await userRes.json() as GitLabUser;
     const externalAccount: DevExternalAccount = {
       id: user.id != null ? String(user.id) : null,
       login: user.username ?? null,
