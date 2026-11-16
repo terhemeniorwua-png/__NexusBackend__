@@ -94,9 +94,9 @@ test('parseEnv rejects a missing or weak JWT access secret', () => {
   assert.throws(() => parseEnv({ ...baseEnv, JWT_ACCESS_SECRET: 'too-short' }), ConfigurationError);
 });
 
-test('parseEnv requires a valid TOTP encryption key outside tests', () => {
+test('parseEnv requires a TOTP encryption key in production and validates its format', () => {
   assert.throws(
-    () => parseEnv({ ...baseEnv, TOTP_ENCRYPTION_KEY: '' }),
+    () => parseEnv({ ...baseEnv, NODE_ENV: 'production', TOTP_ENCRYPTION_KEY: '' }),
     (error) =>
       error instanceof ConfigurationError &&
       error.issues.some((issue) => issue.field === 'TOTP_ENCRYPTION_KEY'),
@@ -133,6 +133,8 @@ test('parseEnv forces secure cookies in production', () => {
     NODE_ENV: 'production',
     EMAIL_PROVIDER: 'smtp',
     EMAIL_SMTP_HOST: 'smtp.example.com',
+    AUTH_COOKIE_SECURE: 'true',
+    CORS_CREDENTIALS: 'true',
   });
 
   assert.equal(config.cookieSecure, true);

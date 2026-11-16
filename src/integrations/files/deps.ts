@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 // Connect these 5 functions to your existing integrations table, token
 // storage, file storage and DB. Everything else works without changes.
 import type { ProviderId } from './types';
