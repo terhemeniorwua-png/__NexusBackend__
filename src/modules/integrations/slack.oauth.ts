@@ -137,6 +137,11 @@ export async function exchangeSlackCode(code: string): Promise<{
 }
 
 export function slackResultUrl(status: 'connected' | 'denied' | 'error'): string {
-  const frontend = (process.env.FRONTEND_URL ?? '').replace(/\/$/, '');
-  return `${frontend}/settings/integrations?slack=${encodeURIComponent(status)}`;
+  let origin = 'http://localhost:3000';
+  try {
+    if (process.env.FRONTEND_URL) origin = new URL(process.env.FRONTEND_URL).origin;
+  } catch {
+    /* keep default */
+  }
+  return `${origin}/app/integrations?integration=slack&status=${status}`;
 }
