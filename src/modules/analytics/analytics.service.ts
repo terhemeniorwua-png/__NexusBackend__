@@ -404,7 +404,6 @@ export function createAnalyticsService({
               prisma.workspaceMembership.count({
                 where: {
                   workspaceId: workspaceIdFilter,
-                  userId,
                   status: 'ACTIVE',
                   joinedAt: { gte: start, lte: end },
                 },

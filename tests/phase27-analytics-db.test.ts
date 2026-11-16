@@ -284,6 +284,18 @@ describe('Phase 27 reporting and analytics', { skip: skipReason || false }, () =
     });
     assert.equal(memberSnapshot.activity.tasksCreated, 1);
 
+    await prisma.workspaceMembership.update({
+      where: { workspaceId_userId: { workspaceId, userId: memberId } },
+      data: { joinedAt: new Date('2026-11-02T00:00:00.000Z') },
+    });
+    const ownerSnapshot = await service.getSnapshot({
+      userId: ownerId,
+      workspaceId,
+      range: '30d',
+    });
+    assert.equal(ownerSnapshot.activity.membersJoined, 1);
+    assert.equal(ownerSnapshot.members.recentlyJoinedCount, 1);
+
     await assert.rejects(
       service.tasksByStatus({
         userId: memberId,
