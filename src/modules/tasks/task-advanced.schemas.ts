@@ -86,6 +86,44 @@ export const setTaskCustomFieldValuesSchema = z
 export type SetTaskCustomFieldValuesInput = z.infer<typeof setTaskCustomFieldValuesSchema>;
 
 // Saved views
+const MAX_CONFIG_BYTES = 32 * 1024;
+
+function jsonSizeLimit(value: unknown, maxBytes: number, ctx: z.RefinementCtx, path: (string | number)[] = []) {
+  try {
+    const size = Buffer.byteLength(JSON.stringify(value ?? null), 'utf8');
+    if (size > maxBytes) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Config exceeds maximum size of ${maxBytes} bytes`, path });
+    }
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Config must be JSON-serializable', path });
+  }
+}
+
+const savedViewConfigBaseSchema = z
+  .object({
+    version: z.literal(1),
+    filters: z.record(z.string(), z.unknown()).default({}),
+    sort: z.record(z.string(), z.unknown()).nullable().default(null),
+    group: z.record(z.string(), z.unknown()).nullable().default(null),
+  })
+  .strict();
+
+export const savedViewConfigSchema = savedViewConfigBaseSchema.superRefine((val, ctx) => {
+  jsonSizeLimit(val, MAX_CONFIG_BYTES, ctx);
+});
+
+const savedViewConfigUpdateSchema = z
+  .object({
+    version: z.literal(1),
+    filters: z.record(z.string(), z.unknown()).optional(),
+    sort: z.record(z.string(), z.unknown()).nullable().optional(),
+    group: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    jsonSizeLimit(val, MAX_CONFIG_BYTES, ctx);
+  });
+
 export const savedViewParamsSchema = z.object({
   workspaceId: uuid,
   projectId: uuid,
@@ -96,14 +134,7 @@ export const createSavedViewSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     isShared: z.boolean().optional().default(false),
-    config: z
-      .object({
-        filters: z.record(z.string(), z.unknown()).optional().default({}),
-        sort: z.record(z.string(), z.unknown()).optional().nullable(),
-        group: z.record(z.string(), z.unknown()).optional().nullable(),
-      })
-      .passthrough()
-      .default({ filters: {} }),
+    config: savedViewConfigSchema.default({ version: 1, filters: {}, sort: null, group: null }),
   })
   .strict();
 
@@ -113,14 +144,7 @@ export const updateSavedViewSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
     isShared: z.boolean().optional(),
-    config: z
-      .object({
-        filters: z.record(z.string(), z.unknown()).optional(),
-        sort: z.record(z.string(), z.unknown()).optional().nullable(),
-        group: z.record(z.string(), z.unknown()).optional().nullable(),
-      })
-      .passthrough()
-      .optional(),
+    config: savedViewConfigUpdateSchema.optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, 'Provide at least one field to update');
@@ -150,6 +174,29 @@ export const upsertRecurrenceSchema = z
 export type UpsertRecurrenceInput = z.infer<typeof upsertRecurrenceSchema>;
 
 // Task templates
+const MAX_BLUEPRINT_BYTES = 64 * 1024;
+
+const taskTemplateDataSchema = z
+  .object({
+    version: z.literal(1),
+    title: z.string().trim().max(200).optional(),
+    description: z.string().max(10000).nullable().optional(),
+    status: z.string().max(40).optional(),
+    priority: z.string().max(40).optional(),
+    category: z.string().max(80).nullable().optional(),
+    labels: z.array(z.string().max(40)).max(30).optional(),
+    startDate: z.string().datetime({ offset: true }).nullable().optional(),
+    dueDate: z.string().datetime({ offset: true }).nullable().optional(),
+    customFieldValues: z.array(z.object({ fieldId: uuid, value: z.unknown().nullable().optional() }).strict()).max(200).optional(),
+    subtasks: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    jsonSizeLimit(val, MAX_BLUEPRINT_BYTES, ctx);
+  });
+
+const taskTemplateDataUpdateSchema = taskTemplateDataSchema; // full versioned blueprint on update
+
 export const taskTemplateParamsSchema = z.object({
   workspaceId: uuid,
   projectId: uuid,
@@ -160,7 +207,7 @@ export const createTaskTemplateSchema = z
   .object({
     name: z.string().trim().min(1).max(200),
     description: z.string().trim().max(2000).optional().nullable(),
-    data: z.record(z.string(), z.unknown()).default({}),
+    data: taskTemplateDataSchema.default({ version: 1 }),
   })
   .strict();
 
@@ -170,7 +217,7 @@ export const updateTaskTemplateSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).optional().nullable(),
-    data: z.record(z.string(), z.unknown()).optional(),
+    data: taskTemplateDataUpdateSchema.optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, 'Provide at least one field to update');
@@ -187,6 +234,49 @@ export const createTaskFromTemplateSchema = z
   .strict();
 
 // Project templates
+const projectTemplateDataSchema = z
+  .object({
+    version: z.literal(1),
+    description: z.string().max(10000).nullable().optional(),
+    status: z.string().max(40).optional(),
+    visibility: z.string().max(40).optional(),
+    customFields: z
+      .array(
+        z
+          .object({
+            name: z.string().max(120),
+            key: z.string().max(80).optional(),
+            type: customFieldTypeSchema,
+            description: z.string().max(500).nullable().optional(),
+            options: z.array(customFieldOptionSchema).max(100).nullable().optional(),
+            required: z.boolean().optional(),
+            position: z.number().int().optional(),
+          })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
+    taskTemplates: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
+    tasks: z
+      .array(
+        z
+          .object({
+            title: z.string().max(200),
+            description: z.string().max(10000).nullable().optional(),
+            status: z.string().max(40).optional(),
+            priority: z.string().max(40).optional(),
+            labels: z.array(z.string().max(40)).max(30).optional(),
+          })
+          .strict(),
+      )
+      .max(200)
+      .optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    jsonSizeLimit(val, MAX_BLUEPRINT_BYTES, ctx);
+  });
+
 export const projectTemplateParamsSchema = z.object({
   workspaceId: uuid,
   templateId: uuid,
@@ -196,7 +286,7 @@ export const createProjectTemplateSchema = z
   .object({
     name: z.string().trim().min(1).max(200),
     description: z.string().trim().max(2000).optional().nullable(),
-    data: z.record(z.string(), z.unknown()).default({}),
+    data: projectTemplateDataSchema.default({ version: 1 }),
   })
   .strict();
 
@@ -206,7 +296,7 @@ export const updateProjectTemplateSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).optional().nullable(),
-    data: z.record(z.string(), z.unknown()).optional(),
+    data: projectTemplateDataSchema.optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, 'Provide at least one field to update');

@@ -288,6 +288,11 @@ const envSchema = z
       .positive()
       .default(300_000),
 
+    // Background worker that generates due recurring task instances automatically.
+    // Runs inside the API process behind an env flag.
+    TASK_RECURRENCE_WORKER_ENABLED: booleanString.default(false),
+    TASK_RECURRENCE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+
     // Paystack hosted checkout uses only the server secret. USD remains
     // disabled until the merchant account has been approved for USD.
     PAYSTACK_SECRET_KEY: z.string().trim().default(''),
@@ -747,6 +752,8 @@ export interface AppConfig {
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
   taskDeadlineNotificationPollIntervalMs: number;
+  taskRecurrenceWorkerEnabled: boolean;
+  taskRecurrencePollIntervalMs: number;
   paystackSecretKey: string;
   paystackWebhookSecret: string;
   paystackWebhookPreviousSecret: string;
@@ -943,6 +950,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
     taskDeadlineNotificationPollIntervalMs:
       values.TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS,
+    taskRecurrenceWorkerEnabled: values.TASK_RECURRENCE_WORKER_ENABLED,
+    taskRecurrencePollIntervalMs: values.TASK_RECURRENCE_POLL_INTERVAL_MS,
     paystackSecretKey: values.PAYSTACK_SECRET_KEY,
     paystackWebhookSecret: values.PAYSTACK_WEBHOOK_SECRET,
     paystackWebhookPreviousSecret: values.PAYSTACK_WEBHOOK_PREVIOUS_SECRET,

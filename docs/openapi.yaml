@@ -15224,54 +15224,54 @@ paths:
       operationId: listProjectCustomFields
       summary: List custom fields defined for a project
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Custom fields
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Custom fields, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required (AUTHENTICATION_REQUIRED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied (INSUFFICIENT_ROLE/PERMISSION_DENIED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (PROJECT_NOT_FOUND/WORKSPACE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     post:
       tags: [Tasks]
       operationId: createProjectCustomField
-      summary: Create a custom field for a project
+      summary: Create a custom field for a project (types: TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: true
+              additionalProperties: false
               properties:
                 name: { type: string }
                 key: { type: string }
                 type: { type: string, enum: [TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX] }
                 description: { type: string, nullable: true }
-                options: { type: array, items: { type: object, additionalProperties: true }, nullable: true }
+                options:
+                  type: array
+                  nullable: true
+                  items:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      value: { type: string }
+                      label: { type: string }
+                      color: { type: string }
+                    required: [value, label]
                 required: { type: boolean }
                 position: { type: integer }
+              required: [name, type]
       responses:
-        '201':
-          description: Created custom field
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '201': { description: Created custom field, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '409': { description: Conflict, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}:
     patch:
@@ -15279,52 +15279,33 @@ paths:
       operationId: updateProjectCustomField
       summary: Update a project custom field
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: fieldId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: fieldId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: string, nullable: true }, options: { type: array, nullable: true, items: { type: object, additionalProperties: false, properties: { value: { type: string }, label: { type: string }, color: { type: string } }, required: [value, label] } }, required: { type: boolean }, position: { type: integer } } }
       responses:
-        '200':
-          description: Updated custom field
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Updated custom field, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (CUSTOM_FIELD_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteProjectCustomField
       summary: Delete a project custom field
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: fieldId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: fieldId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Deleted
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (CUSTOM_FIELD_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/custom-fields:
     get:
@@ -15332,63 +15313,46 @@ paths:
       operationId: getTaskCustomFieldValues
       summary: Get custom field values for a task
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: taskId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Task custom field values
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Task custom field values, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (TASK_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     put:
       tags: [Tasks]
       operationId: setTaskCustomFieldValues
       summary: Set custom field values for a task
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: taskId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 values:
                   type: array
                   items:
                     type: object
+                    additionalProperties: false
                     properties:
                       fieldId: { type: string, format: uuid }
                       value: {}
                     required: [fieldId]
               required: [values]
       responses:
-        '200':
-          description: Updated values
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Updated values, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation/field errors (VALIDATION_ERROR, CUSTOM_FIELD_INVALID, CUSTOM_FIELD_VALUE_INVALID, CUSTOM_FIELD_REQUIRED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (TASK_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-views:
     get:
@@ -15396,108 +15360,94 @@ paths:
       operationId: listTaskSavedViews
       summary: List saved task views for a project (own and shared)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Saved views
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Saved views, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     post:
       tags: [Tasks]
       operationId: createTaskSavedView
-      summary: Create a saved task view
+      summary: Create a saved task view (versioned config with filters/sort/group)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 name: { type: string }
                 isShared: { type: boolean }
                 config:
                   type: object
+                  additionalProperties: false
                   properties:
+                    version: { type: integer, enum: [1] }
                     filters: { type: object, additionalProperties: true }
                     sort: { type: object, additionalProperties: true, nullable: true }
                     group: { type: object, additionalProperties: true, nullable: true }
+                  required: [version]
               required: [name]
       responses:
-        '201':
-          description: Created saved view
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '201': { description: Created saved view, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, config size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-views/{viewId}:
     patch:
       tags: [Tasks]
       operationId: updateTaskSavedView
-      summary: Update a saved task view (owner only)
+      summary: Update a saved task view (owner or project admin for shared views)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: viewId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: viewId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string }
+                isShared: { type: boolean }
+                config:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    version: { type: integer, enum: [1] }
+                    filters: { type: object, additionalProperties: true }
+                    sort: { type: object, additionalProperties: true, nullable: true }
+                    group: { type: object, additionalProperties: true, nullable: true }
+                  required: [version]
       responses:
-        '200':
-          description: Updated saved view
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Updated saved view, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, config size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied (PERMISSION_DENIED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (SAVED_VIEW_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteTaskSavedView
-      summary: Delete a saved task view (owner only)
+      summary: Delete a saved task view (owner or project admin for shared views)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: viewId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: viewId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Deleted
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied (PERMISSION_DENIED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (SAVED_VIEW_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/recurrence:
     get:
@@ -15505,47 +15455,29 @@ paths:
       operationId: getTaskRecurrence
       summary: Get recurrence rule for a task
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: taskId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Recurrence rule
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Recurrence rule, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (RECURRENCE_NOT_FOUND/TASK_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     put:
       tags: [Tasks]
       operationId: upsertTaskRecurrence
       summary: Create or update a task recurrence rule
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: taskId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 frequency: { type: string, enum: [DAILY, WEEKLY, MONTHLY] }
                 interval: { type: integer, minimum: 1 }
@@ -15557,59 +15489,41 @@ paths:
                 active: { type: boolean }
               required: [frequency]
       responses:
-        '200':
-          description: Upserted recurrence rule
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Upserted recurrence rule, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (TASK_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteTaskRecurrence
       summary: Delete a task recurrence rule
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: taskId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Deleted
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (RECURRENCE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/recurrence/generate:
     post:
       tags: [Tasks]
       operationId: generateTaskRecurrence
-      summary: Generate the next recurring task instance
+      summary: Generate the next recurring task instance (idempotent per occurrence)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: taskId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '201':
-          description: Generated task
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '201': { description: Generated task, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Invalid state (RECURRENCE_INACTIVE, RECURRENCE_COMPLETE, RECURRENCE_ENDED, RECURRENCE_NOT_GENERATED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (TASK_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '409': { description: Conflict (RECURRENCE_NOT_DUE, RECURRENCE_ALREADY_GENERATED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-templates:
     get:
@@ -15617,50 +15531,53 @@ paths:
       operationId: listTaskTemplates
       summary: List task templates for a project
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Task templates
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Task templates, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     post:
       tags: [Tasks]
       operationId: createTaskTemplate
-      summary: Create a task template for a project
+      summary: Create a task template (versioned blueprint)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 name: { type: string }
                 description: { type: string, nullable: true }
-                data: { type: object, additionalProperties: true }
+                data:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    version: { type: integer, enum: [1] }
+                    title: { type: string }
+                    description: { type: string, nullable: true }
+                    status: { type: string }
+                    priority: { type: string }
+                    category: { type: string, nullable: true }
+                    labels: { type: array, items: { type: string } }
+                    startDate: { type: string, format: date-time, nullable: true }
+                    dueDate: { type: string, format: date-time, nullable: true }
+                    customFieldValues: { type: array, items: { type: object, additionalProperties: false, properties: { fieldId: { type: string, format: uuid }, value: {} }, required: [fieldId] } }
+                    subtasks: { type: array, items: { type: object, additionalProperties: true } }
+                  required: [version]
               required: [name]
       responses:
-        '201':
-          description: Created task template
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '201': { description: Created task template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, blueprint size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-templates/{templateId}:
     patch:
@@ -15668,52 +15585,33 @@ paths:
       operationId: updateTaskTemplate
       summary: Update a task template
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: templateId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: templateId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: string, nullable: true }, data: { type: object, additionalProperties: false, properties: { version: { type: integer, enum: [1] }, title: { type: string }, description: { type: string, nullable: true }, status: { type: string }, priority: { type: string }, category: { type: string, nullable: true }, labels: { type: array, items: { type: string } }, startDate: { type: string, format: date-time, nullable: true }, dueDate: { type: string, format: date-time, nullable: true }, customFieldValues: { type: array, items: { type: object, additionalProperties: false, properties: { fieldId: { type: string, format: uuid }, value: {} }, required: [fieldId] } }, subtasks: { type: array, items: { type: object, additionalProperties: true } } }, required: [version] } } }
       responses:
-        '200':
-          description: Updated task template
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Updated task template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (TASK_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteTaskTemplate
       summary: Delete a task template
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: templateId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: templateId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Deleted
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (TASK_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-templates/{templateId}/create-task:
     post:
@@ -15721,29 +15619,20 @@ paths:
       operationId: createTaskFromTemplate
       summary: Create a task from a task template
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: projectId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: templateId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: templateId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: false
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema: { type: object, additionalProperties: false, properties: { title: { type: string }, assigneeIds: { type: array, items: { type: string, format: uuid } }, startDate: { type: string, format: date-time, nullable: true }, dueDate: { type: string, format: date-time, nullable: true } } }
       responses:
-        '201':
-          description: Created task
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '201': { description: Created task, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (TASK_TEMPLATE_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/project-templates:
     get:
@@ -15751,42 +15640,47 @@ paths:
       operationId: listProjectTemplates
       summary: List project templates in a workspace
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Project templates
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Project templates, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     post:
       tags: [Projects]
       operationId: createProjectTemplate
-      summary: Create a project template in a workspace
+      summary: Create a project template (versioned blueprint)
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 name: { type: string }
                 description: { type: string, nullable: true }
-                data: { type: object, additionalProperties: true }
+                data:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    version: { type: integer, enum: [1] }
+                    description: { type: string, nullable: true }
+                    status: { type: string }
+                    visibility: { type: string }
+                    customFields: { type: array, items: { type: object, additionalProperties: false, properties: { name: { type: string }, key: { type: string }, type: { type: string, enum: [TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX] }, description: { type: string, nullable: true }, options: { type: array, nullable: true, items: { type: object, additionalProperties: false, properties: { value: { type: string }, label: { type: string }, color: { type: string } }, required: [value, label] } }, required: { type: boolean }, position: { type: integer } }, required: [name, type] } }
+                    taskTemplates: { type: array, items: { type: object, additionalProperties: true } }
+                    tasks: { type: array, items: { type: object, additionalProperties: false, properties: { title: { type: string }, description: { type: string, nullable: true }, status: { type: string }, priority: { type: string }, labels: { type: array, items: { type: string } } }, required: [title] } }
+                  required: [version]
               required: [name]
       responses:
-        '201':
-          description: Created project template
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '201': { description: Created project template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, blueprint size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/project-templates/{templateId}:
     patch:
@@ -15794,44 +15688,31 @@ paths:
       operationId: updateProjectTemplate
       summary: Update a project template
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: templateId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: templateId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: string, nullable: true }, data: { type: object, additionalProperties: false, properties: { version: { type: integer, enum: [1] }, description: { type: string, nullable: true }, status: { type: string }, visibility: { type: string }, customFields: { type: array, items: { type: object, additionalProperties: true } }, taskTemplates: { type: array, items: { type: object, additionalProperties: true } }, tasks: { type: array, items: { type: object, additionalProperties: true } } }, required: [version] } } }
       responses:
-        '200':
-          description: Updated project template
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Updated project template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (PROJECT_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Projects]
       operationId: deleteProjectTemplate
       summary: Delete a project template
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: templateId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: templateId, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200':
-          description: Deleted
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (PROJECT_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/project-templates/{templateId}/create-project:
     post:
@@ -15839,33 +15720,29 @@ paths:
       operationId: createProjectFromTemplate
       summary: Create a project from a project template
       parameters:
-        - in: path
-          name: workspaceId
-          required: true
-          schema: { type: string, format: uuid }
-        - in: path
-          name: templateId
-          required: true
-          schema: { type: string, format: uuid }
+        - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: templateId, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 name: { type: string }
                 key: { type: string }
                 description: { type: string, nullable: true }
               required: [name, key]
       responses:
-        '201':
-          description: Created project
-          content:
-            application/json:
-              schema: { type: object, additionalProperties: true }
+        '201': { description: Created project, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: Not found (PROJECT_TEMPLATE_NOT_FOUND/WORKSPACE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '409': { description: Conflict (PROJECT_KEY_TAKEN), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
-components:
+
   securitySchemes:
     bearerAuth:
       type: http
