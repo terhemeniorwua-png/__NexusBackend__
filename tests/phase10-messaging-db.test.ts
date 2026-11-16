@@ -81,8 +81,7 @@ function runTests(rawDbUrl: string): void {
     const db = await connectTestDatabase(rawDbUrl);
     const { getPrismaClient } = await import('../src/db/prisma');
     getPrismaClient(db.url);
-    const config = (await import('../src/config/env')).loadEnv({
-      ...process.env,
+    const config = (await import('./helpers/test-config')).loadTestConfig({
       RATE_LIMIT_NAMESPACE: `phase10-${tag}`,
       RATE_LIMIT_MAX: '100000',
       AUTH_REGISTER_RATE_LIMIT_MAX: '1000',
@@ -103,6 +102,7 @@ function runTests(rawDbUrl: string): void {
       body: JSON.stringify({ name: `P10 WS ${tag}` }),
       jar: owner.jar,
     });
+    assert.equal(wsRes.status, 201, JSON.stringify(wsRes.body));
     workspaceId = (wsRes.body.data as { id: string }).id;
     workspaceIds.push(workspaceId);
 
@@ -114,13 +114,15 @@ function runTests(rawDbUrl: string): void {
       jar: owner.jar,
     });
 
-    // Create a workspace channel
+    // Create a workspace channel. Workspace creation already makes a default "General" channel,
+    // so this test uses its own name to avoid CHANNEL_NAME_CONFLICT.
     const chRes = await jsonRequest(channelUrl(), {
       method: 'POST',
       headers: auth(owner),
-      body: JSON.stringify({ type: 'WORKSPACE', name: 'General' }),
+      body: JSON.stringify({ type: 'WORKSPACE', name: 'Messaging' }),
       jar: owner.jar,
     });
+    assert.equal(chRes.status, 201, JSON.stringify(chRes.body));
     channelId = (chRes.body.data as { id: string }).id;
   });
 

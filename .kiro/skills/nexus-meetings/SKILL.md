@@ -1,17 +1,61 @@
 ---
 name: nexus-ai-meetings
-description: Specialized instructions for implementing AI-powered meetings in the Nexus backend, including scheduling, participants, meeting integrations, transcription, summaries, action items, task creation, authorization, and meeting-related notifications.
+description: Specialized instructions for implementing AI-powered meetings in the Nexus backend, including calendar scheduling, Google and Microsoft calendar synchronisation, participants, managed calling SDK integration, transcription, summaries, action items, task creation, the separate Python/FastAPI AI boundary, AI action approval, authorization, and meeting-related notifications.
 ---
 
 # Nexus AI Meetings Skill
+
+## 0. Nexus Product Context and Non-Negotiable Rules
+
+Nexus is a general-purpose **Real-Time Workspace & Project Management Platform**, not a developer-only tool. It combines project and task management, team communication, collaborative documents, file management, scheduling, forms, global search, automation, billing, integrations and AI-assisted productivity.
+
+Nexus supports three workspace experiences on one shared backend:
+
+- **Individual** workspaces.
+- **Company** workspaces.
+- **Institution** workspaces.
+
+These are not separate applications. Shared services must adapt features, permissions and navigation to the workspace type while preserving strict isolation between users, workspaces and organisations.
+
+### Service boundaries
+
+- The main backend is **Node.js, Express.js and TypeScript**. It is authoritative for authentication, authorisation, business rules, database mutations, workspace context and application APIs.
+- The AI service is a separate, independently deployable **Python/FastAPI** service using managed AI APIs. It must not bypass Express authentication, permissions or business rules, and must not mutate application data directly.
+- Express authenticates the user, gathers only authorised context, calls the AI service, validates structured results, and rechecks permissions before executing any approved AI action.
+- Core Nexus functionality must continue operating when the AI service is unavailable.
+- Do not convert the Express backend to Python, move ordinary business logic into Python, or rewrite TypeScript as JavaScript.
+
+### Roles, ownership and isolation
+
+Company roles: Owner, Admin, Team Lead, Member, Guest. Institution roles: Owner, Institution Admin, Department Admin, Team/Group Lead, Member, Guest. Project roles (Project Owner, Project Manager, Contributor, Viewer, Guest) are separate from organisation roles.
+
+Only the Owner may remove or demote another administrator. An administrator cannot remove the Owner. Team Leads cannot remove organisation members unless explicitly authorised. Organisation membership never automatically grants access to private projects, private files or private meetings.
+
+Enforce authentication and authorisation server-side for every protected operation, including HTTP, real-time events, files, search and AI context. Verify workspace, resource ownership, membership, role, visibility and explicit grants. Never trust client-supplied user IDs, roles, workspace IDs, ownership claims or storage paths. Prevent insecure direct object references and privilege escalation: knowing a resource ID never grants access.
+
+### Messaging and notification separation
+
+Direct messages, group messages, channel messages, project conversations, announcements and message mentions belong in the **Messages** area. They must never be duplicated in the general notification bell. Message unread counts and general notification unread counts are independent and must not clear each other.
+
+**General notifications** cover task assignments, task comments and mentions, meeting invitations and changes, join-request decisions, workspace invitations, file-sharing events, security changes and AI action outcomes. Use one central notification service; do not build per-feature notification stores.
+
+### Git, phase and preservation rules
+
+- Never commit or push implementation work directly to `main`.
+- Work on a dedicated branch such as `feature/phase-N-description`, `fix/phase-N-description`, `refactor/description` or `docs/description`; commit and push that branch.
+- Never force-push, rewrite shared history, delete remote branches, or merge into `main` without explicit user authorisation.
+- Preserve uncommitted user changes and never include unrelated changes in a commit.
+- `PHASES.md` is the authoritative implementation tracker. Identify the current active phase, work only on that phase, check dependencies, and update the tracker only when the documented completion criteria are genuinely met. Mark blocked work as `BLOCKED`; never begin another phase without authorisation.
+- Never delete or overwrite `.env`, commit secrets, remove working features, replace the existing ORM or backend framework, convert TypeScript to JavaScript, or move the main backend to Python.
+- Prefer the smallest safe change. Do not implement future enhancements unless the active phase or the user explicitly authorises them.
 
 ## 1. Purpose
 
 This skill defines how AI-powered meeting functionality must be designed, implemented, tested, and maintained in the Nexus backend.
 
-Nexus is a real-time workspace and project management platform combining project management, collaborative documentation, messaging, task management, notifications, meetings, and AI-assisted workflows.
+Nexus is a general-purpose Real-Time Workspace & Project Management Platform serving Individual, Company, and Institution workspaces from one shared backend. It combines project and task management, team communication, collaborative documents, file management, scheduling, forms, search, automation, billing, integrations, and AI-assisted workflows.
 
-AI Meetings should help teams conduct meetings, preserve decisions, extract actionable work, and connect discussions to the appropriate Nexus projects and tasks.
+AI Meetings should help teams schedule meetings, preserve decisions, extract actionable work, and connect discussions to the appropriate Nexus projects and tasks. Calendar integration, meeting access, and AI outputs must respect organisation roles, project visibility, and guest access.
 
 The implementation must prioritize security, participant privacy, accurate information, data integrity, and a reliable user experience.
 
@@ -26,24 +70,27 @@ Use the existing project configuration as the source of truth.
 - Language: TypeScript
 - Database: PostgreSQL
 - ORM: Prisma
-- Real-time communication: Socket.IO
+- Real-time communication: the existing WebSocket/real-time implementation. Socket.IO is the planned transport but is not yet installed.
 - Cache and temporary coordination: Redis
-- AI provider: Use the provider already configured in the project, if one exists.
-- Audio/video: Use an existing or explicitly approved WebRTC-compatible meeting provider or conferencing service.
+- AI service: a separate, independently deployable Python/FastAPI service using a managed AI API.
+- Audio/video: a managed calling SDK or conferencing provider.
+- Calendar: Google Calendar and Microsoft Outlook Calendar integrations through controlled backend adapters.
 
 Do not replace existing technologies or introduce additional providers without a clear technical justification and appropriate approval.
 
-Do not assume that Socket.IO alone provides audio/video conferencing. Socket.IO can coordinate meeting events, while media transport requires an appropriate WebRTC implementation or conferencing provider.
+Do not assume that real-time transport alone provides audio/video conferencing. It can coordinate meeting events, while media transport requires the managed calling SDK or an appropriate WebRTC implementation.
+
+Express remains authoritative for authentication, permissions, application data mutations, calendar access decisions, and AI action approval.
 
 ## 3. Inspect Before Implementing
 
 Before changing AI Meetings functionality:
 
-1. Read `agent.md` and `PHASES.md`.
+1. Read `AGENTS.md` and `PHASES.md`.
 2. Inspect `package.json` and existing dependencies.
 3. Review the Prisma schema and existing meeting-related models.
 4. Inspect authentication, workspace membership, project permissions, and role enforcement.
-5. Check existing notification, email, file-storage, and Socket.IO services.
+5. Check existing notification, email, file-storage, calendar, and real-time services.
 6. Inspect any existing AI provider integration and environment configuration.
 7. Identify the relevant phase and its acceptance criteria.
 
@@ -59,21 +106,24 @@ Design the system to support the meeting capabilities required by the Nexus prod
 
 Potential features include:
 
-- Scheduling meetings.
-- Creating instant meetings.
+- Personal, workspace, team, department, and project calendars.
+- Scheduling meetings and creating instant meetings.
+- Google Calendar and Microsoft Outlook Calendar connection and two-way synchronisation.
+- Conflict detection and duplicate-event prevention during sync.
 - Editing and cancelling meetings.
 - Managing meeting participants and invitations.
 - Joining and leaving meetings.
 - Tracking participant attendance.
-- Linking meetings to workspaces, teams, and projects.
+- Linking meetings to workspaces, teams, departments, and projects.
 - Meeting descriptions, agendas, and attachments.
 - Meeting reminders and notifications.
-- Recording references or recordings where supported and authorized.
+- Meeting recording references or recordings where supported and authorized.
 - Transcription of recorded or live audio where supported.
 - AI-generated summaries and decisions.
 - Extracted action items.
 - Linking action items to Nexus tasks.
 - Searching authorized meeting summaries and transcripts.
+- Authorized meeting history and audit records.
 
 Implement only the capabilities required by the current phase. Do not claim that audio/video, live transcription, or recording works unless the necessary infrastructure is implemented and tested.
 
@@ -155,7 +205,7 @@ Do not trust a client-supplied user ID to establish the identity of the meeting 
 
 ## 7. Real-Time Meeting Integration
 
-Use the existing Socket.IO architecture for real-time signaling and application events where appropriate.
+Use the existing real-time architecture for signaling and application events where appropriate. Socket.IO is planned but not yet installed; confirm the actual transport before writing transport-specific code.
 
 Possible events include:
 
@@ -169,18 +219,18 @@ Possible events include:
 
 Requirements:
 
-- Authenticate socket connections.
+- Authenticate real-time connections.
 - Authorize access to each meeting room.
 - Validate event payloads.
 - Ensure users cannot subscribe to unauthorized meeting rooms.
 - Avoid exposing private meeting content through broadcast events.
 - Handle reconnects and repeated events safely.
 - Persist important events or records when they must survive disconnections.
-- Do not treat socket delivery as proof that an event was permanently stored.
+- Do not treat event delivery as proof that a record was permanently stored.
 
-Use an appropriate WebRTC implementation or conferencing provider for audio/video.
+Use the managed calling SDK or conferencing provider for audio/video.
 
-Never assume that creating a Socket.IO room automatically establishes secure media transport.
+Never assume that creating a real-time room automatically establishes secure media transport.
 
 Keep media credentials, provider secrets, and privileged meeting tokens on the server.
 
@@ -229,11 +279,18 @@ Do not claim that consent requirements are satisfied merely because a meeting pa
 
 If the required consent workflow or recording provider is not yet implemented, report that limitation clearly.
 
-## 10. AI Provider Integration
+## 10. AI Service Integration and Boundary
 
-Use a dedicated AI service rather than embedding provider-specific logic in route handlers.
+Use the separate Python/FastAPI AI service rather than embedding provider-specific logic in route handlers or Express services.
 
-The AI service should accept only the authorized input required for a particular operation.
+Express prepares the request:
+
+1. Authenticate the user.
+2. Authorize access to the meeting, transcript, and related workspace resources.
+3. Gather only the context required for the operation.
+4. Send a controlled request to the Python service.
+
+The Python service performs AI processing and returns structured results or action proposals. It must not bypass Express permissions or mutate the application database directly.
 
 Possible operations include:
 
@@ -247,17 +304,28 @@ Possible operations include:
 
 Requirements:
 
-- Reuse the existing AI provider configuration when available.
+- Reuse the existing AI service and provider configuration when available.
 - Keep API keys in environment variables or the approved secret-management system.
 - Apply request timeouts and reasonable input limits.
 - Handle provider errors, rate limits, and temporary outages.
 - Avoid sending unnecessary personal or confidential information.
 - Do not expose provider credentials to clients.
-- Validate and normalize AI outputs before saving them.
+- Validate and normalize structured AI outputs before saving them.
 - Track processing status and failures where needed.
 - Do not claim that an AI operation succeeded if the provider request failed.
+- Keep core meeting functionality usable when the AI service is unavailable.
 
 Never hardcode AI API keys or commit secrets to version control.
+
+### AI action approval
+
+Classify AI behaviour as read, recommend, or act.
+
+- **Read:** summarize or retrieve information for an authorized user.
+- **Recommend:** propose summaries, tasks, assignments, or schedule changes without applying them.
+- **Act:** any mutation, including creating tasks, assigning users, sending invitations, or changing meeting state.
+
+Every act operation requires specific explicit user approval. Express must revalidate the user's permissions against the current resource state immediately before executing the approved action. Approval of one action never authorizes a different action.
 
 ## 11. AI Summaries and Decisions
 
@@ -307,10 +375,11 @@ Requirements:
 - Distinguish an explicit commitment from a suggestion.
 - Do not invent assignees or due dates.
 - Verify that proposed assignees are eligible members of the relevant workspace or project.
-- Validate project and task relationships.
+- Validate project and task relationships and project visibility.
 - Respect the existing Nexus task workflow and task status rules.
 - Require appropriate authorization before creating or assigning tasks.
-- Provide a review or confirmation step before automatically creating consequential work.
+- Require explicit user approval for the AI action before creating or assigning consequential work.
+- Revalidate permissions in Express immediately before executing the approved action.
 - Prevent duplicate tasks when the same AI job is retried.
 - Preserve traceability to the source meeting and action item.
 
@@ -384,12 +453,15 @@ Potential notifications include:
 Requirements:
 
 - Respect notification preferences where applicable.
-- Verify the intended recipient.
+- Verify the intended recipient and their current access to the meeting.
 - Avoid sending duplicate notifications.
 - Use the existing email templates and notification records.
 - Keep real-time notifications separate from durable notification storage.
 - Handle email delivery failures without corrupting meeting data.
 - Do not send private transcript content in an email unless the feature explicitly requires it and access is appropriately controlled.
+- Keep meeting events in the general notification area; they are work events, not messages.
+- Do not duplicate meeting notices into the Messages unread counts.
+- For Google Calendar and Microsoft Outlook sync, prevent duplicate notifications when the same external event is received more than once.
 
 Do not build an independent notification system solely for AI Meetings.
 
@@ -462,7 +534,7 @@ Test:
 
 Test:
 
-- Socket authentication.
+- Real-time authentication.
 - Meeting room authorization.
 - Join and leave behavior.
 - Unauthorized event rejection.
@@ -499,19 +571,22 @@ Never run tests that record real participants or send unintended real emails.
 
 For every AI Meetings task:
 
-1. Inspect `agent.md`, `PHASES.md`, and existing implementation.
-2. Identify the current phase and its acceptance criteria.
-3. Determine the required meeting, participant, and workspace relationships.
-4. Define permissions, privacy requirements, and lifecycle transitions.
-5. Identify which external providers or services are actually available.
-6. Plan schema, migration, API, and real-time changes.
-7. Implement the smallest coherent set of changes.
-8. Add AI processing, validation, and background jobs only where required.
-9. Add notifications using existing services.
-10. Write tests for successful, invalid, unauthorized, and failed operations.
-11. Run schema validation, relevant tests, and applicable build checks.
-12. Document provider configuration, limitations, and deployment requirements.
-13. Update `PHASES.md` only when the associated acceptance criteria are genuinely satisfied.
+1. Inspect `AGENTS.md`, `PHASES.md`, and existing implementation.
+2. Confirm the current Git branch; never implement directly on `main`.
+3. Identify the current phase and its acceptance criteria.
+4. Determine the required meeting, participant, calendar, and workspace relationships.
+5. Define permissions, privacy requirements, and lifecycle transitions.
+6. Identify which external providers or services are actually available.
+7. Plan schema, migration, API, and real-time changes.
+8. Implement the smallest coherent set of changes.
+9. Add AI processing, validation, and background jobs only where required.
+10. Add explicit approval and permission revalidation for AI actions.
+11. Add notifications using existing services.
+12. Write tests for successful, invalid, unauthorized, and failed operations.
+13. Run schema validation, relevant tests, and applicable build checks.
+14. Document provider configuration, limitations, and deployment requirements.
+15. Update `PHASES.md` only when the associated acceptance criteria are genuinely satisfied.
+16. Commit and push the feature branch; never merge into `main` without explicit authorisation.
 
 ## 20. Definition of Done
 
@@ -524,13 +599,15 @@ An AI Meetings feature is complete when all applicable requirements are satisfie
 - AI inputs and outputs are validated.
 - Summaries and action items are traceable to their source.
 - Task creation respects the existing task workflow.
+- AI actions require explicit approval and Express revalidates permissions before execution.
 - Recording and transcription follow the required consent and privacy rules.
 - Background jobs handle retries and duplicate execution safely.
-- Notifications use existing Nexus services.
+- Notifications use existing Nexus services and remain separate from message notifications.
 - Required migrations are generated and reviewed.
 - Relevant tests pass, or remaining failures are clearly documented.
 - No credentials or sensitive meeting data are unnecessarily exposed.
 - Documentation reflects the implemented behavior and remaining limitations.
+- Changes are committed and pushed to the correct feature branch, not `main`.
 
 ## 21. Required Agent Behavior
 

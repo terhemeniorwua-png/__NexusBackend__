@@ -12,7 +12,16 @@ import { logger as baseLogger, type Logger } from './utils/logger';
 import { createAccountDeletionWorker } from './modules/auth/account-deletion.service';
 import { createBillingService } from './modules/billing/billing.service';
 import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
+import { createAutomationWorker } from './modules/automation/automation.worker';
+import { createIntegrationSyncWorker } from './modules/integrations/integration-sync.worker';
+import { createWebhookWorker } from './modules/webhooks/webhook.worker';
 import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
+import { createQueueStatusProbe } from './services/workers/queue-status';
+import { createWorkerHealthRegistry } from './services/workers/worker-health';
+import { createAuditPruneWorker } from './services/workers/audit-prune.worker';
+import { createTaskDeadlineNotificationWorker } from './services/workers/task-deadline-notification.worker';
+import { createTaskRecurrenceWorker } from './services/workers/task-recurrence.worker';
+import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
 export interface RunningServer {
   server: Server;
@@ -65,8 +74,38 @@ export async function startServer(): Promise<RunningServer> {
     logger.warn('redis_unavailable', { error });
   }
 
-  const app = createApp({ config, logger });
+  // Worker liveness is process-local. Each instance reports its own loops so
+  // a load balancer can detect an instance whose timers stopped advancing.
+  const workerHealth = createWorkerHealthRegistry({ staleAfterMs: config.workerHealthStaleMs });
+  const workerRecorders = {
+    email: workerHealth.register('email'),
+    accountDeletion: workerHealth.register('account-deletion'),
+    billingSeatSync: workerHealth.register('billing-seat-sync'),
+    automation: workerHealth.register('automation'),
+    integrationSync: workerHealth.register('integration-sync'),
+    webhooks: workerHealth.register('webhooks'),
+    auditPrune: workerHealth.register('audit-prune'),
+    taskDeadlineNotification: workerHealth.register('task-deadline-notification'),
+    taskRecurrence: workerHealth.register('task-recurrence'),
+  };
+
+  const app = createApp({
+    config,
+    logger,
+    workerHealth,
+    queueStatusProbe: createQueueStatusProbe(getPrismaClient()),
+  });
   const server = createServer(app);
+
+  // Realtime (Socket.IO) shares the HTTP server. A failure here must not stop
+  // the REST API from serving requests.
+  let socketServer: SocketServer | null = null;
+  try {
+    socketServer = await createSocketServer(server, config);
+    logger.info('socket_server_started');
+  } catch (error) {
+    logger.error('socket_server_failed', { error });
+  }
 
   // Every transactional email is written to the outbox before the provider is
   // contacted, and the worker delivers the queued messages.
@@ -76,6 +115,7 @@ export async function startServer(): Promise<RunningServer> {
     service: getEmailDeliveryService(config),
     config,
     logger,
+    health: workerRecorders.email,
   });
 
   if (config.emailWorkerEnabled) {
@@ -94,6 +134,7 @@ export async function startServer(): Promise<RunningServer> {
       secretAccessKey: config.objectStorageSecretAccessKey,
       requestTimeoutMs: config.objectStorageRequestTimeoutMs,
     }),
+    health: workerRecorders.accountDeletion,
   });
   accountDeletionWorker.start();
 
@@ -101,8 +142,56 @@ export async function startServer(): Promise<RunningServer> {
     prisma: getPrismaClient(),
     service: createBillingService(config, { prisma: getPrismaClient() }),
     logger,
+    health: workerRecorders.billingSeatSync,
   });
   billingSeatSyncWorker.start();
+
+  const automationWorker = createAutomationWorker({
+    prisma: getPrismaClient(),
+    logger,
+    health: workerRecorders.automation,
+  });
+  automationWorker.start();
+
+  const integrationSyncWorker = createIntegrationSyncWorker({
+    prisma: getPrismaClient(),
+    logger,
+    health: workerRecorders.integrationSync,
+  });
+  integrationSyncWorker.start();
+
+  const webhookWorker = createWebhookWorker({
+    prisma: getPrismaClient(),
+    logger,
+    health: workerRecorders.webhooks,
+  });
+  webhookWorker.start();
+
+  const auditPruneWorker = createAuditPruneWorker({
+    prisma: getPrismaClient(),
+    config,
+    logger,
+    health: workerRecorders.auditPrune,
+  });
+  auditPruneWorker.start();
+
+  const taskDeadlineNotificationWorker = createTaskDeadlineNotificationWorker({
+    prisma: getPrismaClient(),
+    logger,
+    pollIntervalMs: config.taskDeadlineNotificationPollIntervalMs,
+    health: workerRecorders.taskDeadlineNotification,
+  });
+  taskDeadlineNotificationWorker.start();
+
+  const taskRecurrenceWorker = createTaskRecurrenceWorker({
+    prisma: getPrismaClient(),
+    logger,
+    pollIntervalMs: config.taskRecurrencePollIntervalMs,
+    health: workerRecorders.taskRecurrence,
+  });
+  if (config.taskRecurrenceWorkerEnabled) {
+    taskRecurrenceWorker.start();
+  }
 
   try {
     await listen(server, config.port);
@@ -112,6 +201,12 @@ export async function startServer(): Promise<RunningServer> {
       emailWorker.stop(),
       accountDeletionWorker.stop(),
       billingSeatSyncWorker.stop(),
+      automationWorker.stop(),
+      integrationSyncWorker.stop(),
+      webhookWorker.stop(),
+      auditPruneWorker.stop(),
+      taskDeadlineNotificationWorker.stop(),
+      taskRecurrenceWorker.stop(),
     ]);
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
@@ -136,9 +231,11 @@ export async function startServer(): Promise<RunningServer> {
 
     timeout.unref();
 
+    await socketServer?.close().catch(() => undefined);
+
     const closeServer = new Promise<void>((resolve, reject) => {
       server.close((error) => {
-        if (error) {
+        if (error && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') {
           reject(error);
           return;
         }
@@ -154,6 +251,12 @@ export async function startServer(): Promise<RunningServer> {
       emailWorker.stop(),
       accountDeletionWorker.stop(),
       billingSeatSyncWorker.stop(),
+      automationWorker.stop(),
+      integrationSyncWorker.stop(),
+      webhookWorker.stop(),
+      auditPruneWorker.stop(),
+      taskDeadlineNotificationWorker.stop(),
+      taskRecurrenceWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);

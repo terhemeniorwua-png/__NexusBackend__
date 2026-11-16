@@ -1,3 +1,4 @@
+import { ensureDefaultChannels } from '../channels/default-channels';
 import type {
   Prisma,
   PrismaClient,
@@ -16,6 +17,7 @@ import type { RequestContext } from '../auth/auth.types';
 import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { createTaskAssignmentNotifier } from '../../services/task-assignment-notifier';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { AppError } from '../../utils/errors';
 import {
   assertMayManageMember,
@@ -192,6 +194,7 @@ function toSummary(
     role,
     organizationRole,
     joinCodeEnabled: Boolean(workspace.joinCodeHash),
+    timeTrackingEnabled: workspace.timeTrackingEnabled,
     memberCount: counts.members,
     projectCount: counts.projects,
     teamCount: counts.teams,
@@ -416,6 +419,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           },
         });
 
+        await ensureDefaultChannels(tx, created.id, input.userId);
+
         if (created.type === 'COMPANY') {
           await tx.companyProfile.create({ data: { workspaceId: created.id, name: created.name } });
         } else if (created.type === 'INSTITUTION') {
@@ -517,6 +522,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+            ...(input.timeTrackingEnabled !== undefined
+              ? { timeTrackingEnabled: input.timeTrackingEnabled }
+              : {}),
           },
         });
 
@@ -530,6 +538,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+            ...(input.timeTrackingEnabled !== undefined
+              ? { timeTrackingEnabled: input.timeTrackingEnabled }
+              : {}),
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
@@ -1151,6 +1162,20 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         });
 
         return created;
+      });
+
+      await enqueueAutomationRunsSafely({
+        workspaceId: access.workspace.id,
+        trigger: 'EVENT_MEMBER_JOINED',
+        eventKey: `member.joined:membership:${membership.id}`,
+        payload: {
+          workspaceId: access.workspace.id,
+          userId: membership.userId,
+          membershipId: membership.id,
+          role: assignedRole,
+          organizationRole: input.organizationRole ?? null,
+          source: 'direct_add',
+        },
       });
 
       return toMember(membership, access.workspace.ownerId);

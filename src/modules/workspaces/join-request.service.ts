@@ -5,6 +5,18 @@ import { getPrismaClient } from '../../db/prisma';
 import type { RequestContext } from '../auth/auth.types';
 import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
+import { isEmailNotificationEnabled } from '../../services/notification-preferences';
+import {
+  buildEmailBrand,
+  buildJoinRequestApprovedEmail,
+  buildJoinRequestRejectedEmail,
+  sendEmail,
+  type EmailMessage,
+  type EmailSender,
+} from '../../services/email';
+import { summarizeErrorForLog } from '../../services/email/log-privacy';
+import { logger as defaultLogger, type Logger } from '../../utils/logger';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
 import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
@@ -137,8 +149,68 @@ async function transitionPendingRequest(
 export function createJoinRequestService(
   config: AppConfig,
   prisma?: PrismaClient,
+  deps: { send?: EmailSender['send']; logger?: Logger } = {},
 ): JoinRequestService {
   const client = prisma ?? getPrismaClient();
+  const log = deps.logger ?? defaultLogger;
+  const send = deps.send ?? sendEmail;
+  const emailBrand = buildEmailBrand(config);
+
+  /**
+   * Sends the applicant-facing outcome of a decision.
+   *
+   * The decision is already committed when this runs, and the email is
+   * optional: a provider or outbox failure is logged without a recipient
+   * address and never rolls back the membership change.
+   */
+  async function sendDecisionEmail(input: {
+    requestId: string;
+    userId: string;
+    to: string;
+    name: string;
+    workspaceId: string;
+    workspaceName: string;
+    approved: boolean;
+    role?: string | null;
+    decisionNote?: string | null;
+  }): Promise<void> {
+    try {
+      const type = input.approved ? 'JOIN_REQUEST_APPROVED' : 'JOIN_REQUEST_REJECTED';
+      const enabled = await isEmailNotificationEnabled(client, {
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        type,
+      });
+
+      if (!enabled) {
+        return;
+      }
+
+      const base = {
+        to: input.to,
+        name: input.name,
+        brand: emailBrand,
+        workspaceName: input.workspaceName,
+        workspaceUrl: workspaceLink(input.workspaceId),
+        idempotencyKey: `join-request:${input.approved ? 'approved' : 'rejected'}:${input.requestId}`,
+      };
+
+      const message: EmailMessage = input.approved
+        ? buildJoinRequestApprovedEmail({ ...base, role: input.role ?? null })
+        : buildJoinRequestRejectedEmail({
+            ...base,
+            decisionNote: input.decisionNote ?? null,
+          });
+
+      await send(message);
+    } catch (error) {
+      log.warn('join_request_email_failed', {
+        requestId: input.requestId,
+        approved: input.approved,
+        error: summarizeErrorForLog(error),
+      });
+    }
+  }
 
   const workspaceLink = (workspaceId: string): string =>
     `${config.frontendUrl.replace(/\/+$/, '')}/workspaces/${workspaceId}`;
@@ -616,6 +688,31 @@ export function createJoinRequestService(
         throw new AppError(500, 'JOIN_REQUEST_NOT_STORED', 'The join request could not be stored');
       }
 
+      await enqueueAutomationRunsSafely({
+        workspaceId: access.workspace.id,
+        trigger: 'EVENT_MEMBER_JOINED',
+        eventKey: `member.joined:join-request:${approved.id}`,
+        payload: {
+          workspaceId: access.workspace.id,
+          userId: request.user.id,
+          role,
+          organizationRole: organizationRole ?? null,
+          teamId: teamId ?? null,
+          source: 'join_request',
+        },
+      });
+
+      await sendDecisionEmail({
+        requestId: approved.id,
+        userId: request.user.id,
+        to: request.user.email,
+        name: request.user.name,
+        workspaceId: access.workspace.id,
+        workspaceName: access.workspace.name,
+        approved: true,
+        role,
+      });
+
       return toSummary(stored);
     },
 
@@ -696,6 +793,17 @@ export function createJoinRequestService(
       if (!stored) {
         throw new AppError(500, 'JOIN_REQUEST_NOT_STORED', 'The join request could not be stored');
       }
+
+      await sendDecisionEmail({
+        requestId: stored.id,
+        userId: request.user.id,
+        to: request.user.email,
+        name: request.user.name,
+        workspaceId: access.workspace.id,
+        workspaceName: access.workspace.name,
+        approved: false,
+        decisionNote: input.note ?? null,
+      });
 
       return toSummary(stored);
     },

@@ -127,6 +127,7 @@ export const updateWorkspaceSchema = z
     name: nameSchema.optional(),
     description: descriptionSchema.optional(),
     visibility: workspaceVisibilitySchema.optional(),
+    timeTrackingEnabled: z.boolean().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, {

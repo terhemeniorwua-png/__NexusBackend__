@@ -22,15 +22,25 @@ import {
 import { createTeamRouter } from '../modules/teams/team.routes';
 import { createTeamService, type TeamService } from '../modules/teams/team.service';
 import type { ReadinessProbe } from '../services/health';
+import type { QueueStatusProbe } from '../services/workers/queue-status';
+import type { WorkerHealthRegistry } from '../services/workers/worker-health';
 import { createHealthRouter } from './health';
 import { createBillingRouter } from '../modules/billing/billing.routes';
 import { createBillingService, type BillingService } from '../modules/billing/billing.service';
 import { createOrganizationRouter } from '../modules/organizations/organization.routes';
 import { createProjectOrganizationRouter } from '../modules/projects/organization-access.routes';
 import { createProjectRouter } from '../modules/projects/project.routes';
+import { createProjectRolesRouter } from '../modules/projects/project-roles.routes';
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 import { createChannelRouter } from '../modules/channels/channel.routes';
 import { createTaskRouter } from '../modules/tasks/task.routes';
+import { createCustomFieldRouter } from '../modules/tasks/custom-field.routes';
+import { createSavedViewRouter } from '../modules/tasks/saved-view.routes';
+import { createTaskTemplateRouter } from '../modules/tasks/task-template.routes';
+import { createProjectTemplateRouter } from '../modules/projects/project-template.routes';
+import { createTaskWorkDocumentRouter } from '../modules/task-work-documents/task-work-document.routes';
+import { createTaskBlockerRouter } from '../modules/task-blockers/task-blocker.routes';
+import { createTaskTimeEntryRouter } from '../modules/task-time-entries/task-time-entry.routes';
 import { createMessageRouter } from '../modules/messaging/message.routes';
 import { createNotificationRouter } from '../modules/notifications/notification.routes';
 import { createFileRouter } from '../modules/files/file.routes';
@@ -40,13 +50,23 @@ import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 import { createFormRouter } from '../modules/forms/form.routes';
 import { createSearchRouter } from '../modules/search/search.routes';
 import { createIntegrationRouter } from '../modules/integrations/integration.routes';
+import {
+  createDevIntegrationCallbackRouter,
+  createProjectRepositoryRouter,
+  createTaskDevLinkRouter,
+  createWorkspaceDevIntegrationRouter,
+} from '../modules/dev-integrations/dev-integration.routes';
 import { createAutomationRouter } from '../modules/automation/automation.routes';
+import { createWebhookRouter } from '../modules/webhooks/webhook.routes';
 import { createAiRouter } from '../modules/ai/ai.routes';
 import { createAuditRouter } from '../modules/audit/audit.routes';
+import { createAnalyticsRouter } from '../modules/analytics/analytics.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
   readinessProbe: ReadinessProbe;
+  workerHealth?: WorkerHealthRegistry;
+  queueStatusProbe?: QueueStatusProbe;
   authService?: AuthService;
   usersService?: UsersService;
   workspaceService?: WorkspaceService;
@@ -59,6 +79,8 @@ interface ApiRouterOptions {
 export function createApiRouter({
   config,
   readinessProbe,
+  workerHealth,
+  queueStatusProbe,
   authService = createAuthService(config),
   usersService,
   workspaceService = createWorkspaceService(config),
@@ -69,7 +91,10 @@ export function createApiRouter({
 }: ApiRouterOptions): Router {
   const router = Router();
 
-  router.use('/health', createHealthRouter({ config, readinessProbe }));
+  router.use(
+    '/health',
+    createHealthRouter({ config, readinessProbe, workerHealth, queueStatusProbe }),
+  );
   router.use('/billing', createBillingRouter({ config, service: billingService }));
   router.use('/privacy-requests', createPrivacyRouter({ config }));
   router.use('/auth', createAuthRouter({ config, service: authService }));
@@ -87,12 +112,26 @@ export function createApiRouter({
   router.use('/invitations', createInvitationRouter({ config, service: invitationService }));
   router.use('/workspaces/:workspaceId/projects', createProjectOrganizationRouter({ config }));
   router.use('/workspaces/:workspaceId/projects', createProjectRouter({ config }));
+  router.use('/workspaces/:workspaceId/project-roles', createProjectRolesRouter({ config }));
   // Tasks are nested under projects:
   // /workspaces/:workspaceId/projects/:projectId/tasks/…
   // The task router uses mergeParams to access workspaceId and projectId.
+  router.use('/workspaces/:workspaceId/projects/:projectId/tasks', createTaskRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/custom-fields', createCustomFieldRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/task-views', createSavedViewRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/task-templates', createTaskTemplateRouter({ config }));
+  router.use('/workspaces/:workspaceId/project-templates', createProjectTemplateRouter({ config }));
   router.use(
-    '/workspaces/:workspaceId/projects/:projectId/tasks',
-    createTaskRouter({ config }),
+    '/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/work-documents',
+    createTaskWorkDocumentRouter({ config }),
+  );
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/blockers',
+    createTaskBlockerRouter({ config }),
+  );
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/time-entries',
+    createTaskTimeEntryRouter({ config }),
   );
   router.use('/workspaces/:workspaceId/channels', createChannelRouter({ config }));
   // Messages are nested under channels:
@@ -105,8 +144,15 @@ export function createApiRouter({
   router.use('/search', createSearchRouter({ config }));
   // Integrations are user-scoped (optionally workspace-scoped via query)
   router.use('/integrations', createIntegrationRouter({ config }));
+  // Dev/source-control integrations (Phase 5, GitHub App workspace connections)
+  router.use('/dev-integrations', createDevIntegrationCallbackRouter({ config }));
+  router.use('/workspaces/:workspaceId/dev-integrations', createWorkspaceDevIntegrationRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/repositories', createProjectRepositoryRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links', createTaskDevLinkRouter({ config }));
   // Automations are workspace-scoped
   router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));
+  // Outbound webhook subscriptions are workspace-scoped
+  router.use('/workspaces/:workspaceId/webhooks', createWebhookRouter({ config }));
   // AI service proxy (Phases 21-23)
   router.use('/ai', createAiRouter({ config }));
   // Workspace audit log API (Phase 26)
@@ -124,7 +170,13 @@ export function createApiRouter({
   router.use('/workspaces/:workspaceId', createOrganizationRouter({ config }));
   // Teams are nested under workspaces: /workspaces/:workspaceId/teams/…
   // The team router uses mergeParams to access the workspaceId from the parent.
-  router.use('/workspaces/:workspaceId/teams', createTeamRouter({ config, service: teamService }));
+  router.use(
+    '/workspaces/:workspaceId/teams',
+    createTeamRouter({ config, service: teamService, invitationService }),
+  );
+
+  // Analytics are user-scoped and permission-filtered by workspace access.
+  router.use('/analytics', createAnalyticsRouter({ config }));
 
   return router;
 }

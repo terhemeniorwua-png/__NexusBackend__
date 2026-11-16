@@ -4,6 +4,8 @@ interface AppErrorOptions {
   details?: ErrorDetails;
   cause?: unknown;
   expose?: boolean;
+  /** Permission required by a failed project authorization check. */
+  requiredPermission?: string;
 }
 
 export class AppError extends Error {
@@ -11,6 +13,7 @@ export class AppError extends Error {
   readonly code: string;
   readonly details?: ErrorDetails;
   readonly expose: boolean;
+  readonly requiredPermission?: string;
 
   constructor(statusCode: number, code: string, message: string, options: AppErrorOptions = {}) {
     super(message, { cause: options.cause });
@@ -19,6 +22,7 @@ export class AppError extends Error {
     this.code = code;
     this.details = options.details;
     this.expose = options.expose ?? statusCode < 500;
+    this.requiredPermission = options.requiredPermission;
   }
 }
 

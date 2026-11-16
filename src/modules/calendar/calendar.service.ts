@@ -1,9 +1,11 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { ProjectCapability, requireProjectAccess } from '../authorization/project.policy';
+import { projectVisibleToUser } from '../projects/project-visibility';
 
 export interface EventSummary {
   id: string;
@@ -39,6 +41,46 @@ function toSummary(row: {
 
 type Input = { userId: string; workspaceId: string };
 
+/** Events on projects the caller cannot see are hidden. Unrestricted legacy managers bypass. */
+async function eventScope(prisma: PrismaClient, input: { userId: string; workspaceId: string }): Promise<Prisma.CalendarEventWhereInput> {
+  const ws = await requireWorkspaceAccess(prisma, {
+    userId: input.userId, workspaceId: input.workspaceId,
+    capability: WorkspaceCapability.ViewWorkspace,
+  });
+  const unrestricted = (ws.effectiveRole === 'OWNER' || ws.effectiveRole === 'PROJECT_MANAGER') && !ws.membership.organizationRole;
+  if (unrestricted) return {};
+  const visible = await prisma.project.findMany({
+    where: { workspaceId: input.workspaceId, AND: [projectVisibleToUser(input.userId)] },
+    select: { id: true },
+  });
+  return { OR: [{ projectId: null }, { projectId: { in: visible.map((p) => p.id) } }] };
+}
+
+async function assertEventVisible(prisma: PrismaClient, input: { userId: string; workspaceId: string; eventId: string }): Promise<void> {
+  const found = await prisma.calendarEvent.findFirst({
+    where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
+    select: { id: true },
+  });
+  if (!found) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
+}
+
+
+/** Only the creator, or a workspace OWNER / PROJECT_MANAGER, may change or remove an event. */
+async function assertCanManageEvent(
+  prisma: PrismaClient,
+  input: { userId: string; workspaceId: string },
+  event: { createdById: string },
+): Promise<void> {
+  if (event.createdById === input.userId) return;
+  const ws = await requireWorkspaceAccess(prisma, {
+    userId: input.userId, workspaceId: input.workspaceId,
+    capability: WorkspaceCapability.ViewWorkspace,
+  });
+  if (ws.effectiveRole !== 'OWNER' && ws.effectiveRole !== 'PROJECT_MANAGER') {
+    throw new AppError(403, 'EVENT_EDIT_FORBIDDEN', 'Only the creator or a manager can change this event');
+  }
+}
+
 export function createCalendarService(prisma: PrismaClient = getPrismaClient()) {
   return {
     async create(
@@ -49,10 +91,16 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
         inviteeIds?: string[];
       },
     ): Promise<EventSummary> {
-      await requireWorkspaceAccess(prisma, {
+      const ws = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      if (input.projectId) {
+        await requireProjectAccess(prisma, {
+          userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId,
+          workspaceRole: ws.effectiveRole, capability: ProjectCapability.ViewProject,
+        });
+      }
 
       const event = await prisma.$transaction(async (tx) => {
         const created = await tx.calendarEvent.create({
@@ -105,7 +153,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       });
 
       const event = await prisma.calendarEvent.findFirst({
-        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null },
+        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
       });
       if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
       return toSummary(event);
@@ -126,10 +174,17 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       const events = await prisma.calendarEvent.findMany({
         where: {
           workspaceId: input.workspaceId, deletedAt: null,
+          ...(await eventScope(prisma, input)),
           ...(input.projectId ? { projectId: input.projectId } : {}),
           ...(input.status ? { status: input.status as 'CONFIRMED' | 'TENTATIVE' | 'CANCELLED' } : {}),
-          ...(input.startAfter ? { startAt: { gte: new Date(input.startAfter) } } : {}),
-          ...(input.startBefore ? { startAt: { lte: new Date(input.startBefore) } } : {}),
+          ...(input.startAfter || input.startBefore
+            ? {
+                startAt: {
+                  ...(input.startAfter ? { gte: new Date(input.startAfter) } : {}),
+                  ...(input.startBefore ? { lte: new Date(input.startBefore) } : {}),
+                },
+              }
+            : {}),
         },
         orderBy: [{ startAt: 'asc' }, { id: 'asc' }],
         take: input.limit + 1,
@@ -153,18 +208,21 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       });
 
       const event = await prisma.calendarEvent.findFirst({
-        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null },
+        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
       });
       if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
 
-      const isCreator = event.createdById === input.userId;
+      await assertCanManageEvent(prisma, input, event);
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
-        capability: WorkspaceCapability.ManageMembers,
+        capability: WorkspaceCapability.ViewWorkspace,
       });
-      const isAdmin = workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
-      if (!isCreator && !isAdmin) {
-        throw new AppError(403, 'EVENT_EDIT_FORBIDDEN', 'Only the creator or a manager can edit this event');
+
+      if (input.projectId && input.projectId !== event.projectId) {
+        await requireProjectAccess(prisma, {
+          userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId,
+          workspaceRole: workspace.effectiveRole, capability: ProjectCapability.ViewProject,
+        });
       }
 
       const updated = await prisma.$transaction(async (tx) => {
@@ -199,9 +257,11 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       });
 
       const event = await prisma.calendarEvent.findFirst({
-        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null },
+        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
       });
       if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
+
+      await assertCanManageEvent(prisma, input, event);
 
       await prisma.$transaction(async (tx) => {
         await tx.calendarEvent.update({
@@ -222,9 +282,11 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       });
 
       const event = await prisma.calendarEvent.findFirst({
-        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null },
+        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
       });
       if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
+
+      await assertCanManageEvent(prisma, input, event);
 
       await prisma.$transaction(async (tx) => {
         await tx.calendarEvent.update({ where: { id: event.id }, data: { deletedAt: new Date() } });
@@ -244,20 +306,28 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       });
 
       const event = await prisma.calendarEvent.findFirst({
-        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null },
+        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
       });
       if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
 
-      await prisma.eventInvitation.upsert({
-        where: { eventId_userId: { eventId: input.eventId, userId: input.targetUserId } },
-        create: { eventId: input.eventId, userId: input.targetUserId },
-        update: {},
-      });
+      await assertCanManageEvent(prisma, input, event);
 
-      await createNotification(prisma, {
-        userId: input.targetUserId, type: 'MEETING_INVITE',
-        title: `Event invitation: ${event.title}`,
-        data: { workspaceId: input.workspaceId, eventId: event.id },
+      await prisma.$transaction(async (tx) => {
+        await tx.eventInvitation.upsert({
+          where: { eventId_userId: { eventId: input.eventId, userId: input.targetUserId } },
+          create: { eventId: input.eventId, userId: input.targetUserId },
+          update: {},
+        });
+        await createNotification(tx, {
+          userId: input.targetUserId, type: 'MEETING_INVITE',
+          title: `Event invitation: ${event.title}`,
+          data: { workspaceId: input.workspaceId, eventId: event.id },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId, actorId: input.userId,
+          action: 'calendar.invitee_added', targetType: 'CalendarEvent', targetId: event.id,
+          metadata: { inviteeUserId: input.targetUserId },
+        });
       });
     },
 
@@ -269,8 +339,23 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
         capability: WorkspaceCapability.ViewWorkspace,
       });
 
-      await prisma.eventInvitation.deleteMany({
-        where: { eventId: input.eventId, userId: input.targetUserId },
+      const event = await prisma.calendarEvent.findFirst({
+        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
+        select: { id: true, createdById: true },
+      });
+      if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
+
+      await assertCanManageEvent(prisma, input, event);
+
+      await prisma.$transaction(async (tx) => {
+        await tx.eventInvitation.deleteMany({
+          where: { eventId: input.eventId, userId: input.targetUserId },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId, actorId: input.userId,
+          action: 'calendar.invitee_removed', targetType: 'CalendarEvent', targetId: input.eventId,
+          metadata: { inviteeUserId: input.targetUserId },
+        });
       });
     },
 
@@ -279,13 +364,22 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
     ): Promise<void> {
       const invitation = await prisma.eventInvitation.findUnique({
         where: { eventId_userId: { eventId: input.eventId, userId: input.userId } },
-        include: { event: true },
+        include: { event: { select: { id: true, workspaceId: true, deletedAt: true } } },
       });
-      if (!invitation) throw new AppError(404, 'INVITATION_NOT_FOUND', 'You are not invited to this event');
+      if (!invitation || invitation.event.workspaceId !== input.workspaceId || invitation.event.deletedAt) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'You are not invited to this event');
+      }
 
-      await prisma.eventInvitation.update({
-        where: { id: invitation.id },
-        data: { status: input.status },
+      await prisma.$transaction(async (tx) => {
+        await tx.eventInvitation.update({
+          where: { id: invitation.id },
+          data: { status: input.status },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId, actorId: input.userId,
+          action: 'calendar.invitation_responded', targetType: 'CalendarEvent', targetId: input.eventId,
+          metadata: { status: input.status },
+        });
       });
     },
 
@@ -296,6 +390,8 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+
+      await assertEventVisible(prisma, input);
 
       const invitations = await prisma.eventInvitation.findMany({
         where: { eventId: input.eventId },

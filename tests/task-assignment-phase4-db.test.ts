@@ -3,6 +3,7 @@ import test, { after, before, describe } from 'node:test';
 import type { PrismaClient, UserStatus } from '@prisma/client';
 import { parseEnv, type AppConfig } from '../src/config/env';
 import { createEmailDeliveryService, type EmailDeliveryService } from '../src/services/email';
+import { createTaskService } from '../src/modules/tasks/task.service';
 import {
   createTaskAssignmentNotifier,
   taskAssignmentIdempotencyKey,
@@ -463,5 +464,72 @@ describe('Phase 4.3 task assignment email notifier', { skip: skipReason || false
       await prisma.emailDelivery.count({ where: { toAddress: fixture.assigneeEmail } }),
       0,
     );
+  });
+
+  async function addWorkspaceMember(fixture: Fixture, name: string) {
+    const email = uniqueEmail('task-added-member');
+    emailAddresses.push(email);
+
+    const user = await prisma.user.create({
+      data: {
+        email,
+        passwordHash: 'not-used',
+        name,
+        status: 'ACTIVE',
+        emailVerifiedAt: new Date(),
+      },
+    });
+    userIds.push(user.id);
+
+    await prisma.workspaceMembership.create({
+      data: { workspaceId: fixture.workspaceId, userId: user.id, role: 'MEMBER' },
+    });
+    await prisma.projectMembership.create({
+      data: { projectId: fixture.projectId, userId: user.id, role: 'MEMBER' },
+    });
+
+    return { id: user.id, email };
+  }
+
+  test('addAssignee queues one assignment email for the newly assigned member', async () => {
+    const fixture = await createFixture();
+    const member = await addWorkspaceMember(fixture, 'Katherine Johnson');
+    const service = createTaskService(prisma, { assignmentNotifier: notifier });
+
+    await service.addAssignee(
+      {
+        userId: fixture.ownerId,
+        workspaceId: fixture.workspaceId,
+        projectId: fixture.projectId,
+        taskId: fixture.taskId,
+        targetUserId: member.id,
+      },
+      { ip: undefined, userAgent: undefined },
+    );
+
+    const rows = await prisma.emailDelivery.findMany({ where: { toAddress: member.email } });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.template, 'task_assignment');
+  });
+
+  test('addAssignee does not email a user who assigns the task to themselves', async () => {
+    const fixture = await createFixture();
+    const service = createTaskService(prisma, { assignmentNotifier: notifier });
+
+    await service.addAssignee(
+      {
+        userId: fixture.ownerId,
+        workspaceId: fixture.workspaceId,
+        projectId: fixture.projectId,
+        taskId: fixture.taskId,
+        targetUserId: fixture.ownerId,
+      },
+      { ip: undefined, userAgent: undefined },
+    );
+
+    const owner = await prisma.user.findUniqueOrThrow({ where: { id: fixture.ownerId } });
+
+    assert.equal(await prisma.emailDelivery.count({ where: { toAddress: owner.email } }), 0);
   });
 });

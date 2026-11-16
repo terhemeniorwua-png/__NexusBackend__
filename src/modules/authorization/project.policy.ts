@@ -8,6 +8,10 @@ import type {
 } from '@prisma/client';
 import { AppError } from '../../utils/errors';
 import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
+import {
+  PROJECT_ROLE_RANK,
+  maximumProjectRoleForOrganizationRole as maximumProjectRoleForOrganizationRoleFromCatalog,
+} from './project.permissions';
 
 /**
  * Project-level authorization policy.
@@ -118,6 +122,7 @@ const PROJECT_ROLE_CAPABILITIES: Record<ProjectRole, readonly ProjectCapabilityV
     'project:view_tasks',
     'project:view_files',
   ],
+  COLLABORATOR: ['project:view', 'project:view_tasks', 'project:view_files'],
   VIEWER: ['project:view', 'project:view_tasks', 'project:view_files'],
 };
 
@@ -142,27 +147,23 @@ export function projectRoleCan(
 export function maximumProjectRoleForOrganizationRole(
   role: OrganizationRole | null,
 ): ProjectRole | null {
-  if (role === 'COMPANY_PROJECT_MANAGER') return 'PROJECT_MANAGER';
-  if (
-    role === 'COMPANY_OWNER' ||
-    role === 'COMPANY_ADMIN' ||
-    role === 'INSTITUTION_OWNER' ||
-    role === 'INSTITUTION_ADMIN'
-  )
-    return 'PROJECT_MANAGER';
-  if (role === 'COMPANY_VIEWER' || role === 'INSTITUTION_VIEWER') return 'VIEWER';
-  if (role) return 'MEMBER';
-  return null;
+  return maximumProjectRoleForOrganizationRoleFromCatalog(role);
 }
 
 export function organizationRoleCanOwnProjects(role: OrganizationRole | null): boolean {
-  return role === null || maximumProjectRoleForOrganizationRole(role) === 'PROJECT_MANAGER';
+  return (
+    role === null ||
+    role === 'COMPANY_OWNER' ||
+    role === 'COMPANY_ADMIN' ||
+    role === 'COMPANY_PROJECT_MANAGER' ||
+    role === 'INSTITUTION_OWNER' ||
+    role === 'INSTITUTION_ADMIN'
+  );
 }
 
 function capProjectRole(assigned: ProjectRole, maximum: ProjectRole | null): ProjectRole {
-  if (!maximum || maximum === 'PROJECT_MANAGER') return assigned;
-  if (maximum === 'VIEWER') return 'VIEWER';
-  return assigned === 'PROJECT_MANAGER' ? 'MEMBER' : assigned;
+  if (!maximum) return assigned;
+  return PROJECT_ROLE_RANK[assigned] > PROJECT_ROLE_RANK[maximum] ? maximum : assigned;
 }
 
 // ---------------------------------------------------------------------------

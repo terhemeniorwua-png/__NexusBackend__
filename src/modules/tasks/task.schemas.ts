@@ -3,6 +3,18 @@ import { z } from 'zod';
 const uuid = z.string().uuid();
 const dateInput = z.string().datetime({ offset: true }).optional().nullable();
 
+const expectedDeliverablesSchema = z
+  .array(
+    z
+      .object({
+        id: z.string().trim().min(1).max(120).optional(),
+        label: z.string().trim().min(1).max(300),
+        required: z.boolean().optional().default(true),
+      })
+      .strict(),
+  )
+  .max(50);
+
 // ---------------------------------------------------------------------------
 // Params
 // ---------------------------------------------------------------------------
@@ -16,6 +28,13 @@ export const taskParamsSchema = z.object({
 export const taskWorkspaceProjectParamsSchema = z.object({
   workspaceId: uuid,
   projectId: uuid,
+});
+
+export const subtaskParamsSchema = z.object({
+  workspaceId: uuid,
+  projectId: uuid,
+  taskId: uuid,
+  subtaskId: uuid,
 });
 
 // ---------------------------------------------------------------------------
@@ -43,7 +62,10 @@ export const createTaskSchema = z
     dueDate: dateInput,
     position: z.number().int().min(0).optional(),
     parentTaskId: uuid.optional().nullable(),
+    weight: z.number().int().positive().optional(),
     assigneeIds: z.array(uuid).max(50).optional(),
+    requiresApproval: z.boolean().optional(),
+    expectedDeliverables: expectedDeliverablesSchema.optional().nullable(),
   })
   .strict()
   .refine(
@@ -82,6 +104,9 @@ export const updateTaskSchema = z
     dueDate: dateInput,
     position: z.number().int().min(0).optional(),
     parentTaskId: uuid.optional().nullable(),
+    weight: z.number().int().positive().optional(),
+    requiresApproval: z.boolean().optional(),
+    expectedDeliverables: expectedDeliverablesSchema.optional().nullable(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update')
@@ -95,6 +120,45 @@ export const updateTaskSchema = z
   );
 
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
+
+export const taskWorkspaceQuerySchema = z.object({});
+
+export const taskActivityQuerySchema = z.object({
+  cursor: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const submitTaskSchema = z
+  .object({
+    workSummary: z.string().trim().min(1).max(10000),
+  })
+  .strict();
+
+export type SubmitTaskInput = z.infer<typeof submitTaskSchema>;
+
+export const reviewTaskSchema = z
+  .object({
+    decision: z.enum(['START_REVIEW', 'APPROVE', 'REQUEST_CHANGES']),
+    feedback: z.string().trim().max(10000).optional().nullable(),
+  })
+  .strict()
+  .refine(
+    (value) => value.decision !== 'REQUEST_CHANGES' || Boolean(value.feedback?.trim()),
+    {
+      message: 'Feedback is required when requesting changes',
+      path: ['feedback'],
+    },
+  );
+
+export type ReviewTaskInput = z.infer<typeof reviewTaskSchema>;
+
+export const completeSubtaskSchema = z
+  .object({
+    workSummary: z.string().trim().max(10000).optional(),
+  })
+  .strict();
+
+export type CompleteSubtaskInput = z.infer<typeof completeSubtaskSchema>;
 
 // ---------------------------------------------------------------------------
 // List tasks query
@@ -185,6 +249,10 @@ export const createCommentSchema = z
   .object({
     body: z.string().trim().min(1).max(10000),
     parentId: uuid.optional().nullable(),
+    mentionedUserIds: z.array(uuid).max(50).optional().default([]).refine(
+      (ids) => new Set(ids).size === ids.length,
+      'Mentioned users must be unique',
+    ),
   })
   .strict();
 
@@ -201,3 +269,5 @@ export type UpdateCommentInput = z.infer<typeof updateCommentSchema>;
 export const listCommentsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
+
+export type ListTaskActivityQuery = z.infer<typeof taskActivityQuerySchema>;

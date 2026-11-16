@@ -271,9 +271,27 @@ const envSchema = z
     EMAIL_RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().default(30_000),
     EMAIL_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().default(3_600_000),
     EMAIL_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+    // A row that stays in SENDING for longer than this was left behind by a
+    // worker that could not record an outcome. It is recovered on the next
+    // pass instead of staying in flight forever.
+    EMAIL_SENDING_STALE_MS: z.coerce.number().int().positive().default(300_000),
     EMAIL_WORKER_ENABLED: booleanString.default(true),
     EMAIL_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),
     EMAIL_WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+
+    // Background worker that notifies task assignees about approaching and
+    // overdue deadlines. Runs inside the API process (same pattern as other
+    // polling workers).
+    TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(300_000),
+
+    // Background worker that generates due recurring task instances automatically.
+    // Runs inside the API process behind an env flag.
+    TASK_RECURRENCE_WORKER_ENABLED: booleanString.default(false),
+    TASK_RECURRENCE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
 
     // Paystack hosted checkout uses only the server secret. USD remains
     // disabled until the merchant account has been approved for USD.
@@ -305,19 +323,116 @@ const envSchema = z
       .positive()
       .max(60_000)
       .default(15_000),
+
+    // --- Dev/source-control integrations (Phase 5, GitHub App) --------------
+    GITHUB_APP_ID: z.string().trim().default(''),
+    GITHUB_APP_SLUG: z.string().trim().default(''),
+    GITHUB_APP_CLIENT_ID: z.string().trim().default(''),
+    GITHUB_APP_CLIENT_SECRET: z.string().default(''),
+    GITHUB_APP_PRIVATE_KEY: z.string().default(''),
+    GITHUB_APP_WEBHOOK_SECRET: z.string().default(''),
+    GITHUB_APP_CALLBACK_URL: z.string().trim().default(''),
+    GITHUB_APP_INSTALL_URL: z.string().trim().default(''),
+
+    // --- Dev/source-control integrations (Phase 5, GitLab OAuth) -----------
+    GITLAB_CLIENT_ID: z.string().trim().default(''),
+    GITLAB_CLIENT_SECRET: z.string().default(''),
+    GITLAB_CALLBACK_URL: z.string().trim().default(''),
+    GITLAB_BASE_URL: z.string().trim().default('https://gitlab.com'),
+    GITLAB_SCOPES: z.string().trim().default('read_api read_repository'),
+    GITLAB_WEBHOOK_SECRET: z.string().default(''),
+
+    // --- AI service integration (Phases 21-23) ------------------------------
+    //
+    // The Python/FastAPI service is optional infrastructure. The Express
+    // backend keeps working when it is disabled or unreachable: AI endpoints
+    // return a clear unavailable response and every core feature continues.
+    AI_ENABLED: booleanString.default(false),
+    AI_SERVICE_URL: z.string().trim().url().default(''),
+    AI_SERVICE_TOKEN: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) => value === '' || value.length >= 32,
+        'AI_SERVICE_TOKEN must be at least 32 characters',
+      ),
+    AI_MODEL: z.string().trim().default(''),
+    AI_FAST_MODEL: z.string().trim().default(''),
+    AI_PROVIDER: z.enum(['service', 'openrouter']).default('service'),
+    OPENROUTER_API_KEY: z.string().trim().default(''),
+    AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().max(120_000).default(20_000),
+    AI_STREAM_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(90_000),
+    AI_MAX_INPUT_CHARS: z.coerce.number().int().min(1_000).max(200_000).default(50_000),
+    AI_MAX_CONTEXT_CHARS: z.coerce.number().int().min(1_000).max(200_000).default(12_000),
+    AI_DAILY_REQUEST_LIMIT: z.coerce.number().int().positive().max(1_000_000).default(500),
+    AI_MONTHLY_TOKEN_LIMIT: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1_000_000_000)
+      .default(2_000_000),
+    AI_CONVERSATION_RETENTION_DAYS: z.coerce.number().int().min(1).max(3_650).default(90),
+    AI_WRITING_RETENTION_MINUTES: z.coerce.number().int().min(1).max(10_080).default(60),
+    AI_ACTION_APPROVAL_TTL_SECONDS: z.coerce.number().int().positive().max(86_400).default(900),
+    AI_CIRCUIT_BREAKER_FAILURES: z.coerce.number().int().min(1).max(100).default(5),
+    AI_CIRCUIT_BREAKER_RESET_MS: z.coerce.number().int().positive().max(3_600_000).default(60_000),
+
+    // --- Cache, analytics and audit retention (Phases 24-27) ----------------
+    CACHE_NAMESPACE: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(
+        /^[a-zA-Z0-9:_-]+$/,
+        'CACHE_NAMESPACE may only contain letters, digits, ":" "_" and "-"',
+      )
+      .default('nexus-cache'),
+    ANALYTICS_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3_600).default(60),
+    ANALYTICS_MAX_RANGE_DAYS: z.coerce.number().int().min(1).max(3_660).default(366),
+    AUDIT_RETENTION_DAYS: z.coerce.number().int().min(1).max(36_500).default(365),
+    AUDIT_PRUNE_BATCH_SIZE: z.coerce.number().int().min(1).max(10_000).default(1_000),
+    WORKER_HEALTH_STALE_MS: z.coerce.number().int().positive().max(3_600_000).default(120_000),
   })
   .superRefine((values, ctx) => {
-    if (
-      values.NODE_ENV === 'production' &&
-      values.OTP_HMAC_SECRET === 'test-only-otp-hmac-secret-not-for-production'
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['OTP_HMAC_SECRET'],
-        message: 'OTP_HMAC_SECRET must be set in production',
-      });
+    if (values.NODE_ENV === 'production') {
+      if (!values.AUTH_COOKIE_SECURE) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_COOKIE_SECURE'],
+          message: 'AUTH_COOKIE_SECURE must be true in production',
+        });
+      }
+      if (!values.CORS_CREDENTIALS) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['CORS_CREDENTIALS'],
+          message: 'CORS_CREDENTIALS must be true in production',
+        });
+      }
+      if (!values.JWT_ACCESS_SECRET || values.JWT_ACCESS_SECRET.includes('change-me') || values.JWT_ACCESS_SECRET.includes('changeme')) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['JWT_ACCESS_SECRET'],
+          message: 'JWT_ACCESS_SECRET must be set to a non-placeholder secret in production',
+        });
+      }
+      if (!values.OTP_HMAC_SECRET || values.OTP_HMAC_SECRET === 'test-only-otp-hmac-secret-not-for-production') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OTP_HMAC_SECRET'],
+          message: 'OTP_HMAC_SECRET must be set in production',
+        });
+      }
+      if (!values.TOTP_ENCRYPTION_KEY) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['TOTP_ENCRYPTION_KEY'],
+          message: 'TOTP_ENCRYPTION_KEY must be set in production',
+        });
+      }
     }
-    if (values.NODE_ENV !== 'test' && !/^[A-Za-z0-9_-]{43}$/.test(values.TOTP_ENCRYPTION_KEY)) {
+    if (values.NODE_ENV !== 'test' && values.TOTP_ENCRYPTION_KEY && !/^[A-Za-z0-9_-]{43}$/.test(values.TOTP_ENCRYPTION_KEY)) {
       ctx.addIssue({
         code: 'custom',
         path: ['TOTP_ENCRYPTION_KEY'],
@@ -515,6 +630,68 @@ const envSchema = z
         });
       }
     }
+
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'service' && !values.AI_SERVICE_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AI_SERVICE_URL'],
+        message: 'AI_SERVICE_URL is required when AI_ENABLED=true',
+      });
+    }
+
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'service' && !values.AI_SERVICE_TOKEN) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AI_SERVICE_TOKEN'],
+        message: 'AI_SERVICE_TOKEN is required when AI_ENABLED=true',
+      });
+    }
+
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'openrouter' && !values.OPENROUTER_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OPENROUTER_API_KEY'],
+        message: 'OPENROUTER_API_KEY is required when AI_ENABLED=true and AI_PROVIDER=openrouter',
+      });
+    }
+
+    if (values.AI_ENABLED && values.AI_PROVIDER === 'openrouter' && !values.AI_MODEL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AI_MODEL'],
+        message: 'AI_MODEL is required when AI_ENABLED=true and AI_PROVIDER=openrouter',
+      });
+    }
+
+    if (values.AI_SERVICE_URL) {
+      try {
+        const url = new URL(values.AI_SERVICE_URL);
+        if (url.username || url.password || url.search || url.hash) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['AI_SERVICE_URL'],
+            message: 'AI_SERVICE_URL must not contain credentials, query parameters, or fragments',
+          });
+        }
+        if (
+          values.NODE_ENV === 'production' &&
+          url.protocol !== 'https:' &&
+          !['localhost', '127.0.0.1'].includes(url.hostname)
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['AI_SERVICE_URL'],
+            message: 'AI_SERVICE_URL must use https in production',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AI_SERVICE_URL'],
+          message: 'AI_SERVICE_URL must be an absolute URL',
+        });
+      }
+    }
   });
 
 export interface AppConfig {
@@ -597,9 +774,13 @@ export interface AppConfig {
   emailRetryBaseDelayMs: number;
   emailRetryMaxDelayMs: number;
   emailRequestTimeoutMs: number;
+  emailSendingStaleMs: number;
   emailWorkerEnabled: boolean;
   emailWorkerPollIntervalMs: number;
   emailWorkerBatchSize: number;
+  taskDeadlineNotificationPollIntervalMs: number;
+  taskRecurrenceWorkerEnabled: boolean;
+  taskRecurrencePollIntervalMs: number;
   paystackSecretKey: string;
   paystackWebhookSecret: string;
   paystackWebhookPreviousSecret: string;
@@ -614,6 +795,44 @@ export interface AppConfig {
   objectStorageAccessKeyId: string;
   objectStorageSecretAccessKey: string;
   objectStorageRequestTimeoutMs: number;
+  githubAppId: string;
+  githubAppSlug: string;
+  githubAppClientId: string;
+  githubAppClientSecret: string;
+  githubAppPrivateKey: string;
+  githubAppWebhookSecret: string;
+  githubAppCallbackUrl: string;
+  githubAppInstallUrl: string;
+  gitlabClientId: string;
+  gitlabClientSecret: string;
+  gitlabCallbackUrl: string;
+  gitlabBaseUrl: string;
+  gitlabScopes: string;
+  gitlabWebhookSecret: string;
+  aiEnabled: boolean;
+  aiServiceUrl: string;
+  aiServiceToken: string;
+  aiModel: string;
+  aiProvider: 'service' | 'openrouter';
+  openrouterApiKey: string;
+  aiFastModel: string;
+  aiRequestTimeoutMs: number;
+  aiStreamTimeoutMs: number;
+  aiMaxInputChars: number;
+  aiMaxContextChars: number;
+  aiDailyRequestLimit: number;
+  aiMonthlyTokenLimit: number;
+  aiConversationRetentionDays: number;
+  aiWritingRetentionMinutes: number;
+  aiActionApprovalTtlSeconds: number;
+  aiCircuitBreakerFailures: number;
+  aiCircuitBreakerResetMs: number;
+  cacheNamespace: string;
+  analyticsCacheTtlSeconds: number;
+  analyticsMaxRangeDays: number;
+  auditRetentionDays: number;
+  auditPruneBatchSize: number;
+  workerHealthStaleMs: number;
 }
 
 export class ConfigurationError extends Error {
@@ -752,9 +971,14 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     emailRetryBaseDelayMs: values.EMAIL_RETRY_BASE_DELAY_MS,
     emailRetryMaxDelayMs: values.EMAIL_RETRY_MAX_DELAY_MS,
     emailRequestTimeoutMs: values.EMAIL_REQUEST_TIMEOUT_MS,
+    emailSendingStaleMs: values.EMAIL_SENDING_STALE_MS,
     emailWorkerEnabled: values.EMAIL_WORKER_ENABLED,
     emailWorkerPollIntervalMs: values.EMAIL_WORKER_POLL_INTERVAL_MS,
     emailWorkerBatchSize: values.EMAIL_WORKER_BATCH_SIZE,
+    taskDeadlineNotificationPollIntervalMs:
+      values.TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS,
+    taskRecurrenceWorkerEnabled: values.TASK_RECURRENCE_WORKER_ENABLED,
+    taskRecurrencePollIntervalMs: values.TASK_RECURRENCE_POLL_INTERVAL_MS,
     paystackSecretKey: values.PAYSTACK_SECRET_KEY,
     paystackWebhookSecret: values.PAYSTACK_WEBHOOK_SECRET,
     paystackWebhookPreviousSecret: values.PAYSTACK_WEBHOOK_PREVIOUS_SECRET,
@@ -769,6 +993,44 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     objectStorageAccessKeyId: values.OBJECT_STORAGE_ACCESS_KEY_ID,
     objectStorageSecretAccessKey: values.OBJECT_STORAGE_SECRET_ACCESS_KEY,
     objectStorageRequestTimeoutMs: values.OBJECT_STORAGE_REQUEST_TIMEOUT_MS,
+    githubAppId: values.GITHUB_APP_ID,
+    githubAppSlug: values.GITHUB_APP_SLUG,
+    githubAppClientId: values.GITHUB_APP_CLIENT_ID,
+    githubAppClientSecret: values.GITHUB_APP_CLIENT_SECRET,
+    githubAppPrivateKey: values.GITHUB_APP_PRIVATE_KEY,
+    githubAppWebhookSecret: values.GITHUB_APP_WEBHOOK_SECRET,
+    githubAppCallbackUrl: values.GITHUB_APP_CALLBACK_URL,
+    githubAppInstallUrl: values.GITHUB_APP_INSTALL_URL,
+    gitlabClientId: values.GITLAB_CLIENT_ID,
+    gitlabClientSecret: values.GITLAB_CLIENT_SECRET,
+    gitlabCallbackUrl: values.GITLAB_CALLBACK_URL,
+    gitlabBaseUrl: values.GITLAB_BASE_URL,
+    gitlabScopes: values.GITLAB_SCOPES,
+    gitlabWebhookSecret: values.GITLAB_WEBHOOK_SECRET,
+    aiEnabled: values.AI_ENABLED,
+    aiServiceUrl: values.AI_SERVICE_URL.replace(/\/+$/, ''),
+    aiServiceToken: values.AI_SERVICE_TOKEN,
+    aiModel: values.AI_MODEL,
+    aiProvider: values.AI_PROVIDER,
+    openrouterApiKey: values.OPENROUTER_API_KEY,
+    aiFastModel: values.AI_FAST_MODEL,
+    aiRequestTimeoutMs: values.AI_REQUEST_TIMEOUT_MS,
+    aiStreamTimeoutMs: values.AI_STREAM_TIMEOUT_MS,
+    aiMaxInputChars: values.AI_MAX_INPUT_CHARS,
+    aiMaxContextChars: values.AI_MAX_CONTEXT_CHARS,
+    aiDailyRequestLimit: values.AI_DAILY_REQUEST_LIMIT,
+    aiMonthlyTokenLimit: values.AI_MONTHLY_TOKEN_LIMIT,
+    aiConversationRetentionDays: values.AI_CONVERSATION_RETENTION_DAYS,
+    aiWritingRetentionMinutes: values.AI_WRITING_RETENTION_MINUTES,
+    aiActionApprovalTtlSeconds: values.AI_ACTION_APPROVAL_TTL_SECONDS,
+    aiCircuitBreakerFailures: values.AI_CIRCUIT_BREAKER_FAILURES,
+    aiCircuitBreakerResetMs: values.AI_CIRCUIT_BREAKER_RESET_MS,
+    cacheNamespace: values.CACHE_NAMESPACE,
+    analyticsCacheTtlSeconds: values.ANALYTICS_CACHE_TTL_SECONDS,
+    analyticsMaxRangeDays: values.ANALYTICS_MAX_RANGE_DAYS,
+    auditRetentionDays: values.AUDIT_RETENTION_DAYS,
+    auditPruneBatchSize: values.AUDIT_PRUNE_BATCH_SIZE,
+    workerHealthStaleMs: values.WORKER_HEALTH_STALE_MS,
   };
 }
 

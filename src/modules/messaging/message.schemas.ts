@@ -17,6 +17,7 @@ export const sendMessageSchema = z
   .object({
     body: z.string().trim().min(1).max(10_000),
     parentId: uuid.optional().nullable(),
+    clientTempId: z.string().max(64).optional(),
   })
   .strict();
 

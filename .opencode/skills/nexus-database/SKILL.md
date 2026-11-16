@@ -5,13 +5,59 @@ description: Specialized database engineering instructions for the Nexus backend
 
 # Nexus Database Engineering Skill
 
+## 0. Nexus Product Context and Non-Negotiable Rules
+
+Nexus is a general-purpose **Real-Time Workspace & Project Management Platform**, not a developer-only tool. It combines project and task management, team communication, collaborative documents, file management, scheduling, forms, global search, automation, billing, integrations and AI-assisted productivity.
+
+Nexus supports three workspace experiences on one shared backend:
+
+- **Individual** workspaces.
+- **Company** workspaces.
+- **Institution** workspaces.
+
+These are not separate applications. Shared services must adapt features, permissions and navigation to the workspace type while preserving strict isolation between users, workspaces and organisations.
+
+### Service boundaries
+
+- The main backend is **Node.js, Express.js and TypeScript**. It is authoritative for authentication, authorisation, business rules, database mutations, workspace context and application APIs.
+- The AI service is a separate, independently deployable **Python/FastAPI** service using managed AI APIs. It must not bypass Express authentication, permissions or business rules, and must not mutate application data directly.
+- Express authenticates the user, gathers only authorised context, calls the AI service, validates structured results, and rechecks permissions before executing any approved AI action.
+- Core Nexus functionality must continue operating when the AI service is unavailable.
+- Do not convert the Express backend to Python, move ordinary business logic into Python, or rewrite TypeScript as JavaScript.
+
+### Roles, ownership and isolation
+
+Company roles: Owner, Admin, Team Lead, Member, Guest. Institution roles: Owner, Institution Admin, Department Admin, Team/Group Lead, Member, Guest. Project roles (Project Owner, Project Manager, Contributor, Viewer, Guest) are separate from organisation roles.
+
+Only the Owner may remove or demote another administrator. An administrator cannot remove the Owner. Team Leads cannot remove organisation members unless explicitly authorised. Organisation membership never automatically grants access to private projects, private files or private meetings.
+
+Enforce authentication and authorisation server-side for every protected operation, including HTTP, real-time events, files, search and AI context. Verify workspace, resource ownership, membership, role, visibility and explicit grants. Never trust client-supplied user IDs, roles, workspace IDs, ownership claims or storage paths. Prevent insecure direct object references and privilege escalation: knowing a resource ID never grants access.
+
+### Messaging and notification separation
+
+Direct messages, group messages, channel messages, project conversations, announcements and message mentions belong in the **Messages** area. They must never be duplicated in the general notification bell. Message unread counts and general notification unread counts are independent and must not clear each other.
+
+**General notifications** cover task assignments, task comments and mentions, meeting invitations and changes, join-request decisions, workspace invitations, file-sharing events, security changes and AI action outcomes. Use one central notification service; do not build per-feature notification stores.
+
+### Git, phase and preservation rules
+
+- Never commit or push implementation work directly to `main`.
+- Work on a dedicated branch such as `feature/phase-N-description`, `fix/phase-N-description`, `refactor/description` or `docs/description`; commit and push that branch.
+- Never force-push, rewrite shared history, delete remote branches, or merge into `main` without explicit user authorisation.
+- Preserve uncommitted user changes and never include unrelated changes in a commit.
+- `PHASES.md` is the authoritative implementation tracker. Identify the current active phase, work only on that phase, check dependencies, and update the tracker only when the documented completion criteria are genuinely met. Mark blocked work as `BLOCKED`; never begin another phase without authorisation.
+- Never delete or overwrite `.env`, commit secrets, remove working features, replace the existing ORM or backend framework, convert TypeScript to JavaScript, or move the main backend to Python.
+- Prefer the smallest safe change. Do not implement future enhancements unless the active phase or the user explicitly authorises them.
+
 ## 1. Purpose
 
 This skill defines how database-related features must be designed, implemented, tested, and maintained in the Nexus backend.
 
-Nexus is a real-time workspace and project management platform combining project management, collaborative documentation, messaging, notifications, file sharing, meetings, and AI-assisted workflows.
+Nexus is a general-purpose Real-Time Workspace & Project Management Platform combining project and task management, team communication, collaborative documents, file management, scheduling, forms, search, automation, billing, integrations, and AI-assisted workflows. It is not developer-only software.
 
-The database must support reliable relationships, workspace isolation, role-based access, real-time collaboration, data integrity, and future scalability.
+Nexus serves Individual, Company, and Institution workspaces from one shared database architecture. Workspace type changes the applicable organisation hierarchy, roles, and feature access, but must not weaken isolation between workspaces.
+
+The database must support reliable relationships, workspace isolation, role-based and resource-level access, real-time collaboration, data integrity, and future scalability.
 
 Follow this skill whenever implementing or modifying database functionality.
 
@@ -25,8 +71,9 @@ Use the existing project configuration as the source of truth.
 - Primary database: PostgreSQL
 - ORM: Prisma ORM
 - Cache and temporary shared state: Redis
-- Real-time communication: Socket.IO
+- Real-time communication: the existing WebSocket/real-time implementation. Socket.IO is the planned transport but is not yet installed; inspect the repository before relying on it.
 - API architecture: REST APIs with real-time events where appropriate
+- AI service: a separate Python/FastAPI service; it does not own the application database
 
 Do not replace PostgreSQL or Prisma with another database or ORM without explicit approval.
 
@@ -36,7 +83,7 @@ Do not introduce another database library merely to perform operations that Pris
 
 Before making database changes:
 
-1. Read `agent.md` and `PHASES.md`.
+1. Read `AGENTS.md` and `PHASES.md`.
 2. Inspect `package.json` and the installed Prisma version.
 3. Locate the existing Prisma schema and migration directory.
 4. Inspect database configuration, environment variable names, and Prisma Client initialization.
@@ -56,14 +103,19 @@ PostgreSQL is the authoritative store for persistent application data.
 
 Use PostgreSQL for information such as:
 
-- User accounts and profiles.
-- Workspaces and workspace memberships.
-- Teams and team memberships.
-- Projects, tasks, assignments, comments, and activity records.
-- Documents and document metadata.
-- Conversations, messages, and persistent notification records.
-- Meetings, invitations, and attendance records.
-- Audit logs, integration settings, and durable job records where required.
+- User accounts, profiles, sessions, and security events.
+- Individual, Company, and Institution workspaces and workspace memberships.
+- Company teams, Institution departments/groups, and their memberships.
+- Organisation invitations, join requests, approvals, and ownership transfer records.
+- Roles, permissions, project access, resource grants, and audit records.
+- Subscriptions, plans, entitlements, seats, usage, and billing state.
+- Projects, tasks, assignments, comments, dependencies, milestones, and activity records.
+- Documents and document metadata, including version-history foundations.
+- Conversations, messages, read states, and persistent notification records.
+- Meetings, invitations, calendars, attendance, summaries, and action items.
+- Forms, form fields, responses, and survey results.
+- Integrations, automation workflows, execution history, and webhook events.
+- AI action proposals/approvals, Nexus Write suggestions, and AI job records.
 
 Redis is not a replacement for PostgreSQL.
 
@@ -114,13 +166,15 @@ Examples of important Nexus relationships:
 
 - A user can belong to multiple workspaces.
 - A workspace can have multiple members.
-- A workspace can contain multiple teams and projects.
-- A project can contain multiple tasks.
-- A task can have assignments, comments, attachments, and activity records.
+- A workspace can contain multiple teams, departments, groups, projects, and forms.
+- A project can contain multiple tasks, milestones, and conversations.
+- A task can have assignments, comments, attachments, dependencies, and activity records.
 - Messages belong to conversations and have authors.
-- Notifications belong to their intended recipients.
-- Meetings can have multiple participants.
+- Notifications belong to their intended recipients and remain separate from message unread state.
+- Meetings can have multiple participants, calendar links, summaries, and action items.
 - Files and documents must have clearly defined ownership and access rules.
+- Subscriptions and entitlements belong to the correct workspace or billing owner.
+- Automation workflows, integration records, and AI action approvals must retain their owning workspace.
 
 These examples describe intended domain relationships, not permission to duplicate models that already exist.
 
@@ -137,8 +191,12 @@ For every workspace-owned resource, establish how its workspace is identified an
 Requirements:
 
 - Validate that related records belong to the correct workspace.
+- Distinguish Individual, Company, and Institution ownership and roles where the schema requires it.
 - Prevent users from accessing another workspace's private records without authorization.
-- Verify project, task, conversation, document, meeting, and file access according to the relevant membership and permission rules.
+- Verify project, task, conversation, document, meeting, file, form, integration, and automation access according to the relevant membership and permission rules.
+- Preserve protected Owner rules: only the Owner may remove or demote another administrator, and an administrator cannot remove the Owner.
+- Keep project roles separate from organisation roles.
+- Do not grant organisation administrators automatic access to private projects, private files, or private meetings.
 - Enforce role and resource permissions in the service layer.
 - Do not rely on frontend checks to protect database records.
 - Avoid accepting workspace ownership or privileged roles directly from untrusted request bodies.
@@ -223,11 +281,16 @@ Add indexes based on actual query patterns and relationships.
 Consider indexes for:
 
 - Foreign-key fields used in lookups.
-- Workspace and project filtering.
+- Workspace and project filtering, including workspace type.
 - Task status, assignment, and due-date queries.
 - Message conversation and chronological retrieval.
-- Unread notifications by recipient.
+- Message unread state and independently tracked general notifications.
 - Meeting schedules and participant lookups.
+- Calendar event synchronisation keys and external provider identifiers.
+- File and document search metadata.
+- Form and form-response lookups.
+- Subscription, entitlement, and usage queries.
+- Automation trigger and execution lookups.
 - Unique identifiers and fields used for login or invitations.
 
 Use composite indexes when common queries filter or sort on multiple fields.
@@ -356,15 +419,16 @@ Do not claim a database feature is complete simply because the Prisma schema val
 
 Follow this workflow for every database task:
 
-1. **Inspect:** Read relevant project instructions, schema files, migrations, and affected services.
-2. **Plan:** Identify models, relations, constraints, indexes, migration impact, and affected API behavior.
-3. **Implement:** Make the smallest coherent schema and code changes.
-4. **Migrate:** Create and review the migration using the installed Prisma workflow.
-5. **Generate:** Update Prisma Client when required.
-6. **Test:** Run schema validation, relevant automated tests, and the appropriate integration checks.
-7. **Verify:** Check that relationships, authorization, and data consistency remain correct.
-8. **Document:** Explain schema changes, migrations, environment requirements, and any follow-up work.
-9. **Track:** Update `PHASES.md` only when the corresponding phase's completion criteria have genuinely been met.
+1. **Inspect:** Read `AGENTS.md`, `PHASES.md`, relevant skills, schema files, migrations, and affected services.
+2. **Branch:** Confirm you are not on `main`; create or use a dedicated feature branch and preserve uncommitted user changes.
+3. **Plan:** Identify models, relations, constraints, indexes, migration impact, and affected API behavior.
+4. **Implement:** Make the smallest coherent schema and code changes.
+5. **Migrate:** Create and review the migration using the installed Prisma workflow.
+6. **Generate:** Update Prisma Client when required.
+7. **Test:** Run schema validation, relevant automated tests, and the appropriate integration checks.
+8. **Verify:** Check that relationships, authorization, workspace isolation, and data consistency remain correct.
+9. **Document:** Explain schema changes, migrations, environment requirements, and any follow-up work.
+10. **Track and commit:** Update `PHASES.md` only when the corresponding phase's completion criteria have genuinely been met, then commit and push the feature branch. Never merge into `main` without explicit authorisation.
 
 Do not mark a phase complete merely because its schema has been created.
 
@@ -383,6 +447,7 @@ A database task is complete only when all applicable requirements are satisfied:
 - No unrelated features or migration history have been damaged.
 - No secrets have been exposed.
 - Documentation and `PHASES.md` reflect the actual state of the work.
+- Changes are committed and pushed to the correct feature branch, not `main`.
 
 ## 19. Required Agent Behavior
 

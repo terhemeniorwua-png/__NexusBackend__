@@ -17,3 +17,5 @@ export function buildEmailBrand(config: AppConfig): EmailBrand {
 export * from './layout';
 export * from './account';
 export * from './collaboration';
+export * from './workspace';
+export * from './billing';

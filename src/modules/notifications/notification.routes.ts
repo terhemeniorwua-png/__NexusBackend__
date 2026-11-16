@@ -55,14 +55,9 @@ export function createNotificationRouter({
   );
 
   // Get unread count
-  router.get(
-    '/unread-count',
-    requireAuth,
-    requireActiveAccount,
-    async (_req, res) => {
-      sendSuccess(res, await service.getUnreadCount({ userId: userId(_req) }));
-    },
-  );
+  router.get('/unread-count', requireAuth, requireActiveAccount, async (_req, res) => {
+    sendSuccess(res, await service.getUnreadCount({ userId: userId(_req) }));
+  });
 
   // Mark specific notifications as read
   router.post(
@@ -78,15 +73,10 @@ export function createNotificationRouter({
   );
 
   // Mark all as read
-  router.post(
-    '/read-all',
-    requireAuth,
-    requireActiveAccount,
-    async (req, res) => {
-      await service.markAllRead({ userId: userId(req) });
-      sendSuccess(res, { ok: true });
-    },
-  );
+  router.post('/read-all', requireAuth, requireActiveAccount, async (req, res) => {
+    await service.markAllRead({ userId: userId(req) });
+    sendSuccess(res, { ok: true });
+  });
 
   // List notification preferences for a workspace
   router.get(
@@ -96,10 +86,7 @@ export function createNotificationRouter({
     validate({ params: preferenceParamsSchema }),
     async (req, res) => {
       const { workspaceId } = req.validated!.params as { workspaceId: string };
-      sendSuccess(
-        res,
-        await service.listPreferences({ userId: userId(req), workspaceId }),
-      );
+      sendSuccess(res, await service.listPreferences({ userId: userId(req), workspaceId }));
     },
   );
 
@@ -116,7 +103,8 @@ export function createNotificationRouter({
         userId: userId(req),
         workspaceId,
         type: body.type,
-        inAppEnabled: body.inAppEnabled,
+        ...(body.inAppEnabled !== undefined ? { inAppEnabled: body.inAppEnabled } : {}),
+        ...(body.emailEnabled !== undefined ? { emailEnabled: body.emailEnabled } : {}),
       });
       sendSuccess(res, { ok: true });
     },

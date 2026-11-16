@@ -4,6 +4,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { Logger } from '../../utils/logger';
 import { hashPassword } from '../../services/password';
 import type { PrivateObjectStorage } from '../../services/storage/private-object-storage';
+import type { WorkerHealthRecorder } from '../../services/workers/worker-health';
 import { isAppError } from '../../utils/errors';
 
 const ACCOUNT_DELETION_BATCH_SIZE = 25;
@@ -331,6 +332,8 @@ export function createAccountDeletionWorker(input: {
   logger: Logger;
   bcryptSaltRounds?: number;
   storage?: PrivateObjectStorage;
+  /** Optional liveness recorder for `GET /health/workers`. */
+  health?: WorkerHealthRecorder;
 }): AccountDeletionWorker {
   let timer: NodeJS.Timeout | null = null;
   let inFlight: Promise<void> | null = null;
@@ -370,9 +373,12 @@ export function createAccountDeletionWorker(input: {
             loggedBlockedUsers.delete(userId);
           }
         }
+
+        input.health?.succeeded();
       })
       .catch((error: unknown) => {
         input.logger.error('account_deletion_worker_failed', { error });
+        input.health?.failed(error);
       })
       .finally(() => {
         inFlight = null;
@@ -387,8 +393,13 @@ export function createAccountDeletionWorker(input: {
         return;
       }
 
+      input.health?.started();
+      input.health?.passStarted();
       void run();
-      timer = setInterval(() => void run(), ACCOUNT_DELETION_POLL_INTERVAL_MS);
+      timer = setInterval(() => {
+        input.health?.passStarted();
+        void run();
+      }, ACCOUNT_DELETION_POLL_INTERVAL_MS);
       timer.unref();
     },
     async stop(): Promise<void> {
@@ -400,6 +411,8 @@ export function createAccountDeletionWorker(input: {
       if (inFlight) {
         await inFlight;
       }
+
+      input.health?.stopped();
     },
   };
 }

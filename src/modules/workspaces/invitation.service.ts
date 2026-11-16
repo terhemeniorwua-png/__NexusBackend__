@@ -1,3 +1,4 @@
+import { createCollaborationEmailNotifier } from '../../services/collaboration-email-notifier';
 import {
   Prisma,
   type Invitation,
@@ -12,6 +13,7 @@ import { recordAuditEvent, WorkspaceAuditAction } from '../../services/audit';
 import { buildEmailBrand, buildWorkspaceInvitationEmail } from '../../services/email';
 import { sendEmail } from '../../services/email';
 import { createNotification } from '../../services/notifications';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
 import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
@@ -20,8 +22,15 @@ import {
   effectiveWorkspaceRole,
 } from '../authorization/organization-role';
 import type { CreateInvitationInput } from './workspace.schemas';
-import type { InvitationPreview, InvitationResult, InvitationSummary } from './workspace.types';
+import type {
+  InvitationPreview,
+  InvitationResult,
+  InvitationSummary,
+  InvitationVerification,
+  InvitationVerificationReason,
+} from './workspace.types';
 import { assertWorkspaceSeatCapacity } from '../billing/membership-billing';
+import { TeamCapability, requireTeamAccess } from '../authorization';
 
 /**
  * Workspace invitations.
@@ -48,6 +57,22 @@ export interface InvitationService {
     input: { userId: string; workspaceId: string } & CreateInvitationInput,
     ctx: RequestContext,
   ): Promise<InvitationResult>;
+  createTeam(
+    input: { userId: string; workspaceId: string; teamId: string; targetUserId: string },
+    ctx: RequestContext,
+  ): Promise<InvitationResult>;
+  listTeam(input: {
+    userId: string;
+    workspaceId: string;
+    teamId: string;
+    status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REVOKED' | 'EXPIRED' | 'ALL';
+  }): Promise<InvitationSummary[]>;
+  revokeTeam(input: {
+    userId: string;
+    workspaceId: string;
+    teamId: string;
+    invitationId: string;
+  }): Promise<InvitationSummary>;
   list(input: {
     userId: string;
     workspaceId: string;
@@ -63,6 +88,7 @@ export interface InvitationService {
     invitationId: string;
   }): Promise<InvitationSummary>;
   preview(token: string): Promise<InvitationPreview>;
+  verify(input: { userId: string; token: string }): Promise<InvitationVerification>;
   accept(input: { userId: string; token: string }, ctx: RequestContext): Promise<InvitationSummary>;
   decline(
     input: { userId: string; token: string },
@@ -89,6 +115,22 @@ export function maskInvitationEmail(email: string): string {
   return `${local.slice(0, 1)}***@${domain}`;
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function isInvitationRecipient(
+  invitation: Pick<Invitation, 'email' | 'forUserId'>,
+  user: { id: string; email: string },
+): boolean {
+  // A bound invitation belongs to one account, even if that account later
+  // changes its address. An unbound invitation belongs to the address it was
+  // sent to.
+  return invitation.forUserId !== null
+    ? invitation.forUserId === user.id
+    : normalizeEmail(invitation.email) === normalizeEmail(user.email);
+}
+
 function pendingKeyFor(workspaceId: string, email: string): string {
   return `workspace:${workspaceId}:email:${email}`;
 }
@@ -103,6 +145,7 @@ export function createInvitationService(
 ): InvitationService {
   const client = prisma ?? getPrismaClient();
   const brand = buildEmailBrand(config);
+  const collaborationEmailNotifier = createCollaborationEmailNotifier(config, { prisma: client });
 
   function acceptUrl(token: string): string {
     const base = config.frontendUrl.replace(/\/+$/, '');
@@ -120,6 +163,7 @@ export function createInvitationService(
     invitation: Invitation & {
       workspace: { id: string; name: string };
       invitedBy: { id: string; name: string };
+      team?: { id: string; name: string } | null;
     },
   ): InvitationSummary {
     return {
@@ -130,6 +174,7 @@ export function createInvitationService(
       role: invitation.role,
       organizationRole: invitation.organizationRole,
       type: invitation.type,
+      ...(invitation.team ? { teamId: invitation.team.id, teamName: invitation.team.name } : {}),
       status: invitation.status,
       invitedBy: { id: invitation.invitedBy.id, name: invitation.invitedBy.name },
       expiresAt: invitation.expiresAt,
@@ -143,6 +188,7 @@ export function createInvitationService(
   const summaryInclude = {
     workspace: { select: { id: true, name: true } },
     invitedBy: { select: { id: true, name: true } },
+    team: { select: { id: true, name: true } },
   } as const;
 
   /**
@@ -374,6 +420,221 @@ export function createInvitationService(
       return { invitation: toSummary(stored), emailSent };
     },
 
+    async createTeam(input, ctx): Promise<InvitationResult> {
+      const workspace = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      if (workspace.workspace.status !== 'ACTIVE') {
+        throw new AppError(409, 'WORKSPACE_NOT_ACTIVE', 'This workspace is not active');
+      }
+      const access = await requireTeamAccess(client, {
+        userId: input.userId,
+        workspaceId: workspace.workspace.id,
+        teamId: input.teamId,
+        workspaceRole: workspace.effectiveRole,
+        capability: TeamCapability.ManageMembers,
+      });
+      if (access.team.status !== 'ACTIVE') {
+        throw new AppError(409, 'TEAM_NOT_ACTIVE', 'Invitations cannot be sent to this team');
+      }
+
+      const recipientMembership = await client.workspaceMembership.findUnique({
+        where: { workspaceId_userId: { workspaceId: workspace.workspace.id, userId: input.targetUserId } },
+        select: { status: true },
+      });
+      const recipient = await client.user.findUnique({
+        where: { id: input.targetUserId },
+        select: { id: true, name: true, email: true, status: true, deletedAt: true },
+      });
+      if (
+        !recipient ||
+        recipient.deletedAt ||
+        recipient.status !== 'ACTIVE' ||
+        recipientMembership?.status !== 'ACTIVE'
+      ) {
+        throw new AppError(404, 'TEAM_INVITATION_RECIPIENT_NOT_FOUND', 'That active workspace member does not exist');
+      }
+
+      const existingTeamMembership = await client.teamMembership.findUnique({
+        where: { teamId_userId: { teamId: access.team.id, userId: recipient.id } },
+        select: { id: true },
+      });
+      if (existingTeamMembership) {
+        throw new AppError(409, 'ALREADY_A_TEAM_MEMBER', 'This account is already a member of the team');
+      }
+
+      const token = generateSecureToken();
+      const tokenHash = hashSecret(token);
+      const expiresAt = new Date(Date.now() + config.workspaceInvitationTtlSeconds * 1_000);
+      const pendingKey = `team:${access.team.id}:user:${recipient.id}`;
+      let invitation: Invitation;
+      try {
+        invitation = await client.$transaction(async (tx) => {
+          await lockActiveWorkspace(tx, workspace.workspace.id);
+          await tx.invitation.updateMany({
+            where: { pendingKey, status: 'PENDING', expiresAt: { lte: new Date() } },
+            data: { status: 'EXPIRED', pendingKey: null },
+          });
+          const pending = await tx.invitation.findFirst({
+            where: { pendingKey, status: 'PENDING' },
+            select: { id: true },
+          });
+          if (pending) {
+            throw new AppError(409, 'TEAM_INVITATION_EXISTS', 'A team invitation is already pending');
+          }
+          const activeMembership = await tx.workspaceMembership.findUnique({
+            where: {
+              workspaceId_userId: { workspaceId: workspace.workspace.id, userId: recipient.id },
+            },
+            select: { status: true },
+          });
+          const activeRecipient = await tx.user.findFirst({
+            where: { id: recipient.id, status: 'ACTIVE', deletedAt: null },
+            select: { id: true },
+          });
+          const activeTeam = await tx.team.findFirst({
+            where: { id: access.team.id, workspaceId: workspace.workspace.id, status: 'ACTIVE', deletedAt: null },
+            select: { id: true },
+          });
+          if (activeMembership?.status !== 'ACTIVE' || !activeRecipient || !activeTeam) {
+            throw new AppError(409, 'TEAM_INVITATION_NOT_AVAILABLE', 'The team invitation is no longer available');
+          }
+          const alreadyMember = await tx.teamMembership.findUnique({
+            where: { teamId_userId: { teamId: access.team.id, userId: recipient.id } },
+            select: { id: true },
+          });
+          if (alreadyMember) {
+            throw new AppError(409, 'ALREADY_A_TEAM_MEMBER', 'This account is already a member of the team');
+          }
+          const created = await tx.invitation.create({
+            data: {
+              workspaceId: workspace.workspace.id,
+              teamId: access.team.id,
+              email: recipient.email,
+              forUserId: recipient.id,
+              role: 'MEMBER',
+              type: 'TEAM',
+              tokenHash,
+              status: 'PENDING',
+              invitedById: input.userId,
+              expiresAt,
+              pendingKey,
+            },
+          });
+          await recordAuditEvent(tx, {
+            workspaceId: workspace.workspace.id,
+            actorId: input.userId,
+            action: WorkspaceAuditAction.InvitationCreated,
+            targetType: 'Invitation',
+            targetId: created.id,
+            metadata: { type: 'TEAM', teamId: access.team.id, recipientId: recipient.id },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+          return created;
+        });
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new AppError(409, 'TEAM_INVITATION_EXISTS', 'A team invitation is already pending');
+        }
+        throw error;
+      }
+
+      const email = await collaborationEmailNotifier.notifyTeamInvitation({
+        invitationId: invitation.id,
+        token,
+      });
+      const stored = await client.invitation.findUnique({
+        where: { id: invitation.id },
+        include: summaryInclude,
+      });
+      if (!stored) throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      return { invitation: toSummary(stored), emailSent: email.accepted };
+    },
+
+    async listTeam(input): Promise<InvitationSummary[]> {
+      const workspace = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      await requireTeamAccess(client, {
+        userId: input.userId,
+        workspaceId: workspace.workspace.id,
+        teamId: input.teamId,
+        workspaceRole: workspace.effectiveRole,
+        capability: TeamCapability.ManageMembers,
+      });
+      await expireStale(workspace.workspace.id);
+      const invitations = await client.invitation.findMany({
+        where: {
+          workspaceId: workspace.workspace.id,
+          teamId: input.teamId,
+          type: 'TEAM',
+          ...(input.status === 'ALL' ? {} : { status: input.status }),
+        },
+        include: summaryInclude,
+        orderBy: { createdAt: 'desc' },
+      });
+      return invitations.map(toSummary);
+    },
+
+    async revokeTeam(input): Promise<InvitationSummary> {
+      const workspace = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      await requireTeamAccess(client, {
+        userId: input.userId,
+        workspaceId: workspace.workspace.id,
+        teamId: input.teamId,
+        workspaceRole: workspace.effectiveRole,
+        capability: TeamCapability.ManageMembers,
+      });
+      const invitation = await client.invitation.findFirst({
+        where: {
+          id: input.invitationId,
+          workspaceId: workspace.workspace.id,
+          teamId: input.teamId,
+          type: 'TEAM',
+        },
+      });
+      if (!invitation) throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
+      if (invitation.status === 'ACCEPTED') {
+        throw new AppError(409, 'INVITATION_ALREADY_ACCEPTED', 'This invitation has already been accepted');
+      }
+      if (invitation.status === 'REVOKED') {
+        throw new AppError(409, 'INVITATION_REVOKED', 'This invitation was revoked');
+      }
+      const revoked = await client.$transaction(async (tx) => {
+        await lockActiveWorkspace(tx, workspace.workspace.id);
+        const changed = await tx.invitation.updateMany({
+          where: {
+            id: invitation.id,
+            teamId: input.teamId,
+            type: 'TEAM',
+            status: { in: ['PENDING', 'DECLINED', 'EXPIRED'] },
+          },
+          data: { status: 'REVOKED', revokedAt: new Date(), pendingKey: null },
+        });
+        if (!changed.count) throw new AppError(409, 'INVITATION_STATE_CHANGED', 'The invitation state changed; refresh and try again');
+        await recordAuditEvent(tx, {
+          workspaceId: workspace.workspace.id,
+          actorId: input.userId,
+          action: WorkspaceAuditAction.InvitationRevoked,
+          targetType: 'Invitation',
+          targetId: invitation.id,
+          metadata: { type: 'TEAM', teamId: input.teamId, recipientId: invitation.forUserId },
+        });
+        return tx.invitation.findUnique({ where: { id: invitation.id }, include: summaryInclude });
+      });
+      if (!revoked) throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+      return toSummary(revoked);
+    },
+
     async list(input): Promise<InvitationSummary[]> {
       const access = await requireWorkspaceAccess(client, {
         userId: input.userId,
@@ -386,6 +647,7 @@ export function createInvitationService(
       const invitations = await client.invitation.findMany({
         where: {
           workspaceId: access.workspace.id,
+          type: 'WORKSPACE',
           ...(input.status === 'ALL' ? {} : { status: input.status }),
         },
         include: summaryInclude,
@@ -408,6 +670,9 @@ export function createInvitationService(
       });
 
       if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
+      }
+      if (invitation.type !== 'WORKSPACE') {
         throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
       }
 
@@ -542,6 +807,9 @@ export function createInvitationService(
       if (!invitation) {
         throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
       }
+      if (invitation.type !== 'WORKSPACE') {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'That invitation does not exist');
+      }
 
       if (invitation.status === 'ACCEPTED') {
         throw new AppError(
@@ -606,11 +874,16 @@ export function createInvitationService(
             select: { id: true, name: true, slug: true, status: true, deletedAt: true },
           },
           invitedBy: { select: { id: true, name: true } },
+          team: { select: { id: true, name: true, status: true, deletedAt: true } },
         },
       });
 
       if (!invitation) {
         throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
+      }
+
+      if (invitation.type === 'TEAM' && (!invitation.team || invitation.team.status !== 'ACTIVE' || invitation.team.deletedAt)) {
+        throw new AppError(410, 'TEAM_INVITATION_UNAVAILABLE', 'This team invitation is no longer available');
       }
 
       if (invitation.workspace.status !== 'ACTIVE' || invitation.workspace.deletedAt) {
@@ -651,10 +924,138 @@ export function createInvitationService(
         invitedBy: invitation.invitedBy,
         role: invitation.role,
         organizationRole: invitation.organizationRole,
+        ...(invitation.team ? { team: { id: invitation.team.id, name: invitation.team.name } } : {}),
         status: invitation.status,
         expiresAt: invitation.expiresAt,
         maskedEmail: maskInvitationEmail(invitation.email),
         boundToAccount: Boolean(invitation.forUserId),
+      };
+    },
+
+    /**
+     * Verifies the invitation for the signed-in account without changing it.
+     *
+     * The public preview cannot answer whether the current account may act on
+     * the invitation, because it has no viewer. This method does, and it
+     * deliberately reports terminal states instead of throwing so the
+     * frontend can render "already accepted", "revoked", "expired" or "wrong
+     * account" without guessing from an error.
+     */
+    async verify(input): Promise<InvitationVerification> {
+      const invitation = await client.invitation.findUnique({
+        where: { tokenHash: hashSecret(input.token) },
+        include: {
+          workspace: {
+            select: { id: true, name: true, slug: true, status: true, deletedAt: true },
+          },
+          invitedBy: { select: { id: true, name: true } },
+          team: { select: { id: true, name: true, status: true, deletedAt: true } },
+        },
+      });
+
+      if (!invitation) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'This invitation link is not valid');
+      }
+
+      const user = await client.user.findUnique({
+        where: { id: input.userId },
+        select: { id: true, email: true, deletedAt: true },
+      });
+
+      if (!user || user.deletedAt) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+      }
+
+      let status = invitation.status;
+
+      // Keep the stored state honest, exactly like the public preview does.
+      if (status === 'PENDING' && invitation.expiresAt.getTime() <= Date.now()) {
+        await client.invitation.updateMany({
+          where: { id: invitation.id, status: 'PENDING', expiresAt: { lte: new Date() } },
+          data: { status: 'EXPIRED', pendingKey: null },
+        });
+        status = 'EXPIRED';
+      }
+
+      const workspaceAvailable =
+        invitation.workspace.status === 'ACTIVE' && !invitation.workspace.deletedAt;
+      const teamAvailable = invitation.type !== 'TEAM' || Boolean(
+        invitation.team && invitation.team.status === 'ACTIVE' && !invitation.team.deletedAt,
+      );
+      const emailMatches = isInvitationRecipient(invitation, user);
+
+      // Only ask about membership when the viewer is the recipient. A
+      // stranger must not learn anything about the recipient's memberships.
+      const membership = emailMatches
+        ? await client.workspaceMembership.findUnique({
+            where: {
+              workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id },
+            },
+            select: { role: true, status: true },
+          })
+        : null;
+      const alreadyMember = membership?.status === 'ACTIVE';
+      const teamMembership = emailMatches && invitation.type === 'TEAM' && invitation.teamId
+        ? await client.teamMembership.findUnique({
+            where: { teamId_userId: { teamId: invitation.teamId, userId: user.id } },
+            select: { id: true },
+          })
+        : null;
+      const alreadyTeamMember = Boolean(teamMembership);
+
+      let reason: InvitationVerificationReason | null = null;
+
+      if (!emailMatches) {
+        reason = 'EMAIL_MISMATCH';
+      } else if (!workspaceAvailable) {
+        reason = 'WORKSPACE_UNAVAILABLE';
+      } else if (!teamAvailable) {
+        reason = 'TEAM_UNAVAILABLE';
+      } else if (status === 'ACCEPTED') {
+        reason = 'ALREADY_ACCEPTED';
+      } else if (status === 'DECLINED') {
+        reason = 'DECLINED';
+      } else if (status === 'REVOKED') {
+        reason = 'REVOKED';
+      } else if (status === 'EXPIRED') {
+        reason = 'EXPIRED';
+      } else if (invitation.type === 'TEAM' && !alreadyMember) {
+        reason = 'WORKSPACE_MEMBERSHIP_REQUIRED';
+      } else if (invitation.type === 'TEAM' && alreadyTeamMember) {
+        reason = 'ALREADY_A_TEAM_MEMBER';
+      } else if (invitation.type !== 'TEAM' && alreadyMember) {
+        reason = 'ALREADY_A_MEMBER';
+      }
+
+      const actionable = emailMatches && workspaceAvailable && teamAvailable && status === 'PENDING' &&
+        (invitation.type === 'TEAM' ? alreadyMember && !alreadyTeamMember : !alreadyMember);
+      const canDecline = emailMatches && workspaceAvailable && teamAvailable && status === 'PENDING';
+
+      return {
+        workspace: {
+          id: invitation.workspace.id,
+          name: invitation.workspace.name,
+          slug: invitation.workspace.slug,
+        },
+        invitedBy: invitation.invitedBy,
+        role: invitation.role,
+        organizationRole: invitation.organizationRole,
+        ...(invitation.team ? { team: { id: invitation.team.id, name: invitation.team.name } } : {}),
+        status,
+        expiresAt: invitation.expiresAt,
+        maskedEmail: maskInvitationEmail(invitation.email),
+        boundToAccount: Boolean(invitation.forUserId),
+        viewer: {
+          userId: user.id,
+          email: user.email,
+          emailMatches,
+          alreadyMember,
+          membershipRole: membership?.role ?? null,
+          ...(invitation.type === 'TEAM' ? { alreadyTeamMember } : {}),
+          canAccept: actionable,
+          canDecline,
+          reason,
+        },
       };
     },
 
@@ -664,6 +1065,7 @@ export function createInvitationService(
         include: {
           workspace: { select: { id: true, name: true } },
           invitedBy: { select: { id: true, name: true } },
+          team: { select: { id: true, name: true, status: true, deletedAt: true } },
         },
       });
 
@@ -719,15 +1121,90 @@ export function createInvitationService(
 
       // The invitation is meant for one recipient. A bound invitation belongs
       // to one account, an unbound one to the address it was sent to.
-      const boundToOtherAccount = invitation.forUserId !== null && invitation.forUserId !== user.id;
-      const addressDoesNotMatch = invitation.forUserId === null && invitation.email !== user.email;
-
-      if (boundToOtherAccount || addressDoesNotMatch) {
+      if (!isInvitationRecipient(invitation, user)) {
         throw new AppError(
           403,
           'INVITATION_FOR_OTHER_USER',
           'This invitation was sent to a different account',
         );
+      }
+
+      let joined = false;
+      if (invitation.type === 'TEAM') {
+        if (!invitation.teamId || !invitation.team || invitation.team.status !== 'ACTIVE' || invitation.team.deletedAt) {
+          throw new AppError(410, 'TEAM_INVITATION_UNAVAILABLE', 'This team invitation is no longer available');
+        }
+        const acceptedTeamInvitation = await client.$transaction(async (tx) => {
+          await lockActiveWorkspace(tx, invitation.workspaceId);
+          const membership = await tx.workspaceMembership.findUnique({
+            where: {
+              workspaceId_userId: { workspaceId: invitation.workspaceId, userId: user.id },
+            },
+            select: { status: true },
+          });
+          if (membership?.status !== 'ACTIVE') {
+            throw new AppError(403, 'TEAM_INVITATION_REQUIRES_WORKSPACE_MEMBER', 'An active workspace membership is required');
+          }
+          const team = await tx.team.findFirst({
+            where: {
+              id: invitation.teamId!,
+              workspaceId: invitation.workspaceId,
+              status: 'ACTIVE',
+              deletedAt: null,
+            },
+            select: { id: true, name: true },
+          });
+          if (!team) {
+            throw new AppError(410, 'TEAM_INVITATION_UNAVAILABLE', 'This team invitation is no longer available');
+          }
+          const alreadyMember = await tx.teamMembership.findUnique({
+            where: { teamId_userId: { teamId: team.id, userId: user.id } },
+            select: { id: true },
+          });
+          if (alreadyMember) {
+            throw new AppError(409, 'ALREADY_A_TEAM_MEMBER', 'This account is already a member of the team');
+          }
+          const now = new Date();
+          const updated = await tx.invitation.updateMany({
+            where: {
+              id: invitation.id,
+              workspaceId: invitation.workspaceId,
+              teamId: team.id,
+              type: 'TEAM',
+              tokenHash: hashSecret(input.token),
+              status: 'PENDING',
+              expiresAt: { gt: now },
+            },
+            data: { status: 'ACCEPTED', acceptedAt: now, acceptedById: user.id, pendingKey: null },
+          });
+          if (!updated.count) {
+            throw new AppError(409, 'INVITATION_ALREADY_ACCEPTED', 'This invitation can no longer be accepted');
+          }
+          await tx.teamMembership.create({ data: { teamId: team.id, userId: user.id, role: 'MEMBER' } });
+          await recordAuditEvent(tx, {
+            workspaceId: invitation.workspaceId,
+            actorId: user.id,
+            action: WorkspaceAuditAction.InvitationAccepted,
+            targetType: 'Invitation',
+            targetId: invitation.id,
+            metadata: { type: 'TEAM', teamId: team.id, userId: user.id },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+          if (invitation.invitedById !== user.id) {
+            await createNotification(tx, {
+              userId: invitation.invitedById,
+              type: 'INVITATION_ACCEPTED',
+              title: `${user.name} joined ${team.name}`,
+              data: { workspaceId: invitation.workspaceId, teamId: team.id, userId: user.id },
+            });
+          }
+          return tx.invitation.findUnique({ where: { id: invitation.id }, include: summaryInclude });
+        });
+        if (!acceptedTeamInvitation) {
+          throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
+        }
+        return toSummary(acceptedTeamInvitation);
       }
 
       const accepted = await client.$transaction(async (tx) => {
@@ -740,6 +1217,7 @@ export function createInvitationService(
 
         // An account that already belongs to the workspace keeps its role.
         if (!existing) {
+          joined = true;
           await assertWorkspaceSeatCapacity(tx, {
             workspaceId: invitation.workspaceId,
             userId: user.id,
@@ -817,6 +1295,21 @@ export function createInvitationService(
         throw new AppError(500, 'INVITATION_NOT_STORED', 'The invitation could not be stored');
       }
 
+      if (joined) {
+        await enqueueAutomationRunsSafely({
+          workspaceId: invitation.workspaceId,
+          trigger: 'EVENT_MEMBER_JOINED',
+          eventKey: `member.joined:invitation:${invitation.id}`,
+          payload: {
+            workspaceId: invitation.workspaceId,
+            userId: user.id,
+            role: invitation.role,
+            organizationRole: invitation.organizationRole ?? null,
+            source: 'invitation',
+          },
+        });
+      }
+
       return toSummary(accepted);
     },
 
@@ -842,9 +1335,7 @@ export function createInvitationService(
         throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
       }
 
-      const boundToOtherAccount = invitation.forUserId !== null && invitation.forUserId !== user.id;
-      const addressDoesNotMatch = invitation.forUserId === null && invitation.email !== user.email;
-      if (boundToOtherAccount || addressDoesNotMatch) {
+      if (!isInvitationRecipient(invitation, user)) {
         throw new AppError(
           403,
           'INVITATION_FOR_OTHER_USER',

@@ -1,0 +1,73 @@
+# Render Blueprint for Nexus backend (single web service)
+# Docs: https://render.com/docs/blueprint-spec
+# Set secret values in the Render Dashboard (or as env groups); do not commit secrets.
+services:
+  - type: web
+    name: nexus-backend
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "4000"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: LOG_LEVEL
+        value: info
+      # --- Required infrastructure (secrets/URLs set in dashboard) ---
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      # --- Public URLs / CORS (browser talks to Vercel frontend; frontend proxies REST) ---
+      - key: FRONTEND_URL
+        sync: false # e.g. https://app.example.com
+      - key: CORS_ORIGINS
+        sync: false # include https://app.example.com and backend origin if needed
+      - key: CORS_CREDENTIALS
+        value: "true"
+      # --- Auth/cookie hardening (required in production) ---
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
+      - key: AUTH_COOKIE_SAME_SITE
+        value: none # required for cross-site cookie auth; use lax only if same-site
+      - key: AUTH_COOKIE_DOMAIN
+        sync: false # set if sharing cookie across subdomains
+      # --- Core secrets (required; set in dashboard) ---
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: OTP_HMAC_SECRET
+        sync: false
+      - key: TOTP_ENCRYPTION_KEY
+        sync: false
+      # --- Email (required in production: smtp or brevo-api) ---
+      - key: EMAIL_PROVIDER
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: EMAIL_SMTP_HOST
+        sync: false
+      - key: EMAIL_SMTP_PORT
+        sync: false
+      - key: EMAIL_SMTP_USER
+        sync: false
+      - key: EMAIL_SMTP_PASSWORD
+        sync: false
+      # --- Private object storage (S3-compatible, e.g. Cloudflare R2/MinIO/S3) ---
+      - key: OBJECT_STORAGE_ENDPOINT
+        sync: false # e.g. https://<accountid>.r2.cloudflarestorage.com
+      - key: OBJECT_STORAGE_BUCKET
+        sync: false
+      - key: OBJECT_STORAGE_REGION
+        value: auto # R2 uses "auto"; AWS S3 uses region like us-east-1
+      - key: OBJECT_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: OBJECT_STORAGE_REQUEST_TIMEOUT_MS
+        value: "15000"

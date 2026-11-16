@@ -313,11 +313,15 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
     const saved = await db.notificationPreference.findMany({
       where: { userId: input.userId, workspaceId: input.workspaceId },
     });
-    const byType = new Map(saved.map((preference) => [preference.type, preference.inAppEnabled]));
-    return Object.values(NotificationType).map((type) => ({
-      type,
-      inAppEnabled: byType.get(type as NotificationTypeValue) ?? true,
-    }));
+    const byType = new Map(saved.map((preference) => [preference.type, preference]));
+    return Object.values(NotificationType).map((type) => {
+      const preference = byType.get(type as NotificationTypeValue);
+      return {
+        type,
+        inAppEnabled: preference?.inAppEnabled ?? true,
+        emailEnabled: preference?.emailEnabled ?? true,
+      };
+    });
   }
 
   async function updateNotificationPreferences(
@@ -339,9 +343,17 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
             workspaceId: input.workspaceId,
             userId: input.userId,
             type: preference.type,
-            inAppEnabled: preference.inAppEnabled,
+            inAppEnabled: preference.inAppEnabled ?? true,
+            emailEnabled: preference.emailEnabled ?? true,
           },
-          update: { inAppEnabled: preference.inAppEnabled },
+          update: {
+            ...(preference.inAppEnabled !== undefined
+              ? { inAppEnabled: preference.inAppEnabled }
+              : {}),
+            ...(preference.emailEnabled !== undefined
+              ? { emailEnabled: preference.emailEnabled }
+              : {}),
+          },
         });
       }
       await recordAuditEvent(tx, {
@@ -352,18 +364,29 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
         targetId: `${input.workspaceId}:${input.userId}`,
         metadata: {
           changedTypes: input.preferences.map(({ type }) => type),
-          channel: 'in_app',
+          channels: [
+            ...new Set(
+              input.preferences.flatMap((preference) => [
+                ...(preference.inAppEnabled !== undefined ? ['in_app'] : []),
+                ...(preference.emailEnabled !== undefined ? ['email'] : []),
+              ]),
+            ),
+          ],
         },
         ...context,
       });
       const saved = await tx.notificationPreference.findMany({
         where: { userId: input.userId, workspaceId: input.workspaceId },
       });
-      const byType = new Map(saved.map((preference) => [preference.type, preference.inAppEnabled]));
-      return Object.values(NotificationType).map((type) => ({
-        type,
-        inAppEnabled: byType.get(type as NotificationTypeValue) ?? true,
-      }));
+      const byType = new Map(saved.map((preference) => [preference.type, preference]));
+      return Object.values(NotificationType).map((type) => {
+        const preference = byType.get(type as NotificationTypeValue);
+        return {
+          type,
+          inAppEnabled: preference?.inAppEnabled ?? true,
+          emailEnabled: preference?.emailEnabled ?? true,
+        };
+      });
     });
   }
 

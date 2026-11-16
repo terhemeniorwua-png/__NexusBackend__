@@ -97,10 +97,6 @@ function runTests(dbUrl: string): void {
     // For the test database we verify with a direct DB token retrieval.
     const db = await connectTestDatabase(dbUrl);
     const user = await db.prisma.user.findUniqueOrThrow({ where: { email } });
-    const token = await db.prisma.authToken.findFirstOrThrow({
-      where: { userId: user.id, purpose: 'EMAIL_VERIFICATION', usedAt: null },
-      orderBy: { createdAt: 'desc' },
-    });
     // We need the raw token, but only the hash is stored. Use the crypto helper
     // to generate a usable verify path by reading the token hash directly via
     // a one-time lookup flow instead — use login after manual activation.
@@ -108,10 +104,6 @@ function runTests(dbUrl: string): void {
     await db.prisma.user.update({
       where: { id: user.id },
       data: { status: 'ACTIVE', emailVerifiedAt: new Date() },
-    });
-    await db.prisma.authToken.update({
-      where: { id: token.id },
-      data: { usedAt: new Date() },
     });
     await db.prisma.$disconnect();
 
@@ -179,7 +171,11 @@ function runTests(dbUrl: string): void {
 
   before(async () => {
     const db = await connectTestDatabase(dbUrl);
-    const config = (await import('../src/config/env')).loadEnv();
+    const config = (await import('./helpers/test-config')).loadTestConfig({
+      RATE_LIMIT_NAMESPACE: `phase6-db-${process.pid}-${Date.now()}`,
+      RATE_LIMIT_MAX: '100000',
+      AUTH_REGISTER_RATE_LIMIT_MAX: '1000',
+    });
 
     await connectRedis({ redisUrl: 'redis://localhost:6379/15' });
 

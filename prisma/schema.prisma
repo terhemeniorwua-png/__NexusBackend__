@@ -131,6 +131,7 @@ enum ProjectVisibility {
 enum ProjectRole {
   PROJECT_MANAGER
   MEMBER
+  COLLABORATOR
   VIEWER
 }
 
@@ -183,6 +184,10 @@ enum NotificationType {
   MEETING_RESCHEDULED
   MEETING_CANCELLED
   PROJECT_UPDATE
+  TASK_BLOCKER_REPORTED
+  TASK_BLOCKER_RESOLVED
+  TASK_DUE_SOON
+  TASK_OVERDUE
 }
 
 enum AuthTokenPurpose {
@@ -276,56 +281,78 @@ model User {
   twoFactorVerifiedAt      DateTime?
   twoFactorSetupExpiresAt  DateTime?
 
-  profile                     UserProfile?
-  sessions                    Session[]
-  externalIdentities          ExternalIdentity[]
-  googleOAuthLoginCodes       GoogleOAuthLoginCode[]
-  authTokens                  AuthToken[]
-  authOneTimeCodes            AuthOneTimeCode[]
-  twoFactorRecoveryCodes      TwoFactorRecoveryCode[]
-  workspaceMemberships        WorkspaceMembership[]
-  teamMemberships             TeamMembership[]
-  departmentMemberships       DepartmentMembership[]
-  institutionGroupMemberships InstitutionGroupMembership[]
-  projectMemberships          ProjectMembership[]
-  createdTasks                Task[]                       @relation("TaskCreator")
-  assignedTasks               TaskAssignee[]
-  authoredComments            Comment[]
-  notifications               Notification[]
-  uploadedFiles               FileAttachment[]
-  auditLogs                   AuditLog[]
-  invitedWorkspaces           Invitation[]                 @relation("InvitedBy")
-  pendingInvitations          Invitation[]                 @relation("InvitedUser")
-  acceptedInvitations         Invitation[]                 @relation("AcceptedBy")
-  ownedWorkspaces             Workspace[]                  @relation("WorkspaceOwner")
-  ownedProjects               Project[]                    @relation("ProjectOwner")
-  ledTeams                    Team[]                       @relation("TeamLead")
-  taskAssignments             TaskAssignee[]               @relation("TaskAssigner")
-  joinRequests                JoinRequest[]                @relation("JoinRequestApplicant")
-  reviewedJoinRequests        JoinRequest[]                @relation("JoinRequestReviewer")
-  ledInstitutionGroups        InstitutionGroup[]           @relation("InstitutionGroupLead")
-  initiatedOwnershipTransfers WorkspaceOwnershipTransfer[] @relation("OwnershipTransferInitiator")
-  receivedOwnershipTransfers  WorkspaceOwnershipTransfer[] @relation("OwnershipTransferRecipient")
-  acceptedBillingTransfers    WorkspaceOwnershipTransfer[] @relation("BillingResponsibilityAcceptor")
-  billingOwnedSubscriptions   Subscription[]               @relation("SubscriptionBillingOwner")
-  privacyRequests             PrivacyRequest[]             @relation("PrivacyRequestOwner")
-  reviewedPrivacyRequests     PrivacyRequest[]             @relation("PrivacyRequestReviewer")
-  channelsCreated             Channel[]                    @relation("ChannelCreatedBy")
-  channelMemberships          ChannelMembership[]          @relation("ChannelMemberships")
-  messagesAuthored            Message[]                    @relation("MessageAuthor")
-  messageReactions            MessageReaction[]            @relation("MessageReactions")
-  messageReadReceipts         MessageReadReceipt[]         @relation("MessageReadReceipts")
-  documentsAuthored           Document[]                   @relation("DocumentAuthor")
-  documentRevisions           DocumentRevision[]           @relation("DocumentRevisionAuthor")
-  documentComments            DocumentComment[]            @relation("DocumentCommentAuthor")
-  calendarEventsCreated       CalendarEvent[]              @relation("EventCreatedBy")
-  formsCreated               Form[]                   @relation("FormCreatedBy")
-  formResponses              FormResponse[]           @relation("FormSubmitter")
-  calendarInvitations         EventInvitation[]            @relation("EventInvitations")
-  integrations                Integration[]                @relation("UserIntegrations")
-  automationsCreated          Automation[]                 @relation("AutomationCreatedBy")
-  meetingsCreated             Meeting[]                    @relation("MeetingCreatedBy")
-  meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
+  profile                       UserProfile?
+  sessions                      Session[]
+  externalIdentities            ExternalIdentity[]
+  googleOAuthLoginCodes         GoogleOAuthLoginCode[]
+  authTokens                    AuthToken[]
+  authOneTimeCodes              AuthOneTimeCode[]
+  twoFactorRecoveryCodes        TwoFactorRecoveryCode[]
+  workspaceMemberships          WorkspaceMembership[]
+  teamMemberships               TeamMembership[]
+  departmentMemberships         DepartmentMembership[]
+  institutionGroupMemberships   InstitutionGroupMembership[]
+  projectMemberships            ProjectMembership[]
+  createdTasks                  Task[]                       @relation("TaskCreator")
+  submittedTasks                Task[]                       @relation("TaskSubmittedBy")
+  reviewedTasks                 Task[]                       @relation("TaskReviewedBy")
+  createdTaskDocuments          TaskDocument[]               @relation("TaskDocumentCreator")
+  savedTaskDocumentVersions     TaskDocumentVersion[]        @relation("TaskDocumentVersionSaver")
+  reportedTaskBlockers          TaskBlocker[]                @relation("TaskBlockerReporter")
+  notifiedTaskBlockers          TaskBlocker[]                @relation("TaskBlockerNotifyUser")
+  resolvedTaskBlockers          TaskBlocker[]                @relation("TaskBlockerResolver")
+  timeEntries                   TaskTimeEntry[]
+  assignedTasks                 TaskAssignee[]
+  authoredComments              Comment[]
+  commentMentions               CommentMention[]
+  notifications                 Notification[]
+  uploadedFiles                 FileAttachment[]
+  auditLogs                     AuditLog[]
+  invitedWorkspaces             Invitation[]                 @relation("InvitedBy")
+  pendingInvitations            Invitation[]                 @relation("InvitedUser")
+  acceptedInvitations           Invitation[]                 @relation("AcceptedBy")
+  ownedWorkspaces               Workspace[]                  @relation("WorkspaceOwner")
+  ownedProjects                 Project[]                    @relation("ProjectOwner")
+  ledTeams                      Team[]                       @relation("TeamLead")
+  taskAssignments               TaskAssignee[]               @relation("TaskAssigner")
+  joinRequests                  JoinRequest[]                @relation("JoinRequestApplicant")
+  reviewedJoinRequests          JoinRequest[]                @relation("JoinRequestReviewer")
+  ledInstitutionGroups          InstitutionGroup[]           @relation("InstitutionGroupLead")
+  initiatedOwnershipTransfers   WorkspaceOwnershipTransfer[] @relation("OwnershipTransferInitiator")
+  receivedOwnershipTransfers    WorkspaceOwnershipTransfer[] @relation("OwnershipTransferRecipient")
+  acceptedBillingTransfers      WorkspaceOwnershipTransfer[] @relation("BillingResponsibilityAcceptor")
+  billingOwnedSubscriptions     Subscription[]               @relation("SubscriptionBillingOwner")
+  privacyRequests               PrivacyRequest[]             @relation("PrivacyRequestOwner")
+  reviewedPrivacyRequests       PrivacyRequest[]             @relation("PrivacyRequestReviewer")
+  channelsCreated               Channel[]                    @relation("ChannelCreatedBy")
+  channelMemberships            ChannelMembership[]          @relation("ChannelMemberships")
+  messagesAuthored              Message[]                    @relation("MessageAuthor")
+  messageReactions              MessageReaction[]            @relation("MessageReactions")
+  messageReadReceipts           MessageReadReceipt[]         @relation("MessageReadReceipts")
+  documentsAuthored             Document[]                   @relation("DocumentAuthor")
+  documentRevisions             DocumentRevision[]           @relation("DocumentRevisionAuthor")
+  documentComments              DocumentComment[]            @relation("DocumentCommentAuthor")
+  calendarEventsCreated         CalendarEvent[]              @relation("EventCreatedBy")
+  formsCreated                  Form[]                       @relation("FormCreatedBy")
+  formResponses                 FormResponse[]               @relation("FormSubmitter")
+  calendarInvitations           EventInvitation[]            @relation("EventInvitations")
+  integrations                  Integration[]                @relation("UserIntegrations")
+  automationsCreated            Automation[]                 @relation("AutomationCreatedBy")
+  meetingsCreated               Meeting[]                    @relation("MeetingCreatedBy")
+  meetingParticipations         MeetingParticipant[]         @relation("MeetingParticipants")
+  searchHistory                 SearchHistory[]
+  webhookSubscriptions          WebhookSubscription[]        @relation("WebhookSubscriptionCreatedBy")
+  integrationConnectionsCreated IntegrationConnection[]      @relation("IntegrationConnectionsCreatedBy")
+  taskDevLinksLinked            TaskDevLink[]                @relation("TaskDevLinksLinked")
+  aiConversations               AiConversation[]             @relation("AiConversationOwner")
+  aiUsageRecords                AiUsageRecord[]              @relation("AiUsageRecordOwner")
+  aiActionProposals             AiActionProposal[]           @relation("AiActionProposalOwner")
+  aiActionApprovals             AiActionApproval[]           @relation("AiActionApprovalActor")
+  aiWritingSessions             AiWritingSession[]           @relation("AiWritingSessionOwner")
+  createdCustomFields           ProjectCustomField[]         @relation("ProjectCustomFieldCreator")
+  taskSavedViews                TaskSavedView[]              @relation("TaskSavedViewOwner")
+  createdTaskTemplates          TaskTemplate[]               @relation("TaskTemplateCreator")
+  createdProjectTemplates       ProjectTemplate[]            @relation("ProjectTemplateCreator")
 
   @@index([status])
   @@index([createdAt])
@@ -469,6 +496,7 @@ model Workspace {
   visibility          WorkspaceVisibility @default(PRIVATE)
   status              WorkspaceStatus     @default(ACTIVE)
   deletionSuspendedAt DateTime?
+  timeTrackingEnabled Boolean             @default(false)
   ownerId             String
   /// SHA-256 digest of the join code. The plaintext code is only returned
   /// when an administrator generates or rotates it.
@@ -477,31 +505,40 @@ model Workspace {
   updatedAt           DateTime            @updatedAt
   deletedAt           DateTime?
 
-  owner               User                         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members             WorkspaceMembership[]
-  teams               Team[]
-  projects            Project[]
-  departments         Department[]
-  channels            Channel[]
-  companyProfile      CompanyProfile?
-  institutionProfile  InstitutionProfile?
-  institutionGroups   InstitutionGroup[]
-  invitations         Invitation[]
-  joinRequests        JoinRequest[]
-  files               FileAttachment[]
-  documents           Document[]
-  calendarEvents      CalendarEvent[]
-  forms              Form[]
-  integrations       Integration[]                @relation("WorkspaceIntegrations")
-  automations        Automation[]                 @relation("WorkspaceAutomations")
-  meetings            Meeting[]
-  auditLogs           AuditLog[]
-  subscription        Subscription?
-  billingPayments     BillingPayment[]
-  billingCheckouts    BillingCheckout[]
-  billingSeatSync     BillingSeatSync?
-  billingCancellation BillingCancellation?
-  ownershipTransfers  WorkspaceOwnershipTransfer[]
+  owner                  User                         @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members                WorkspaceMembership[]
+  teams                  Team[]
+  projects               Project[]
+  departments            Department[]
+  channels               Channel[]
+  companyProfile         CompanyProfile?
+  institutionProfile     InstitutionProfile?
+  institutionGroups      InstitutionGroup[]
+  invitations            Invitation[]
+  joinRequests           JoinRequest[]
+  files                  FileAttachment[]
+  documents              Document[]
+  calendarEvents         CalendarEvent[]
+  forms                  Form[]
+  integrations           Integration[]                @relation("WorkspaceIntegrations")
+  integrationConnections IntegrationConnection[]      @relation("WorkspaceIntegrationConnections")
+  automations            Automation[]                 @relation("WorkspaceAutomations")
+  meetings               Meeting[]
+  auditLogs              AuditLog[]
+  subscription           Subscription?
+  billingPayments        BillingPayment[]
+  billingCheckouts       BillingCheckout[]
+  billingSeatSync        BillingSeatSync?
+  billingCancellation    BillingCancellation?
+  ownershipTransfers     WorkspaceOwnershipTransfer[]
+  searchHistory          SearchHistory[]
+  webhookSubscriptions   WebhookSubscription[]
+  aiConversations        AiConversation[]
+  aiUsageRecords         AiUsageRecord[]
+  aiActionProposals      AiActionProposal[]
+  aiWritingSessions      AiWritingSession[]
+  taskTemplates          TaskTemplate[]
+  projectTemplates       ProjectTemplate[]
 
   @@index([ownerId])
   @@index([status])
@@ -708,6 +745,7 @@ model NotificationPreference {
   userId       String
   type         NotificationType
   inAppEnabled Boolean          @default(true)
+  emailEnabled Boolean          @default(true)
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 
@@ -834,6 +872,7 @@ model Team {
   department   Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   lead         User?            @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
   members      TeamMembership[]
+  invitations  Invitation[]
   projects     Project[]
   channels     Channel[]
   joinRequests JoinRequest[]
@@ -882,10 +921,10 @@ model Project {
   updatedAt    DateTime          @default(now())
   deletedAt    DateTime?
 
-  workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  team           Team?               @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  department     Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  owner          User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  workspace      Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team           Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  department     Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  owner          User                 @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   members        ProjectMembership[]
   milestones     ProjectMilestone[]
   tasks          Task[]
@@ -894,6 +933,11 @@ model Project {
   documents      Document[]
   calendarEvents CalendarEvent[]
   meetings       Meeting[]
+  repositories   ProjectRepository[]  @relation("ProjectRepositories")
+  taskDevLinks   TaskDevLink[]
+  customFields   ProjectCustomField[]
+  savedViews     TaskSavedView[]
+  taskTemplates  TaskTemplate[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -938,36 +982,58 @@ model ProjectMembership {
 }
 
 model Task {
-  id           String       @id @default(uuid())
-  projectId    String
-  key          String
-  title        String
-  description  String?
-  status       TaskStatus   @default(ASSIGNED)
-  priority     TaskPriority @default(MEDIUM)
-  category     String?
-  labels       String[]     @default([])
-  startDate    DateTime?
-  dueDate      DateTime?
-  completedAt  DateTime?
-  position     Int          @default(0)
-  parentTaskId String?
-  creatorId    String
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @default(now())
-  archivedAt   DateTime?
-  deletedAt    DateTime?
+  id                   String       @id @default(uuid())
+  projectId            String
+  key                  String
+  title                String
+  description          String?
+  status               TaskStatus   @default(ASSIGNED)
+  priority             TaskPriority @default(MEDIUM)
+  category             String?
+  labels               String[]     @default([])
+  startDate            DateTime?
+  dueDate              DateTime?
+  completedAt          DateTime?
+  position             Int          @default(0)
+  parentTaskId         String?
+  weight               Int          @default(1)
+  creatorId            String
+  requiresApproval     Boolean      @default(false)
+  expectedDeliverables Json?
+  submissionSummary    String?
+  submittedAt          DateTime?
+  submittedById        String?
+  reviewFeedback       String?
+  reviewedAt           DateTime?
+  reviewedById         String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @default(now())
+  archivedAt           DateTime?
+  deletedAt            DateTime?
+  dueSoonNotifiedAt    DateTime?
+  overdueNotifiedAt    DateTime?
 
-  project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parentTask   Task?            @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
-  subTasks     Task[]           @relation("TaskHierarchy")
-  creator      User             @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict)
-  assignees    TaskAssignee[]
-  dependencies TaskDependency[] @relation("BlockedTask")
-  blockers     TaskDependency[] @relation("BlockingTask")
-  comments     Comment[]
-  attachments  FileAttachment[]
-  documents    Document[]
+  project             Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentTask          Task?                  @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  subTasks            Task[]                 @relation("TaskHierarchy")
+  creator             User                   @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  submittedBy         User?                  @relation("TaskSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  reviewedBy          User?                  @relation("TaskReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  assignees           TaskAssignee[]
+  dependencies        TaskDependency[]       @relation("BlockedTask")
+  blockers            TaskDependency[]       @relation("BlockingTask")
+  reportedBlockers    TaskBlocker[]
+  comments            Comment[]
+  attachments         FileAttachment[]
+  documents           Document[]
+  workDocuments       TaskDocument[]
+  timeEntries         TaskTimeEntry[]
+  devLinks            TaskDevLink[]
+  customFieldValues   TaskCustomFieldValue[]
+  recurrenceRule      TaskRecurrenceRule?
+  recurrenceSourceId  String?
+  recurrenceSource    Task?                  @relation("TaskRecurrenceInstances", fields: [recurrenceSourceId], references: [id], onDelete: SetNull)
+  recurrenceInstances Task[]                 @relation("TaskRecurrenceInstances")
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -975,8 +1041,95 @@ model Task {
   @@index([projectId, position])
   @@index([parentTaskId])
   @@index([creatorId])
+  @@index([submittedById])
+  @@index([reviewedById])
   @@index([dueDate])
+  @@index([createdAt])
+  @@index([completedAt])
   @@index([status, dueDate])
+  @@index([recurrenceSourceId])
+}
+
+model TaskDocument {
+  id             String    @id @default(uuid())
+  taskId         String
+  title          String
+  createdById    String
+  currentVersion Int       @default(1)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  task      Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdBy User                  @relation("TaskDocumentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  versions  TaskDocumentVersion[]
+
+  @@index([taskId])
+  @@index([taskId, deletedAt])
+  @@index([createdById])
+}
+
+enum TaskBlockerStatus {
+  OPEN
+  RESOLVED
+}
+
+model TaskBlocker {
+  id           String            @id @default(uuid())
+  taskId       String
+  status       TaskBlockerStatus @default(OPEN)
+  description  String
+  reportedById String
+  notifyUserId String?
+  resolvedAt   DateTime?
+  resolvedById String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reportedBy User  @relation("TaskBlockerReporter", fields: [reportedById], references: [id], onDelete: Restrict)
+  notifyUser User? @relation("TaskBlockerNotifyUser", fields: [notifyUserId], references: [id], onDelete: SetNull)
+  resolvedBy User? @relation("TaskBlockerResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([taskId, status])
+  @@index([reportedById])
+  @@index([notifyUserId])
+}
+
+model TaskTimeEntry {
+  id              String   @id @default(uuid())
+  taskId          String
+  userId          String
+  startedAt       DateTime
+  durationMinutes Int
+  note            String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([taskId, userId])
+  @@index([userId])
+  @@index([startedAt])
+}
+
+model TaskDocumentVersion {
+  id         String   @id @default(uuid())
+  documentId String
+  version    Int
+  content    Json
+  savedById  String
+  createdAt  DateTime @default(now())
+
+  document TaskDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  savedBy  User         @relation("TaskDocumentVersionSaver", fields: [savedById], references: [id], onDelete: Restrict)
+
+  @@unique([documentId, version])
+  @@index([documentId, createdAt])
+  @@index([savedById])
 }
 
 model TaskAssignee {
@@ -1024,10 +1177,24 @@ model Comment {
   parent      Comment?         @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies     Comment[]        @relation("CommentReplies")
   attachments FileAttachment[]
+  mentions    CommentMention[]
 
   @@index([taskId, createdAt])
   @@index([authorId])
   @@index([parentId])
+}
+
+model CommentMention {
+  id        String   @id @default(uuid())
+  commentId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+  @@index([userId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,7 +1202,10 @@ model Comment {
 // ---------------------------------------------------------------------------
 
 model Channel {
-  id           String      @id @default(uuid())
+  id           String            @id @default(uuid())
+  isDefault    Boolean           @default(false)
+  systemKey    String?
+  postPolicy   ChannelPostPolicy @default(ALL_MEMBERS)
   workspaceId  String
   type         ChannelType
   name         String
@@ -1046,8 +1216,8 @@ model Channel {
   createdById  String
   archivedAt   DateTime?
   deletedAt    DateTime?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
 
   workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   team         Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -1058,6 +1228,7 @@ model Channel {
   messages     Message[]
   readReceipts MessageReadReceipt[]
 
+  @@unique([workspaceId, systemKey])
   // A unique channel name per workspace among non-deleted channels cannot be
   // expressed in Prisma. It is added as a partial unique index in the
   // migration SQL (see the Phase 7 channel migration).
@@ -1089,16 +1260,20 @@ model ChannelMembership {
 // ---------------------------------------------------------------------------
 
 model Message {
-  id        String    @id @default(uuid())
-  channelId String
-  authorId  String
-  body      String
-  parentId  String?
-  editedAt  DateTime?
-  pinnedAt  DateTime?
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id              String             @id @default(uuid())
+  type            MessageContentType @default(TEXT)
+  audioMime       String?
+  audioDurationMs Int?
+  audio           MessageAudio?
+  channelId       String
+  authorId        String
+  body            String
+  parentId        String?
+  editedAt        DateTime?
+  pinnedAt        DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   channel      Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
   author       User                 @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
@@ -1196,6 +1371,7 @@ model Invitation {
   pendingKey String? @unique
 
   workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team       Team?     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   invitedBy  User      @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
   forUser    User?     @relation("InvitedUser", fields: [forUserId], references: [id], onDelete: SetNull)
   acceptedBy User?     @relation("AcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
@@ -1242,19 +1418,24 @@ model JoinRequest {
 }
 
 model FileAttachment {
-  id           String    @id @default(uuid())
-  workspaceId  String
-  projectId    String?
-  taskId       String?
-  commentId    String?
-  uploadedById String
-  fileName     String
-  mimeType     String
-  sizeBytes    Int
-  storageKey   String    @unique
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+  id              String    @id @default(uuid())
+  workspaceId     String
+  projectId       String?
+  taskId          String?
+  commentId       String?
+  uploadedById    String
+  fileName        String
+  mimeType        String
+  sizeBytes       Int
+  storageKey      String    @unique
+  /// Best-effort plain text extracted at upload time for search. Supports text
+  /// formats, DOCX and PDF content streams; legacy binary and image-only files
+  /// are not parsed. Extraction failure never fails the upload.
+  extractedText   String?
+  textExtractedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   project   Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -1268,6 +1449,7 @@ model FileAttachment {
   @@index([commentId])
   @@index([uploadedById])
   @@index([storageKey])
+  @@index([workspaceId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -1418,28 +1600,29 @@ enum MeetingParticipantStatus {
 }
 
 model Meeting {
-  id          String        @id @default(uuid())
-  workspaceId String?
-  projectId   String?
-  calendarEventId String?
-  createdById String
-  title       String
-  description String?
+  id                String        @id @default(uuid())
+  workspaceId       String?
+  projectId         String?
+  calendarEventId   String?
+  createdById       String
+  title             String
+  description       String?
+  transcript        String?
   providerMeetingId String?
   providerHostToken String?
-  status      MeetingStatus  @default(SCHEDULED)
-  scheduledAt DateTime?
-  startedAt   DateTime?
-  endedAt     DateTime?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
-  deletedAt   DateTime?
+  status            MeetingStatus @default(SCHEDULED)
+  scheduledAt       DateTime?
+  startedAt         DateTime?
+  endedAt           DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  deletedAt         DateTime?
 
-  workspace    Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project      Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  calendarEvent CalendarEvent?      @relation(fields: [calendarEventId], references: [id], onDelete: SetNull)
-  createdBy    User                 @relation("MeetingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  participants MeetingParticipant[]
+  workspace     Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project       Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  calendarEvent CalendarEvent?       @relation(fields: [calendarEventId], references: [id], onDelete: SetNull)
+  createdBy     User                 @relation("MeetingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  participants  MeetingParticipant[]
 
   @@index([workspaceId, status])
   @@index([projectId])
@@ -1448,14 +1631,14 @@ model Meeting {
 }
 
 model MeetingParticipant {
-  id        String                  @id @default(uuid())
+  id        String                   @id @default(uuid())
   meetingId String
   userId    String
   status    MeetingParticipantStatus @default(INVITED)
   joinedAt  DateTime?
   leftAt    DateTime?
-  createdAt DateTime                @default(now())
-  updatedAt DateTime                @updatedAt
+  createdAt DateTime                 @default(now())
+  updatedAt DateTime                 @updatedAt
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   user    User    @relation("MeetingParticipants", fields: [userId], references: [id], onDelete: Cascade)
@@ -1501,10 +1684,10 @@ model Form {
   updatedAt   DateTime   @updatedAt
   deletedAt   DateTime?
 
-  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy  User          @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  fields     FormField[]
-  responses  FormResponse[]
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  fields    FormField[]
+  responses FormResponse[]
 
   @@index([workspaceId, status])
   @@index([createdById])
@@ -1522,8 +1705,8 @@ model FormField {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  form      Form           @relation(fields: [formId], references: [id], onDelete: Cascade)
-  answers   FormAnswer[]
+  form    Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers FormAnswer[]
 
   @@index([formId, position])
 }
@@ -1534,9 +1717,9 @@ model FormResponse {
   submittedBy String
   createdAt   DateTime @default(now())
 
-  form     Form          @relation(fields: [formId], references: [id], onDelete: Cascade)
-  submitter User          @relation("FormSubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
-  answers  FormAnswer[]
+  form      Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  submitter User         @relation("FormSubmitter", fields: [submittedBy], references: [id], onDelete: Restrict)
+  answers   FormAnswer[]
 
   @@index([formId, createdAt])
   @@index([submittedBy])
@@ -1579,26 +1762,193 @@ enum IntegrationStatus {
 }
 
 model Integration {
-  id          String              @id @default(uuid())
-  userId      String
-  workspaceId String?
-  provider    IntegrationProvider
-  status      IntegrationStatus   @default(ACTIVE)
+  id                     String              @id @default(uuid())
+  userId                 String
+  workspaceId            String?
+  provider               IntegrationProvider
+  status                 IntegrationStatus   @default(ACTIVE)
+  enabled                Boolean             @default(true)
   accessTokenCiphertext  String
   refreshTokenCiphertext String?
-  tokenExpiresAt DateTime?
-  scopes      String[]            @default([])
-  externalUserId String?
-  externalEmail  String?
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  tokenExpiresAt         DateTime?
+  scopes                 String[]            @default([])
+  externalUserId         String?
+  externalEmail          String?
+  lastError              String?
+  lastRefreshedAt        DateTime?
+  lastSyncedAt           DateTime?
+  revokedAt              DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
 
-  user      User       @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
-  workspace Workspace? @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User                 @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace?           @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  syncJobs  IntegrationSyncJob[]
 
   @@unique([userId, provider, workspaceId])
   @@index([userId, status])
   @@index([workspaceId, provider])
+  @@index([enabled, status])
+}
+
+enum IntegrationSyncStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model IntegrationSyncJob {
+  id            String                @id @default(uuid())
+  integrationId String
+  status        IntegrationSyncStatus @default(PENDING)
+  attempts      Int                   @default(0)
+  maxRetries    Int                   @default(5)
+  nextAttemptAt DateTime              @default(now())
+  lastError     String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([integrationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Dev/source-control integrations (Phase 5)
+// ---------------------------------------------------------------------------
+
+enum DevIntegrationProvider {
+  GITHUB
+  GITLAB
+}
+
+enum IntegrationConnectionStatus {
+  PENDING
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+model IntegrationConnection {
+  id                   String                      @id @default(uuid())
+  provider             DevIntegrationProvider
+  workspaceId          String
+  status               IntegrationConnectionStatus @default(PENDING)
+  externalAccountId    String?
+  externalAccountLogin String?
+  externalAccountName  String?
+  encryptedCredentials String
+  scopes               String[]                    @default([])
+  createdById          String
+  lastError            String?
+  revokedAt            DateTime?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  workspace           Workspace           @relation("WorkspaceIntegrationConnections", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy           User                @relation("IntegrationConnectionsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  projectRepositories ProjectRepository[]
+
+  @@unique([workspaceId, provider])
+  @@index([workspaceId, status])
+  @@index([createdById])
+}
+
+model ProjectRepository {
+  id             String                 @id @default(uuid())
+  projectId      String
+  connectionId   String
+  provider       DevIntegrationProvider
+  externalRepoId String
+  fullName       String
+  defaultBranch  String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  project      Project               @relation("ProjectRepositories", fields: [projectId], references: [id], onDelete: Cascade)
+  connection   IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  taskDevLinks TaskDevLink[]
+
+  @@unique([projectId, provider, externalRepoId])
+  @@unique([connectionId, externalRepoId])
+  @@index([projectId])
+  @@index([connectionId])
+}
+
+enum DevLinkType {
+  BRANCH
+  PULL_REQUEST
+  COMMIT
+}
+
+model TaskDevLink {
+  id                  String                 @id @default(uuid())
+  taskId              String
+  projectId           String
+  projectRepositoryId String?
+  provider            DevIntegrationProvider
+  externalType        DevLinkType
+  externalId          String
+  externalNumber      Int?
+  title               String?
+  url                 String?
+  ref                 String?
+  headRef             String?
+  baseRef             String?
+  state               String?
+  repositoryFullName  String?
+  linkedById          String
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  task              Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectRepository ProjectRepository? @relation(fields: [projectRepositoryId], references: [id], onDelete: SetNull)
+  linkedBy          User               @relation("TaskDevLinksLinked", fields: [linkedById], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, provider, externalType, externalId])
+  @@index([taskId])
+  @@index([projectId])
+  @@index([projectRepositoryId])
+  @@index([linkedById])
+}
+
+model GitHubWebhookDelivery {
+  id                 String    @id @default(uuid())
+  provider           String    @default("GITHUB")
+  deliveryId         String
+  event              String
+  installationId     String?
+  repositoryFullName String?
+  status             String    @default("RECEIVED")
+  processedAt        DateTime?
+  error              String?
+  createdAt          DateTime  @default(now())
+
+  @@unique([provider, deliveryId])
+  @@index([event])
+  @@index([installationId])
+  @@index([createdAt])
+}
+
+model GitLabWebhookDelivery {
+  id                String    @id @default(uuid())
+  provider          String    @default("GITLAB")
+  deliveryId        String
+  event             String
+  projectIdExternal String?
+  status            String    @default("RECEIVED")
+  processedAt       DateTime?
+  error             String?
+  createdAt         DateTime  @default(now())
+
+  @@unique([provider, deliveryId])
+  @@index([event])
+  @@index([createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -1628,22 +1978,22 @@ enum AutomationRunStatus {
 }
 
 model Automation {
-  id          String            @id @default(uuid())
-  workspaceId String
-  createdById String
-  name        String
-  trigger     AutomationTrigger
-  condition   Json?
-  action      AutomationActionType
+  id           String               @id @default(uuid())
+  workspaceId  String
+  createdById  String
+  name         String
+  trigger      AutomationTrigger
+  condition    Json?
+  action       AutomationActionType
   actionConfig Json
-  enabled     Boolean           @default(true)
-  maxRetries  Int               @default(3)
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  deletedAt   DateTime?
+  enabled      Boolean              @default(true)
+  maxRetries   Int                  @default(3)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  deletedAt    DateTime?
 
-  workspace Workspace      @relation("WorkspaceAutomations", fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy User           @relation("AutomationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  workspace Workspace       @relation("WorkspaceAutomations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User            @relation("AutomationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   runs      AutomationRun[]
 
   @@index([workspaceId, enabled])
@@ -1651,33 +2001,42 @@ model Automation {
 }
 
 model AutomationRun {
-  id           String              @id @default(uuid())
-  automationId String
-  status       AutomationRunStatus @default(PENDING)
-  attempts     Int                 @default(0)
-  error        String?
-  startedAt    DateTime?
-  completedAt  DateTime?
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  id            String              @id @default(uuid())
+  automationId  String
+  status        AutomationRunStatus @default(PENDING)
+  attempts      Int                 @default(0)
+  error         String?
+  eventKey      String?
+  payload       Json?
+  nextAttemptAt DateTime            @default(now())
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
 
+  // eventKey makes an event-triggered run idempotent: a replayed event cannot
+  // create a second run for the same automation. NULL keys (manual runs) are
+  // not constrained by PostgreSQL unique indexes.
+  @@unique([automationId, eventKey])
   @@index([automationId, status])
   @@index([automationId, createdAt])
+  @@index([status, nextAttemptAt])
 }
 
 model AuditLog {
-  id          String   @id @default(uuid())
-  workspaceId String?
-  actorId     String?
-  action      String
-  targetType  String
-  targetId    String
-  metadata    Json?
-  ip          String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
+  id            String   @id @default(uuid())
+  workspaceId   String?
+  actorId       String?
+  action        String
+  targetType    String
+  targetId      String
+  metadata      Json?
+  ip            String?
+  userAgent     String?
+  securityEvent Boolean  @default(false)
+  createdAt     DateTime @default(now())
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor     User?      @relation(fields: [actorId], references: [id], onDelete: SetNull)
@@ -1687,6 +2046,7 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@index([createdAt])
+  @@index([workspaceId, securityEvent, createdAt])
 }
 
 model PrivacyRequest {
@@ -1791,25 +2151,429 @@ model EmailWebhookEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Global search (Phase 18)
+// ---------------------------------------------------------------------------
+
+model SearchHistory {
+  id          String   @id @default(uuid())
+  userId      String
+  workspaceId String?
+  query       String
+  category    String?
+  createdAt   DateTime @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, query])
+  @@index([workspaceId])
+}
+
+// ---------------------------------------------------------------------------
+// Outbound webhook subscriptions (Phase 19 / Phase 20 automation)
+// ---------------------------------------------------------------------------
+
+enum WebhookDeliveryStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model WebhookSubscription {
+  id               String    @id @default(uuid())
+  workspaceId      String
+  createdById      String
+  url              String
+  /// AES-256-GCM encrypted signing secret. Never returned by the API.
+  secretCiphertext String
+  events           String[]  @default([])
+  description      String?
+  enabled          Boolean   @default(true)
+  lastDeliveryAt   DateTime?
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy  User              @relation("WebhookSubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  deliveries WebhookDelivery[]
+
+  @@index([workspaceId, enabled])
+  @@index([createdById])
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid())
+  subscriptionId String
+  event          String
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  maxRetries     Int                   @default(5)
+  nextAttemptAt  DateTime              @default(now())
+  responseStatus Int?
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([subscriptionId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// AI service (Phases 21-23)
+// ---------------------------------------------------------------------------
+
+enum AiConversationStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AiMessageStatus {
+  COMPLETED
+  FAILED
+}
+
+enum AiUsageStatus {
+  SUCCESS
+  FAILURE
+}
+
+enum AiActionType {
+  CREATE_TASK
+  ADD_TASK_COMMENT
+  COMPLETE_TASK
+  CREATE_DOCUMENT
+  SEND_NOTIFICATION
+  POST_MESSAGE
+  SCHEDULE_EVENT
+}
+
+enum AiActionStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  EXECUTING
+  EXECUTED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum AiWritingStatus {
+  ACTIVE
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+}
+
+model AiConversation {
+  id            String               @id @default(uuid())
+  userId        String
+  workspaceId   String?
+  title         String
+  status        AiConversationStatus @default(ACTIVE)
+  contextType   String?
+  contextId     String?
+  lastMessageAt DateTime             @default(now())
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  user            User               @relation("AiConversationOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace       Workspace?         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages        AiMessage[]
+  actionProposals AiActionProposal[]
+
+  @@index([userId, updatedAt])
+  @@index([workspaceId, updatedAt])
+  @@index([status])
+}
+
+model AiMessage {
+  id             String          @id @default(uuid())
+  conversationId String
+  role           AiMessageRole
+  content        String
+  status         AiMessageStatus @default(COMPLETED)
+  model          String?
+  tokenCount     Int?
+  references     Json?
+  metadata       Json?
+  createdAt      DateTime        @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model AiUsageRecord {
+  id               String        @id @default(uuid())
+  userId           String
+  workspaceId      String?
+  conversationId   String?
+  operation        String
+  model            String?
+  promptTokens     Int           @default(0)
+  completionTokens Int           @default(0)
+  totalTokens      Int           @default(0)
+  latencyMs        Int?
+  status           AiUsageStatus
+  errorCode        String?
+  createdAt        DateTime      @default(now())
+
+  user      User       @relation("AiUsageRecordOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([operation, createdAt])
+  @@index([status, createdAt])
+}
+
+model AiActionProposal {
+  id               String         @id @default(uuid())
+  workspaceId      String
+  userId           String
+  conversationId   String?
+  actionType       AiActionType
+  status           AiActionStatus @default(PROPOSED)
+  title            String
+  summary          String?
+  payload          Json
+  sourceReferences Json?
+  idempotencyKey   String         @unique
+  expiresAt        DateTime
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  executedAt       DateTime?
+  executionResult  Json?
+  failureReason    String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user         User               @relation("AiActionProposalOwner", fields: [userId], references: [id], onDelete: Cascade)
+  conversation AiConversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  approvals    AiActionApproval[]
+
+  @@index([workspaceId, status])
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+}
+
+model AiActionApproval {
+  id         String   @id @default(uuid())
+  proposalId String
+  userId     String
+  decision   String
+  note       String?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  proposal AiActionProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  user     User             @relation("AiActionApprovalActor", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([proposalId, createdAt])
+  @@index([userId])
+}
+
+model AiWritingSession {
+  id                    String          @id @default(uuid())
+  userId                String
+  workspaceId           String?
+  status                AiWritingStatus @default(ACTIVE)
+  originalText          String
+  suggestions           Json
+  detectedTone          String?
+  summary               String?
+  acceptedSuggestionIds Json?
+  dismissedAt           DateTime?
+  acceptedAt            DateTime?
+  expiresAt             DateTime
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  user      User       @relation("AiWritingSessionOwner", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  SELECT
+  MULTI_SELECT
+  USER
+  CHECKBOX
+}
+
+enum TaskRecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model ProjectCustomField {
+  id          String          @id @default(uuid())
+  projectId   String
+  name        String
+  key         String
+  type        CustomFieldType
+  description String?
+  options     Json?
+  required    Boolean         @default(false)
+  position    Int             @default(0)
+  createdById String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  project   Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User                   @relation("ProjectCustomFieldCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  values    TaskCustomFieldValue[]
+
+  @@unique([projectId, key])
+  @@index([projectId, position])
+  @@index([projectId])
+}
+
+model TaskCustomFieldValue {
+  id        String   @id @default(uuid())
+  taskId    String
+  fieldId   String
+  value     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task  Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  field ProjectCustomField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, fieldId])
+  @@index([fieldId])
+  @@index([taskId])
+}
+
+model TaskSavedView {
+  id        String   @id @default(uuid())
+  projectId String
+  ownerId   String
+  name      String
+  isShared  Boolean  @default(false)
+  config    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  owner   User    @relation("TaskSavedViewOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, ownerId])
+  @@index([projectId, isShared])
+}
+
+model TaskRecurrenceRule {
+  id              String                  @id @default(uuid())
+  taskId          String                  @unique
+  frequency       TaskRecurrenceFrequency
+  interval        Int                     @default(1)
+  daysOfWeek      Int[]                   @default([])
+  dayOfMonth      Int?
+  endsAt          DateTime?
+  maxOccurrences  Int?
+  occurrenceCount Int                     @default(0)
+  nextRunAt       DateTime?
+  active          Boolean                 @default(true)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([active, nextRunAt])
+}
+
+model TaskTemplate {
+  id          String   @id @default(uuid())
+  workspaceId String
+  projectId   String?
+  name        String
+  description String?
+  data        Json
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("TaskTemplateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId])
+  @@index([projectId])
+}
+
+model ProjectTemplate {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  data        Json
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("ProjectTemplateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId])
+}
+
+// ---------------------------------------------------------------------------
 // Planned models — intentionally NOT created yet.
 //
 // These belong to later roadmap phases and must be designed when their
 // requirements and relationships are fully understood (see the database skill,
 // section 5). Creating empty tables now would force premature migration churn.
 //
-//   Phase 12/13 — Realtime & messaging
-//     Conversation, ConversationMembership, Message, MessageReaction,
-//     MessageAttachment, MessageReadReceipt, PresenceRecord
-//   Phase 16 — Calendar & scheduling
-//     CalendarEvent, Reminder, RecurrenceRule
-//   Phase 17 — Meetings
-//     Meeting, MeetingParticipant, MeetingInvitation, CallRecord
-//   Phase 18 — AI
-//     AiConversation, AiMessage, AiUsageRecord, AiArtifact
-//   Phase 19 — Automation & jobs
-//     AutomationRule, BackgroundJob, JobRun
-//   Phase 20 — Integrations
-//     Integration, IntegrationCredential, WebhookSubscription, WebhookDelivery
+//   Phase 21 — Python AI service
+//     AiArtifact (planned; conversations, messages, usage, actions and
+//     writing sessions are implemented above)
+//
+// Implemented models are no longer listed here:
+//   Phase 10 — Messaging (Channel, Message, MessageReaction, MessageReadReceipt)
+//   Phase 14 — Calendar (CalendarEvent, EventInvitation)
+//   Phase 15 — Meetings (Meeting, MeetingParticipant)
+//   Phase 18 — Search (SearchHistory)
+//   Phase 19 — Integrations (Integration, IntegrationSyncJob, WebhookSubscription,
+//              WebhookDelivery)
+//   Phase 20 — Automation (Automation, AutomationRun)
 //
 // Documented field-level stubs live in docs/planned-models.md.
 // ---------------------------------------------------------------------------
+
+enum ChannelPostPolicy {
+  ALL_MEMBERS
+  MANAGERS_ONLY
+}
+
+enum MessageContentType {
+  TEXT
+  VOICE
+}
+
+model MessageAudio {
+  messageId String  @id
+  data      Bytes
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}

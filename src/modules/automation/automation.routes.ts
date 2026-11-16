@@ -4,7 +4,15 @@ import { createRequireActiveAccount, createRequireAuth } from '../../middleware/
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
-import { automationParamsSchema, automationWorkspaceParams, createAutomationSchema, updateAutomationSchema, type CreateAutomationInput } from './automation.service';
+import {
+  automationParamsSchema,
+  automationRunParamsSchema,
+  automationWorkspaceParams,
+  createAutomationSchema,
+  listAutomationRunsQuerySchema,
+  updateAutomationSchema,
+  type CreateAutomationInput,
+} from './automation.service';
 import { createAutomationService } from './automation.service';
 
 export interface AutomationRouterOptions { config: AppConfig; service?: ReturnType<typeof createAutomationService> }
@@ -27,6 +35,15 @@ export function createAutomationRouter({ config, service = createAutomationServi
   router.get('/:automationId', requireAuth, requireActive, validate({ params: automationParamsSchema }), async (req, res) => {
     const { workspaceId, automationId } = req.validated!.params as { workspaceId: string; automationId: string };
     sendSuccess(res, await service.get({ userId: userId(req), workspaceId, automationId }));
+  });
+  router.get('/:automationId/runs', requireAuth, requireActive, validate({ params: automationParamsSchema, query: listAutomationRunsQuerySchema }), async (req, res) => {
+    const { workspaceId, automationId } = req.validated!.params as { workspaceId: string; automationId: string };
+    const { limit } = req.validated!.query as { limit?: number };
+    sendSuccess(res, await service.listRuns({ userId: userId(req), workspaceId, automationId, limit }));
+  });
+  router.post('/:automationId/runs/:runId/retry', requireAuth, requireActive, validate({ params: automationRunParamsSchema }), async (req, res) => {
+    const { workspaceId, automationId, runId } = req.validated!.params as { workspaceId: string; automationId: string; runId: string };
+    sendSuccess(res, await service.retryRun({ userId: userId(req), workspaceId, automationId, runId }));
   });
   router.patch('/:automationId', requireAuth, requireActive, validate({ params: automationParamsSchema, body: updateAutomationSchema }), async (req, res) => {
     const { workspaceId, automationId } = req.validated!.params as { workspaceId: string; automationId: string };

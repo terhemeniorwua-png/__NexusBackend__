@@ -2,7 +2,11 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import { hashSecret } from '../../utils/crypto';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
-import type { EmailTransport } from '../providers/email';
+import type {
+  EmailTransport,
+  EmailTransportRequest,
+  EmailTransportResult,
+} from '../providers/email';
 import { redactEmailAddresses, summarizeErrorForLog } from './log-privacy';
 import { isAddressSuppressed } from './suppression.service';
 import type { EmailDeliveryResult, EmailMessage } from './types';
@@ -37,6 +41,25 @@ export interface DeliveryPassResult {
   failed: number;
   retried: number;
   suppressed: number;
+}
+
+const SENDING_INTERRUPTED_ERROR =
+  'The delivery worker stopped before the provider outcome was recorded';
+const SENDING_INTERRUPTED_CODE = 'SENDING_INTERRUPTED';
+const MAX_ATTEMPTS_EXHAUSTED_ERROR = 'Retry limit reached before delivery';
+const MAX_ATTEMPTS_EXHAUSTED_CODE = 'MAX_ATTEMPTS_EXHAUSTED';
+const PROVIDER_TIMEOUT_CODE = 'PROVIDER_TIMEOUT';
+
+/**
+ * Raised when the provider does not answer within the configured request
+ * timeout. It is treated as a transient failure, so it uses the same bounded
+ * retry policy as any other provider error.
+ */
+class EmailRequestTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`The email provider did not respond within ${timeoutMs} ms`);
+    this.name = 'EmailRequestTimeoutError';
+  }
 }
 
 interface ClaimedDelivery {
@@ -217,12 +240,89 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
     return client.$executeRaw`
       UPDATE "EmailDelivery"
       SET "status" = 'FAILED',
-          "lastError" = COALESCE("lastError", 'Retry limit reached before delivery'),
-          "lastErrorCode" = COALESCE("lastErrorCode", 'MAX_ATTEMPTS_EXHAUSTED'),
+          "lastError" = COALESCE("lastError", ${MAX_ATTEMPTS_EXHAUSTED_ERROR}),
+          "lastErrorCode" = COALESCE("lastErrorCode", ${MAX_ATTEMPTS_EXHAUSTED_CODE}),
           "failedAt" = COALESCE("failedAt", NOW()),
           "updatedAt" = NOW()
       WHERE "status" = 'QUEUED' AND "attempts" >= "maxAttempts"
     `;
+  }
+
+  /**
+   * Recovers rows that were claimed by a worker that stopped before it could
+   * record the outcome. Without this repair a hard crash leaves the row in
+   * `SENDING` forever, even though the attempts counter already counts that
+   * interrupted attempt.
+   *
+   * The update is conditional on the row still being stale and still being in
+   * `SENDING`, so two workers cannot both recover it. An interrupted attempt
+   * that already reached the limit becomes terminal; every other row returns
+   * to the queue with the normal backoff and its attempt counter intact.
+   */
+  async function recoverStaleSending(limit: number): Promise<{ requeued: number; failed: number }> {
+    const staleBefore = new Date(Date.now() - deps.config.emailSendingStaleMs);
+    const rows = await client.emailDelivery.findMany({
+      where: { status: 'SENDING', updatedAt: { lt: staleBefore } },
+      select: { id: true, template: true, attempts: true, maxAttempts: true },
+      orderBy: { updatedAt: 'asc' },
+      take: limit,
+    });
+    const recovered = { requeued: 0, failed: 0 };
+
+    for (const row of rows) {
+      if (row.attempts >= row.maxAttempts) {
+        const updated = await client.emailDelivery.updateMany({
+          where: { id: row.id, status: 'SENDING', updatedAt: { lt: staleBefore } },
+          data: {
+            status: 'FAILED',
+            lastError: MAX_ATTEMPTS_EXHAUSTED_ERROR,
+            lastErrorCode: MAX_ATTEMPTS_EXHAUSTED_CODE,
+            failedAt: new Date(),
+          },
+        });
+
+        if (updated.count === 0) {
+          continue;
+        }
+
+        recovered.failed += 1;
+        log.error('email_delivery_failed', {
+          deliveryId: row.id,
+          template: row.template,
+          attempt: row.attempts,
+          maxAttempts: row.maxAttempts,
+          errorCode: MAX_ATTEMPTS_EXHAUSTED_CODE,
+        });
+        continue;
+      }
+
+      const delay = retryDelayMs(row.attempts, deps.config);
+      const updated = await client.emailDelivery.updateMany({
+        where: { id: row.id, status: 'SENDING', updatedAt: { lt: staleBefore } },
+        data: {
+          status: 'QUEUED',
+          lastError: SENDING_INTERRUPTED_ERROR,
+          lastErrorCode: SENDING_INTERRUPTED_CODE,
+          nextAttemptAt: new Date(Date.now() + delay),
+        },
+      });
+
+      if (updated.count === 0) {
+        continue;
+      }
+
+      recovered.requeued += 1;
+      log.warn('email_delivery_recovered', {
+        deliveryId: row.id,
+        template: row.template,
+        attempt: row.attempts,
+        maxAttempts: row.maxAttempts,
+        retryInMs: delay,
+        errorCode: SENDING_INTERRUPTED_CODE,
+      });
+    }
+
+    return recovered;
   }
 
   async function markSuppressed(delivery: ClaimedDelivery): Promise<void> {
@@ -276,6 +376,29 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
         nextAttemptAt: new Date(Date.now() + delayMs),
       },
     });
+  }
+
+  /**
+   * Bounds a provider call. The SMTP transport already has its own socket
+   * timeouts, but the delivery worker must not depend on a provider adapter
+   * honouring them. A provider that never answers would otherwise hold the
+   * worker open and leave the row in `SENDING` indefinitely.
+   */
+  async function sendWithTimeout(request: EmailTransportRequest): Promise<EmailTransportResult> {
+    const timeoutMs = deps.config.emailRequestTimeoutMs;
+    let timer: NodeJS.Timeout | undefined;
+
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new EmailRequestTimeoutError(timeoutMs)), timeoutMs);
+    });
+
+    try {
+      return await Promise.race([transport.send(request), timeout]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   /**
@@ -335,22 +458,38 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       return 'suppressed';
     }
 
-    const result = await transport.send({
-      deliveryId: delivery.id,
-      to: delivery.toAddress,
-      from: delivery.fromAddress,
-      replyTo: deps.config.emailReplyToAddress || undefined,
-      subject: delivery.subject,
-      text: isOtpTemplate(delivery.template)
+    let result: EmailTransportResult;
+
+    try {
+      result = await sendWithTimeout({
+        deliveryId: delivery.id,
+        to: delivery.toAddress,
+        from: delivery.fromAddress,
+        replyTo: deps.config.emailReplyToAddress || undefined,
+        subject: delivery.subject,
+        text: isOtpTemplate(delivery.template)
         ? decryptOtpBody(delivery.textBody, deps.config.otpHmacSecret)
         : delivery.textBody,
-      html: delivery.htmlBody
+        html: delivery.htmlBody
         ? isOtpTemplate(delivery.template)
           ? decryptOtpBody(delivery.htmlBody, deps.config.otpHmacSecret)
           : delivery.htmlBody
         : undefined,
-      headers: toHeaderRecord(delivery.headers),
-    });
+        headers: toHeaderRecord(delivery.headers),
+      });
+    } catch (error) {
+      if (error instanceof EmailRequestTimeoutError) {
+        log.warn('email_delivery_timeout', {
+          deliveryId: delivery.id,
+          template: delivery.template,
+          timeoutMs: deps.config.emailRequestTimeoutMs,
+        });
+
+        return retryOrFail(delivery, error.message, PROVIDER_TIMEOUT_CODE);
+      }
+
+      throw error;
+    }
 
     if (result.accepted) {
       await markAccepted(delivery, result.providerMessageId ?? delivery.id);
@@ -386,18 +525,26 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
    * Runs one pass of the worker: claim, send, record.
    */
   async function processPending(limit: number): Promise<DeliveryPassResult> {
+    const recovered = await recoverStaleSending(limit);
     const exhausted = await failExhaustedQueued();
     const claimed = await claimDue(limit);
     const result: DeliveryPassResult = {
       claimed: claimed.length,
       sent: 0,
-      failed: exhausted,
-      retried: 0,
+      failed: exhausted + recovered.failed,
+      retried: recovered.requeued,
       suppressed: 0,
     };
 
     if (exhausted > 0) {
       log.error('email_delivery_attempts_exhausted', { count: exhausted });
+    }
+
+    if (recovered.requeued > 0 || recovered.failed > 0) {
+      log.warn('email_delivery_stale_sending_recovered', {
+        requeued: recovered.requeued,
+        failed: recovered.failed,
+      });
     }
 
     for (const delivery of claimed) {

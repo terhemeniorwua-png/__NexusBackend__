@@ -38,6 +38,12 @@ export const teamMemberParamsSchema = z.object({
   userId: z.string().trim().uuid('The user id is not valid'),
 });
 
+export const teamInvitationParamsSchema = z.object({
+  workspaceId: z.string().trim().uuid('The workspace id is not valid'),
+  teamId: z.string().trim().uuid('The team id is not valid'),
+  invitationId: z.string().trim().uuid('The invitation id is not valid'),
+});
+
 // ---------------------------------------------------------------------------
 // Query schemas
 // ---------------------------------------------------------------------------
@@ -47,6 +53,10 @@ export const listTeamsQuerySchema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true'),
+});
+
+export const listTeamInvitationsQuerySchema = z.object({
+  status: z.enum(['PENDING', 'ACCEPTED', 'DECLINED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
 });
 
 // ---------------------------------------------------------------------------
@@ -61,6 +71,10 @@ export const createTeamSchema = z
     leadId: z.string().trim().uuid('The lead user id is not valid').optional().nullable(),
   })
   .strict();
+
+export const createTeamInvitationSchema = z.object({
+  targetUserId: z.string().trim().uuid('The user id is not valid'),
+}).strict();
 
 export const updateTeamSchema = z
   .object({

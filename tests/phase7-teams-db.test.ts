@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { createApp } from '../src/app';
 import { connectRedis, disconnectRedis } from '../src/db/redis';
+import { resetEmailSender, setEmailSender, type EmailMessage } from '../src/services/email';
 import { ProjectCapability, requireProjectAccess } from '../src/modules/authorization';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { CookieJar, jsonRequest, startServer, type RunningServer } from './helpers/test-server';
@@ -167,8 +168,7 @@ function runTests(rawDbUrl: string): void {
     // the app so the test cannot read from an implicit development URL.
     const { getPrismaClient } = await import('../src/db/prisma');
     getPrismaClient(db.url);
-    const config = (await import('../src/config/env')).loadEnv({
-      ...process.env,
+    const config = (await import('./helpers/test-config')).loadTestConfig({
       RATE_LIMIT_NAMESPACE: `phase7-db-${process.pid}-${Date.now()}`,
       RATE_LIMIT_MAX: '100000',
       AUTH_REGISTER_RATE_LIMIT_MAX: '1000',
@@ -395,6 +395,120 @@ function runTests(rawDbUrl: string): void {
         jar: member.jar,
       });
       assert.equal(res.status, 403);
+    });
+  });
+
+  describe('Phase 4.4 team invitation workflow', () => {
+    test('invites an existing workspace member and adds only team membership on acceptance', async () => {
+      const invitedTeamId = await createTeam(owner, workspaceId, 'Invitation Team');
+      let captured: EmailMessage | undefined;
+      setEmailSender({
+        async send(message) {
+          captured = message;
+          return { accepted: true };
+        },
+      });
+
+      try {
+        const create = await jsonRequest(`${teamUrl(workspaceId, invitedTeamId)}/invitations`, {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ targetUserId: member.id }),
+          jar: owner.jar,
+        });
+        assert.equal(create.status, 201, JSON.stringify(create.body));
+        assert.equal((create.body.data as { emailSent: boolean }).emailSent, true);
+        assert.equal(captured?.template, 'team_invitation');
+        assert.equal(captured?.to, member.email);
+
+        const link = captured!.text.match(/\?token=([A-Za-z0-9_-]+)/);
+        assert.ok(link, 'team invitation email should contain its one-time acceptance token');
+        const token = decodeURIComponent(link[1]!);
+        assert.equal(JSON.stringify(create.body).includes(token), false);
+
+        const invitation = (create.body.data as { invitation: { id: string; type: string; teamId: string } }).invitation;
+        assert.equal(invitation.type, 'TEAM');
+        assert.equal(invitation.teamId, invitedTeamId);
+
+        const duplicate = await jsonRequest(`${teamUrl(workspaceId, invitedTeamId)}/invitations`, {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ targetUserId: member.id }),
+          jar: owner.jar,
+        });
+        assert.equal(duplicate.status, 409);
+
+        const preview = await jsonRequest(`${baseUrl}/api/v1/invitations/${token}`);
+        assert.equal(preview.status, 200);
+        assert.equal((preview.body.data as { team: { id: string; name: string } }).team.id, invitedTeamId);
+
+        const verify = await jsonRequest(`${baseUrl}/api/v1/invitations/${token}/verify`, {
+          headers: auth(member),
+          jar: member.jar,
+        });
+        assert.equal(verify.status, 200);
+        const viewer = (verify.body.data as { viewer: { alreadyMember: boolean; canAccept: boolean; alreadyTeamMember: boolean } }).viewer;
+        assert.equal(viewer.alreadyMember, true);
+        assert.equal(viewer.canAccept, true);
+        assert.equal(viewer.alreadyTeamMember, false);
+
+        const before = await connectTestDatabase(rawDbUrl);
+        const membershipBefore = await before.prisma.workspaceMembership.findUniqueOrThrow({
+          where: { workspaceId_userId: { workspaceId, userId: member.id } },
+          select: { role: true },
+        });
+        await before.prisma.$disconnect();
+
+        const accepts = await Promise.all([
+          jsonRequest(`${baseUrl}/api/v1/invitations/${token}/accept`, {
+            method: 'POST',
+            headers: auth(member),
+            jar: member.jar,
+          }),
+          jsonRequest(`${baseUrl}/api/v1/invitations/${token}/accept`, {
+            method: 'POST',
+            headers: auth(member),
+            jar: member.jar,
+          }),
+        ]);
+        assert.deepEqual(accepts.map((result) => result.status).sort(), [200, 409]);
+        const db = await connectTestDatabase(rawDbUrl);
+        const [teamMembership, membershipAfter, persistedInvitation] = await Promise.all([
+          db.prisma.teamMembership.findUnique({
+            where: { teamId_userId: { teamId: invitedTeamId, userId: member.id } },
+          }),
+          db.prisma.workspaceMembership.findUniqueOrThrow({
+            where: { workspaceId_userId: { workspaceId, userId: member.id } },
+            select: { role: true },
+          }),
+          db.prisma.invitation.findUniqueOrThrow({ where: { id: invitation.id } }),
+        ]);
+        assert.ok(teamMembership);
+        assert.equal(membershipAfter.role, membershipBefore.role);
+        assert.equal(persistedInvitation.status, 'ACCEPTED');
+        await db.prisma.$disconnect();
+
+        const replay = await jsonRequest(`${baseUrl}/api/v1/invitations/${token}/accept`, {
+          method: 'POST',
+          headers: auth(member),
+          jar: member.jar,
+        });
+        assert.equal(replay.status, 409);
+      } finally {
+        resetEmailSender();
+      }
+    });
+
+    test('rejects team invitations for people without active workspace membership', async () => {
+      const invitedTeamId = await createTeam(owner, workspaceId, 'Member-only Invitations');
+      const response = await jsonRequest(`${teamUrl(workspaceId, invitedTeamId)}/invitations`, {
+        method: 'POST',
+        headers: auth(owner),
+        body: JSON.stringify({ targetUserId: outsider.id }),
+        jar: owner.jar,
+      });
+      assert.equal(response.status, 404);
+      assert.equal((response.body.error as { code: string }).code, 'TEAM_INVITATION_RECIPIENT_NOT_FOUND');
     });
   });
 

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { createApp } from '../src/app';
 import { connectRedis, disconnectRedis } from '../src/db/redis';
+import { installOutboxEmailSender, resetEmailServices } from '../src/services/email';
+import { mentionEmailIdempotencyKey } from '../src/services/mention-email-notifier';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { CookieJar, jsonRequest, startServer, type RunningServer } from './helpers/test-server';
 
@@ -95,12 +97,12 @@ function runTests(rawDbUrl: string): void {
     const db = await connectTestDatabase(rawDbUrl);
     const { getPrismaClient } = await import('../src/db/prisma');
     getPrismaClient(db.url);
-    const config = (await import('../src/config/env')).loadEnv({
-      ...process.env,
+    const config = (await import('./helpers/test-config')).loadTestConfig({
       RATE_LIMIT_NAMESPACE: `phase9-db-${tag}`,
       RATE_LIMIT_MAX: '100000',
       AUTH_REGISTER_RATE_LIMIT_MAX: '1000',
     });
+    installOutboxEmailSender(config);
     await connectRedis(config);
     server = await startServer(createApp({ config }));
     baseUrl = server.baseUrl;
@@ -151,6 +153,7 @@ function runTests(rawDbUrl: string): void {
   after(async () => {
     await server.close();
     await disconnectRedis();
+    await resetEmailServices();
     const db = await connectTestDatabase(rawDbUrl);
     await db.prisma.task.deleteMany({ where: { projectId } });
     await db.prisma.project.deleteMany({ where: { id: projectId } });
@@ -414,6 +417,82 @@ function runTests(rawDbUrl: string): void {
   });
 
   describe('Phase 9 comments', () => {
+    test('persists task comment mentions, creates notification, and queues mention email', async () => {
+      const create = await jsonRequest(tasksUrl(), {
+        method: 'POST',
+        headers: auth(owner),
+        body: JSON.stringify({ title: 'Mention Task' }),
+        jar: owner.jar,
+      });
+      const taskId = (create.body.data as { id: string }).id;
+
+      const response = await jsonRequest(`${taskUrl(taskId)}/comments`, {
+        method: 'POST',
+        headers: auth(owner),
+        body: JSON.stringify({ body: 'Please review this', mentionedUserIds: [member.id] }),
+        jar: owner.jar,
+      });
+      assert.equal(response.status, 201, JSON.stringify(response.body));
+      const comment = response.body.data as { id: string; mentions: Array<{ userId: string }> };
+      assert.deepEqual(comment.mentions, [{ userId: member.id }]);
+
+      const db = await connectTestDatabase(rawDbUrl);
+      const [mention, notification, delivery] = await Promise.all([
+        db.prisma.commentMention.findUnique({
+          where: { commentId_userId: { commentId: comment.id, userId: member.id } },
+        }),
+        db.prisma.notification.findFirst({
+          where: { userId: member.id, type: 'MENTION', data: { path: ['commentId'], equals: comment.id } },
+        }),
+        db.prisma.emailDelivery.findUnique({
+          where: { idempotencyKey: mentionEmailIdempotencyKey(comment.id, member.id) },
+          select: { id: true, template: true },
+        }),
+      ]);
+      assert.ok(mention);
+      assert.ok(notification);
+      assert.equal(delivery?.template, 'mention');
+      if (delivery) await db.prisma.emailDelivery.delete({ where: { id: delivery.id } });
+      await db.prisma.$disconnect();
+    });
+
+    test('does not reveal or accept a mention recipient without task access', async () => {
+      const db = await connectTestDatabase(rawDbUrl);
+      const privateProject = await db.prisma.project.create({
+        data: {
+          workspaceId,
+          name: 'Private mention project',
+          key: `PM${tag.slice(-4)}`,
+          visibility: 'PRIVATE',
+          ownerId: owner.id,
+        },
+      });
+      await db.prisma.$disconnect();
+      const privateTask = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${workspaceId}/projects/${privateProject.id}/tasks`,
+        {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ title: 'Private Mention Task' }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(privateTask.status, 201, JSON.stringify(privateTask.body));
+      const taskId = (privateTask.body.data as { id: string }).id;
+      const response = await jsonRequest(
+        `${baseUrl}/api/v1/workspaces/${workspaceId}/projects/${privateProject.id}/tasks/${taskId}/comments`,
+        {
+          method: 'POST',
+          headers: auth(owner),
+          body: JSON.stringify({ body: 'Private comment', mentionedUserIds: [member.id] }),
+          jar: owner.jar,
+        },
+      );
+      assert.equal(response.status, 400);
+      assert.equal((response.body.error as { code: string }).code, 'INVALID_MENTION_RECIPIENT');
+      await dbCleanupPrivateProject(privateProject.id);
+    });
+
     test('can create, update, and delete comments', async () => {
       const create = await jsonRequest(tasksUrl(), {
         method: 'POST',
@@ -457,4 +536,10 @@ function runTests(rawDbUrl: string): void {
       assert.equal(del.status, 200);
     });
   });
+
+  async function dbCleanupPrivateProject(id: string): Promise<void> {
+    const db = await connectTestDatabase(rawDbUrl);
+    await db.prisma.project.delete({ where: { id } });
+    await db.prisma.$disconnect();
+  }
 }

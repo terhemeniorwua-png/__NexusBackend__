@@ -22,7 +22,11 @@ import type {
   RegisterInput,
 } from './auth.schemas';
 import type { RequestContext } from './auth.types';
-import { createGoogleOAuthService, type GoogleOAuthService } from './google-oauth.service';
+import {
+  createGoogleOAuthService,
+  GOOGLE_OAUTH_STATE_COOKIE,
+  type GoogleOAuthService,
+} from './google-oauth.service';
 
 /**
  * HTTP layer for the authentication module.
@@ -144,14 +148,32 @@ export function createAuthController({
 
   return {
     async googleStart(_req: Request, res: Response): Promise<void> {
-      res.redirect(302, await googleOAuth.initiate());
+      const { authorizationUrl, browserBinding } = await googleOAuth.initiate();
+      setCookie(res, GOOGLE_OAUTH_STATE_COOKIE, browserBinding, {
+        httpOnly: true,
+        secure: config.cookieSecure,
+        sameSite: 'lax',
+        maxAge: 10 * 60_000,
+      });
+      res.redirect(302, authorizationUrl);
     },
 
     async googleCallback(req: Request, res: Response): Promise<void> {
       const code = typeof req.query.code === 'string' ? req.query.code : undefined;
       const state = typeof req.query.state === 'string' ? req.query.state : undefined;
       const error = typeof req.query.error === 'string' ? req.query.error : undefined;
-      res.redirect(302, await googleOAuth.callback({ code, state, error }));
+      const redirect = await googleOAuth.callback({
+        code,
+        state,
+        error,
+        browserBinding: readCookie(req, GOOGLE_OAUTH_STATE_COOKIE),
+      });
+      clearCookie(res, GOOGLE_OAUTH_STATE_COOKIE, {
+        httpOnly: true,
+        secure: config.cookieSecure,
+        sameSite: 'lax',
+      });
+      res.redirect(302, redirect);
     },
 
     async googleExchange(req: Request, res: Response): Promise<void> {

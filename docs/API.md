@@ -23,6 +23,28 @@ listed here is not evidence that a roadmap phase is complete.
 | GET    | `/health`       | Public | Liveness information.                                        |
 | GET    | `/health/live`  | Public | Liveness probe.                                              |
 | GET    | `/health/ready` | Public | Readiness and dependency status; returns 503 when not ready. |
+| GET    | `/health/workers` | Public | Background worker liveness and durable queue depth; returns 503 when a worker is failing or stale. |
+
+### Background processing (Phase 24)
+
+Each background worker claims rows from a PostgreSQL-backed queue with
+`FOR UPDATE SKIP LOCKED`, applies bounded exponential backoff, and records
+failures for inspection. PostgreSQL is the durable queue; Redis is never the
+only record of a job or message. Workers run inside the API process and stop
+during graceful shutdown.
+
+`GET /health/workers` returns `status` (`ok` or `degraded`), per-worker
+liveness (`state`, `stale`, `consecutiveFailures`, `lastSuccessAt`,
+`lastFailureAt`, `lastErrorCode`), and queue depth (`pending`, `failed`) for
+email, outbox webhooks, automation runs and integration sync jobs. Worker
+liveness is process-local, so a load balancer should probe each instance.
+The response never contains job payloads, recipient addresses or raw error
+messages.
+
+Redis cache entries use the `CACHE_NAMESPACE` prefix and always have a TTL.
+Cache reads and writes degrade to cache misses when Redis is unavailable; the
+cache never makes a request fail. Invalidation of an entity prefix uses
+`SCAN`, not `KEYS`, so it cannot block the Redis server.
 
 ## Authentication and account lifecycle
 
@@ -61,8 +83,12 @@ case-sensitive `redirect_URL` value as the Google callback URL.
 `GOOGLE_CALLBACK_URL` is only a fallback when `redirect_URL` is absent; its
 current dotenv value points to the frontend and is not the backend callback.
 The initiation endpoint is a browser navigation (`GET /api/v1/auth/google`),
-not a fetch request. It requests only `openid`, `email`, and `profile`; the
-backend stores a hashed, single-use state and nonce before redirecting to Google.
+not a fetch request. Start it at the Render backend origin so its short-lived,
+HttpOnly `nexus_google_oauth_state` cookie is scoped to the same host that
+receives Google's callback. The backend requests only `openid`, `email`, and
+`profile`; it stores a hashed, single-use state and nonce and signs the state
+into that cookie before redirecting to Google. The callback requires both the
+database state and its matching browser cookie; state expires after ten minutes.
 
 With the current deployment URLs, register this exact Google Authorized
 redirect URI: `https://nexusbackend-1-0ffo.onrender.com/api/auth/google/callback`.
@@ -75,9 +101,12 @@ Google returns to the configured backend callback path with `code` and `state`
 (or an OAuth `error`). The backend exchanges and verifies the ID token, then
 redirects to the fixed frontend path `/auth/google/callback` on the first origin
 in `FRONTEND_URL`. Success appends a short-lived, single-use `code` query
-parameter; cancellation/failure appends an `error` code. The frontend must
-immediately POST `{ "code": "..." }` to
-`POST /api/v1/auth/google/exchange` with `credentials: "include"`. The response
+parameter; cancellation and failures append a stable, generic `error` code to
+that same allowlisted frontend URL. The callback never accepts a redirect URL
+from the request. The frontend must immediately POST `{ "code": "..." }` to
+`POST /api/v1/auth/google/exchange` with `credentials: "include"`. Prefer the
+Vercel same-origin `/api/backend/...` proxy for this exchange; the browser then
+stores the returned host-only session cookies for the frontend origin. The response
 uses the normal auth success envelope and contains `user`, `accessToken`,
 `tokenType`, `expiresIn`, `csrfToken`, and `session`; it sets the existing
 httpOnly `nexus_rt` and readable `nexus_csrf` cookies. The frontend should
@@ -85,26 +114,37 @@ remove the one-time code from browser history after exchange. If 2FA is enabled,
 exchange returns the existing `twoFactorRequired` challenge and the regular
 `POST /api/v1/auth/2fa/challenge` flow completes login.
 
-Errors use the standard `{ "success": false, "error": { "code": string,
+Errors on the frontend callback use stable codes including
+`OAUTH_CANCELLED`, `OAUTH_STATE_INVALID`, `GOOGLE_CALLBACK_INVALID`,
+`GOOGLE_TOKEN_INVALID`, and `GOOGLE_SIGN_IN_FAILED`. They do not reveal whether
+an email already belongs to a Nexus account. API exchange validation errors use
+the standard `{ "success": false, "error": { "code": string,
 "message": string } }` shape. OAuth-specific codes include
-`GOOGLE_AUTH_UNAVAILABLE`, `OAUTH_STATE_INVALID`, `GOOGLE_TOKEN_INVALID`,
-`GOOGLE_ACCOUNT_LINK_REQUIRED`, `OAUTH_CODE_INVALID`, and `OAUTH_CANCELLED`.
-An existing Nexus email is never linked automatically; the user must first
-authenticate normally and use a future authenticated linking flow. Verified
+`GOOGLE_AUTH_UNAVAILABLE` and `OAUTH_CODE_INVALID`. An existing Nexus email is
+never linked automatically; the user must first authenticate normally and use
+a future authenticated linking flow. This avoids taking over an account based
+on an email match. Verified
 Google email activates the account but creates only the private personal
 workspace. Company/institution workspace choice and setup remain the normal
 onboarding steps and are not inferred from Google profile data.
 
-For separate deployed origins, configure `CORS_ORIGINS`/`FRONTEND_URL` to
-include the exact frontend origin and enable `CORS_CREDENTIALS=true`. Since the
-frontend and Render API are cross-site, set `AUTH_COOKIE_SAME_SITE=none` and
-`AUTH_COOKIE_SECURE=true`; the existing parser rejects `SameSite=None` without
-Secure. The frontend must send `credentials: "include"` and send the readable
-`nexus_csrf` value in `X-CSRF-Token` on cookie-authenticated refresh/logout
-requests. The current dotenv has `CORS_CREDENTIALS=false` and
-`AUTH_COOKIE_SAME_SITE=lax`; keep those local values unchanged and apply the
-cross-site settings in the Render environment before enabling browser cookie
-authentication.
+The Vercel page and Render API are different sites. Requests sent through the
+Vercel `/api/backend/*` proxy are same-origin from the browser; direct browser
+requests to Render are cross-site. The OAuth start must still navigate directly
+to Render so the state cookie is returned to the Render callback. Use the Vercel
+proxy for the exchange and later cookie-authenticated calls, and verify that the
+proxy forwards both `Set-Cookie` headers without adding a `Domain` attribute.
+With this proxy path, keep session cookies `Secure` in production,
+`SameSite=Lax`, and host-only (`AUTH_COOKIE_DOMAIN` empty). If the frontend calls
+Render directly instead, configure the exact frontend origin in
+`CORS_ORIGINS`/`FRONTEND_URL`, set `CORS_CREDENTIALS=true`,
+`AUTH_COOKIE_SAME_SITE=none`, and `AUTH_COOKIE_SECURE=true`, and send
+`credentials: "include"`. Never set a cookie domain shared by Vercel and
+Render; they do not share a parent domain. Cookie-authenticated refresh/logout
+requests must send the readable `nexus_csrf` value in `X-CSRF-Token`. Render
+must also set `TRUST_PROXY=true` so Express derives the rate-limit client IP
+from the trusted hosting proxy; verify the deployed setting and forwarded-IP
+behavior before relying on per-IP OAuth limits.
 
 ### Account deletion request and frontend behavior
 
@@ -215,9 +255,21 @@ by the team service; knowing a team or user ID does not grant access.
 | DELETE | `/workspaces/{workspaceId}/teams/{teamId}`                  | Authorized team manager                            | Soft-delete a team.                                                       |
 | GET    | `/workspaces/{workspaceId}/teams/{teamId}/members`          | Authorized team member                             | List team members.                                                        |
 | POST   | `/workspaces/{workspaceId}/teams/{teamId}/members`          | Authorized team manager                            | Add a workspace member to the team.                                       |
+| GET    | `/workspaces/{workspaceId}/teams/{teamId}/invitations?status=PENDING` | Team manager | List invitations for that team. |
+| POST   | `/workspaces/{workspaceId}/teams/{teamId}/invitations`       | Team manager, rate limited                         | Invite an existing active workspace member by `{ targetUserId }`.         |
+| DELETE | `/workspaces/{workspaceId}/teams/{teamId}/invitations/{invitationId}` | Team manager | Revoke a team invitation. |
 | PATCH  | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager                            | Change a team member's role.                                              |
 | DELETE | `/workspaces/{workspaceId}/teams/{teamId}/members/{userId}` | Authorized team manager                            | Remove a member from the team.                                            |
 | PATCH  | `/workspaces/{workspaceId}/teams/{teamId}/lead`             | Authorized team manager                            | Assign or clear the team lead.                                            |
+
+Team invitation acceptance uses the shared `/invitations/{token}` preview,
+verification and accept/decline routes. Only an already active workspace
+member can receive a team invitation. Accepting adds `TeamMembership` only;
+it does not create, change or reactivate workspace membership. Invitations
+expire according to `WORKSPACE_INVITATION_TTL_SECONDS`, are single use, and
+are audited. The raw token is sent through the existing team-invitation email
+template and stored only as a hash. Workspace invitation management routes list,
+resend and revoke only `WORKSPACE` invitation records.
 
 Project organizational access is a Phase 7 integration only; project CRUD remains
 outside the registered API.
@@ -261,13 +313,16 @@ Institution groups are independent from departments. They do not grant access
 to departments, teams, projects, or channels by themselves.
 
 Notification preferences are scoped to the authenticated member and workspace.
-All in-app notification types are enabled by default; a member can update
-selected types. These preferences do not affect email or message unread state.
+All notification types are enabled by default for both the in-app and email
+channels; a member can update selected types per channel. These preferences do
+not affect message unread state. Transactional emails (join-request decisions,
+billing receipts, failed-payment warnings, subscription changes) are always
+sent and are not gated by preference channels.
 
 | Method | Path                                                 | Access           | Purpose                                                                |
 | ------ | ---------------------------------------------------- | ---------------- | ---------------------------------------------------------------------- |
-| GET    | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Read the caller's in-app notification preferences, including defaults. |
-| PATCH  | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Update selected in-app notification type preferences.                  |
+| GET    | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Read the caller's notification preferences, including defaults.        |
+| PATCH  | `/workspaces/{workspaceId}/notification-preferences` | Workspace member | Update selected notification type preferences for the in-app and email |
 
 ## Invitations
 
@@ -278,9 +333,49 @@ selected types. These preferences do not affect email or message unread state.
 | POST   | `/workspaces/{workspaceId}/invitations/{invitationId}/resend` | Workspace member with permission, rate limited | Resend a pending invitation.                     |
 | DELETE | `/workspaces/{workspaceId}/invitations/{invitationId}`        | Workspace member with permission               | Revoke an invitation.                            |
 | GET    | `/invitations`                                                | Authenticated, active account                  | List invitations addressed to the caller.        |
-| GET    | `/invitations/{token}`                                        | Public, rate limited                           | Preview an invitation.                           |
+| GET    | `/invitations/{token}`                                        | Public, rate limited                           | Preview an invitation without accepting it.      |
+| GET    | `/invitations/{token}/verify`                                 | Authenticated, active account, rate limited    | Verify the invitation for the signed-in account. |
 | POST   | `/invitations/{token}/accept`                                 | Authenticated, active account                  | Accept an invitation addressed to the caller.    |
 | POST   | `/invitations/{token}/decline`                                | Authenticated, active account                  | Decline an invitation addressed to the caller.   |
+
+### Workspace invitation acceptance contract
+
+The invitation link is a frontend route built from `FRONTEND_URL` and
+`WORKSPACE_INVITATION_LINK_PATH` with the raw token appended as `?token=...`.
+The raw token is never stored; the database keeps only its SHA-256 digest.
+
+Opening the link must call `GET /invitations/{token}` first. That endpoint is
+public, validates the token, returns the invited workspace, inviter, role,
+expiry and masked recipient address, and never creates membership or changes
+the invitation status. It returns `404 INVITATION_NOT_FOUND` for an unknown
+token and `410` for an expired, revoked, accepted or unavailable invitation.
+
+When a user is signed in, the frontend must call
+`GET /invitations/{token}/verify` before showing the accept or decline action.
+The response adds a `viewer` object with `emailMatches`, `alreadyMember`,
+`membershipRole`, `canAccept`, `canDecline` and a `reason`. A terminal
+invitation is reported with HTTP 200 and its real status, so the frontend can
+render "already accepted", "declined", "revoked", "expired", "wrong account"
+or "already a member" without treating those states as server errors.
+
+Accepting requires the signed-in account to be the intended recipient: the
+invitation is either bound to that account or addressed to its verified email.
+The service rechecks workspace availability, the token digest, the pending
+state and the deadline inside one transaction, creates the membership and marks
+the invitation `ACCEPTED` atomically, and records the audit event and inviter
+notification. A second or concurrent acceptance receives `409
+INVITATION_ALREADY_ACCEPTED` and never creates a second membership. Declining
+requires the same recipient check, moves a pending invitation to `DECLINED`
+without creating or deleting membership, and clears the pending-invitation
+slot so the address can be invited again.
+
+Invitation statuses are `PENDING`, `ACCEPTED`, `DECLINED`, `REVOKED` and
+`EXPIRED`. Only `PENDING` is actionable. Expiry is enforced on every read and
+write, and the stored status is updated to `EXPIRED` when the deadline passes.
+
+The complete frontend contract, including request/response examples and
+redirect behavior, is maintained in
+[`frontend-workspace-invitation-contract.md`](./frontend-workspace-invitation-contract.md).
 
 ## Workspace discovery and join requests
 
@@ -306,6 +401,100 @@ events using the configured signature or webhook token, not a user session.
 | ------ | ------------------------- | --------------------------------- | -------------------------------------------------------------- |
 | POST   | `/webhooks/email`         | Provider verification required    | Receive an email delivery event.                               |
 | POST   | `/webhooks/email/{token}` | Configured webhook token required | Receive an email event from providers without signed payloads. |
+
+## Global search (Phase 18)
+
+Search routes are mounted at `/api/v1/search` and are user-scoped. Every query
+is filtered by the caller's current workspace membership and resource
+visibility before results are returned. `data` is an array; pagination
+metadata is returned in `meta`.
+
+| Method | Path | Access | Purpose |
+| ------ | ---- | ------ | ------- |
+| GET | `/search` | Authenticated, active account | Search authorised content. Supports `q`, `category`, `workspaceId`, `page`, `limit`, and `sort` (`relevance` or `recent`). |
+| GET | `/search/suggestions` | Authenticated, active account | Return up to eight lightweight ranked suggestions for `q`. |
+| GET | `/search/recent` | Authenticated, active account | List the caller's recent search history. History is private and deduplicated. |
+| DELETE | `/search/recent` | Authenticated, active account | Clear the caller's recent search history, optionally scoped to a workspace. |
+
+Categories are `all`, `people`, `workspaces`, `teams`, `departments`,
+`projects`, `tasks`, `messages`, `conversations`, `files`, `documents`,
+`meetings`, `channels`, and `announcements`. The `announcements` category
+returns no results until an announcement model exists. Search runs at query
+time, so permission and content changes take effect immediately. Uploaded text,
+DOCX, and PDF content is extracted into `FileAttachment.extractedText` and is
+searchable; legacy binary `.doc` and scanned image-only PDFs are not parsed.
+
+## Integrations (Phase 19)
+
+Integration routes are mounted at `/api/v1/integrations`. Connection records
+never return access or refresh tokens. The common connect endpoint currently
+supports providers that do not have a dedicated OAuth flow; Slack, Google
+Drive, Dropbox, GitHub, Google Calendar, and Gmail tokens are rejected there
+and must use their OAuth routes. Gmail, GitHub, and Google Calendar connections
+are personal (`workspaceId: null`); a supplied `workspaceId` query parameter is
+accepted for frontend compatibility but does not make them workspace-shared.
+
+| Method | Path | Access | Purpose |
+| ------ | ---- | ------ | ------- |
+| GET | `/integrations` | Authenticated, active account | List the caller's personal connections and, when `workspaceId` is supplied, visible workspace connections. Disconnected rows are omitted. |
+| POST | `/integrations` | Authenticated, active account | Save a connection for providers without a dedicated OAuth flow. Workspace-scoped connections require workspace access. |
+| PATCH | `/integrations/{integrationId}` | Connection owner; workspace manager for workspace connections | Enable or disable an integration without deleting it. |
+| DELETE | `/integrations/{integrationId}` | Connection owner; workspace manager for Slack | Disconnect an integration. The provider token is revoked when the provider supports revocation; provider-side data is never deleted. |
+| POST | `/integrations/{integrationId}/refresh` | Connection owner; workspace manager for workspace connections | Refresh an expiring access token through the provider adapter and record `lastRefreshedAt`. |
+| POST | `/integrations/{integrationId}/sync` | Connection owner; workspace manager for workspace connections | Queue a durable sync job for the integration. |
+| GET | `/integrations/{integrationId}/sync-jobs` | Connection owner; workspace manager for workspace connections | List sync job history. |
+| POST | `/integrations/{integrationId}/sync-jobs/{jobId}/retry` | Connection owner; workspace manager for workspace connections | Reset a failed sync job to pending. |
+| GET | `/integrations/gmail/authorize` | Authenticated, active account | Return a Google consent URL for the caller's personal Gmail account. |
+| GET | `/integrations/gmail/callback` | Public OAuth callback | Consume the single-use state, exchange the Google code, persist encrypted credentials, then redirect to the frontend with `integration=gmail` and a status. |
+| GET | `/integrations/google-drive/authorize` | Workspace manager | Return a Google Drive consent URL for the selected workspace. |
+| GET | `/integrations/google-drive/callback` | Public OAuth callback | Consume state, exchange the Google code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/dropbox/authorize` | Authenticated workspace member | Return a Dropbox consent URL for the selected workspace. |
+| GET | `/integrations/dropbox/callback` | Public OAuth callback | Consume state, exchange the Dropbox code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/github/authorize` | Authenticated, active account | Return a GitHub App consent URL for the caller. |
+| GET | `/integrations/github/callback` | Public OAuth callback | Consume state, exchange the GitHub code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/google-calendar/authorize` | Authenticated, active account | Return a Google Calendar consent URL for the caller. |
+| GET | `/integrations/google-calendar/callback` | Public OAuth callback | Consume state, exchange the Google code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/slack/authorize` | Workspace manager | Return a Slack OAuth URL for the selected workspace. |
+| GET | `/integrations/slack/callback` | Public OAuth callback | Consume state, exchange the Slack code, persist encrypted credentials, and redirect with status. |
+
+OAuth state is signed and single use, with a ten-minute lifetime. Integration
+tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY`. Gmail requests
+`gmail.readonly`, `gmail.send`, `gmail.compose`, and `gmail.modify`, plus
+`openid` and `email`; Google must have these Gmail scopes enabled for the OAuth
+client. The callback redirects to the frontend integrations page and does not
+expose credentials in the redirect.
+
+Phase 19 also adds `enabled`, `lastError`, `lastRefreshedAt`, `lastSyncedAt`,
+and `revokedAt` to `Integration`, plus the durable `IntegrationSyncJob` queue.
+The sync worker refreshes an expiring token when a refresh token exists and
+records `lastSyncedAt`; provider-specific data import remains a later
+integration stage. Live OAuth and revocation still require provider
+credentials and callback configuration, so external provider verification is
+environment-dependent.
+
+## Outbound webhooks
+
+Workspace webhook subscriptions are mounted at
+`/api/v1/workspaces/{workspaceId}/webhooks`. Only workspace OWNER /
+PROJECT_MANAGER roles may create, update, delete, or retry a delivery; any
+active workspace member may list subscriptions and delivery history. The
+signing secret is returned only when a subscription is created or its secret is
+rotated.
+
+| Method | Path | Access | Purpose |
+| ------ | ---- | ------ | ------- |
+| GET | `/workspaces/{workspaceId}/webhooks` | Active workspace member | List webhook subscriptions. Secrets are never returned. |
+| POST | `/workspaces/{workspaceId}/webhooks` | Workspace manager | Create a subscription. Returns the generated or supplied signing secret once. |
+| PATCH | `/workspaces/{workspaceId}/webhooks/{webhookId}` | Workspace manager | Update the URL, event list, description, enabled flag, or rotate the secret. |
+| DELETE | `/workspaces/{workspaceId}/webhooks/{webhookId}` | Workspace manager | Delete a subscription and its delivery history. |
+| GET | `/workspaces/{workspaceId}/webhooks/{webhookId}/deliveries` | Active workspace member | List delivery attempts and outcomes. |
+| POST | `/workspaces/{workspaceId}/webhooks/{webhookId}/deliveries/{deliveryId}/retry` | Workspace manager | Reset a failed delivery to pending. |
+
+Deliveries are written to PostgreSQL before the network call, signed with
+HMAC-SHA256 in `x-nexus-signature`, sent only to HTTPS endpoints that pass the
+SSRF guard, and retried with bounded exponential backoff. Supported event names
+are `task.created`, `task.completed`, `member.joined`, and `*` for every
+workspace event.
 
 ## Billing
 
@@ -374,56 +563,133 @@ server-only `PAYSTACK_WEBHOOK_SECRET` (`whsec_...`). During secret rotation,
 when the timestamped header is absent. Events are deduplicated and accepted
 events return `{ "success": true, "data": { "received": true } }`.
 
-## Other APIs not exposed
+## Additional registered APIs
 
-The current application router does not expose tasks, messaging,
-general notifications, files, documents, calendar, meetings, forms, search,
-integrations, automation, or AI endpoints. Department routes cover listing,
-creation, renaming, and member assignment or removal; department deletion and
-department-settings routes are not registered.
-Do not document planned behavior as live API functionality.
+The following routers are mounted by the current application router. They
+require authentication and an active account unless noted otherwise. These
+are route-family summaries; consult route schemas and handlers for exact
+request and response fields. Paths below are relative to `/api/v1`.
+
+| Area | Registered path | Supported operations |
+| --- | --- | --- |
+| Tasks | `/workspaces/{workspaceId}/projects/{projectId}/tasks` | List/create/get/update/delete tasks; manage assignees, dependencies, comments, and activity. |
+| Channels and messages | `/workspaces/{workspaceId}/channels` and `/workspaces/{workspaceId}/channels/{channelId}/messages` | Manage channels and membership; create/list/update/delete messages, replies, reactions, pins, and read state. |
+| Notifications | `/notifications` | List notifications and unread counts; mark read; read activity and manage workspace notification preferences. |
+| Files | `/workspaces/{workspaceId}/files` | List/upload files, obtain authorized download access, and delete files. Storage configuration is required for uploads. |
+| Documents | `/workspaces/{workspaceId}/documents` | Create/list/get/update/delete documents; read revisions and comments; add or remove comments. Project-bound documents inherit project visibility. |
+| Calendar | `/workspaces/{workspaceId}/events` | Create/list/get/update/cancel/delete events; manage invitations and responses. |
+| Meetings | `/workspaces/{workspaceId}/meetings` | Create/list/get/update/delete meetings; join/leave and manage participants. This API stores meeting state but does not provide a calling SDK. |
+| Forms | `/workspaces/{workspaceId}/forms` | Create/list/get/update/delete forms; manage fields and submit/list responses. All current routes require an authenticated active account. |
+| Search | `/search` | Unified search across people, workspaces, teams, departments, projects, tasks, messages, conversations, files, documents, meetings, and channels. Supports category, workspace, page/limit, and relevance/recent filters, suggestions, and per-user recent-search history. Every result is permission-filtered. |
+| Integrations | `/integrations` | List/manage personal and workspace integrations, OAuth connections, enable/disable, token refresh, provider revocation on disconnect, and durable sync jobs. Live connections require provider credentials and callback configuration. |
+| Outbound webhooks | `/workspaces/{workspaceId}/webhooks` | Manage workspace webhook subscriptions and inspect/retry durable HMAC-signed deliveries. |
+| Automations | `/workspaces/{workspaceId}/automations` | Create/list/get/update/delete automation definitions; read execution history; retry a failed run. Event triggers (task created, task completed, member joined) and daily/weekly schedules are executed by the background automation worker with conditions, bounded retries, idempotency, and workspace-scoped permissions. |
+| AI | `/ai` | Conversations and streamed answers, workspace-aware authorised context, usage limits, writing analysis/rewrite/summarize/translate, task generation with preview/confirm, summarization, project intelligence, personal productivity, knowledge search, meeting transcript summarization, and approval-gated AI actions. Runs in-process via OpenRouter when `AI_ENABLED=true` and `AI_PROVIDER=openrouter` (requires `AI_MODEL` and `OPENROUTER_API_KEY`); `AI_PROVIDER=service` keeps the optional Python/FastAPI service. Degrades with a clear 503 when unconfigured. |
+| Audit | `/workspaces/{workspaceId}/audit` | Read workspace audit events subject to authorization. Use `?securityEvent=true` to show only security-relevant changes. |
+| Analytics | `/analytics` | Return permission-filtered aggregated workspace metrics (activity, projects, tasks, members, meetings, files, subscription). Results are cached for a short TTL. |
+
+Task comment creation accepts `{ body, parentId?, mentionedUserIds? }`.
+`mentionedUserIds` is an optional array of up to 50 distinct user IDs. Each
+recipient must be an active workspace member with access to the task's
+project; invalid or inaccessible recipients receive the generic
+`INVALID_MENTION_RECIPIENT` error. The author is silently excluded from
+mentions. Valid mentions are persisted with the comment and create a general
+`MENTION` notification. A post-commit email is attempted through the existing
+idempotent email outbox and cannot roll back the comment.
+
+Department routes cover listing, creation, renaming, and member assignment or
+removal; department deletion and department-settings routes are not
+registered. The OpenAPI document does not yet describe all these registered
+route families and is incomplete relative to the running router.
 
 ## Projects and project visibility (Phase 8 — in progress)
 
-Project records are workspace-scoped. `WORKSPACE` projects are visible to
-active workspace members. `DEPARTMENT_TEAM` projects inherit access from their
-active department membership, or from active team membership when assigned to
-a team; a team association narrows access over department membership. `PRIVATE`
-projects require explicit project membership or ownership, even when a team or
-department is associated with them. Organization roles
-do not independently grant private-project access. Project-level `VIEWER`
-members can read but cannot mutate; `MEMBER` can perform project contribution
-actions; `PROJECT_MANAGER` can manage project metadata and members, subject to
-the workspace-role ceiling. Project managers/owners are assigned by the server.
-All project and milestone reads use the same authorization policy. Cross-
-workspace and inaccessible restricted project IDs are returned as 404.
+Project records are workspace-scoped. All project-scoped routes enforce access
+in this order: authenticate → active workspace membership → effective project
+access/visibility → project permission → resource-specific special rules.
 
-`DEPARTMENT_TEAM` creation/update requires an active same-workspace team or
-department. Projects expose `category`, `labels`, dates, status, visibility,
-owner, member/task counts, and the caller's explicit project role. Listing is
-cursor-paginated (`cursor` is the last project ID, `limit` defaults to 25 and
-is capped at 100) and applies visibility in the database query. Archived
-projects are excluded by default and may be requested with
-`includeArchived=true`. Project deletion is a soft deletion; restore applies
-to archived projects.
+### Visibility and access sources
+
+- `WORKSPACE`: visible to active workspace members. Members without explicit
+  project membership receive read-only base access (`project.view`,
+  `task.view`) with `accessSource = "workspace_member"`; writes require an
+  explicit project membership.
+- `DEPARTMENT_TEAM`: inherited base read access comes from active team
+  membership when a team is linked, otherwise from active department
+  membership. Team linkage narrows scope over department membership. Inherited
+  access is read-only with `accessSource = "team_member"` or
+  `"department_member"` unless the caller has explicit project membership.
+- `PRIVATE`: requires explicit project membership or project ownership. No
+  inherited visibility.
+
+Cross-workspace, missing, or inaccessible restricted project IDs return
+`404 PROJECT_NOT_FOUND` (no existence leak). When a caller can see the project
+but lacks the required permission, the server returns
+`403 PERMISSION_DENIED` with the standard error envelope and
+`error.requiredPermission` set to the missing permission.
+
+### Project roles and permission catalog
+
+Project roles: `PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, `VIEWER`.
+`project.delete` is not granted by the project-manager role; project deletion
+is reserved for workspace administrators and the project owner.
+
+- **Workspace administrators (legacy implicit access):** workspace `OWNER` or
+  `PROJECT_MANAGER` memberships **without** an organization role receive
+  implicit full project permissions for workspace projects, including
+  `project.delete`, with `accessSource = "workspace_admin"` and effective
+  project role `PROJECT_MANAGER`. Organization owners/admins (organization-role
+  members) do **not** receive implicit private-project access and must hold
+  explicit project membership.
+- **Explicit project members / project owners:** permissions come from the
+  project role (`accessSource = "project_member"`). The project owner always
+  holds the `PROJECT_MANAGER` role.
+- **Institution role mapping (single source):** Department Head and
+  Lecturer/Staff are project-manager capable (ceiling `PROJECT_MANAGER`);
+  Student ceiling `MEMBER`; Collaborator/Viewer ceilings match their roles.
+- **Role ceiling:** workspace `VIEWER` → `VIEWER` only; `COLLABORATOR` →
+  `COLLABORATOR`/`VIEWER`; `MEMBER` and above → any role up to their ceiling.
+  Actors cannot grant roles above their own effective project role or above the
+  target member’s ceiling, and users cannot change their own project role.
+
+Special rules enforced in authorization/services: no self approval/review/
+reject/request-revision of own submissions; a project must retain at least one
+project manager; project owners cannot be removed or demoted below
+`PROJECT_MANAGER` (transfer ownership first); added members must be active
+workspace members. `task.update` never implies submission approval/review.
+Submission permissions exist in the catalog/matrix for future submission
+resources; task status transitions to `APPROVED`/`UNDER_REVIEW`/
+`CHANGES_REQUESTED` currently enforce the corresponding submission permissions
+and self-review protection.
 
 | Method | Path | Access | Purpose |
 | --- | --- | --- | --- |
 | GET | `/workspaces/{workspaceId}/projects` | Active workspace member | Cursor-paginated visible projects; supports `status`, `visibility`, `teamId`, `departmentId`, `search`, and `includeArchived`. |
 | POST | `/workspaces/{workspaceId}/projects` | Workspace role with project creation capability | Create project; body includes `name`, `key`, optional `description`, `category`, `labels`, `visibility`, `teamId`, `departmentId`, `startDate`, `dueDate`. Owner and initial PROJECT_MANAGER membership are server-assigned. |
-| GET | `/workspaces/{workspaceId}/projects/{projectId}` | Project reader | Read an authorized project. |
-| PATCH | `/workspaces/{workspaceId}/projects/{projectId}` | Project manager | Update metadata, scope, visibility, category/labels, lifecycle status (excluding ARCHIVED), and dates. |
+| GET | `/workspaces/{workspaceId}/project-roles` | Active workspace member | Project role catalog: `{ items: [{ role, label, description, permissions }] }`. |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}` | Project reader (`project.view`) | Read an authorized project. |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/permissions` | Active workspace member with project visibility | Effective permissions: `{ projectId, workspaceRole, projectRole, accessSource, permissions: string[], assignableRoles: string[] }`. |
+| PATCH | `/workspaces/{workspaceId}/projects/{projectId}` | `project.update` | Update metadata, scope, visibility, category/labels, lifecycle status (excluding ARCHIVED), and dates. |
 | POST | `/workspaces/{workspaceId}/projects/{projectId}/transfer-ownership` | Current project owner or workspace OWNER/PROJECT_MANAGER (including organization owner/admin) | Immediately transfer ownership. Body: `{newOwnerId, previousOwnerRole?}` where prior role is `MANAGER` (default), `MEMBER`, or `REMOVE`. No notification is sent. |
-| DELETE | `/workspaces/{workspaceId}/projects/{projectId}` | Authorized project manager/owner | Soft-delete project. |
-| POST | `/workspaces/{workspaceId}/projects/{projectId}/archive` | Project manager | Archive project. |
-| POST | `/workspaces/{workspaceId}/projects/{projectId}/restore` | Project manager | Restore archived project to its prior status (or PLANNING if no archive record exists). |
-| GET | `/workspaces/{workspaceId}/projects/{projectId}/members` | Project member manager | List project members. |
-| POST | `/workspaces/{workspaceId}/projects/{projectId}/members` | Project member manager | Add/update member role (`PROJECT_MANAGER`, `MEMBER`, `VIEWER`) for an active workspace member. |
-| PATCH | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | Project member manager | Change project role. |
-| DELETE | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | Project member manager | Remove project membership (owner cannot be removed). |
-| GET | `/workspaces/{workspaceId}/projects/{projectId}/activity` | Project reader | Read cursor-paginated project audit activity. |
-| GET/POST | `/workspaces/{workspaceId}/projects/{projectId}/milestones` | Project reader / project manager | List milestones or create one (`name`, optional `description`, `dueDate`, `position`). |
-| PATCH/DELETE | `/workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}` | Project manager | Update or delete a milestone. Completion is represented by `completedAt`; update accepts `completed: boolean`. |
+| DELETE | `/workspaces/{workspaceId}/projects/{projectId}` | `project.delete` (workspace admin or project owner) | Soft-delete project. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/archive` | `project.archive` | Archive project. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/restore` | `project.archive` | Restore archived project to its prior status (or PLANNING if no archive record exists). |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/members` | `project.view` | List project members. |
+| POST | `/workspaces/{workspaceId}/projects/{projectId}/members` | `project.member.manage` | Add/update member role (`PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, `VIEWER`) for an active workspace member (audited). |
+| PATCH | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | `project.member.manage` | Change project role (audited). |
+| DELETE | `/workspaces/{workspaceId}/projects/{projectId}/members/{userId}` | `project.member.manage` | Remove project membership (audited; owner/last manager safeguards apply). |
+| GET | `/workspaces/{workspaceId}/projects/{projectId}/activity` | `project.view` | Read cursor-paginated project audit activity. |
+| GET/POST | `/workspaces/{workspaceId}/projects/{projectId}/milestones` | `project.view` / `project.update` | List milestones or create one (`name`, optional `description`, `dueDate`, `position`). |
+| PATCH/DELETE | `/workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}` | `project.update` | Update or delete a milestone. Completion is represented by `completedAt`; update accepts `completed: boolean`. |
+
+Project mutations and membership/milestone changes write audit records in the
+same database transaction. Membership addition/role change/removal, archive,
+delete and relevant task submission decisions are audited with actor, target,
+before/after metadata and project/workspace context. Project-level settings
+remain deferred; no settings API is invented. Task, file and other project-
+scoped routes must enforce the shared project authorization policy. Phase 8
+remains in progress until all roadmap settings and related-resource
+integration criteria are verified.
 
 Project mutations and membership/milestone changes write audit records in the
 same database transaction. Membership addition also creates an in-app
@@ -482,6 +748,408 @@ other than workspace owners/project managers may delete a channel. Parent team,
 department, or project archival/deletion revokes ordinary channel access;
 workspace managers retain archive/delete actions for those parent-inaccessible
 channels.
+
+## AI service (Phases 21–23)
+
+All AI routes require an authenticated active account. Paths are relative to
+`/api/v1`. When the optional Python/FastAPI service is disabled or
+misconfigured, AI endpoints return HTTP 503 `AI_NOT_CONFIGURED`; they never
+break non-AI features. Express performs every permission check and prepares
+the only context the AI service receives. The AI service never writes to the
+Nexus database and never executes a mutation itself.
+
+### Conversations
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/ai/health` | Report configuration and AI service health (`configured`, `status`, `latencyMs`, optional `version`). |
+| POST | `/ai/chat` | Ask a question. Body: `{workspaceId?,conversationId?,query,projectId?,taskId?,documentId?,meetingId?,contextType?,contextId?}`. Returns `{conversationId,answer,references,model,usage,sources}`. |
+| POST | `/ai/chat/stream` | Same body; responds with server-sent events `conversation`, `token`, `references`, `done`, or `error`. |
+| GET | `/ai/conversations?workspaceId=&cursor=&limit=` | Stable cursor page of the caller's conversations. |
+| GET | `/ai/conversations/{conversationId}` | Read one owned conversation and its messages. |
+| DELETE | `/ai/conversations/{conversationId}` | Delete an owned conversation and its messages. |
+| GET | `/ai/usage?workspaceId=` | Daily request and monthly token usage against configured limits. |
+| POST | `/ai/tasks/generate` | Return a validated task preview (title, description, status, priority, category, labels, dueDate) for a project. Saves nothing; confirm separately. Body: `{workspaceId,projectId,prompt}`. |
+| POST | `/ai/tasks/generate/confirm` | Create a task from a preview through the existing task service after re-checking permissions. Body: `{workspaceId,projectId,preview:{...}}`. |
+| POST | `/ai/summarize` | Summarise a channel (with optional `from`/`to` date range), project, task, document or meeting. Context is permission-checked before any text reaches the AI service. Body: `{workspaceId,contextType,contextId?,channelId?,from?,to?,maxMessages?}`. |
+| POST | `/ai/projects/intelligence` | Return DB-computed project health numbers (overdue, blocked, unassigned, completed tasks and per-assignee workload) plus a model explanation. Body: `{workspaceId,projectId}`. |
+| GET | `/ai/personal/tasks` | Tasks assigned to the caller in a workspace. Query: `?workspaceId=`. |
+| POST | `/ai/personal/daily-plan` | Propose a concise daily plan from the caller's assigned tasks. Body: `{workspaceId}`. |
+| POST | `/ai/personal/weekly-report` | Write a weekly report from the caller's tasks. Body: `{workspaceId}`. |
+| POST | `/ai/knowledge/search` | Answer a question from permission-filtered search results, citing sources as `[type:id]`. Body: `{workspaceId,query,category?,limit?}`. |
+| POST | `/ai/meetings/{meetingId}/summarize` | Summarize an existing meeting transcript for a participant or creator. Path: `meetingId`. |
+
+Context is limited to workspaces, projects, tasks, documents and meetings the
+caller may currently access. Private projects, hidden documents and meetings
+the caller is not part of are excluded before any text reaches the AI service.
+Returned citations are filtered against the authorised source set. Usage rows
+are written for successful and failed calls.
+
+### Nexus Write
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/ai/writing/analyze` | Analyse text. Body: `{workspaceId?,text,features[],language?,toneTarget?}`; returns `{sessionId,suggestions,detectedTone,summary,usage,expiresAt}`. |
+| POST | `/ai/writing/rewrite` | Rewrite text from `{workspaceId?,text,instruction,tone?}`; returns the rewritten `text` and explanation. |
+| POST | `/ai/writing/summarize` | Summarise text using the rewrite contract with a summarisation instruction. |
+| POST | `/ai/writing/translate` | Translate text using the rewrite contract with a translation instruction. |
+| POST | `/ai/writing/sessions/{sessionId}/accept` | Apply selected `{suggestionIds[]}`. Returns the resulting `text`; the caller's editor decides whether to save it. |
+| POST | `/ai/writing/sessions/{sessionId}/dismiss` | Discard a writing session and its retained original text. |
+
+Analysis never modifies a document, message or comment. Original text is
+retained only until the session is accepted, dismissed or expires (default 60
+minutes) and is cleared afterwards.
+
+### Approval-gated actions
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/ai/actions/proposals` | Create a proposal. Body: `{workspaceId,actionType,payload,conversationId?,title?,summary?,idempotencyKey?,sourceReferences?}`. |
+| GET | `/ai/actions/proposals?workspaceId=&status=&cursor=&limit=` | List the caller's proposals in a workspace. |
+| GET | `/ai/actions/proposals/{proposalId}` | Read one proposal. |
+| POST | `/ai/actions/proposals/{proposalId}/approve` | Approve a proposed action (`{note?}`). |
+| POST | `/ai/actions/proposals/{proposalId}/reject` | Reject a proposed or approved action (`{note?}`). |
+| POST | `/ai/actions/proposals/{proposalId}/cancel` | Cancel a proposed or approved action. |
+| POST | `/ai/actions/proposals/{proposalId}/execute` | Execute an approved action after re-checking permissions. |
+
+Supported `actionType` values are `CREATE_TASK`, `ADD_TASK_COMMENT`,
+`COMPLETE_TASK`, `CREATE_DOCUMENT` and `SEND_NOTIFICATION`. A proposal is
+inert until approved. Approval and execution both re-evaluate the caller's
+current workspace/project permissions. Execution uses a conditional
+`APPROVED → EXECUTING` transition so concurrent requests cannot apply the same
+action twice. Proposals expire after the configured approval TTL (default 15
+minutes). Propose, approve, reject, execute and failure events are audited.
+Providing the same `idempotencyKey` for the same user and workspace returns the
+existing proposal instead of creating a duplicate.
+
+## Task working environment (Phase 3)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks`.
+Project/task access is enforced server-side through `authorizeProject` and the
+project permission catalog; hidden/inaccessible projects return 404. Permission
+denials return 403 `PERMISSION_DENIED` with `requiredPermission` where applicable.
+
+### Workspace aggregate
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/{taskId}/workspace` | Path params: `workspaceId`, `projectId`, `taskId` | `200 { success, data: { task, subtasks, progress, people, schedule, recentActivity } }`. `task`/`subtasks` are task summaries including `weight` (positive integer, default 1; meaningful for subtasks), `requiresApproval`, `expectedDeliverables`, `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`, `subTaskCount`, `commentCount`, `attachmentCount`, assignees/dependencies/blockers. `progress` is **server-computed only** from subtasks: `{ percent, completed, total }` where `completed`/`total` are subtask counts and `percent = round((sum of weights of APPROVED subtasks / sum of weights of all subtasks) * 100)` (0% when there are no subtasks; only `APPROVED` subtasks contribute to completed progress; equal weights produce the same results as the Phase 3 count-based progress). `people`: `{ assignees, assignedBy, reviewer }`. `schedule`: `{ startDate, dueDate, overdue }`. `recentActivity`: newest-first last 5 audit events for the task. | 401 unauthenticated, 403/404 project/task access denied or not found (`PROJECT_ACCESS_DENIED`/`PROJECT_NOT_FOUND`/`TASK_NOT_FOUND`) | `task.view` |
+
+### Task activity timeline
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/{taskId}/activity` | Query: `cursor?` (audit log id), `limit?` (1-100, default 25) | `200 { success, data: { items, nextCursor } }` newest-first, cursor-paginated audit events relevant to the task (task/comment/assignee/dependency actions). Each item: `{ id, action, actorId, metadata, createdAt }`. | 401, 403/404 access/not found | `task.view` |
+
+### Submission and review
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| POST | `/{taskId}/submit` | Body: `{ "workSummary": string(1-10000) }` | `200 { success, data: <task summary> }` with `status: SUBMITTED`, submission metadata set, review feedback cleared. Requires task in submittable state and (assignee or authorized updater); tasks with required deliverables must include work summary. | 400 `DELIVERABLES_REQUIRED`, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`, 409 `TASK_SUBMIT_NOT_ALLOWED` | `submission.submit` |
+| POST | `/{taskId}/review` | Body: `{ "decision": "START_REVIEW"|"APPROVE"|"REQUEST_CHANGES", "feedback"?: string }` (`feedback` required for `REQUEST_CHANGES`) | `200 { success, data: <task summary> }` with status `UNDER_REVIEW`/`APPROVED`/`CHANGES_REQUESTED` and review metadata/audit recorded. Self-review of own submission is forbidden. | 400 validation, 403 `PERMISSION_DENIED`/`SELF_REVIEW_NOT_ALLOWED`, 404 `TASK_NOT_FOUND` | `submission.review` (`START_REVIEW`), `submission.approve` (`APPROVE`), `submission.request_revision` (`REQUEST_CHANGES`) |
+
+### Subtask completion (approval-gated)
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| POST | `/{taskId}/subtasks/{subtaskId}/complete` | Body: `{ "workSummary"?: string }` | `200 { success, data: { subtask, progress, requiresApproval, submissionCreated } }`. If subtask or parent task `requiresApproval=true`, creates submission for review instead of immediate approval: subtask becomes `SUBMITTED` with submission metadata (`submissionCreated: true`); otherwise subtask becomes `APPROVED`/completed (`submissionCreated: false`). `progress` is recomputed server-side for the parent from subtasks as `{ percent, completed, total }` using weighted approved progress: `percent = round((sum of weights of APPROVED subtasks / sum of weights of all subtasks) * 100)` (0% when none; only `APPROVED` counts as completed). Allowed for assigned member or authorized collaborator (collaborators only for subtasks assigned to them). | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`SUBTASK_NOT_FOUND` | `task.complete` (on subtask context) |
+
+### Task model additions (additive)
+
+Tasks may include: `weight` (positive integer, default 1), `requiresApproval` (boolean, default false), `expectedDeliverables` (JSON array of `{id?,label,required?}` or null), `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`.
+
+**Subtask weight & progress (Phase 4D, additive):**
+- `weight` applies to **subtasks** (tasks with `parentTaskId`). It must be a positive integer (>=1); zero, negative, decimal, or invalid values are rejected. Default is 1.
+- Only users with appropriate task-management permissions (task create/update) may set or modify subtask weights. Ordinary assignees do not automatically receive weight-management privileges. Weight changes are rejected for non-subtask (parent) tasks.
+- Progress is **computed exclusively on the backend** from subtasks as `{ percent, completed, total }` where `completed`/`total` are subtask counts and `percent = round((sum of weights of APPROVED subtasks / sum of weights of all subtasks) * 100)`.
+- A subtask contributes to completed progress **only when its status is `APPROVED`** (per existing submission/review workflow). `SUBMITTED`/`UNDER_REVIEW`/merely completed-not-approved states do not count as approved.
+- When a task has **no subtasks**, progress is `0%` (`{ percent:0, completed:0, total:0 }`).
+- When all subtasks have **equal weights**, progress produces exactly the same results as the existing Phase 3 count-based implementation.
+- The frontend must display backend-calculated progress only (no separate client-side progress calculation).
+
+**Migration (Phase 3, not applied to production by this change):** `20261115120000_task_workspace_approval_submission_flow` adds earlier additive task columns/relations. Apply only in a controlled environment after verification.
+
+**Migration (Phase 4D, additive, local dev applied after verification; not applied to production):** `20261116180000_task_subtask_weight` adds `Task.weight INTEGER NOT NULL DEFAULT 1`. Production steps (ordered): 1) backup DB and verify migration state/order (including prior unapplied Phase 3/4A/4B/4C as applicable), 2) deploy code containing migration, 3) in a controlled maintenance window run `npx prisma migrate deploy` (or apply reviewed SQL in order) in staging then production after verification, 4) run `prisma generate` in build, restart, and smoke-test subtask weight create/update permissions/validation and weighted progress (approved-only, no-subtasks 0%, equal-weights parity). **Never `prisma migrate deploy` outside controlled rollout; never reset; never mutate applied migrations; never touch production outside this process.**
+
+### Task work documents (Phase 4A)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/work-documents`.
+Task/project access is enforced server-side (workspace membership + project/task
+visibility; collaborators must be assigned to the task where task resource scope
+requires it). Existing generic `Document`/`DocumentRevision` models and routes
+are unchanged.
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | Path: `workspaceId`, `projectId`, `taskId` | `200 { success, data: { items: TaskDocumentSummary[] } }` (non-deleted docs, newest updated first). `TaskDocumentSummary`: `{ id, taskId, title, createdById, createdBy:{id,name}, currentVersion, createdAt, updatedAt }`. | 401, 403/404 access denied or task not found | `task.view` (on task) |
+| POST | `/` | Body: `{ "title": string(1-200), "content"?: TipTapJSONDoc }` (content defaults to empty doc, sanitized) | `201 { success, data: { ...summary, content } }` (version 1 created). | 400 `VALIDATION_ERROR`/`DOCUMENT_TOO_LARGE`, 401, 403 `PERMISSION_DENIED`, 404 | `task.update` on task **or** task assignee |
+| GET | `/{documentId}` | Path includes `documentId` | `200 { success, data: { ...summary, content } }` (current version content). | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.view` |
+| PATCH | `/{documentId}` | Body: `{ "baseVersion": number>=1, "content": TipTapJSONDoc, "title"?: string(1-200), "mode"?: "autosave"|"manual" (default manual) }` | `200 { success, data: { ...summary, content, throttled?: boolean } }`. On success with version advance, persists sanitized content and creates a new version; updates title if provided. If `mode="autosave"` and the same user saved the current version within 60s, content/title are coalesced into the latest version (no new version number, `throttled:true`) to enforce ≤1 version/min/user/document while never discarding content. | 400 `DOCUMENT_TOO_LARGE`/validation, 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND`, 409 `WORK_DOCUMENT_CONFLICT` | `task.update` on task **or** task assignee |
+| GET | `/{documentId}/versions` | Path includes `documentId` | `200 { success, data: { items: {id,version,savedById,savedBy:{id,name},createdAt}[], currentVersion } }` newest-first. | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.view` |
+| GET | `/{documentId}/versions/{version}` | Path includes `documentId`, `version>=1` | `200 { success, data: { id, version, savedBy:{id,name}, createdAt, content } }`. | 401, 403/404, 404 `WORK_DOCUMENT_NOT_FOUND`/`WORK_DOCUMENT_VERSION_NOT_FOUND` | `task.view` |
+| POST | `/{documentId}/versions/{version}/restore` | Empty body `{}` | `200 { success, data: { ...summary, content } }` creates a new version with restored content (append-only history). | 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND`/`WORK_DOCUMENT_VERSION_NOT_FOUND` | `task.update` on task **or** task assignee |
+| DELETE | `/{documentId}` | — | `200 { success, data: { id, deleted: true } }` (soft delete). | 401, 403 `PERMISSION_DENIED`, 404 `WORK_DOCUMENT_NOT_FOUND` | `task.update` on task (permission-controlled; assignee-only without `task.update` cannot delete) |
+
+**Conflict handling:** if `baseVersion !== currentVersion`, the server returns
+`409 { success:false, error:{ code:"WORK_DOCUMENT_CONFLICT", message, details:{ currentVersion, latestContent, document } } }`
+and never overwrites silently. Clients must let the user reload latest or copy
+local content.
+
+**Content/security:** server sanitizes TipTap/ProseMirror JSON to an allowlist of
+nodes/marks (`doc, paragraph, text, heading, bulletList, orderedList, listItem,
+table, tableRow, tableCell, tableHeader, hardBreak, blockquote, codeBlock,
+horizontalRule` and `bold, italic, link, strike, code, underline`; links
+restricted to `http(s):`/`mailto:`). Maximum serialized content size is 2 MB
+(`DOCUMENT_TOO_LARGE`).
+
+**Audit:** create/update/restore/delete emit `task.work_document.{created,updated,restored,deleted}`
+audit events with task/project/document/version metadata.
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116120000_task_work_documents` creates `TaskDocument` and
+`TaskDocumentVersion` tables (+ indexes/foreign keys). Existing generic
+`Document`/`DocumentRevision` tables are untouched. Production steps (ordered):
+1) backup DB, 2) deploy code containing migration, 3) in a maintenance window run
+`npx prisma migrate deploy` (or apply the reviewed SQL) in staging then
+production after verification, 4) run `prisma generate` as part of build and
+smoke-test task work-document endpoints and permissions. Do not use
+`prisma migrate deploy` outside controlled rollout; never reset/mutate
+previously applied migrations.
+
+### Task blockers (Phase 4B)
+
+All routes require an authenticated, active account and are mounted under
+`/api/v1/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/blockers`.
+These are **reported blockers/issues** (`TaskBlocker`, OPEN/RESOLVED) and are
+additive to existing dependency blockers (`task.blockers` / `TaskDependency`
+relations remain unchanged). Task summaries/workspace payloads now also include
+additive `reportedBlockers` and `hasOpenBlocker`.
+
+| Method | Path | Request | Success response | Errors | Required permission / rule |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: { items: ReportedBlocker[], hasOpenBlocker: boolean } }` (newest first). `ReportedBlocker`: `{ id, taskId, status:"OPEN"\|"RESOLVED", description, reportedById, reportedBy:{id,name}, notifyUserId, notifyUser, resolvedAt, resolvedById, resolvedBy, createdAt, updatedAt }`. | 401, 403/404 access/task not found | `task.view` |
+| POST | `/` | Body: `{ "description": string(1-2000), "notifyUserId"?: uuid\|null }` | `201 { success, data: <ReportedBlocker> }` (OPEN). Notifies task owner (task creator) and chosen `notifyUser` (if active workspace member, excluding reporter) with `TASK_BLOCKER_REPORTED`; records audit `task.blocker.reported`. | 400 validation, 401, 403 `PERMISSION_DENIED` (not an assigned member), 404 `TASK_NOT_FOUND`/`USER_NOT_FOUND` | **Assigned member only** (task assignee) with task view access |
+| POST | `/:blockerId/resolve` | Empty body `{}` | `200 { success, data: <ReportedBlocker> }` (RESOLVED, `resolvedAt`/`resolvedById` set). Notifies reporter (if different from resolver) with `TASK_BLOCKER_RESOLVED`; records audit `task.blocker.resolved`. Idempotent if already resolved. | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`TASK_BLOCKER_NOT_FOUND` | Reporter, task owner (task creator), or PM/admin with task management authority (`task.update`/manage or workspace admin) |
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116140000_task_blockers` creates enum `TaskBlockerStatus`, adds
+`NotificationType` values `TASK_BLOCKER_REPORTED`/`TASK_BLOCKER_RESOLVED`, and
+creates `TaskBlocker` table (+ indexes/FKs). Production steps (ordered):
+1) backup DB, 2) deploy code containing migration, 3) in a maintenance window run
+`npx prisma migrate deploy` (or apply the reviewed SQL) in staging then
+production after verification, 4) run `prisma generate` as part of build and
+smoke-test blocker list/report/resolve, permissions, notifications, and workspace
+blocked indicators. Never `prisma migrate deploy` outside controlled rollout.
+
+### Task time tracking (Phase 4C)
+
+Time tracking is gated by the workspace setting `timeTrackingEnabled` (default `false`).
+All time-entry endpoints are **rejected when time tracking is off** with
+`409 { code: "TIME_TRACKING_DISABLED" }`. `Workspace` responses now include
+additive `timeTrackingEnabled: boolean`; it can be toggled via the existing
+workspace update endpoint `PATCH /api/v1/workspaces/:workspaceId` with body
+`{ "timeTrackingEnabled": true|false }` (requires workspace update permission).
+
+Routes are mounted under
+`/api/v1/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/time-entries`
+and require an authenticated, active account.
+
+| Method | Path | Request | Success response | Errors | Required permission / rule |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: { items: TimeEntry[], totalMinutes: number } }` (newest first). `TimeEntry`: `{ id, taskId, userId, user:{id,name}, startedAt, durationMinutes, note, createdAt, updatedAt }`. | 401, 403/404 access/task not found, 409 `TIME_TRACKING_DISABLED` | `task.view` (and time tracking enabled) |
+| POST | `/` | Body: `{ "startedAt": ISO datetime, "durationMinutes": int(1..1440), "note"?: string\|null(max 2000) }` | `201 { success, data: <TimeEntry> }` (logged for current user). Audit `task.time_entry.logged`. | 400 validation, 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | Task assignee **or** user with task update/manage permission (logs own time); time tracking enabled |
+| PATCH | `/:entryId` | Body: `{ "startedAt"?, "durationMinutes"?, "note"? }` (at least one field) | `200 { success, data: <TimeEntry> }`. Audit `task.time_entry.updated`. | 400 validation, 401, 403 `PERMISSION_DENIED` (not owner), 404 `TIME_ENTRY_NOT_FOUND`/`TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | **Edit own only**; time tracking enabled |
+| DELETE | `/:entryId` | — | `200 { success, data: { id, deleted: true } }`. Audit `task.time_entry.deleted`. | 401, 403 `PERMISSION_DENIED` (not owner), 404 `TIME_ENTRY_NOT_FOUND`/`TASK_NOT_FOUND`, 409 `TIME_TRACKING_DISABLED` | **Delete own only**; time tracking enabled |
+
+**Migration (additive, local dev applied after verification per request; not applied to production):**
+`20261116160000_task_time_tracking` adds `Workspace.timeTrackingEnabled` (boolean,
+default `false`) and creates `TaskTimeEntry` table (+ indexes/FKs). Production
+steps (ordered): 1) backup DB, 2) deploy code containing migration, 3) in a
+maintenance window run `npx prisma migrate deploy` (or apply the reviewed SQL)
+in staging then production after verification, 4) run `prisma generate` as part
+of build and smoke-test workspace toggle, time-entry log/list/edit/delete-own,
+and rejection when disabled. Never `prisma migrate deploy` outside controlled
+rollout.
+
+### Task deadline notifications (Phase 4E)
+
+A background polling worker (`task-deadline-notification`, in-process, same
+`start/stop/runOnce(now)` pattern as other workers) notifies **current task
+assignees** about approaching and overdue deadlines using existing in-app
+notification creation and notification preferences.
+
+**Notification types (additive):** `TASK_DUE_SOON`, `TASK_OVERDUE`.
+
+**Eligibility:** task must have `dueDate != null`, not be deleted or archived,
+have at least one assignee, and be actionable (`status != APPROVED` and
+`completedAt == null`). Submitted tasks awaiting review are not approved and may
+be eligible per existing workflow/status. Only current assignees are notified
+and existing in-app notification preferences are respected.
+
+**Rules:**
+- **Due soon (`TASK_DUE_SOON`)**: sent once per task when `now >= dueDate - 24h`
+  and `now < dueDate`.
+- **Overdue (`TASK_OVERDUE`)**: sent once per task when `now >= dueDate`.
+- A task may receive at most one due-soon and one overdue notification total
+  (tracked by additive task markers `dueSoonNotifiedAt`, `overdueNotifiedAt`);
+  never repeated across runs/restarts/concurrent executions. If a due date
+  changes after a notification type was sent, that same type is not resent.
+
+**Idempotency/concurrency:** each threshold is claimed atomically in a database
+transaction (conditional update on marker/eligibility) and notifications are
+created within the same transaction, so concurrent workers cannot duplicate and
+a crash cannot persist a sent marker without committed notifications.
+
+**Configuration:** `TASK_DEADLINE_NOTIFICATION_POLL_INTERVAL_MS` (default
+`300000` ms). Worker is registered with health monitoring and stopped cleanly
+on shutdown.
+
+**Migration (additive, local dev applied after verification; not applied to production):**
+`20261116200000_task_deadline_notifications` adds `NotificationType` values
+`TASK_DUE_SOON`, `TASK_OVERDUE` and `Task.dueSoonNotifiedAt` /
+`Task.overdueNotifiedAt` (nullable). Production steps (ordered): 1) backup DB
+and verify migration state/order and unapplied migrations, 2) deploy code
+containing migration, 3) in a controlled maintenance window run
+`npx prisma migrate deploy` (or apply reviewed SQL in order) in staging then
+production after verification, 4) run `prisma generate`, restart services, and
+smoke-test deadline notifications, preferences, and worker health. **Never
+`prisma migrate deploy` outside controlled rollout; never reset/drop/recreate
+DB; never mutate applied migrations; never touch production outside this
+process.**
+
+## Dev/source-control integrations (Phase 5, workspace source control)
+
+Workspace-level source control connections behind a provider abstraction (`IntegrationConnection.provider`: `GITHUB` GitHub App, `GITLAB` GitLab OAuth). Nexus links to providers and shows repository/project development status; it does **not** host, edit, or store source code. Linked repositories are associated with projects and tasks.
+
+**Connection model (additive):** `IntegrationConnection` (workspace-scoped, provider `GITHUB|GITLAB`, status `PENDING|ACTIVE|DISCONNECTED|ERROR`, external account metadata, encrypted credentials at rest, `createdById`) with unique `(workspaceId, provider)`. `ProjectRepository` links a project to a connection/repo. `TaskDevLink` links tasks to branches/pull/merge requests/commits. `GitHubWebhookDelivery`/`GitLabWebhookDelivery` provide inbound webhook idempotency.
+
+**Security:** OAuth/install authorization uses signed, Redis-backed one-time state bound to the authenticated user and workspace (validated/consumed on callback). Credentials/tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY` (AES-256-GCM); no tokens/secrets/private keys are returned in API responses or logged. Outbound provider API calls use timeouts and graceful error handling. Rotated GitLab OAuth access tokens are persisted (encrypted) when refreshed. Disconnect removes/revokes stored credentials best-effort and marks the connection disconnected. Inbound webhooks verify authenticity (GitHub HMAC-SHA256 `X-Hub-Signature-256`, GitLab secret token `X-Gitlab-Token`) with constant-time comparison and are idempotent by provider delivery id. Backend authorization is authoritative.
+
+### Workspace dev-integration routes
+
+Mounted at `/api/v1/workspaces/:workspaceId/dev-integrations` (authenticated, active account).
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/connections` | — | `200 { success, data: DevConnectionSummary[] }` (no secrets) | 401, 403 workspace access/suspended | Active workspace membership (`workspace:view`) |
+| GET | `/github/start` | — | `200 { success, data: { url } }` (GitHub App install/authorization URL) | 401, 403 insufficient role, 503 not configured | Workspace manager (`workspace:update`, e.g. OWNER/PROJECT_MANAGER) |
+| GET | `/gitlab/start` | — | `200 { success, data: { url } }` (GitLab OAuth authorization URL) | 401, 403 insufficient role, 503 not configured | Workspace manager (`workspace:update`) |
+| DELETE | `/connections/:connectionId` | — | `200 { success, data: { ok: true, providerRevoked?: boolean } }` (stored credentials removed/revoked best-effort) | 401, 403, 404 not found | Workspace manager (`workspace:update`) |
+| GET | `/connections/:connectionId/repos` | — | `200 { success, data: DevRepositorySummary[] }` (repos/projects available to the connection) | 401, 403, 404, 409 not active, 502 provider unavailable | Active workspace membership (`workspace:view`) |
+
+**`DevConnectionSummary`**: `{ id, provider, workspaceId, status, externalAccount:{id,login,name}, scopes, createdById, lastError, createdAt, updatedAt }`.
+
+**`DevRepositorySummary`**: `{ externalRepoId, fullName, name?, ownerLogin?, defaultBranch, private?, htmlUrl? }` (GitLab `fullName` is project path with namespace).
+
+### OAuth/install callbacks
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/api/v1/dev-integrations/github/callback` (and optional alias mounted at `GITHUB_APP_CALLBACK_URL` pathname) | Public browser redirect endpoint. Validates/consumes signed one-time state (user/workspace bound), requires a GitHub App `installation_id`, fetches installation/account metadata, stores/updates encrypted workspace connection as `ACTIVE`, records audit, then redirects to frontend integrations page with `?devIntegration=github&status=connected\|denied\|error`. |
+| GET | `/api/v1/dev-integrations/gitlab/callback` (and optional alias mounted at `GITLAB_CALLBACK_URL` pathname) | Public browser redirect endpoint. Validates/consumes signed one-time state (user/workspace bound), exchanges authorization code for OAuth tokens, fetches GitLab user, stores/updates encrypted workspace connection as `ACTIVE`, records audit, then redirects to frontend integrations page with `?devIntegration=gitlab&status=connected\|denied\|error`. |
+
+### Project repository routes
+
+Mounted at `/api/v1/workspaces/:workspaceId/projects/:projectId/repositories` (authenticated, active account).
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: LinkedProjectRepository[] }` | 401, 403/404 project access | Project view (`project.view` / task.view-equivalent project visibility) |
+| POST | `/` | Body `{ "connectionId": uuid, "externalRepoId": string, "fullName": string, "defaultBranch"?: string\|null }` | `201 { success, data: LinkedProjectRepository }` | 400 validation, 401, 403, 404 connection/project not found, 409 already linked | Project management/update (`project.update`) |
+| DELETE | `/:repositoryId` | — | `200 { success, data: { ok: true } }` | 401, 403, 404 not found | Project management/update (`project.update`) |
+
+**`LinkedProjectRepository`**: `{ id, projectId, connectionId, provider, externalRepoId, fullName, defaultBranch, createdAt, updatedAt }`.
+
+### Environment variables
+
+**GitHub App (Features A–C)**
+- `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY` (server-side only)
+- `GITHUB_APP_CALLBACK_URL`, `GITHUB_APP_INSTALL_URL` (optional override)
+- `GITHUB_APP_WEBHOOK_SECRET` — inbound webhook signature secret
+
+**GitLab OAuth (Feature D)**
+- `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` (server-side only)
+- `GITLAB_CALLBACK_URL` — backend OAuth callback/redirect URI
+- `GITLAB_BASE_URL` — instance base URL (default `https://gitlab.com`)
+- `GITLAB_SCOPES` — OAuth scopes (default `read_api read_repository`, minimum read)
+- `GITLAB_WEBHOOK_SECRET` — inbound webhook secret token
+
+Requires existing `INTEGRATION_ENCRYPTION_KEY` (base64url, 32 bytes) for credential encryption at rest.
+
+### Provider setup (manual)
+
+**GitHub App:** create app with minimum read permissions (contents/metadata, pull requests, checks/statuses as needed), set callback and webhook URLs/secrets, install on target account/org, connect workspace and link repositories to projects.
+
+**GitLab OAuth application:** create application with minimum read scopes (`read_api`, `read_repository`), set redirect URI to `GITLAB_CALLBACK_URL` (e.g. `https://<backend>/api/v1/dev-integrations/gitlab/callback`). For inbound MR sync, configure project/group/system webhook to `https://<backend>/api/v1/webhooks/gitlab` with `GITLAB_WEBHOOK_SECRET` as secret token and subscribe to merge request events. Connect workspace and link projects.
+
+**Migrations (additive, local dev applied after verification; not applied to production):**
+- `20261117120000_phase5_dev_integration_connections` — dev integration connections and project repositories
+- `20261117130000_phase5b_task_dev_links` — task dev links
+- `20261117140000_phase5c_github_webhook_deliveries` — GitHub webhook idempotency
+- `20261117150000_phase5d_gitlab_webhook_deliveries` — GitLab webhook idempotency
+
+Production steps (ordered): backup DB and verify migration state, deploy backend, apply migrations in controlled window/staging then production (`prisma migrate deploy` only in controlled rollout), `prisma generate`, set provider env vars, configure provider apps/webhooks, restart/verify. Never `prisma migrate deploy` outside controlled rollout.
+
+### Feature B — Task development links (branches/PRs, no webhooks)
+
+Builds on Feature A linked project repositories. On-demand GitHub reads (mocked in tests, timeouts, no secrets exposed) and persisted task-to-dev-resource links for display in task workspace.
+
+**Repository dev-resource browsing (project-scoped)**
+| Method | Path | Request | Success (data) | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/branches` | Query `search?`, `page?`, `perPage?` | `200 { success, data: { items: DevBranchSummary[] } }` | 401, 403/404, 409 no active connection, 502 provider unavailable | `project.view` (project access) |
+| GET | `/workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/pull-requests` | Query `state?` (`open|closed|all`), `search?`, `page?`, `perPage?` | `200 { success, data: { items: DevPullRequestSummary[] } }` | 401, 403/404, 409, 502 | `project.view` |
+
+**`DevBranchSummary`:** `{ name, commitSha?, protected?, url? }`  
+**`DevPullRequestSummary`:** `{ externalId, number, title, state, url, headRef, baseRef, authorLogin?, updatedAt? }`
+
+**Task dev links**
+| Method | Path | Request | Success (data) | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links` | — | `200 { success, data: TaskDevLink[] }` | 401, 403/404 | Project/task view (`project.view`) |
+| POST | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links` | Body `{ projectRepositoryId, externalType: "BRANCH"|"PULL_REQUEST"|"COMMIT", externalId, externalNumber?, title?, url?, ref?, headRef?, baseRef?, state? }` | `201 { success, data: TaskDevLink }` | 400, 401, 403, 404 task/repo not found, 409 duplicate (`TASK_DEV_LINK_ALREADY_EXISTS`) | Task update (`project.task.update`) |
+| DELETE | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links/:devLinkId` | — | `200 { success, data: { ok: true } }` | 401, 403, 404 | Task update (`project.task.update`) |
+
+**`TaskDevLink`:** `{ id, taskId, projectId, projectRepositoryId, provider, externalType, externalId, externalNumber, title, url, ref, headRef, baseRef, state, repositoryFullName, linkedById, createdAt, updatedAt }` (no secrets).
+
+**Migration (additive, local dev applied after verification; not applied to production):** `20261117130000_phase5b_task_dev_links` adds `DevLinkType` and `TaskDevLink` with relations/indexes/constraints (FKs to Task/Project/ProjectRepository/User). Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, restart/verify.
+
+### Feature C — GitHub App inbound webhooks (idempotent state sync)
+
+Raw-body endpoint (mounted before JSON parsing) for GitHub App webhooks. Verifies authenticity, deduplicates deliveries, and syncs linked development state. **No inbound auto-linking**; GitHub only.
+
+| Method | Path | Auth | Behavior |
+| --- | --- | --- | --- |
+| POST | `/api/v1/webhooks/github` | Webhook signature (public endpoint, not session-authenticated) | Verifies `X-Hub-Signature-256` (HMAC-SHA256 over raw body) against `GITHUB_APP_WEBHOOK_SECRET` (constant-time). Requires `X-GitHub-Delivery` and `X-GitHub-Event`. Returns 401 if unverified, 400 if invalid/missing payload/headers, 503 if not configured, else 200 `{ success, data: { received: true, outcome } }` (`processed|duplicate|ignored`). |
+
+**Idempotency:** each `(provider, deliveryId)` processed once (`GitHubWebhookDelivery` unique key); retries/duplicates acknowledged without reapplying side effects.
+
+**Handled events (current):**
+- `pull_request`: updates existing linked `TaskDevLink` records (`provider=GITHUB`, `externalType=PULL_REQUEST`, matching PR id) with `title`, `externalNumber`, `url`, `headRef`/`ref`, `baseRef`, `state` (`open|closed|merged|draft`). No-op if none linked.
+- `installation` (`deleted`/`suspend`): best-effort marks matching active GITHUB `IntegrationConnection`(s) for the installation as `DISCONNECTED`, revokes stored credentials marker, records reason. Other installation actions acknowledged/ignored.
+- Other events: acknowledged idempotently (`ignored`) for forward compatibility.
+
+**Env/config:** `GITHUB_APP_WEBHOOK_SECRET` required for webhook verification; configure GitHub App webhook URL to `https://<backend>/api/v1/webhooks/github` and subscribe to at least `pull_request` and `installation` (minimum permissions/events).
+
+**Migration (additive, local dev applied after verification; not applied to production):** `20261117140000_phase5c_github_webhook_deliveries` adds `GitHubWebhookDelivery` idempotency table (unique provider+deliveryId, indexes). Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, configure GitHub App webhook/secret, restart/verify delivery signatures and idempotency.
+
+### Feature D — GitLab inbound webhooks (idempotent MR state sync)
+
+Raw-body endpoint (mounted before JSON parsing) for GitLab webhooks. Verifies authenticity, deduplicates deliveries, and syncs linked development state. **No inbound auto-linking**.
+
+| Method | Path | Auth | Behavior |
+| --- | --- | --- | --- |
+| POST | `/api/v1/webhooks/gitlab` | Webhook secret token (public endpoint, not session-authenticated) | Verifies `X-Gitlab-Token` against `GITLAB_WEBHOOK_SECRET` (constant-time). Uses `X-Gitlab-Event-UUID`/`X-Gitlab-Webhook-UUID` when present as delivery id (falls back to deterministic payload key). Returns 401 if unverified, 400 if invalid/missing payload, 503 if not configured, else 200 `{ success, data: { received: true, outcome } }` (`processed|duplicate|ignored`). |
+
+**Idempotency:** each `(provider, deliveryId)` processed once (`GitLabWebhookDelivery` unique key); retries/duplicates acknowledged without reapplying side effects.
+
+**Handled events (current):**
+- `merge_request`: updates existing linked `TaskDevLink` records (`provider=GITLAB`, `externalType=PULL_REQUEST`, matching MR id) with `title`, `externalNumber` (iid), `url`, `headRef`/`ref`, `baseRef`, and mapped `state` (`open|closed|merged|draft`). No-op if none linked.
+- Other events: acknowledged idempotently (`ignored`).
+
+**Env/config:** `GITLAB_WEBHOOK_SECRET` required; configure webhook URL to `https://<backend>/api/v1/webhooks/gitlab` with the same secret token and subscribe to merge request events (minimum scope/events).
 
 ## Updating this API reference
 

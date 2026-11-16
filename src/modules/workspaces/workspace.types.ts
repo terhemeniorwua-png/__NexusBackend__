@@ -33,6 +33,7 @@ export interface WorkspaceSummary {
   organizationRole: OrganizationRole | null;
   /** True when an administrator has enabled a join code. */
   joinCodeEnabled: boolean;
+  timeTrackingEnabled: boolean;
   memberCount: number;
   projectCount: number;
   teamCount: number;
@@ -71,6 +72,8 @@ export interface InvitationSummary {
   role: WorkspaceRole;
   organizationRole: OrganizationRole | null;
   type: InvitationType;
+  teamId?: string;
+  teamName?: string;
   status: InvitationStatus;
   invitedBy: { id: string; name: string };
   expiresAt: Date;
@@ -93,12 +96,61 @@ export interface InvitationPreview {
   invitedBy: { id: string; name: string };
   role: WorkspaceRole;
   organizationRole: OrganizationRole | null;
+  team?: { id: string; name: string };
   status: InvitationStatus;
   expiresAt: Date;
   /** The address the invitation was sent to, with the local part masked. */
   maskedEmail: string;
   /** True when the invitation is bound to a registered account. */
   boundToAccount: boolean;
+}
+
+/**
+ * Why an invitation cannot be accepted or declined by the signed-in account.
+ *
+ * The public preview only describes the invitation. The authenticated
+ * verification endpoint adds the viewer context, because whether an invitation
+ * is actionable depends on the account that is signed in.
+ */
+export type InvitationVerificationReason =
+  | 'EMAIL_MISMATCH'
+  | 'ALREADY_ACCEPTED'
+  | 'DECLINED'
+  | 'REVOKED'
+  | 'EXPIRED'
+  | 'WORKSPACE_UNAVAILABLE'
+  | 'TEAM_UNAVAILABLE'
+  | 'ALREADY_A_MEMBER'
+  | 'ALREADY_A_TEAM_MEMBER'
+  | 'WORKSPACE_MEMBERSHIP_REQUIRED';
+
+export interface InvitationViewer {
+  userId: string;
+  email: string;
+  /** True when the signed-in account is the intended recipient. */
+  emailMatches: boolean;
+  /** True when the signed-in account already belongs to the workspace. */
+  alreadyMember: boolean;
+  /** The caller's current role when they already belong to the workspace. */
+  membershipRole: WorkspaceRole | null;
+  /** True if the caller already has explicit membership in the invited team. */
+  alreadyTeamMember?: boolean;
+  /** True only when accepting would create access the caller does not have. */
+  canAccept: boolean;
+  canDecline: boolean;
+  /** Null when the invitation is actionable. */
+  reason: InvitationVerificationReason | null;
+}
+
+/**
+ * The authenticated view of an invitation.
+ *
+ * It carries the same safe preview as the public endpoint plus the caller's
+ * eligibility, so the frontend never has to infer whether the signed-in
+ * account is the intended recipient.
+ */
+export interface InvitationVerification extends InvitationPreview {
+  viewer: InvitationViewer;
 }
 
 export interface InvitationResult {
