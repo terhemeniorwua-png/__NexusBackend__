@@ -83,8 +83,8 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
         }
       }
 
-      await prisma.$transaction(async (tx) => {
-        const response = await tx.formResponse.create({
+      const response = await prisma.$transaction(async (tx) => {
+        const created = await tx.formResponse.create({
           data: {
             formId: input.formId,
             submittedBy: input.userId,
@@ -97,7 +97,8 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
             },
           },
         });
-        await recordAuditEvent(tx, { workspaceId: form.workspaceId, actorId: input.userId, action: 'form.response_submitted', targetType: 'Form', targetId: form.id, metadata: { responseId: response.id } });
+        await recordAuditEvent(tx, { workspaceId: form.workspaceId, actorId: input.userId, action: 'form.response_submitted', targetType: 'Form', targetId: form.id, metadata: { responseId: created.id } });
+        return created;
       });
 
       await enqueueAutomationRunsSafely(

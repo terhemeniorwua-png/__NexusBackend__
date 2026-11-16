@@ -1,21 +1,39 @@
-import { Router } from 'express';
+import { Router, type Request, type RequestHandler } from 'express';
 import { z } from 'zod';
-import { authenticate } from './';
-import { prisma } from './';
-import { requireWorkspaceAccess } from '../../modules/authorization/workspace.policy';
+import { loadEnv } from '../../config/env';
+import { createRequireAuth } from '../../middleware/authenticate';
+import { getPrismaClient } from '../../db/prisma';
+import { requireWorkspaceAccess, WorkspaceCapability } from '../../modules/workspaces/authorization';
 import { searchExternalFiles, importExternalFile } from './service';
 
 export const externalFilesRouter = Router();
 
-externalFilesRouter.get('/external-search', authenticate, async (req: any, res, next) => {
-  try {
-    const { q } = z.object({ q: z.string().trim().min(2).max(100) }).parse(req.query);
-    res.json(await searchExternalFiles(req.user.id, q));
-  } catch (e) { next(e); }
-});
+const config = loadEnv();
+const requireAuth = createRequireAuth(config);
 
-externalFilesRouter.post('/import', authenticate, async (req: any, res, next) => {
+type AuthRequest = Request & { auth?: { userId: string } };
+
+externalFilesRouter.get('/external-search', requireAuth, (async (req: AuthRequest, res, next) => {
   try {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required' } });
+      return;
+    }
+    const { q } = z.object({ q: z.string().trim().min(2).max(100) }).parse(req.query);
+    res.json(await searchExternalFiles(userId, q));
+  } catch (e) {
+    next(e);
+  }
+}) as RequestHandler);
+
+externalFilesRouter.post('/import', requireAuth, (async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required' } });
+      return;
+    }
     const body = z
       .object({
         workspaceId: z.string().min(1),
@@ -25,12 +43,14 @@ externalFilesRouter.post('/import', authenticate, async (req: any, res, next) =>
       .strict()
       .parse(req.body);
 
-    await requireWorkspaceAccess(prisma, {
-      userId: req.user.id,
+    await requireWorkspaceAccess(getPrismaClient(), {
+      userId,
       workspaceId: body.workspaceId,
-      capability: 'REPLACE_WITH_REAL_CAPABILITY' as any,
+      capability: WorkspaceCapability.UpdateWorkspace,
     });
 
-    res.status(201).json(await importExternalFile(req.user.id, body.workspaceId, body.provider, body.externalId));
-  } catch (e) { next(e); }
-});
+    res.status(201).json(await importExternalFile(userId, body.workspaceId, body.provider, body.externalId));
+  } catch (e) {
+    next(e);
+  }
+}) as RequestHandler);
