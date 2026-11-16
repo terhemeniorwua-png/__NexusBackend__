@@ -4,6 +4,7 @@ import { Prisma, type PrismaClient, type TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
+import { emitDomainEvent } from '../../realtime/domain-events';
 import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { AppError } from '../../utils/errors';
 import {
@@ -439,6 +440,24 @@ export function createTaskService(
         },
       });
 
+      emitDomainEvent('task.created', {
+        workspaceId: input.workspaceId,
+        projectId: access.project.id,
+        taskId: created.id,
+        actorId: input.userId,
+        task: { id: created.id, key: created.key, title: created.title, status: created.status },
+      });
+      for (const assigneeId of input.assigneeIds ?? []) {
+        if (assigneeId === input.userId) continue;
+        emitDomainEvent('task.assigned', {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: created.id,
+          assigneeId,
+          actorId: input.userId,
+        });
+      }
+
       return created;
     },
 
@@ -558,7 +577,7 @@ export function createTaskService(
           throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
       }
 
-      return prisma.$transaction(async (tx) => {
+      const updatedTask = await prisma.$transaction(async (tx) => {
         const statusChanging = input.status !== undefined && input.status !== existing.status;
         const submissionFields: Prisma.TaskUpdateInput = {};
         if (statusChanging && input.status === 'SUBMITTED') {
@@ -641,6 +660,17 @@ export function createTaskService(
         }
         return toSummary(row as TaskRow);
       });
+      emitDomainEvent('task.updated', {
+        workspaceId: input.workspaceId,
+        projectId: access.project.id,
+        taskId: updatedTask.id,
+        actorId: input.userId,
+        changes: Object.keys(input).filter(
+          (k) => k !== 'userId' && k !== 'workspaceId' && k !== 'projectId' && k !== 'taskId',
+        ),
+        task: { id: updatedTask.id, key: (updatedTask as { key?: string }).key, status: updatedTask.status },
+      });
+      return updatedTask;
     },
 
     // -------------------------------------------------------------------------
@@ -952,6 +982,16 @@ export function createTaskService(
         } catch {
           // The email seam is non-fatal: the assignment already committed.
         }
+      }
+
+      if (input.targetUserId !== input.userId) {
+        emitDomainEvent('task.assigned', {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: task.id,
+          assigneeId: input.targetUserId,
+          actorId: input.userId,
+        });
       }
 
       return result;
@@ -1268,6 +1308,31 @@ export function createTaskService(
         }
         return { ...comment, mentions: mentionedUserIds.map((userId) => ({ userId })) };
       });
+      emitDomainEvent('comment.created', {
+        workspaceId: input.workspaceId,
+        projectId: access.project.id,
+        taskId: task.id,
+        commentId: comment.id,
+        authorId: input.userId,
+        comment: {
+          id: comment.id,
+          taskId: task.id,
+          authorId: comment.author.id,
+          body: comment.body,
+          parentId: comment.parentId,
+          createdAt: comment.createdAt instanceof Date ? comment.createdAt.toISOString() : String(comment.createdAt),
+        },
+      });
+      for (const mentionedUserId of mentionedUserIds) {
+        emitDomainEvent('mention.created', {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: task.id,
+          commentId: comment.id,
+          mentionedUserId,
+          actorId: input.userId,
+        });
+      }
       if (deps.mentionNotifier) {
         for (const mentionedUserId of mentionedUserIds) {
           try {

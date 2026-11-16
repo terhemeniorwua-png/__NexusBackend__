@@ -8384,7 +8384,7 @@ paths:
       tags:
       - Notifications
       operationId: get_notifications
-      summary: GET /notifications (registered route; contract aligned to implementation)
+      summary: List general notifications (cursor-paginated) with unreadCount (separate from message unread counts)
       security:
       - bearerAuth: []
       responses:
@@ -8403,6 +8403,7 @@ paths:
           description: Forbidden
         '404':
           description: Not found
+      parameters: []
   /notifications/activity/{workspaceId}:
     get:
       tags:
@@ -8504,7 +8505,7 @@ paths:
       tags:
       - Notifications
       operationId: post_notifications_read
-      summary: POST /notifications/read (registered route; contract aligned to implementation)
+      summary: Mark specific general notifications as read
       security:
       - bearerAuth: []
       responses:
@@ -8542,7 +8543,7 @@ paths:
       tags:
       - Notifications
       operationId: post_notifications_read_all
-      summary: POST /notifications/read-all (registered route; contract aligned to implementation)
+      summary: Mark all general notifications as read
       security:
       - bearerAuth: []
       responses:
@@ -8580,7 +8581,7 @@ paths:
       tags:
       - Notifications
       operationId: get_notifications_unread_count
-      summary: GET /notifications/unread-count (registered route; contract aligned to implementation)
+      summary: Get general notification unread count (separate from message unread counts)
       security:
       - bearerAuth: []
       responses:
@@ -19844,8 +19845,11 @@ components:
               - string
               - 'null'
 x-socketio:
-  description: Realtime Socket.IO contract implemented in src/realtime/socket-server.ts and src/modules/messaging/message.service.ts.
-    Clients connect via Socket.IO (default path /socket.io) with handshake auth; server authenticates before room joins.
+  description: Realtime Socket.IO contract implemented in src/realtime/socket-server.ts, src/realtime/domain-events.ts, src/realtime/io-registry.ts
+    and service emitters. Clients connect via Socket.IO (default path /socket.io) with handshake auth; server authenticates
+    before room joins. Domain events are fanned out to correct rooms only (workspace:{id}, channel:{id}, user:{id}) with permission
+    checks on room join. General notification realtime events are separate from message unread counts (message unread counts
+    remain channel read-receipt based).
   path: /socket.io
   auth:
     handshake:
@@ -19861,18 +19865,27 @@ x-socketio:
     failure: Connection rejected with error "Authentication failed" when token missing/invalid.
   rooms:
   - name: user:{userId}
-    description: Private room joined automatically on authenticated connection.
+    description: Private room joined automatically on authenticated connection (self only). Used for personal domain events
+      (e.g. mention.created, task.assigned) and general notification.created events.
   - name: workspace:{workspaceId}
-    description: Joined via workspace:join; used for workspace presence broadcasts.
+    description: Joined via workspace:join after active workspace membership check; used for workspace-scoped domain events
+      (task.created/task.updated/task.assigned/comment.created) and presence broadcasts.
   - name: channel:{channelId}
-    description: Joined via channel:join after membership/capability check.
+    description: Joined via channel:join after channel access/membership capability check; used for channel messaging and
+      typing events.
   events:
   - event: workspace:join
     direction: client->server
     payload:
       type: string
       description: workspaceId
-    effect: Joins workspace:{workspaceId} room and sets socket workspace context.
+    ack:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      description: Optional callback invoked with {ok:true} on success, {ok:false} when membership/access denied or invalid.
+    effect: Verifies active workspace membership, joins workspace:{workspaceId} room and sets socket workspace context.
   - event: workspace:leave
     direction: client->server
     payload:
@@ -19889,7 +19902,7 @@ x-socketio:
       properties:
         ok:
           type: boolean
-      description: 'Optional callback invoked with {ok: boolean}; true on success, false on failure.'
+      description: Optional callback invoked with {ok:true} on success, {ok:false} on failure.
     effect: Validates channel/workspace and membership capability; joins channel:{channelId} on success.
   - event: channel:leave
     direction: client->server
@@ -19963,9 +19976,28 @@ x-socketio:
           type: string
       required:
       - userId
+  - event: message.created
+    direction: server->clients
+    trigger: Domain event emitted after a channel message is persisted.
+    room: channel:{channelId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        channelId:
+          type: string
+        message:
+          type: object
+          description: Persisted message summary; may include clientTempId on create.
+          additionalProperties: true
+      required:
+      - workspaceId
+      - channelId
+      - message
   - event: message:new
     direction: server->clients
-    trigger: Emitted to channel:{channelId} after a message is persisted (send/voice send).
+    trigger: Backward-compatible alias emitted alongside message.created to channel:{channelId}.
     room: channel:{channelId}
     payload:
       type: object
@@ -19974,12 +20006,171 @@ x-socketio:
           type: string
         message:
           type: object
-          description: MessageSummary (persisted message fields); includes clientTempId when provided on send.
-          properties:
-            clientTempId:
-              type: string
-              description: Echoed from create request when supplied (optional).
-            additionalProperties: true
+          additionalProperties: true
       required:
       - channelId
       - message
+  - event: task.created
+    direction: server->clients
+    trigger: Domain event emitted after task creation.
+    room: workspace:{workspaceId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        actorId:
+          type: string
+        task:
+          type: object
+          additionalProperties: true
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+  - event: task.updated
+    direction: server->clients
+    trigger: Domain event emitted after task update.
+    room: workspace:{workspaceId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        changes:
+          type: array
+          items:
+            type: string
+        actorId:
+          type: string
+        task:
+          type: object
+          additionalProperties: true
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+  - event: task.assigned
+    direction: server->clients
+    trigger: Domain event emitted when a task is assigned.
+    room: user:{assigneeId} and workspace:{workspaceId} (room joins permission-checked; user room is self-only)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        assigneeId:
+          type: string
+        actorId:
+          type: string
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+      - assigneeId
+  - event: comment.created
+    direction: server->clients
+    trigger: Domain event emitted after a task comment is created.
+    room: workspace:{workspaceId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        commentId:
+          type: string
+        authorId:
+          type: string
+        comment:
+          type: object
+          additionalProperties: true
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+      - commentId
+      - authorId
+  - event: mention.created
+    direction: server->clients
+    trigger: Domain event emitted for each created task-comment mention.
+    room: user:{mentionedUserId} (self-only private room)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        commentId:
+          type: string
+        mentionedUserId:
+          type: string
+        actorId:
+          type: string
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+      - commentId
+      - mentionedUserId
+      - actorId
+  - event: notification.created
+    direction: server->clients
+    trigger: Emitted when a general in-app notification row is created (subject to existing preference rules). Not emitted
+      for message unread counts, which remain separate (MessageReadReceipt/channel unread-count endpoints).
+    room: user:{userId} (self-only private room)
+    payload:
+      type: object
+      properties:
+        notification:
+          type: object
+          properties:
+            id:
+              type: string
+            type:
+              type: string
+            title:
+              type: string
+            body:
+              type:
+              - string
+              - 'null'
+            link:
+              type:
+              - string
+              - 'null'
+            data:
+              type:
+              - object
+              - 'null'
+            readAt:
+              type:
+              - string
+              - 'null'
+            createdAt:
+              type: string
+          required:
+          - id
+          - type
+          - title
+          - createdAt
+      required:
+      - notification

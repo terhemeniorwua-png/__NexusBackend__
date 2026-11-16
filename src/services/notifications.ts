@@ -1,4 +1,5 @@
-import type { NotificationType, Prisma, PrismaClient } from '@prisma/client';
+import type { Notification, NotificationType, Prisma, PrismaClient } from '@prisma/client';
+import { emitToUser } from '../realtime/io-registry';
 
 /**
  * In-app notifications.
@@ -7,6 +8,11 @@ import type { NotificationType, Prisma, PrismaClient } from '@prisma/client';
  * The rows are written in the same transaction as the change that caused
  * them, so a member never sees a notification for a change that was rolled
  * back.
+ *
+ * Preference rules (existing): when `data.workspaceId` is provided and the
+ * member has `inAppEnabled === false` for (workspace,user,type), no in-app
+ * notification row is created. Message unread counts are tracked separately via
+ * message read receipts and are not stored as general notifications.
  */
 
 export type NotificationClient = PrismaClient | Prisma.TransactionClient;
@@ -23,7 +29,7 @@ export interface NotificationInput {
 export async function createNotification(
   client: NotificationClient,
   input: NotificationInput,
-): Promise<void> {
+): Promise<Notification | null> {
   const workspaceId = input.data?.workspaceId;
   if (typeof workspaceId === 'string') {
     const preference = await client.notificationPreference.findUnique({
@@ -32,10 +38,10 @@ export async function createNotification(
       },
       select: { inAppEnabled: true },
     });
-    if (preference?.inAppEnabled === false) return;
+    if (preference?.inAppEnabled === false) return null;
   }
 
-  await client.notification.create({
+  const notification = await client.notification.create({
     data: {
       userId: input.userId,
       type: input.type,
@@ -45,4 +51,22 @@ export async function createNotification(
       ...(input.data ? { data: input.data as Prisma.InputJsonValue } : {}),
     },
   });
+
+  // Realtime delivery to the recipient's private room (best-effort). This does
+  // not affect message unread counts, which remain channel read-receipt based.
+  emitToUser(input.userId, 'notification.created', {
+    notification: {
+      id: notification.id,
+      type: notification.type,
+      title: notification.title,
+      body: notification.body,
+      link: notification.link,
+      data: (notification.data as Record<string, unknown> | null) ?? null,
+      readAt: notification.readAt?.toISOString() ?? null,
+      createdAt: notification.createdAt.toISOString(),
+    },
+  });
+
+  return notification;
 }
+

@@ -6,6 +6,10 @@ export function setIo(server: Server): void {
   io = server;
 }
 
+export function getIo(): Server | null {
+  return io;
+}
+
 /** Best-effort: does nothing when realtime is not running. */
 export function emitToUser(userId: string, event: string, payload: unknown): void {
   io?.to(`user:${userId}`).emit(event, payload);
@@ -14,4 +18,9 @@ export function emitToUser(userId: string, event: string, payload: unknown): voi
 /** Best-effort: delivers to sockets that joined `channel:<id>` (access is checked on join). */
 export function emitToChannel(channelId: string, event: string, payload: unknown): void {
   io?.to(`channel:${channelId}`).emit(event, payload);
+}
+
+/** Best-effort: delivers to sockets that joined `workspace:<id>` (access is checked on join). */
+export function emitToWorkspace(workspaceId: string, event: string, payload: unknown): void {
+  io?.to(`workspace:${workspaceId}`).emit(event, payload);
 }

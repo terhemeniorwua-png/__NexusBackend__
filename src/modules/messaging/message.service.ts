@@ -3,6 +3,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireChannelAccess, ChannelCapability } from '../authorization/channel.policy';
+import { emitDomainEvent } from '../../realtime/domain-events';
 import { emitToChannel } from '../../realtime/io-registry';
 
 export interface MessageSummary {
@@ -143,7 +144,13 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
       });
 
       const summary = toSummary(message);
-      if (!summary.parentId) emitToChannel(input.channelId, 'message:new', { channelId: input.channelId, message: { ...summary, clientTempId: input.clientTempId } });
+      if (!summary.parentId) {
+        emitDomainEvent('message.created', {
+          workspaceId: input.workspaceId,
+          channelId: input.channelId,
+          message: { ...summary, clientTempId: input.clientTempId } as unknown as Record<string, unknown>,
+        });
+      }
       return summary;
     },
 
@@ -183,7 +190,11 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         metadata: { channelId: input.channelId, voice: true },
       });
       const summary = toSummary(message);
-      emitToChannel(input.channelId, 'message:new', { channelId: input.channelId, message: summary });
+      emitDomainEvent('message.created', {
+        workspaceId: input.workspaceId,
+        channelId: input.channelId,
+        message: summary as unknown as Record<string, unknown>,
+      });
       return summary;
     },
 
