@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */ // TODO(types): replace any with real types
 import { Router, type Request } from 'express';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';

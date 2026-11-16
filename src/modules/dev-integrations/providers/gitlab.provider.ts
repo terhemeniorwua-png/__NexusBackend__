@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */ // TODO(types): replace any with real types
 import type { GitLabTokenResponse, GitLabUser } from '../gitlab-api.types';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AppConfig } from '../../../config/env';

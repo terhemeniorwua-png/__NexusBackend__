@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */ // TODO(types): replace any with real types
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
