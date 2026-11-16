@@ -75,13 +75,25 @@ export async function createSocketServer(
 
   io.on('connection', (socket) => {
     const userId = socket.data.userId as string;
-    // Private room so a single user can be reached (incoming calls).
+    // Private room so a single user can be reached (incoming calls/notifications).
     void socket.join(`user:${userId}`);
 
-    // Join workspace room
-    socket.on('workspace:join', (workspaceId: string) => {
-      socket.join(`workspace:${workspaceId}`);
-      socket.data.workspaceId = workspaceId;
+    // Join workspace room — the client must prove active workspace membership
+    socket.on('workspace:join', async (workspaceId: string, ack?: (result: { ok: boolean }) => void) => {
+      try {
+        if (typeof workspaceId !== 'string' || !workspaceId) throw new Error('invalid workspace id');
+        const prisma = getPrismaClient();
+        const membership = await prisma.workspaceMembership.findUnique({
+          where: { workspaceId_userId: { workspaceId, userId } },
+          select: { status: true },
+        });
+        if (!membership || membership.status !== 'ACTIVE') throw new Error('access denied');
+        await socket.join(`workspace:${workspaceId}`);
+        socket.data.workspaceId = workspaceId;
+        ack?.({ ok: true });
+      } catch {
+        ack?.({ ok: false });
+      }
     });
 
     // Leave workspace room
