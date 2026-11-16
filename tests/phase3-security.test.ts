@@ -78,10 +78,11 @@ test('avatar image validation uses signatures, rejects corrupt input and enforce
     .png()
     .toBuffer();
   const normalized = await normalizeAvatarImage(validPng, { maxDimension: 10, maxPixels: 100 });
-  assert.equal(normalized.contentType, 'image/png');
+  // All inputs are re-encoded to WebP regardless of the original format.
+  assert.equal(normalized.contentType, 'image/webp');
   await assert.rejects(
     () => normalizeAvatarImage(Buffer.from('<html>'), { maxDimension: 10, maxPixels: 100 }),
-    { code: 'AVATAR_TYPE_UNSUPPORTED' },
+    { code: 'AVATAR_INVALID_TYPE' },
   );
   await assert.rejects(
     () =>

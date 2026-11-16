@@ -16,6 +16,10 @@ import { createUsersService, type UsersService } from './users.service';
  *
  * A profile belongs to an activated account, so the routes sit behind both the
  * session guard and the activation guard.
+ *
+ * Avatar upload uses the multipart field name "file" as specified by the API
+ * contract. The file limit is enforced by multer before the handler runs, so
+ * oversized uploads are rejected while the body is still streaming.
  */
 
 export interface UsersRouterOptions {
@@ -39,10 +43,14 @@ export function createUsersRouter({
     code: 'AVATAR_RATE_LIMITED',
     message: 'Too many profile image changes. Please try again later.',
   });
+
+  // Field name is "file" as required by the API contract.
+  // parts: 2 allows 1 field + 1 file (multer counts both against parts).
   const avatarUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: config.avatarMaxFileSizeBytes, files: 1, fields: 0, parts: 1 },
-  }).single('avatar');
+    limits: { fileSize: config.avatarMaxFileSizeBytes, files: 1, fields: 0, parts: 2 },
+  }).single('file');
+
   const storage = createS3CompatibleObjectStorage({
     endpoint: config.objectStorageEndpoint,
     bucket: config.objectStorageBucket,
@@ -54,6 +62,11 @@ export function createUsersRouter({
   });
   const service = injectedService ?? createUsersService(undefined, storage);
 
+  /**
+   * Wraps multer so that:
+   *   - An oversized file → 413 AVATAR_TOO_LARGE (before the body is fully buffered).
+   *   - Any other multer error → 400 AVATAR_UPLOAD_INVALID.
+   */
   function receiveAvatar(req: Request, _res: Response, next: (error?: unknown) => void): void {
     avatarUpload(req, _res, (error: unknown) => {
       if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
@@ -64,7 +77,7 @@ export function createUsersRouter({
       }
       if (error) {
         next(
-          new AppError(400, 'AVATAR_UPLOAD_INVALID', 'Upload exactly one file in the avatar field'),
+          new AppError(400, 'AVATAR_UPLOAD_INVALID', 'Upload exactly one file in the file field'),
         );
         return;
       }
@@ -110,12 +123,18 @@ export function createUsersRouter({
       const auth = req.auth;
       if (!auth)
         throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-      if (!req.file) throw new AppError(400, 'AVATAR_REQUIRED', 'Select a profile image to upload');
-      const profile = await service.uploadAvatar(auth.userId, req.file.buffer, {
-        maxDimension: config.avatarMaxDimension,
-        maxPixels: config.avatarMaxPixels,
-      });
-      sendSuccess(res, profile);
+      if (!req.file)
+        throw new AppError(400, 'AVATAR_MISSING_FILE', 'Select a profile image to upload');
+      const result = await service.uploadAvatar(
+        auth.userId,
+        req.file.buffer,
+        {
+          maxDimension: config.avatarMaxDimension,
+          maxPixels: config.avatarMaxPixels,
+        },
+        { ip: req.ip, userAgent: req.header('user-agent') },
+      );
+      sendSuccess(res, result);
     },
   );
 
@@ -128,7 +147,11 @@ export function createUsersRouter({
       const auth = req.auth;
       if (!auth)
         throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-      sendSuccess(res, await service.deleteAvatar(auth.userId));
+      const result = await service.deleteAvatar(auth.userId, {
+        ip: req.ip,
+        userAgent: req.header('user-agent'),
+      });
+      sendSuccess(res, result);
     },
   );
 
