@@ -7,47 +7,140 @@ import { z } from 'zod';
 
 const uuid = z.string().uuid();
 
-export const createAutomationSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-  trigger: z.enum(['EVENT_TASK_CREATED', 'EVENT_TASK_COMPLETED', 'EVENT_MEMBER_JOINED', 'SCHEDULED_DAILY', 'SCHEDULED_WEEKLY'] as const),
-  condition: z.record(z.string(), z.string()).optional().nullable(),
-  action: z.enum(['SEND_NOTIFICATION', 'CREATE_TASK', 'SEND_WEBHOOK'] as const),
-  actionConfig: z.record(z.string(), z.string()),
-  enabled: z.boolean().optional().default(true),
-  maxRetries: z.number().int().min(0).max(10).optional().default(3),
-}).strict().superRefine((value, ctx) => {
-  const config = value.actionConfig;
-  if (value.action === 'SEND_NOTIFICATION') {
-    if (!config.userIds && !config.userId) {
-      ctx.addIssue({ code: 'custom', path: ['actionConfig', 'userIds'], message: 'SEND_NOTIFICATION requires userIds or userId' });
-    }
-    if (!config.title?.trim()) {
-      ctx.addIssue({ code: 'custom', path: ['actionConfig', 'title'], message: 'SEND_NOTIFICATION requires a title' });
-    }
-  }
-  if (value.action === 'CREATE_TASK') {
-    if (!config.projectId) {
-      ctx.addIssue({ code: 'custom', path: ['actionConfig', 'projectId'], message: 'CREATE_TASK requires a projectId' });
-    }
-    if (!config.title?.trim()) {
-      ctx.addIssue({ code: 'custom', path: ['actionConfig', 'title'], message: 'CREATE_TASK requires a title' });
-    }
-  }
-  if (value.action === 'SEND_WEBHOOK') {
-    if (!config.url?.trim()) {
-      ctx.addIssue({ code: 'custom', path: ['actionConfig', 'url'], message: 'SEND_WEBHOOK requires a url' });
-    } else {
-      try {
-        const url = new URL(config.url);
-        if (url.protocol !== 'https:') {
-          ctx.addIssue({ code: 'custom', path: ['actionConfig', 'url'], message: 'Webhook URLs must use HTTPS' });
-        }
-      } catch {
-        ctx.addIssue({ code: 'custom', path: ['actionConfig', 'url'], message: 'The webhook URL is not valid' });
+const automationTriggers = [
+  'EVENT_TASK_CREATED',
+  'EVENT_TASK_COMPLETED',
+  'EVENT_MEMBER_JOINED',
+  'EVENT_TASK_STATUS_CHANGED',
+  'EVENT_TASK_ASSIGNED',
+  'EVENT_TASK_DUE_DATE_PASSED',
+  'EVENT_FORM_SUBMITTED',
+  'SCHEDULED_DAILY',
+  'SCHEDULED_WEEKLY',
+] as const;
+
+const automationActions = [
+  'SEND_NOTIFICATION',
+  'CREATE_TASK',
+  'SEND_WEBHOOK',
+  'SET_FIELD',
+  'ASSIGN',
+  'POST_MESSAGE',
+] as const;
+
+export const createAutomationSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    trigger: z.enum(automationTriggers),
+    condition: z.record(z.string(), z.string()).optional().nullable(),
+    action: z.enum(automationActions),
+    actionConfig: z.record(z.string(), z.string()),
+    enabled: z.boolean().optional().default(true),
+    maxRetries: z.number().int().min(0).max(10).optional().default(3),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const config = value.actionConfig;
+    if (value.action === 'SEND_NOTIFICATION') {
+      if (!config.userIds && !config.userId) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'userIds'],
+          message: 'SEND_NOTIFICATION requires userIds or userId',
+        });
+      }
+      if (!config.title?.trim()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'title'],
+          message: 'SEND_NOTIFICATION requires a title',
+        });
       }
     }
-  }
-});
+    if (value.action === 'CREATE_TASK') {
+      if (!config.projectId) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'projectId'],
+          message: 'CREATE_TASK requires a projectId',
+        });
+      }
+      if (!config.title?.trim()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'title'],
+          message: 'CREATE_TASK requires a title',
+        });
+      }
+    }
+    if (value.action === 'SEND_WEBHOOK') {
+      if (!config.url?.trim()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'url'],
+          message: 'SEND_WEBHOOK requires a url',
+        });
+      } else {
+        try {
+          const url = new URL(config.url);
+          if (url.protocol !== 'https:') {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['actionConfig', 'url'],
+              message: 'Webhook URLs must use HTTPS',
+            });
+          }
+        } catch {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['actionConfig', 'url'],
+            message: 'The webhook URL is not valid',
+          });
+        }
+      }
+    }
+    if (value.action === 'SET_FIELD') {
+      if (!config.field?.trim()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'field'],
+          message: 'SET_FIELD requires a field name',
+        });
+      }
+      if (config.value === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'value'],
+          message: 'SET_FIELD requires a value',
+        });
+      }
+    }
+    if (value.action === 'ASSIGN') {
+      if (!config.userIds && !config.userId && !config.assigneeId) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'userIds'],
+          message: 'ASSIGN requires userIds, userId, or assigneeId',
+        });
+      }
+    }
+    if (value.action === 'POST_MESSAGE') {
+      if (!config.channelId?.trim()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'channelId'],
+          message: 'POST_MESSAGE requires a channelId',
+        });
+      }
+      if (!config.body?.trim() && !config.message?.trim()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionConfig', 'body'],
+          message: 'POST_MESSAGE requires a body or message',
+        });
+      }
+    }
+  });
 
 export const updateAutomationSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),

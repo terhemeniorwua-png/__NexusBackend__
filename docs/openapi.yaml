@@ -265,6 +265,12 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: projectId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
       - name: range
         in: query
         required: false
@@ -301,6 +307,122 @@ paths:
           description: Active workspace membership required.
         '400':
           description: Invalid or oversized date range.
+  /analytics/tasks/by-status:
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsTasksByStatus
+      summary: Aggregate task counts by status
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: range, in: query, required: false, schema: { type: string, enum: [7d, 30d, 90d, custom], default: 30d } }
+        - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Tasks grouped by status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskStatusResponse'
+        '400': { description: Invalid or oversized date range }
+        '401': { description: Authentication required }
+        '403': { description: Workspace access denied }
+        '404': { description: Project not found in workspace }
+  /analytics/tasks/by-assignee:
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsTasksByAssignee
+      summary: Aggregate task counts by assignee
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: range, in: query, required: false, schema: { type: string, enum: [7d, 30d, 90d, custom], default: 30d } }
+        - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Tasks grouped by assignee.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskAssigneeResponse'
+        '400': { description: Invalid or oversized date range }
+        '401': { description: Authentication required }
+        '403': { description: Workspace access denied }
+        '404': { description: Project not found in workspace }
+  /analytics/tasks/throughput:
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsTasksThroughput
+      summary: Task throughput (created vs completed) over time
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: range, in: query, required: false, schema: { type: string, enum: [7d, 30d, 90d, custom], default: 30d } }
+        - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Throughput metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskThroughputResponse'
+        '400': { description: Invalid or oversized date range }
+        '401': { description: Authentication required }
+        '403': { description: Workspace access denied }
+        '404': { description: Project not found in workspace }
+  /analytics/tasks/workload:
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsTasksWorkload
+      summary: Task workload by assignee (open/overdue)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: range, in: query, required: false, schema: { type: string, enum: [7d, 30d, 90d, custom], default: 30d } }
+        - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Workload metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskWorkloadResponse'
+        '400': { description: Invalid or oversized date range }
+        '401': { description: Authentication required }
+        '403': { description: Workspace access denied }
+        '404': { description: Project not found in workspace }
+  /analytics/time-logged:
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsTimeLogged
+      summary: Aggregate time logged (task time entries)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: workspaceId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: range, in: query, required: false, schema: { type: string, enum: [7d, 30d, 90d, custom], default: 30d } }
+        - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Time logged totals and per-user breakdown.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTimeLoggedResponse'
+        '400': { description: Invalid or oversized date range }
+        '401': { description: Authentication required }
+        '403': { description: Workspace access denied }
+        '404': { description: Project not found in workspace }
+
   /integrations:
     get:
       tags:
@@ -6812,10 +6934,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AutomationResponse'
         '400':
-          description: Invalid trigger
-          action: null
-          condition: null
-          or actionConfig.: null
+          description: Invalid trigger, action, condition, or actionConfig.
         '403':
           description: Workspace update permission is required.
   /workspaces/{workspaceId}/automations/{automationId}:
@@ -18929,6 +19048,165 @@ paths:
               - string
               - 'null'
               format: date-time
+    AnalyticsScopedSummary:
+      type: object
+      required:
+      - workspaceId
+      - projectId
+      - rangeDays
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        rangeDays:
+          type: integer
+    AnalyticsTaskStatusResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - items
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - status
+              - count
+              properties:
+                status:
+                  type: string
+                  description: Task workflow status.
+                  enum:
+                  - ASSIGNED
+                  - IN_PROGRESS
+                  - SUBMITTED
+                  - UNDER_REVIEW
+                  - APPROVED
+                  - CHANGES_REQUESTED
+                count:
+                  type: integer
+    AnalyticsTaskAssigneeResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - items
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - assigneeId
+              - assigneeName
+              - count
+              properties:
+                assigneeId:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+                assigneeName:
+                  type:
+                  - string
+                  - 'null'
+                count:
+                  type: integer
+    AnalyticsTaskThroughputResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - created
+        - completed
+        - items
+        properties:
+          created:
+            type: integer
+          completed:
+            type: integer
+          items:
+            type: array
+            description: One entry per day in the requested range.
+            items:
+              type: object
+              required:
+              - date
+              - created
+              - completed
+              properties:
+                date:
+                  type: string
+                  format: date
+                created:
+                  type: integer
+                completed:
+                  type: integer
+    AnalyticsTaskWorkloadResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - items
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - assigneeId
+              - assigneeName
+              - openTasks
+              - overdueTasks
+              properties:
+                assigneeId:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+                assigneeName:
+                  type:
+                  - string
+                  - 'null'
+                openTasks:
+                  type: integer
+                overdueTasks:
+                  type: integer
+    AnalyticsTimeLoggedResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - totalMinutes
+        - items
+        properties:
+          totalMinutes:
+            type: integer
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - userId
+              - userName
+              - minutes
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                userName:
+                  type:
+                  - string
+                  - 'null'
+                minutes:
+                  type: integer
     NotificationType:
       type: string
       enum:
@@ -19978,10 +20256,15 @@ paths:
               - unmatched
     AutomationTrigger:
       type: string
+      description: Event/schedule trigger. Runs are executed via a Redis-backed background job queue with durable DB run history.
       enum:
       - EVENT_TASK_CREATED
       - EVENT_TASK_COMPLETED
       - EVENT_MEMBER_JOINED
+      - EVENT_TASK_STATUS_CHANGED
+      - EVENT_TASK_ASSIGNED
+      - EVENT_TASK_DUE_DATE_PASSED
+      - EVENT_FORM_SUBMITTED
       - SCHEDULED_DAILY
       - SCHEDULED_WEEKLY
     AutomationAction:
@@ -19990,6 +20273,9 @@ paths:
       - SEND_NOTIFICATION
       - CREATE_TASK
       - SEND_WEBHOOK
+      - SET_FIELD
+      - ASSIGN
+      - POST_MESSAGE
     AutomationRunStatus:
       type: string
       enum:
@@ -20140,6 +20426,12 @@ paths:
             CREATE_TASK: projectId, title, optional description/priority/assigneeIds.
 
             SEND_WEBHOOK: https url, optional secret used for the x-nexus-signature HMAC.
+
+            SET_FIELD: field (status, priority, startDate, or dueDate) and value.
+
+            ASSIGN: userIds (comma-separated), userId, or assigneeId.
+
+            POST_MESSAGE: channelId and body (or message).
 
             '
         enabled:
