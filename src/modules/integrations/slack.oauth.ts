@@ -51,16 +51,35 @@ export async function slackDefaultConnection(): Promise<{
   };
 }
 
+function defaultCallbackUrl(): URL {
+  const redirectUri = process.env.SLACK_REDIRECT_URI;
+  if (!redirectUri) throw new AppError(503, 'SLACK_NOT_CONFIGURED', 'The Slack integration is not configured');
+  const url = new URL(redirectUri);
+  if (!/\/callback$/.test(url.pathname)) {
+    throw new AppError(503, 'SLACK_NOT_CONFIGURED', 'SLACK_REDIRECT_URI must end with /callback');
+  }
+  url.pathname = url.pathname.replace(/\/callback$/, '/default-callback');
+  url.search = '';
+  return url;
+}
+
 export async function buildSlackAuthorizeUrl(input: {
   userId: string;
   workspaceId: string;
 }): Promise<string> {
-  const { clientId, redirectUri } = slackConfig();
+  const defaultMode = isSlackDefaultConnectEnabled();
+  const oauth = defaultMode ? null : slackConfig();
   const { state } = await createOAuthState({
     provider: 'slack',
     userId: input.userId,
     workspaceId: input.workspaceId,
   });
+  if (defaultMode) {
+    const target = defaultCallbackUrl();
+    target.searchParams.set('state', state);
+    return target.toString();
+  }
+  const { clientId, redirectUri } = oauth!;
   const u = new URL('https://slack.com/oauth/v2/authorize');
   u.searchParams.set('client_id', clientId);
   u.searchParams.set('scope', SLACK_SCOPES.join(','));
