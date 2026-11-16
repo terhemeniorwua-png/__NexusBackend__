@@ -1,20 +1,22 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { getRedisClient } from '../../db/redis';
 import { AppError } from '../../utils/errors';
+import { createOAuthState, verifyOAuthState } from './oauth-state';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
+void STATE_TTL_MS;
 const GITHUB_HEADERS = {
   Accept: 'application/vnd.github+json',
   'X-GitHub-Api-Version': '2022-11-28',
   'User-Agent': 'nexus-backend',
 };
 
-// workspaceId is accepted (the frontend sends it) but unused: GitHub is a personal connection.
-export const githubAuthorizeQuerySchema = z.object({ workspaceId: z.string().uuid().optional() });
+// Minimal scopes for linking PRs/issues to tasks and reading repo metadata.
+const GITHUB_SCOPES = ['read:user', 'repo'];
+
+export const githubAuthorizeQuerySchema = z.object({ workspaceId: z.string().uuid() });
 export const githubCallbackQuerySchema = z.object({
   code: z.string().min(1).max(2000).optional(),
-  state: z.string().min(1).max(2000),
+  state: z.string().min(1).max(4000),
   error: z.string().max(200).optional(),
 });
 
@@ -28,131 +30,138 @@ function githubConfig() {
   return { clientId, clientSecret, redirectUri };
 }
 
-function stateKey(): Buffer {
-  const secret = process.env.JWT_ACCESS_SECRET;
-  if (!secret) throw new AppError(503, 'GITHUB_NOT_CONFIGURED', 'The GitHub integration is not configured');
-  return createHash('sha256').update(`github-oauth-state:${secret}`).digest();
-}
-
-function sign(body: string): string {
-  return createHmac('sha256', stateKey()).update(body).digest('base64url');
-}
-
-export async function buildGithubAuthorizeUrl(input: { userId: string }): Promise<string> {
+export async function buildGithubAuthorizeUrl(input: {
+  userId: string;
+  workspaceId: string;
+}): Promise<string> {
   const { clientId, redirectUri } = githubConfig();
-  const nonce = randomBytes(16).toString('hex');
-  await getRedisClient().set(`github:oauth:state:${nonce}`, input.userId, { EX: STATE_TTL_MS / 1000 });
-  const body = Buffer.from(JSON.stringify({ u: input.userId, n: nonce, e: Date.now() + STATE_TTL_MS })).toString('base64url');
-  const state = `${body}.${sign(body)}`;
-
-  const url = new URL('https://github.com/login/oauth/authorize');
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('state', state);
-  return url.toString();
-}
-
-export async function verifyGithubState(state: string): Promise<{ userId: string }> {
-  const [body, sig, extra] = state.split('.');
-  const bad = () => new AppError(400, 'GITHUB_STATE_INVALID', 'The GitHub authorization link is invalid or expired');
-  if (!body || !sig || extra !== undefined) throw bad();
-  const expected = Buffer.from(sign(body));
-  const given = Buffer.from(sig);
-  if (expected.length !== given.length || !timingSafeEqual(expected, given)) throw bad();
-  let claims: { u?: unknown; e?: unknown; n?: unknown };
-  try {
-    claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-  } catch {
-    throw bad();
+  const { state, codeChallenge } = await createOAuthState({
+    provider: 'github',
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    includePkce: true,
+  });
+  const u = new URL('https://github.com/login/oauth/authorize');
+  u.searchParams.set('client_id', clientId);
+  u.searchParams.set('redirect_uri', redirectUri);
+  u.searchParams.set('scope', GITHUB_SCOPES.join(' '));
+  u.searchParams.set('state', state);
+  u.searchParams.set('allow_signup', 'false');
+  if (codeChallenge) {
+    u.searchParams.set('code_challenge', codeChallenge);
+    u.searchParams.set('code_challenge_method', 'S256');
   }
-  if (typeof claims.u !== 'string' || typeof claims.e !== 'number' || claims.e < Date.now()) throw bad();
-  if (typeof claims.n !== 'string' || !/^[0-9a-f]{32}$/.test(claims.n)) throw bad();
-  // One-time use: a replayed state gets 0 from DEL and is rejected.
-  const consumed = await getRedisClient().del(`github:oauth:state:${claims.n}`);
-  if (consumed !== 1) throw bad();
-  return { userId: claims.u };
+  return u.toString();
 }
 
-interface GithubTokenResponse {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  error?: string;
-  error_description?: string;
+export async function verifyGithubState(
+  state: string,
+): Promise<{ userId: string; workspaceId: string; codeVerifier?: string }> {
+  const claims = await verifyOAuthState('github', state);
+  if (!claims.workspaceId) {
+    throw new AppError(400, 'OAUTH_STATE_INVALID', 'The OAuth state is not valid');
+  }
+  return { userId: claims.userId, workspaceId: claims.workspaceId, codeVerifier: claims.codeVerifier };
 }
 
-async function postToken(params: Record<string, string>): Promise<GithubTokenResponse> {
+export async function exchangeGithubCode(input: {
+  code: string;
+  codeVerifier?: string;
+}): Promise<{
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: string | null;
+  scopes: string[];
+  externalUserId: string | null;
+  externalEmail: string | null;
+}> {
+  const { clientId, clientSecret, redirectUri } = githubConfig();
+  const params = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    code: input.code,
+    redirect_uri: redirectUri,
+  });
+  if (input.codeVerifier) params.set('code_verifier', input.codeVerifier);
   const res = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'nexus-backend' },
-    body: new URLSearchParams(params),
-    signal: AbortSignal.timeout(10_000),
+    headers: { ...GITHUB_HEADERS, Accept: 'application/json' },
+    body: params,
   });
-  // GitHub returns HTTP 200 with an error field for most failures.
-  const data = (await res.json().catch(() => ({}))) as GithubTokenResponse;
-  if (!res.ok || data.error || !data.access_token) {
-    throw new AppError(502, 'GITHUB_OAUTH_FAILED', `GitHub rejected the request (${data.error ?? res.status})`);
+  const body = (await res.json().catch(() => null)) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+    error?: string;
+  } | null;
+  if (!res.ok || !body?.access_token) {
+    throw new AppError(502, 'GITHUB_OAUTH_FAILED', 'GitHub did not return an access token');
   }
-  return data;
-}
-
-export async function exchangeGithubCode(code: string) {
-  const { clientId, clientSecret, redirectUri } = githubConfig();
-  const data = await postToken({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: redirectUri });
-  const auth = { ...GITHUB_HEADERS, Authorization: `Bearer ${data.access_token}` };
 
   let externalUserId: string | null = null;
   let externalEmail: string | null = null;
   try {
-    const u = await fetch('https://api.github.com/user', { headers: auth, signal: AbortSignal.timeout(10_000) });
-    if (u.ok) {
-      const j = (await u.json()) as { id?: number; email?: string | null };
-      externalUserId = j.id !== undefined ? String(j.id) : null;
-      externalEmail = j.email ?? null;
-    }
-    if (!externalEmail) {
-      const e = await fetch('https://api.github.com/user/emails', { headers: auth, signal: AbortSignal.timeout(10_000) });
-      if (e.ok) {
-        const list = (await e.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
-        externalEmail = list.find((x) => x.primary && x.verified)?.email ?? null;
-      }
+    const me = await fetch('https://api.github.com/user', {
+      headers: { ...GITHUB_HEADERS, Authorization: `Bearer ${body.access_token}` },
+    });
+    if (me.ok) {
+      const profile = (await me.json()) as { id?: number; login?: string; email?: string | null };
+      externalUserId = profile.id != null ? String(profile.id) : (profile.login ?? null);
+      externalEmail = profile.email ?? profile.login ?? null;
     }
   } catch {
-    /* best effort */
+    // identity is best-effort
   }
 
   return {
-    accessToken: data.access_token!,
-    refreshToken: data.refresh_token ?? null,
-    tokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000).toISOString() : null,
-    scopes: ['github-app'],
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token ?? null,
+    tokenExpiresAt:
+      typeof body.expires_in === 'number'
+        ? new Date(Date.now() + body.expires_in * 1000).toISOString()
+        : null,
+    scopes: body.scope ? body.scope.split(/[, ]+/).filter(Boolean) : GITHUB_SCOPES,
     externalUserId,
     externalEmail,
   };
 }
 
-/** GitHub App user tokens expire after 8 hours when "Expire user authorization tokens" is on. */
-export async function refreshGithubToken(refreshToken: string) {
+export async function refreshGithubToken(refreshToken: string): Promise<{
+  accessToken: string;
+  tokenExpiresAt: string | null;
+  refreshToken?: string | null;
+}> {
   const { clientId, clientSecret } = githubConfig();
-  const data = await postToken({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
+  const res = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { ...GITHUB_HEADERS, Accept: 'application/json' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    }),
   });
+  const body = (await res.json().catch(() => null)) as {
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+  } | null;
+  if (!res.ok || !body?.access_token) {
+    throw new AppError(502, 'GITHUB_REFRESH_FAILED', 'GitHub did not refresh the token');
+  }
   return {
-    accessToken: data.access_token!,
-    refreshToken: data.refresh_token ?? refreshToken,
-    tokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000).toISOString() : null,
+    accessToken: body.access_token,
+    tokenExpiresAt:
+      typeof body.expires_in === 'number'
+        ? new Date(Date.now() + body.expires_in * 1000).toISOString()
+        : null,
+    refreshToken: body.refresh_token ?? null,
   };
 }
 
 export function githubResultUrl(status: 'connected' | 'denied' | 'error'): string {
-  let origin = 'http://localhost:3000';
-  try {
-    if (process.env.FRONTEND_URL) origin = new URL(process.env.FRONTEND_URL).origin;
-  } catch {
-    /* keep default */
-  }
-  return `${origin}/app/integrations?integration=github&status=${status}`;
+  const frontend = (process.env.FRONTEND_URL ?? '').replace(/\/$/, '');
+  return `${frontend}/settings/integrations?github=${encodeURIComponent(status)}`;
 }

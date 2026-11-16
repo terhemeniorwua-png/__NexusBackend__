@@ -1,19 +1,14 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { getRedisClient } from '../../db/redis';
 import { AppError } from '../../utils/errors';
+import { createOAuthState, verifyOAuthState } from './oauth-state';
 
-// calendar.events = read/write events on calendars the user can access.
-// Must be listed under Data Access in the Google Auth Platform console.
+// Minimal scopes for two-way event sync on calendars the user can access.
 const CALENDAR_API_SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
-const CALENDAR_SCOPES = [...CALENDAR_API_SCOPES, 'openid', 'email'];
-const STATE_TTL_MS = 10 * 60 * 1000;
 
-// workspaceId is accepted (the frontend sends it) but unused: Calendar is a personal connection.
-export const calendarAuthorizeQuerySchema = z.object({ workspaceId: z.string().uuid().optional() });
+export const calendarAuthorizeQuerySchema = z.object({ workspaceId: z.string().uuid() });
 export const calendarCallbackQuerySchema = z.object({
   code: z.string().min(1).max(2000).optional(),
-  state: z.string().min(1).max(2000),
+  state: z.string().min(1).max(4000),
   error: z.string().max(200).optional(),
 });
 
@@ -22,151 +17,155 @@ function calendarConfig() {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri = process.env.GOOGLE_CALENDAR_REDIRECT_URI;
   if (!clientId || !clientSecret || !redirectUri) {
-    throw new AppError(503, 'GOOGLE_CALENDAR_NOT_CONFIGURED', 'The Google Calendar integration is not configured');
+    throw new AppError(
+      503,
+      'GOOGLE_CALENDAR_NOT_CONFIGURED',
+      'The Google Calendar integration is not configured',
+    );
   }
   return { clientId, clientSecret, redirectUri };
 }
 
-function stateKey(): Buffer {
-  const secret = process.env.JWT_ACCESS_SECRET;
-  if (!secret) {
-    throw new AppError(503, 'GOOGLE_CALENDAR_NOT_CONFIGURED', 'The Google Calendar integration is not configured');
-  }
-  return createHash('sha256').update(`gcalendar-oauth-state:${secret}`).digest();
-}
-
-function sign(body: string): string {
-  return createHmac('sha256', stateKey()).update(body).digest('base64url');
-}
-
-export async function buildCalendarAuthorizeUrl(input: { userId: string }): Promise<string> {
+export async function buildCalendarAuthorizeUrl(input: {
+  userId: string;
+  workspaceId: string;
+}): Promise<string> {
   const { clientId, redirectUri } = calendarConfig();
-  const nonce = randomBytes(16).toString('hex');
-  await getRedisClient().set(`gcalendar:oauth:state:${nonce}`, input.userId, { EX: STATE_TTL_MS / 1000 });
-  const body = Buffer.from(
-    JSON.stringify({ u: input.userId, n: nonce, e: Date.now() + STATE_TTL_MS }),
-  ).toString('base64url');
-  const state = `${body}.${sign(body)}`;
-
-  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', CALENDAR_SCOPES.join(' '));
-  url.searchParams.set('access_type', 'offline'); // refresh token
-  url.searchParams.set('prompt', 'consent'); // forces Google to return the refresh token
-  url.searchParams.set('state', state);
-  return url.toString();
-}
-
-export async function verifyCalendarState(state: string): Promise<{ userId: string }> {
-  const [body, sig, extra] = state.split('.');
-  const bad = () =>
-    new AppError(400, 'GOOGLE_CALENDAR_STATE_INVALID', 'The Google Calendar authorization link is invalid or expired');
-  if (!body || !sig || extra !== undefined) throw bad();
-  const expected = Buffer.from(sign(body));
-  const given = Buffer.from(sig);
-  if (expected.length !== given.length || !timingSafeEqual(expected, given)) throw bad();
-  let claims: { u?: unknown; e?: unknown; n?: unknown };
-  try {
-    claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-  } catch {
-    throw bad();
-  }
-  if (typeof claims.u !== 'string' || typeof claims.e !== 'number' || claims.e < Date.now()) throw bad();
-  if (typeof claims.n !== 'string' || !/^[0-9a-f]{32}$/.test(claims.n)) throw bad();
-  // One-time use: a replayed state gets 0 from DEL and is rejected.
-  const consumed = await getRedisClient().del(`gcalendar:oauth:state:${claims.n}`);
-  if (consumed !== 1) throw bad();
-  return { userId: claims.u };
-}
-
-interface GoogleTokenResponse {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  scope?: string;
-  error?: string;
-}
-
-async function postToken(params: Record<string, string>): Promise<GoogleTokenResponse> {
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params),
-    signal: AbortSignal.timeout(10_000),
+  const { state, codeChallenge } = await createOAuthState({
+    provider: 'google-calendar',
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    includePkce: true,
   });
-  const data = (await res.json().catch(() => ({}))) as GoogleTokenResponse;
-  if (!res.ok || !data.access_token) {
-    throw new AppError(502, 'GOOGLE_CALENDAR_OAUTH_FAILED', `Google rejected the request (${data.error ?? res.status})`);
+  const u = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  u.searchParams.set('client_id', clientId);
+  u.searchParams.set('redirect_uri', redirectUri);
+  u.searchParams.set('response_type', 'code');
+  u.searchParams.set('scope', CALENDAR_API_SCOPES.join(' '));
+  u.searchParams.set('access_type', 'offline');
+  u.searchParams.set('prompt', 'consent');
+  u.searchParams.set('include_granted_scopes', 'true');
+  u.searchParams.set('state', state);
+  if (codeChallenge) {
+    u.searchParams.set('code_challenge', codeChallenge);
+    u.searchParams.set('code_challenge_method', 'S256');
   }
-  return data;
+  return u.toString();
 }
 
-export async function exchangeCalendarCode(code: string) {
+export async function verifyCalendarState(
+  state: string,
+): Promise<{ userId: string; workspaceId: string; codeVerifier?: string; nonce: string }> {
+  const claims = await verifyOAuthState('google-calendar', state);
+  if (!claims.workspaceId) {
+    throw new AppError(400, 'OAUTH_STATE_INVALID', 'The OAuth state is not valid');
+  }
+  return {
+    userId: claims.userId,
+    workspaceId: claims.workspaceId,
+    codeVerifier: claims.codeVerifier,
+    nonce: claims.nonce,
+  };
+}
+
+export async function exchangeCalendarCode(input: {
+  code: string;
+  codeVerifier?: string;
+}): Promise<{
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: string | null;
+  scopes: string[];
+  externalUserId: string | null;
+  externalEmail: string | null;
+}> {
   const { clientId, clientSecret, redirectUri } = calendarConfig();
-  const data = await postToken({
-    code,
-    grant_type: 'authorization_code',
+  const params = new URLSearchParams({
+    code: input.code,
     client_id: clientId,
     client_secret: clientSecret,
     redirect_uri: redirectUri,
+    grant_type: 'authorization_code',
   });
-
-  // Users can untick individual permissions on Google's consent screen.
-  const granted = (data.scope ?? '').split(' ');
-  const missing = CALENDAR_API_SCOPES.filter((s) => !granted.includes(s));
-  if (missing.length > 0) {
-    throw new AppError(400, 'GOOGLE_CALENDAR_SCOPES_MISSING', 'Calendar permission must be granted');
+  if (input.codeVerifier) params.set('code_verifier', input.codeVerifier);
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params,
+  });
+  const body = (await res.json().catch(() => null)) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+  } | null;
+  if (!res.ok || !body?.access_token) {
+    throw new AppError(502, 'GOOGLE_CALENDAR_OAUTH_FAILED', 'Google did not return an access token');
   }
 
   let externalUserId: string | null = null;
   let externalEmail: string | null = null;
   try {
-    const info = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
-      headers: { Authorization: `Bearer ${data.access_token}` },
-      signal: AbortSignal.timeout(10_000),
+    const me = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${body.access_token}` },
     });
-    if (info.ok) {
-      const j = (await info.json()) as { sub?: string; email?: string };
-      externalUserId = j.sub ?? null;
-      externalEmail = j.email ?? null;
+    if (me.ok) {
+      const profile = (await me.json()) as { id?: string; email?: string };
+      externalUserId = profile.id ?? null;
+      externalEmail = profile.email ?? null;
     }
   } catch {
-    /* best effort */
+    // identity is best-effort
   }
 
   return {
-    accessToken: data.access_token!,
-    refreshToken: data.refresh_token ?? null,
-    tokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000).toISOString() : null,
-    scopes: granted,
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token ?? null,
+    tokenExpiresAt:
+      typeof body.expires_in === 'number'
+        ? new Date(Date.now() + body.expires_in * 1000).toISOString()
+        : null,
+    scopes: body.scope ? body.scope.split(/\s+/).filter(Boolean) : CALENDAR_API_SCOPES,
     externalUserId,
     externalEmail,
   };
 }
 
-/** Google access tokens last about an hour. Used by the Calendar API calls (next stage). */
-export async function refreshCalendarToken(refreshToken: string) {
+export async function refreshCalendarToken(refreshToken: string): Promise<{
+  accessToken: string;
+  tokenExpiresAt: string | null;
+  refreshToken?: string | null;
+}> {
   const { clientId, clientSecret } = calendarConfig();
-  const data = await postToken({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'refresh_token',
+    }),
   });
+  const body = (await res.json().catch(() => null)) as {
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+  } | null;
+  if (!res.ok || !body?.access_token) {
+    throw new AppError(502, 'GOOGLE_CALENDAR_REFRESH_FAILED', 'Google did not refresh the token');
+  }
   return {
-    accessToken: data.access_token!,
-    tokenExpiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000).toISOString() : null,
+    accessToken: body.access_token,
+    tokenExpiresAt:
+      typeof body.expires_in === 'number'
+        ? new Date(Date.now() + body.expires_in * 1000).toISOString()
+        : null,
+    refreshToken: body.refresh_token ?? null,
   };
 }
 
 export function calendarResultUrl(status: 'connected' | 'denied' | 'error'): string {
-  let origin = 'http://localhost:3000';
-  try {
-    if (process.env.FRONTEND_URL) origin = new URL(process.env.FRONTEND_URL).origin;
-  } catch {
-    /* keep default */
-  }
-  return `${origin}/app/integrations?integration=google_calendar&status=${status}`;
+  const frontend = (process.env.FRONTEND_URL ?? '').replace(/\/$/, '');
+  return `${frontend}/settings/integrations?calendar=${encodeURIComponent(status)}`;
 }

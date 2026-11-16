@@ -25,6 +25,7 @@ import type { ReadinessProbe } from '../services/health';
 import type { QueueStatusProbe } from '../services/workers/queue-status';
 import type { WorkerHealthRegistry } from '../services/workers/worker-health';
 import { createHealthRouter } from './health';
+import { createImportRouter } from '../modules/imports/import.routes';
 import { createBillingRouter } from '../modules/billing/billing.routes';
 import { createBillingService, type BillingService } from '../modules/billing/billing.service';
 import { createOrganizationRouter } from '../modules/organizations/organization.routes';
@@ -142,8 +143,10 @@ export function createApiRouter({
   router.use('/notifications', createNotificationRouter({ config }));
   // Search is user-scoped
   router.use('/search', createSearchRouter({ config }));
-  // Integrations are user-scoped (optionally workspace-scoped via query)
+  // Integrations framework (Phase 19)
   router.use('/integrations', createIntegrationRouter({ config }));
+  // Data importers (ClickUp, Trello, CSV)
+  router.use('/imports', createImportRouter(config));
   // Dev/source-control integrations (Phase 5, GitHub App workspace connections)
   router.use('/dev-integrations', createDevIntegrationCallbackRouter({ config }));
   router.use('/workspaces/:workspaceId/dev-integrations', createWorkspaceDevIntegrationRouter({ config }));

@@ -15,7 +15,8 @@ export function createGithubWebhookRouter({ config }: GithubWebhookRouterOptions
     '/github',
     express.raw({ type: '*/*', limit: config.requestBodyLimit }),
     async (req: Request, res: Response) => {
-      if (!config.githubAppWebhookSecret) {
+      const secret = config.githubIntegrationWebhookSecret || config.githubAppWebhookSecret;
+      if (!secret) {
         res.status(503).json({ success: false, error: { code: 'GITHUB_WEBHOOK_NOT_CONFIGURED', message: 'GitHub webhook is not configured' } });
         return;
       }
@@ -33,7 +34,7 @@ export function createGithubWebhookRouter({ config }: GithubWebhookRouterOptions
       const outcome = await processGithubWebhook({
         rawBody,
         signature,
-        secret: config.githubAppWebhookSecret,
+        secret,
         deliveryId,
         event,
         logger: defaultLogger,

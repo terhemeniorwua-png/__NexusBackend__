@@ -342,6 +342,37 @@ const envSchema = z
     GITLAB_SCOPES: z.string().trim().default('read_api read_repository'),
     GITLAB_WEBHOOK_SECRET: z.string().default(''),
 
+    // --- Integrations (OAuth, sync, webhooks, importers) -------------------
+    INTEGRATION_ENCRYPTION_KEY: z
+      .string()
+      .trim()
+      .default('')
+      .refine(
+        (value) =>
+          value === '' || Buffer.from(value, 'base64url').length === 32,
+        'INTEGRATION_ENCRYPTION_KEY must be a 32-byte base64url value',
+      ),
+    SLACK_CLIENT_ID: z.string().trim().default(''),
+    SLACK_CLIENT_SECRET: z.string().default(''),
+    SLACK_REDIRECT_URI: z.string().trim().default(''),
+    SLACK_DEFAULT_CONNECT: booleanString.default(false),
+    SLACK_BOT_TOKEN: z.string().default(''),
+    GITHUB_CLIENT_ID: z.string().trim().default(''),
+    GITHUB_CLIENT_SECRET: z.string().default(''),
+    GITHUB_CALLBACK_URL: z.string().trim().default(''),
+    GITHUB_INTEGRATION_WEBHOOK_SECRET: z.string().default(''),
+    GOOGLE_CALENDAR_REDIRECT_URI: z.string().trim().default(''),
+    GOOGLE_DRIVE_REDIRECT_URI: z.string().trim().default(''),
+    DROPBOX_APP_KEY: z.string().trim().default(''),
+    DROPBOX_APP_SECRET: z.string().default(''),
+    DROPBOX_REDIRECT_URI: z.string().trim().default(''),
+    GMAIL_REDIRECT_URI: z.string().trim().default(''),
+    OUTLOOK_CLIENT_ID: z.string().trim().default(''),
+    OUTLOOK_CLIENT_SECRET: z.string().default(''),
+    OUTLOOK_CALENDAR_REDIRECT_URI: z.string().trim().default(''),
+    OUTLOOK_MAIL_REDIRECT_URI: z.string().trim().default(''),
+    ONEDRIVE_REDIRECT_URI: z.string().trim().default(''),
+
     // --- AI service integration (Phases 21-23) ------------------------------
     //
     // The Python/FastAPI service is optional infrastructure. The Express
@@ -809,6 +840,27 @@ export interface AppConfig {
   gitlabBaseUrl: string;
   gitlabScopes: string;
   gitlabWebhookSecret: string;
+  integrationEncryptionKey: string;
+  slackClientId: string;
+  slackClientSecret: string;
+  slackRedirectUri: string;
+  slackDefaultConnect: boolean;
+  slackBotToken: string;
+  githubClientId: string;
+  githubClientSecret: string;
+  githubCallbackUrl: string;
+  githubIntegrationWebhookSecret: string;
+  googleCalendarRedirectUri: string;
+  googleDriveRedirectUri: string;
+  dropboxAppKey: string;
+  dropboxAppSecret: string;
+  dropboxRedirectUri: string;
+  gmailRedirectUri: string;
+  outlookClientId: string;
+  outlookClientSecret: string;
+  outlookCalendarRedirectUri: string;
+  outlookMailRedirectUri: string;
+  onedriveRedirectUri: string;
   aiEnabled: boolean;
   aiServiceUrl: string;
   aiServiceToken: string;
@@ -1007,6 +1059,27 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     gitlabBaseUrl: values.GITLAB_BASE_URL,
     gitlabScopes: values.GITLAB_SCOPES,
     gitlabWebhookSecret: values.GITLAB_WEBHOOK_SECRET,
+    integrationEncryptionKey: values.INTEGRATION_ENCRYPTION_KEY,
+    slackClientId: values.SLACK_CLIENT_ID,
+    slackClientSecret: values.SLACK_CLIENT_SECRET,
+    slackRedirectUri: values.SLACK_REDIRECT_URI,
+    slackDefaultConnect: values.SLACK_DEFAULT_CONNECT,
+    slackBotToken: values.SLACK_BOT_TOKEN,
+    githubClientId: values.GITHUB_CLIENT_ID,
+    githubClientSecret: values.GITHUB_CLIENT_SECRET,
+    githubCallbackUrl: values.GITHUB_CALLBACK_URL,
+    githubIntegrationWebhookSecret: values.GITHUB_INTEGRATION_WEBHOOK_SECRET,
+    googleCalendarRedirectUri: values.GOOGLE_CALENDAR_REDIRECT_URI,
+    googleDriveRedirectUri: values.GOOGLE_DRIVE_REDIRECT_URI,
+    dropboxAppKey: values.DROPBOX_APP_KEY,
+    dropboxAppSecret: values.DROPBOX_APP_SECRET,
+    dropboxRedirectUri: values.DROPBOX_REDIRECT_URI,
+    gmailRedirectUri: values.GMAIL_REDIRECT_URI,
+    outlookClientId: values.OUTLOOK_CLIENT_ID,
+    outlookClientSecret: values.OUTLOOK_CLIENT_SECRET,
+    outlookCalendarRedirectUri: values.OUTLOOK_CALENDAR_REDIRECT_URI,
+    outlookMailRedirectUri: values.OUTLOOK_MAIL_REDIRECT_URI,
+    onedriveRedirectUri: values.ONEDRIVE_REDIRECT_URI,
     aiEnabled: values.AI_ENABLED,
     aiServiceUrl: values.AI_SERVICE_URL.replace(/\/+$/, ''),
     aiServiceToken: values.AI_SERVICE_TOKEN,

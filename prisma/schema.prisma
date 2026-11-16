@@ -353,6 +353,7 @@ model User {
   taskSavedViews                TaskSavedView[]              @relation("TaskSavedViewOwner")
   createdTaskTemplates          TaskTemplate[]               @relation("TaskTemplateCreator")
   createdProjectTemplates       ProjectTemplate[]            @relation("ProjectTemplateCreator")
+  importJobsCreated             ImportJob[]                  @relation("ImportJobsCreatedBy")
 
   @@index([status])
   @@index([createdAt])
@@ -522,6 +523,7 @@ model Workspace {
   forms                  Form[]
   integrations           Integration[]                @relation("WorkspaceIntegrations")
   integrationConnections IntegrationConnection[]      @relation("WorkspaceIntegrationConnections")
+  integrationEventLinks  IntegrationEventLink[]
   automations            Automation[]                 @relation("WorkspaceAutomations")
   meetings               Meeting[]
   auditLogs              AuditLog[]
@@ -539,6 +541,8 @@ model Workspace {
   aiWritingSessions      AiWritingSession[]
   taskTemplates          TaskTemplate[]
   projectTemplates       ProjectTemplate[]
+  importJobs             ImportJob[]                  @relation("WorkspaceImportJobs")
+  importExternalIds      ImportExternalId[]           @relation("WorkspaceImportExternalIds")
 
   @@index([ownerId])
   @@index([status])
@@ -1774,6 +1778,10 @@ model Integration {
   scopes                 String[]            @default([])
   externalUserId         String?
   externalEmail          String?
+  /// Provider/workspace-specific non-secret settings (e.g. Slack channel id).
+  config                 Json                @default("{}")
+  /// Provider sync cursor/state (e.g. Google Calendar sync token). No secrets.
+  syncState              Json                @default("{}")
   lastError              String?
   lastRefreshedAt        DateTime?
   lastSyncedAt           DateTime?
@@ -1781,9 +1789,10 @@ model Integration {
   createdAt              DateTime            @default(now())
   updatedAt              DateTime            @updatedAt
 
-  user      User                 @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
-  workspace Workspace?           @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
-  syncJobs  IntegrationSyncJob[]
+  user        User                     @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace?               @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  syncJobs    IntegrationSyncJob[]
+  eventLinks  IntegrationEventLink[]
 
   @@unique([userId, provider, workspaceId])
   @@index([userId, status])
@@ -1798,23 +1807,127 @@ enum IntegrationSyncStatus {
   FAILED
 }
 
+enum IntegrationSyncJobType {
+  SYNC
+  INBOUND_WEBHOOK
+  OUTBOUND_EVENT
+}
+
 model IntegrationSyncJob {
-  id            String                @id @default(uuid())
+  id            String                 @id @default(uuid())
   integrationId String
-  status        IntegrationSyncStatus @default(PENDING)
-  attempts      Int                   @default(0)
-  maxRetries    Int                   @default(5)
-  nextAttemptAt DateTime              @default(now())
+  type          IntegrationSyncJobType @default(SYNC)
+  /// Idempotency key (e.g. provider event id / sync cursor hash).
+  dedupeKey     String?
+  payload       Json?
+  result        Json?
+  status        IntegrationSyncStatus  @default(PENDING)
+  attempts      Int                    @default(0)
+  maxRetries    Int                    @default(5)
+  nextAttemptAt DateTime               @default(now())
   lastError     String?
   startedAt     DateTime?
   completedAt   DateTime?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
 
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
+  @@unique([integrationId, dedupeKey])
   @@index([status, nextAttemptAt])
   @@index([integrationId, createdAt])
+}
+
+/// Maps external provider entities to Nexus entities for idempotent sync/import.
+model IntegrationEventLink {
+  id             String              @id @default(uuid())
+  integrationId  String
+  provider       IntegrationProvider
+  workspaceId    String?
+  externalType   String
+  externalId     String
+  localType      String
+  localId        String
+  /// Extra non-secret sync metadata (e.g. etag/updated stamp) for echo-loop avoidance.
+  metadata       Json                @default("{}")
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  workspace   Workspace?  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, externalType, externalId])
+  @@index([provider, workspaceId, localType, localId])
+  @@index([workspaceId, provider])
+}
+
+enum ImportSource {
+  CLICKUP
+  TRELLO
+  CSV
+}
+
+enum ImportJobStatus {
+  PREVIEWED
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum ImportJobMode {
+  DRY_RUN
+  EXECUTE
+}
+
+model ImportJob {
+  id            String          @id @default(uuid())
+  workspaceId   String
+  createdById   String
+  source        ImportSource
+  mode          ImportJobMode
+  status        ImportJobStatus @default(QUEUED)
+  /// Original upload/request payload (non-secret). CSV content may be stored inline or referenced.
+  payload       Json            @default("{}")
+  /// Dry-run preview or execution report (counts, warnings, created ids, errors).
+  report        Json            @default("{}")
+  /// Client-supplied idempotency key for execute requests.
+  idempotencyKey String?
+  attempts      Int             @default(0)
+  maxRetries    Int             @default(3)
+  lastError     String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  workspace Workspace @relation("WorkspaceImportJobs", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("ImportJobsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  items     ImportExternalId[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, source, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Stores external source ids for idempotent re-runs of imports.
+model ImportExternalId {
+  id           String       @id @default(uuid())
+  jobId        String?
+  workspaceId  String
+  source       ImportSource
+  externalType String
+  externalId   String
+  localType    String
+  localId      String
+  createdAt    DateTime     @default(now())
+
+  job       ImportJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  workspace Workspace  @relation("WorkspaceImportExternalIds", fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, source, externalType, externalId])
+  @@index([jobId])
+  @@index([workspaceId, source])
 }
 
 // ---------------------------------------------------------------------------

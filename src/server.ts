@@ -14,6 +14,7 @@ import { createBillingService } from './modules/billing/billing.service';
 import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
 import { createAutomationWorker } from './modules/automation/automation.worker';
 import { createIntegrationSyncWorker } from './modules/integrations/integration-sync.worker';
+import { createImportWorker } from './modules/imports/import.worker';
 import { createWebhookWorker } from './modules/webhooks/webhook.worker';
 import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
 import { createQueueStatusProbe } from './services/workers/queue-status';
@@ -160,6 +161,9 @@ export async function startServer(): Promise<RunningServer> {
   });
   integrationSyncWorker.start();
 
+  const importWorker = createImportWorker({ prisma: getPrismaClient() });
+  importWorker.start();
+
   const webhookWorker = createWebhookWorker({
     prisma: getPrismaClient(),
     logger,
@@ -203,6 +207,7 @@ export async function startServer(): Promise<RunningServer> {
       billingSeatSyncWorker.stop(),
       automationWorker.stop(),
       integrationSyncWorker.stop(),
+      importWorker.stop(),
       webhookWorker.stop(),
       auditPruneWorker.stop(),
       taskDeadlineNotificationWorker.stop(),
@@ -253,6 +258,7 @@ export async function startServer(): Promise<RunningServer> {
       billingSeatSyncWorker.stop(),
       automationWorker.stop(),
       integrationSyncWorker.stop(),
+      importWorker.stop(),
       webhookWorker.stop(),
       auditPruneWorker.stop(),
       taskDeadlineNotificationWorker.stop(),

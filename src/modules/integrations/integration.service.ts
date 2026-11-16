@@ -14,16 +14,22 @@ import { decryptIntegrationToken, encryptIntegrationToken } from './token-crypto
 // Access and refresh tokens are encrypted with AES-256-GCM (token-crypto.ts) before
 // storage. INTEGRATION_ENCRYPTION_KEY must be set or connect() fails with 503.
 //
-// Slack is a WORKSPACE-level connection: one active row per workspace, visible to every
-// member, connectable and disconnectable by any OWNER / PROJECT_MANAGER (UpdateWorkspace).
-// Every other provider stays personal to the user who connected it.
+// Slack, Google Calendar and GitHub are WORKSPACE-level connections: one active
+// row per workspace, visible to members, connectable/disconnectable by workspace
+// admins/managers only (UpdateWorkspace). Other providers stay personal.
 //
-// Phase 19 lifecycle:
+// Lifecycle:
 // - `refresh` rotates an expiring access token through the provider adapter.
 // - `setEnabled` lets the owner/manager pause an integration without deleting it.
 // - `disconnect` revokes the provider token when possible, then marks the local
 //   record DISCONNECTED. Provider-side data is never deleted.
 // - `enqueueSync` / `processSyncJobs` provide a durable, retryable sync queue.
+
+const WORKSPACE_LEVEL_PROVIDERS = new Set<IntegrationProvider>([
+  'SLACK',
+  'GOOGLE_CALENDAR',
+  'GITHUB',
+]);
 
 type Input = { userId: string };
 
@@ -45,7 +51,8 @@ function backoffFor(attempts: number): number {
   return Math.min(delay, MAX_BACKOFF_MS);
 }
 
-function summary(integration: Integration) {
+function summary(integration: Integration & { config?: unknown }) {
+  const config = (integration.config ?? {}) as Record<string, unknown>;
   return {
     id: integration.id,
     provider: integration.provider,
@@ -54,6 +61,7 @@ function summary(integration: Integration) {
     workspaceId: integration.workspaceId,
     externalEmail: integration.externalEmail,
     scopes: integration.scopes,
+    config,
     lastError: integration.lastError,
     lastRefreshedAt: integration.lastRefreshedAt?.toISOString() ?? null,
     lastSyncedAt: integration.lastSyncedAt?.toISOString() ?? null,
@@ -92,8 +100,18 @@ export function createIntegrationService(
   lifecycle: ProviderLifecycle = createProviderLifecycle(),
 ) {
   const encryptToken = encryptIntegrationToken;
+  const isWorkspaceLevel = (provider: IntegrationProvider, workspaceId: string | null): boolean =>
+    WORKSPACE_LEVEL_PROVIDERS.has(provider) && workspaceId !== null;
 
   async function requireManage(userId: string, integration: Integration): Promise<void> {
+    if (isWorkspaceLevel(integration.provider, integration.workspaceId) && integration.workspaceId) {
+      await requireWorkspaceAccess(prisma, {
+        userId,
+        workspaceId: integration.workspaceId,
+        capability: WorkspaceCapability.UpdateWorkspace,
+      });
+      return;
+    }
     if (integration.workspaceId) {
       await requireWorkspaceAccess(prisma, {
         userId,
@@ -181,18 +199,25 @@ export function createIntegrationService(
         scopes?: string[];
         externalUserId?: string | null;
         externalEmail?: string | null;
+        config?: Record<string, unknown>;
       },
     ) {
-      if (input.workspaceId) {
-        // Slack is a workspace-level connection, so it needs the same role the authorize step required.
-        const capability =
-          input.provider === 'SLACK'
-            ? WorkspaceCapability.UpdateWorkspace
-            : WorkspaceCapability.ViewWorkspace;
+      const workspaceId = input.workspaceId ?? null;
+      const workspaceLevel = WORKSPACE_LEVEL_PROVIDERS.has(input.provider);
+
+      if (workspaceLevel && !workspaceId) {
+        throw new AppError(400, 'WORKSPACE_REQUIRED', 'This integration must be connected to a workspace');
+      }
+
+      if (workspaceId) {
+        // Workspace-level integrations require admin/manager permission; personal
+        // integrations connected in a workspace context require membership.
         await requireWorkspaceAccess(prisma, {
           userId: input.userId,
-          workspaceId: input.workspaceId,
-          capability,
+          workspaceId,
+          capability: workspaceLevel
+            ? WorkspaceCapability.UpdateWorkspace
+            : WorkspaceCapability.ViewWorkspace,
         });
       }
 
@@ -207,33 +232,34 @@ export function createIntegrationService(
         scopes: input.scopes ?? [],
         externalUserId: input.externalUserId ?? null,
         externalEmail: input.externalEmail ?? null,
+        ...(input.config ? { config: input.config as Prisma.InputJsonValue } : {}),
         lastError: null,
         revokedAt: null,
       };
 
-      const connectWorkspaceSlack = async (
+      const connectWorkspaceLevel = async (
         tx: Prisma.TransactionClient,
-        workspaceId: string,
+        wsId: string,
       ): Promise<Integration> => {
         const existing =
           (await tx.integration.findFirst({
-            where: { provider: 'SLACK', workspaceId, userId: input.userId },
+            where: { provider: input.provider, workspaceId: wsId, userId: input.userId },
           })) ??
           (await tx.integration.findFirst({
-            where: { provider: 'SLACK', workspaceId },
+            where: { provider: input.provider, workspaceId: wsId },
             orderBy: { createdAt: 'desc' },
           }));
         const row = existing
           ? await tx.integration.update({
               where: { id: existing.id },
-              data: { ...tokenData, userId: input.userId },
+              data: { ...tokenData, userId: input.userId, workspaceId: wsId },
             })
           : await tx.integration.create({
-              data: { userId: input.userId, workspaceId, provider: 'SLACK', ...tokenData },
+              data: { userId: input.userId, workspaceId: wsId, provider: input.provider, ...tokenData },
             });
-        // One active Slack connection per workspace.
+        // One active connection per workspace for workspace-level providers.
         await tx.integration.updateMany({
-          where: { provider: 'SLACK', workspaceId, id: { not: row.id }, status: 'ACTIVE' },
+          where: { provider: input.provider, workspaceId: wsId, id: { not: row.id }, status: 'ACTIVE' },
           data: { status: 'DISCONNECTED' },
         });
         return row;
@@ -258,33 +284,33 @@ export function createIntegrationService(
 
       const integration = await prisma.$transaction(async (tx) => {
         const created =
-          input.provider === 'SLACK' && input.workspaceId
-            ? await connectWorkspaceSlack(tx, input.workspaceId)
-            : !input.workspaceId
+          workspaceLevel && workspaceId
+            ? await connectWorkspaceLevel(tx, workspaceId)
+            : !workspaceId
               ? await connectPersonal(tx)
               : await tx.integration.upsert({
                   where: {
                     userId_provider_workspaceId: {
                       userId: input.userId,
                       provider: input.provider,
-                      workspaceId: input.workspaceId ?? '',
+                      workspaceId,
                     },
                   },
                   create: {
                     userId: input.userId,
-                    workspaceId: input.workspaceId ?? null,
+                    workspaceId,
                     provider: input.provider,
                     ...tokenData,
                   },
                   update: { ...tokenData },
                 });
         await recordAuditEvent(tx, {
-          workspaceId: input.workspaceId,
+          workspaceId,
           actorId: input.userId,
           action: 'integration.connected',
           targetType: 'Integration',
           targetId: created.id,
-          metadata: { provider: input.provider, workspaceId: input.workspaceId ?? null },
+          metadata: { provider: input.provider, workspaceId },
         });
         return created;
       });
@@ -299,9 +325,15 @@ export function createIntegrationService(
       if (!integration)
         throw new AppError(404, 'INTEGRATION_NOT_FOUND', 'That integration does not exist');
 
-      const workspaceLevel = integration.provider === 'SLACK' && integration.workspaceId !== null;
+      const workspaceLevel = isWorkspaceLevel(integration.provider, integration.workspaceId);
       if (workspaceLevel && integration.workspaceId) {
-        // Any OWNER / PROJECT_MANAGER may disconnect, whoever connected it. Members get 403.
+        // Any workspace admin/manager may disconnect.
+        await requireWorkspaceAccess(prisma, {
+          userId: input.userId,
+          workspaceId: integration.workspaceId,
+          capability: WorkspaceCapability.UpdateWorkspace,
+        });
+      } else if (integration.workspaceId) {
         await requireWorkspaceAccess(prisma, {
           userId: input.userId,
           workspaceId: integration.workspaceId,
@@ -332,7 +364,7 @@ export function createIntegrationService(
         const revokedAt = revocation.revoked ? new Date() : null;
         if (workspaceLevel && integration.workspaceId) {
           await tx.integration.updateMany({
-            where: { provider: 'SLACK', workspaceId: integration.workspaceId },
+            where: { provider: integration.provider, workspaceId: integration.workspaceId },
             data: {
               status: 'DISCONNECTED',
               enabled: false,
@@ -384,7 +416,7 @@ export function createIntegrationService(
             ? {
                 OR: [
                   { workspaceId: input.workspaceId, userId: input.userId },
-                  { workspaceId: input.workspaceId, provider: 'SLACK' as const },
+                  { workspaceId: input.workspaceId, provider: { in: Array.from(WORKSPACE_LEVEL_PROVIDERS) } },
                   { workspaceId: null, userId: input.userId },
                 ],
               }
@@ -393,18 +425,19 @@ export function createIntegrationService(
         orderBy: [{ provider: 'asc' }, { createdAt: 'desc' }],
       });
 
-      // One Slack row per workspace (prefer the ACTIVE one), even if older data has duplicates.
-      const bestSlack = new Map<string, (typeof integrations)[number]>();
+      // One row per workspace-level provider+workspace (prefer ACTIVE).
+      const bestWorkspaceLevel = new Map<string, (typeof integrations)[number]>();
       for (const i of integrations) {
-        if (i.provider !== 'SLACK') continue;
-        const key = i.workspaceId ?? '';
-        const current = bestSlack.get(key);
+        if (!WORKSPACE_LEVEL_PROVIDERS.has(i.provider) || !i.workspaceId) continue;
+        const key = `${i.provider}:${i.workspaceId}`;
+        const current = bestWorkspaceLevel.get(key);
         if (!current || (current.status !== 'ACTIVE' && i.status === 'ACTIVE'))
-          bestSlack.set(key, i);
+          bestWorkspaceLevel.set(key, i);
       }
-      const visible = integrations.filter(
-        (i) => i.provider !== 'SLACK' || bestSlack.get(i.workspaceId ?? '') === i,
-      );
+      const visible = integrations.filter((i) => {
+        if (!WORKSPACE_LEVEL_PROVIDERS.has(i.provider) || !i.workspaceId) return true;
+        return bestWorkspaceLevel.get(`${i.provider}:${i.workspaceId}`) === i;
+      });
 
       return visible.map(summary);
     },
@@ -458,6 +491,39 @@ export function createIntegrationService(
         metadata: { provider: updated.provider },
       });
       return summary(updated);
+    },
+
+    async updateConfig(input: Input & { integrationId: string; config: Record<string, unknown> }) {
+      const integration = await findForCaller(input.userId, input.integrationId);
+      const current = (integration.config ?? {}) as Record<string, unknown>;
+      const next = { ...current, ...input.config };
+      const updated = await prisma.integration.update({
+        where: { id: integration.id },
+        data: { config: next as Prisma.InputJsonValue },
+      });
+      await recordAuditEvent(prisma, {
+        workspaceId: updated.workspaceId,
+        actorId: input.userId,
+        action: 'integration.config_updated',
+        targetType: 'Integration',
+        targetId: updated.id,
+        metadata: { provider: updated.provider },
+      });
+      return summary(updated);
+    },
+
+    async getStatus(input: Input & { integrationId: string }) {
+      const integration = await findForCaller(input.userId, input.integrationId);
+      const latestJob = await prisma.integrationSyncJob.findFirst({
+        where: { integrationId: integration.id },
+        orderBy: { createdAt: 'desc' },
+      });
+      return {
+        integration: summary(integration),
+        lastSyncAt: integration.lastSyncedAt?.toISOString() ?? null,
+        lastError: integration.lastError,
+        latestJob: latestJob ? jobSummary(latestJob) : null,
+      };
     },
 
     async enqueueSync(input: Input & { integrationId: string }) {

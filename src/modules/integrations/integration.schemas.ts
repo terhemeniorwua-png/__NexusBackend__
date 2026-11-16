@@ -35,9 +35,20 @@ export const disconnectParamsSchema = z.object({ integrationId: uuid });
 
 export const updateIntegrationSchema = z
   .object({
-    enabled: z.boolean(),
+    enabled: z.boolean().optional(),
+    config: z
+      .object({
+        slackChannelId: z.string().min(1).max(100).optional(),
+        slackChannelName: z.string().max(200).optional().nullable(),
+        googleCalendarId: z.string().max(200).optional(),
+      })
+      .strict()
+      .optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => value.enabled !== undefined || value.config !== undefined, {
+    message: 'At least one field must be provided',
+  });
 
 export const syncJobParamsSchema = z.object({
   integrationId: uuid,

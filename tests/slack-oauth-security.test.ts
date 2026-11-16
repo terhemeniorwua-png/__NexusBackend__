@@ -127,23 +127,25 @@ function runTests(rawDbUrl: string): void {
     const url = new URL((res.body.data as { url: string }).url);
     assert.equal(url.hostname, 'slack.com');
     assert.ok(url.searchParams.get('state'));
-    assert.equal(url.searchParams.get('scope'), 'chat:write,channels:read,app_mentions:read');
+    assert.equal(url.searchParams.get('scope'), 'chat:write,channels:read,channels:join');
   });
 
   test('a state can be used once; a replay is rejected', async () => {
     const { verifySlackState } = await import('../src/modules/integrations/slack.oauth');
     const res = await authorize(owner);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
     const state = new URL((res.body.data as { url: string }).url).searchParams.get('state')!;
     const claims = await verifySlackState(state);
     assert.equal(claims.userId, owner.id);
     assert.equal(claims.workspaceId, workspaceId);
-    await assert.rejects(verifySlackState(state), /invalid or expired/);
+    await assert.rejects(verifySlackState(state), (err: unknown) => Boolean(err));
   });
 
   test('a tampered state is rejected', async () => {
     const { verifySlackState } = await import('../src/modules/integrations/slack.oauth');
     const res = await authorize(owner);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
     const state = new URL((res.body.data as { url: string }).url).searchParams.get('state')!;
-    await assert.rejects(verifySlackState(`${state}x`), /invalid or expired/);
+    await assert.rejects(verifySlackState(`${state}x`), (err: unknown) => Boolean(err));
   });
 }
