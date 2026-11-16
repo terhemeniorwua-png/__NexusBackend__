@@ -320,7 +320,12 @@ paths:
         - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
         - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: Tasks grouped by status, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '200':
+          description: Tasks grouped by status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskStatusResponse'
         '400': { description: Invalid or oversized date range }
         '401': { description: Authentication required }
         '403': { description: Workspace access denied }
@@ -338,7 +343,12 @@ paths:
         - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
         - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: Tasks grouped by assignee, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '200':
+          description: Tasks grouped by assignee.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskAssigneeResponse'
         '400': { description: Invalid or oversized date range }
         '401': { description: Authentication required }
         '403': { description: Workspace access denied }
@@ -356,7 +366,12 @@ paths:
         - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
         - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: Throughput metrics, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '200':
+          description: Throughput metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskThroughputResponse'
         '400': { description: Invalid or oversized date range }
         '401': { description: Authentication required }
         '403': { description: Workspace access denied }
@@ -374,7 +389,12 @@ paths:
         - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
         - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: Workload metrics, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '200':
+          description: Workload metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTaskWorkloadResponse'
         '400': { description: Invalid or oversized date range }
         '401': { description: Authentication required }
         '403': { description: Workspace access denied }
@@ -392,7 +412,12 @@ paths:
         - { name: startDate, in: query, required: false, schema: { type: string, format: date-time } }
         - { name: endDate, in: query, required: false, schema: { type: string, format: date-time } }
       responses:
-        '200': { description: Time logged totals and per-user breakdown, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '200':
+          description: Time logged totals and per-user breakdown.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTimeLoggedResponse'
         '400': { description: Invalid or oversized date range }
         '401': { description: Authentication required }
         '403': { description: Workspace access denied }
@@ -6909,10 +6934,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AutomationResponse'
         '400':
-          description: Invalid trigger
-          action: null
-          condition: null
-          or actionConfig.: null
+          description: Invalid trigger, action, condition, or actionConfig.
         '403':
           description: Workspace update permission is required.
   /workspaces/{workspaceId}/automations/{automationId}:
@@ -17960,6 +17982,165 @@ components:
               - string
               - 'null'
               format: date-time
+    AnalyticsScopedSummary:
+      type: object
+      required:
+      - workspaceId
+      - projectId
+      - rangeDays
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        rangeDays:
+          type: integer
+    AnalyticsTaskStatusResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - items
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - status
+              - count
+              properties:
+                status:
+                  type: string
+                  description: Task workflow status.
+                  enum:
+                  - ASSIGNED
+                  - IN_PROGRESS
+                  - SUBMITTED
+                  - UNDER_REVIEW
+                  - APPROVED
+                  - CHANGES_REQUESTED
+                count:
+                  type: integer
+    AnalyticsTaskAssigneeResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - items
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - assigneeId
+              - assigneeName
+              - count
+              properties:
+                assigneeId:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+                assigneeName:
+                  type:
+                  - string
+                  - 'null'
+                count:
+                  type: integer
+    AnalyticsTaskThroughputResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - created
+        - completed
+        - items
+        properties:
+          created:
+            type: integer
+          completed:
+            type: integer
+          items:
+            type: array
+            description: One entry per day in the requested range.
+            items:
+              type: object
+              required:
+              - date
+              - created
+              - completed
+              properties:
+                date:
+                  type: string
+                  format: date
+                created:
+                  type: integer
+                completed:
+                  type: integer
+    AnalyticsTaskWorkloadResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - items
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - assigneeId
+              - assigneeName
+              - openTasks
+              - overdueTasks
+              properties:
+                assigneeId:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+                assigneeName:
+                  type:
+                  - string
+                  - 'null'
+                openTasks:
+                  type: integer
+                overdueTasks:
+                  type: integer
+    AnalyticsTimeLoggedResponse:
+      allOf:
+      - $ref: '#/components/schemas/AnalyticsScopedSummary'
+      - type: object
+        required:
+        - totalMinutes
+        - items
+        properties:
+          totalMinutes:
+            type: integer
+          items:
+            type: array
+            items:
+              type: object
+              required:
+              - userId
+              - userName
+              - minutes
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                userName:
+                  type:
+                  - string
+                  - 'null'
+                minutes:
+                  type: integer
     NotificationType:
       type: string
       enum:
@@ -19147,4 +19328,1141 @@ components:
         updatedAt:
           type: string
           format: date-time
-    
+    CreateAutomationRequest:
+      type: object
+      required:
+      - name
+      - trigger
+      - action
+      - actionConfig
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        trigger:
+          $ref: '#/components/schemas/AutomationTrigger'
+        condition:
+          type:
+          - object
+          - 'null'
+          additionalProperties:
+            type: string
+        action:
+          $ref: '#/components/schemas/AutomationAction'
+        actionConfig:
+          type: object
+          additionalProperties:
+            type: string
+          description: 'SEND_NOTIFICATION: userIds (comma-separated) or userId, title, optional body/link.
+
+            CREATE_TASK: projectId, title, optional description/priority/assigneeIds.
+
+            SEND_WEBHOOK: https url, optional secret used for the x-nexus-signature HMAC.
+
+            SET_FIELD: field (status, priority, startDate, or dueDate) and value.
+
+            ASSIGN: userIds (comma-separated), userId, or assigneeId.
+
+            POST_MESSAGE: channelId and body (or message).
+
+            '
+        enabled:
+          type: boolean
+          default: true
+        maxRetries:
+          type: integer
+          minimum: 0
+          maximum: 10
+          default: 3
+    UpdateAutomationRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        enabled:
+          type: boolean
+    AutomationListResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Automation'
+    AutomationResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Automation'
+    AutomationRunListResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationRun'
+    AutomationRunResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/AutomationRun'
+    AiHealthResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - configured
+          - status
+          properties:
+            configured:
+              type: boolean
+            status:
+              type: string
+              enum:
+              - up
+              - down
+            latencyMs:
+              type: number
+            version:
+              type: string
+            error:
+              type: string
+    AiSourceReference:
+      type: object
+      required:
+      - type
+      - id
+      - title
+      properties:
+        type:
+          type: string
+        id:
+          type: string
+        title:
+          type: string
+        workspaceId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        projectId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        snippet:
+          type: string
+    AiUsage:
+      type: object
+      required:
+      - promptTokens
+      - completionTokens
+      - totalTokens
+      properties:
+        promptTokens:
+          type: integer
+          minimum: 0
+        completionTokens:
+          type: integer
+          minimum: 0
+        totalTokens:
+          type: integer
+          minimum: 0
+    AiChatRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - query
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        conversationId:
+          type: string
+          format: uuid
+        query:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        projectId:
+          type: string
+          format: uuid
+        taskId:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        meetingId:
+          type: string
+          format: uuid
+        contextType:
+          type: string
+          maxLength: 60
+        contextId:
+          type: string
+          format: uuid
+    AiChatResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - conversationId
+          - answer
+          - references
+          - model
+          - usage
+          - sources
+          properties:
+            conversationId:
+              type: string
+              format: uuid
+            answer:
+              type: string
+            references:
+              type: array
+              items:
+                $ref: '#/components/schemas/AiSourceReference'
+            sources:
+              type: array
+              items:
+                $ref: '#/components/schemas/AiSourceReference'
+            model:
+              type: string
+            usage:
+              $ref: '#/components/schemas/AiUsage'
+    AiConversation:
+      type: object
+      required:
+      - id
+      - title
+      - status
+      - lastMessageAt
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        workspaceId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        contextType:
+          type:
+          - string
+          - 'null'
+        contextId:
+          type:
+          - string
+          - 'null'
+        lastMessageAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AiConversationMessage:
+      type: object
+      required:
+      - id
+      - role
+      - content
+      - status
+      - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum:
+          - USER
+          - ASSISTANT
+          - SYSTEM
+        content:
+          type: string
+        status:
+          type: string
+          enum:
+          - COMPLETED
+          - FAILED
+        model:
+          type:
+          - string
+          - 'null'
+        tokenCount:
+          type:
+          - integer
+          - 'null'
+        references: {}
+        createdAt:
+          type: string
+          format: date-time
+    AiConversationResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          allOf:
+          - $ref: '#/components/schemas/AiConversation'
+          - type: object
+            required:
+            - messages
+            properties:
+              messages:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AiConversationMessage'
+    AiConversationListResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - items
+          - nextCursor
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AiConversation'
+            nextCursor:
+              type:
+              - string
+              - 'null'
+    AiDeleteResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - deleted
+          properties:
+            deleted:
+              type: boolean
+              const: true
+    AiUsageResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - dailyRequests
+          - dailyRequestLimit
+          - monthlyTokens
+          - monthlyTokenLimit
+          - remainingDailyRequests
+          - remainingMonthlyTokens
+          - since
+          properties:
+            dailyRequests:
+              type: integer
+            dailyRequestLimit:
+              type: integer
+            monthlyTokens:
+              type: integer
+            monthlyTokenLimit:
+              type: integer
+            remainingDailyRequests:
+              type: integer
+            remainingMonthlyTokens:
+              type: integer
+            since:
+              type: object
+              properties:
+                day:
+                  type: string
+                  format: date-time
+                month:
+                  type: string
+                  format: date-time
+    AiWritingSuggestion:
+      type: object
+      required:
+      - id
+      - category
+      - severity
+      - message
+      - original
+      - replacement
+      - offset
+      - length
+      properties:
+        id:
+          type: string
+        category:
+          type: string
+          enum:
+          - SPELLING
+          - GRAMMAR
+          - PUNCTUATION
+          - CLARITY
+          - VOCABULARY
+          - TONE
+          - STYLE
+        severity:
+          type: string
+          enum:
+          - low
+          - medium
+          - high
+        message:
+          type: string
+        original:
+          type: string
+        replacement:
+          type: string
+        offset:
+          type: integer
+          minimum: 0
+        length:
+          type: integer
+          minimum: 0
+        explanation:
+          type: string
+    AiWritingAnalyzeRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - text
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        text:
+          type: string
+          minLength: 1
+          maxLength: 50000
+        features:
+          type: array
+          items:
+            type: string
+            enum:
+            - SPELLING
+            - GRAMMAR
+            - PUNCTUATION
+            - CLARITY
+            - VOCABULARY
+            - TONE
+            - STYLE
+        language:
+          type: string
+          minLength: 2
+          maxLength: 20
+        toneTarget:
+          type: string
+          maxLength: 60
+    AiWritingAnalyzeResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - sessionId
+          - suggestions
+          - usage
+          - expiresAt
+          properties:
+            sessionId:
+              type: string
+              format: uuid
+            suggestions:
+              type: array
+              items:
+                $ref: '#/components/schemas/AiWritingSuggestion'
+            detectedTone:
+              type:
+              - string
+              - 'null'
+            summary:
+              type:
+              - string
+              - 'null'
+            usage:
+              $ref: '#/components/schemas/AiUsage'
+            expiresAt:
+              type: string
+              format: date-time
+    AiWritingRewriteRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - text
+      - instruction
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        text:
+          type: string
+          minLength: 1
+          maxLength: 50000
+        instruction:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        tone:
+          type: string
+          maxLength: 60
+    AiWritingRewriteResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - text
+          - usage
+          properties:
+            text:
+              type: string
+            explanation:
+              type:
+              - string
+              - 'null'
+            usage:
+              $ref: '#/components/schemas/AiUsage'
+    AiWritingAcceptRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - suggestionIds
+      properties:
+        suggestionIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+    AiWritingAcceptResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - sessionId
+          - text
+          - appliedSuggestionIds
+          properties:
+            sessionId:
+              type: string
+              format: uuid
+            text:
+              type: string
+            appliedSuggestionIds:
+              type: array
+              items:
+                type: string
+    AiWritingDismissResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - sessionId
+          - dismissed
+          properties:
+            sessionId:
+              type: string
+              format: uuid
+            dismissed:
+              type: boolean
+              const: true
+    AiActionProposalRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - workspaceId
+      - actionType
+      - payload
+      properties:
+        workspaceId:
+          type: string
+          format: uuid
+        conversationId:
+          type: string
+          format: uuid
+        actionType:
+          type: string
+          enum:
+          - CREATE_TASK
+          - ADD_TASK_COMMENT
+          - COMPLETE_TASK
+          - CREATE_DOCUMENT
+          - SEND_NOTIFICATION
+        payload:
+          type: object
+        title:
+          type: string
+          maxLength: 200
+        summary:
+          type: string
+          maxLength: 2000
+        idempotencyKey:
+          type: string
+          minLength: 8
+          maxLength: 200
+        sourceReferences:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required:
+            - type
+            - id
+            - title
+            properties:
+              type:
+                type: string
+              id:
+                type: string
+              title:
+                type: string
+    AiActionDecisionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note:
+          type: string
+          maxLength: 1000
+    AiActionProposal:
+      type: object
+      required:
+      - id
+      - workspaceId
+      - actionType
+      - status
+      - title
+      - payload
+      - expiresAt
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        actionType:
+          type: string
+          enum:
+          - CREATE_TASK
+          - ADD_TASK_COMMENT
+          - COMPLETE_TASK
+          - CREATE_DOCUMENT
+          - SEND_NOTIFICATION
+        status:
+          type: string
+          enum:
+          - PROPOSED
+          - APPROVED
+          - REJECTED
+          - EXECUTING
+          - EXECUTED
+          - FAILED
+          - CANCELLED
+          - EXPIRED
+        title:
+          type: string
+        summary:
+          type:
+          - string
+          - 'null'
+        payload:
+          type: object
+        sourceReferences: {}
+        expiresAt:
+          type: string
+          format: date-time
+        approvedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        rejectedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        executedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        executionResult: {}
+        failureReason:
+          type:
+          - string
+          - 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AiActionProposalResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/AiActionProposal'
+    AiActionProposalListResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - items
+          - nextCursor
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AiActionProposal'
+            nextCursor:
+              type:
+              - string
+              - 'null'
+x-socketio:
+  description: Realtime Socket.IO contract implemented in src/realtime/socket-server.ts, src/realtime/domain-events.ts, src/realtime/io-registry.ts
+    and service emitters. Clients connect via Socket.IO (default path /socket.io) with handshake auth; server authenticates
+    before room joins. Domain events are fanned out to correct rooms only (workspace:{id}, channel:{id}, user:{id}) with permission
+    checks on room join. General notification realtime events are separate from message unread counts (message unread counts
+    remain channel read-receipt based).
+  path: /socket.io
+  auth:
+    handshake:
+      auth:
+        token:
+          type: string
+          required: true
+          description: JWT access token (verified server-side).
+        workspaceId:
+          type: string
+          required: false
+          description: Optional workspace context supplied at connect.
+    failure: Connection rejected with error "Authentication failed" when token missing/invalid.
+  rooms:
+  - name: user:{userId}
+    description: Private room joined automatically on authenticated connection (self only). Used for personal domain events
+      (e.g. mention.created, task.assigned) and general notification.created events.
+  - name: workspace:{workspaceId}
+    description: Joined via workspace:join after active workspace membership check; used for workspace-scoped domain events
+      (task.created/task.updated/task.assigned/comment.created) and presence broadcasts.
+  - name: channel:{channelId}
+    description: Joined via channel:join after channel access/membership capability check; used for channel messaging and
+      typing events.
+  events:
+  - event: workspace:join
+    direction: client->server
+    payload:
+      type: string
+      description: workspaceId
+    ack:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      description: Optional callback invoked with {ok:true} on success, {ok:false} when membership/access denied or invalid.
+    effect: Verifies active workspace membership, joins workspace:{workspaceId} room and sets socket workspace context.
+  - event: workspace:leave
+    direction: client->server
+    payload:
+      type: string
+      description: workspaceId
+    effect: Leaves workspace:{workspaceId} room.
+  - event: channel:join
+    direction: client->server
+    payload:
+      type: string
+      description: channelId
+    ack:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      description: Optional callback invoked with {ok:true} on success, {ok:false} on failure.
+    effect: Validates channel/workspace and membership capability; joins channel:{channelId} on success.
+  - event: channel:leave
+    direction: client->server
+    payload:
+      type: string
+      description: channelId
+    effect: Leaves channel:{channelId} room.
+  - event: typing:start
+    direction: client->server
+    payload:
+      type: string
+      description: channelId
+    serverEmits:
+      event: typing:start
+      room: channel:{channelId}
+      excludeSender: true
+      payload:
+        type: object
+        properties:
+          channelId:
+            type: string
+          userId:
+            type: string
+        required:
+        - channelId
+        - userId
+  - event: typing:stop
+    direction: client->server
+    payload:
+      type: string
+      description: channelId
+    serverEmits:
+      event: typing:stop
+      room: channel:{channelId}
+      excludeSender: true
+      payload:
+        type: object
+        properties:
+          channelId:
+            type: string
+          userId:
+            type: string
+        required:
+        - channelId
+        - userId
+  - event: presence:online
+    direction: client->server
+    payload:
+      type: 'null'
+      description: No payload (client signal).
+    serverEmits:
+      event: presence:online
+      room: workspace:{workspaceId} (if socket has workspace context)
+      excludeSender: true
+      payload:
+        type: object
+        properties:
+          userId:
+            type: string
+        required:
+        - userId
+  - event: presence:offline
+    direction: server->clients
+    trigger: Socket disconnect when socket had workspace context.
+    room: workspace:{workspaceId}
+    excludeSender: true
+    payload:
+      type: object
+      properties:
+        userId:
+          type: string
+      required:
+      - userId
+  - event: message.created
+    direction: server->clients
+    trigger: Domain event emitted after a channel message is persisted.
+    room: channel:{channelId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        channelId:
+          type: string
+        message:
+          type: object
+          description: Persisted message summary; may include clientTempId on create.
+          additionalProperties: true
+      required:
+      - workspaceId
+      - channelId
+      - message
+  - event: message:new
+    direction: server->clients
+    trigger: Backward-compatible alias emitted alongside message.created to channel:{channelId}.
+    room: channel:{channelId}
+    payload:
+      type: object
+      properties:
+        channelId:
+          type: string
+        message:
+          type: object
+          additionalProperties: true
+      required:
+      - channelId
+      - message
+  - event: task.created
+    direction: server->clients
+    trigger: Domain event emitted after task creation.
+    room: workspace:{workspaceId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        actorId:
+          type: string
+        task:
+          type: object
+          additionalProperties: true
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+  - event: task.updated
+    direction: server->clients
+    trigger: Domain event emitted after task update.
+    room: workspace:{workspaceId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        changes:
+          type: array
+          items:
+            type: string
+        actorId:
+          type: string
+        task:
+          type: object
+          additionalProperties: true
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+  - event: task.assigned
+    direction: server->clients
+    trigger: Domain event emitted when a task is assigned.
+    room: user:{assigneeId} and workspace:{workspaceId} (room joins permission-checked; user room is self-only)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        assigneeId:
+          type: string
+        actorId:
+          type: string
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+      - assigneeId
+  - event: comment.created
+    direction: server->clients
+    trigger: Domain event emitted after a task comment is created.
+    room: workspace:{workspaceId} (join permission-checked)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        commentId:
+          type: string
+        authorId:
+          type: string
+        comment:
+          type: object
+          additionalProperties: true
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+      - commentId
+      - authorId
+  - event: mention.created
+    direction: server->clients
+    trigger: Domain event emitted for each created task-comment mention.
+    room: user:{mentionedUserId} (self-only private room)
+    payload:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        projectId:
+          type: string
+        taskId:
+          type: string
+        commentId:
+          type: string
+        mentionedUserId:
+          type: string
+        actorId:
+          type: string
+      required:
+      - workspaceId
+      - projectId
+      - taskId
+      - commentId
+      - mentionedUserId
+      - actorId
+  - event: notification.created
+    direction: server->clients
+    trigger: Emitted when a general in-app notification row is created (subject to existing preference rules). Not emitted
+      for message unread counts, which remain separate (MessageReadReceipt/channel unread-count endpoints).
+    room: user:{userId} (self-only private room)
+    payload:
+      type: object
+      properties:
+        notification:
+          type: object
+          properties:
+            id:
+              type: string
+            type:
+              type: string
+            title:
+              type: string
+            body:
+              type:
+              - string
+              - 'null'
+            link:
+              type:
+              - string
+              - 'null'
+            data:
+              type:
+              - object
+              - 'null'
+            readAt:
+              type:
+              - string
+              - 'null'
+            createdAt:
+              type: string
+          required:
+          - id
+          - type
+          - title
+          - createdAt
+      required:
+      - notification

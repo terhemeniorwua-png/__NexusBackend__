@@ -448,14 +448,15 @@ export function createTaskService(
         task: { id: created.id, key: created.key, title: created.title, status: created.status },
       });
       for (const assigneeId of input.assigneeIds ?? []) {
-        if (assigneeId === input.userId) continue;
-        emitDomainEvent('task.assigned', {
-          workspaceId: input.workspaceId,
-          projectId: access.project.id,
-          taskId: created.id,
-          assigneeId,
-          actorId: input.userId,
-        });
+        if (assigneeId !== input.userId) {
+          emitDomainEvent('task.assigned', {
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            taskId: created.id,
+            assigneeId,
+            actorId: input.userId,
+          });
+        }
         await enqueueAutomationRunsSafely({
           workspaceId: input.workspaceId,
           trigger: 'EVENT_TASK_ASSIGNED' as never,
@@ -689,7 +690,7 @@ export function createTaskService(
         await enqueueAutomationRunsSafely({
           workspaceId: input.workspaceId,
           trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
-          eventKey: `task.status_changed:${updatedTask.id}:${existing.status}:${updatedTask.status}:${Date.now()}`,
+          eventKey: `task.status_changed:${updatedTask.id}:${updatedTask.updatedAt}`,
           payload: {
             workspaceId: input.workspaceId,
             projectId: access.project.id,
@@ -910,11 +911,11 @@ export function createTaskService(
       if (existing.status !== 'APPROVED')
         return { id: existing.id, status: existing.status as TaskStatus, completedAt: null };
 
-      return prisma.$transaction(async (tx) => {
+      const reopened = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
           where: { id: existing.id },
           data: { status: 'IN_PROGRESS', completedAt: null },
-          select: { id: true, status: true, completedAt: true },
+          select: { id: true, key: true, status: true, completedAt: true, updatedAt: true },
         });
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
@@ -930,8 +931,26 @@ export function createTaskService(
           },
           ...context,
         });
-        return { id: row.id, status: row.status, completedAt: row.completedAt };
+        return { id: row.id, key: row.key, status: row.status, completedAt: row.completedAt, updatedAt: row.updatedAt };
       });
+
+      await enqueueAutomationRunsSafely({
+        workspaceId: input.workspaceId,
+        trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
+        eventKey: `task.status_changed:${reopened.id}:${reopened.updatedAt.toISOString()}`,
+        payload: {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: reopened.id,
+          key: reopened.key,
+          title: existing.title,
+          previousStatus: existing.status,
+          status: reopened.status,
+          actorId: input.userId,
+        },
+      });
+
+      return { id: reopened.id, status: reopened.status, completedAt: reopened.completedAt };
     },
 
     // -------------------------------------------------------------------------
@@ -1015,6 +1034,7 @@ export function createTaskService(
           userId: assignee.userId,
           user: assignee.user,
           assignedBy: input.userId,
+          assignedAt: assignee.assignedAt,
         };
       });
 
@@ -1041,12 +1061,13 @@ export function createTaskService(
       await enqueueAutomationRunsSafely({
         workspaceId: input.workspaceId,
         trigger: 'EVENT_TASK_ASSIGNED' as never,
-        eventKey: `task.assigned:${task.id}:${input.targetUserId}`,
+        eventKey: `task.assigned:${task.id}:${input.targetUserId}:${result.assignedAt.toISOString()}`,
         payload: {
           workspaceId: input.workspaceId,
           projectId: access.project.id,
           taskId: task.id,
           key: task.key,
+          title: task.title,
           assigneeId: input.targetUserId,
           actorId: input.userId,
         },
@@ -1749,6 +1770,23 @@ export function createTaskService(
         });
         return toSummary(updated);
       });
+
+      await enqueueAutomationRunsSafely({
+        workspaceId: input.workspaceId,
+        trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
+        eventKey: `task.status_changed:${row.id}:${row.updatedAt}`,
+        payload: {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: row.id,
+          key: row.key,
+          title: row.title,
+          previousStatus: existing.status,
+          status: row.status,
+          actorId: input.userId,
+        },
+      });
+
       return row;
     },
 
@@ -1827,6 +1865,25 @@ export function createTaskService(
         });
         return toSummary(updated);
       });
+
+      if (row.status !== existing.status) {
+        await enqueueAutomationRunsSafely({
+          workspaceId: input.workspaceId,
+          trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
+          eventKey: `task.status_changed:${row.id}:${row.updatedAt}`,
+          payload: {
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            taskId: row.id,
+            key: row.key,
+            title: row.title,
+            previousStatus: existing.status,
+            status: row.status,
+            actorId: input.userId,
+          },
+        });
+      }
+
       return row;
     },
 
@@ -1933,6 +1990,27 @@ export function createTaskService(
         const progress = computeProgress(siblings);
         return { subtask: toSummary(updated), progress, requiresApproval, submissionCreated: requiresApproval };
       });
+
+      if (result.subtask.status !== subtask.status) {
+        await enqueueAutomationRunsSafely({
+          workspaceId: input.workspaceId,
+          trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
+          eventKey: `task.status_changed:${result.subtask.id}:${result.subtask.updatedAt}`,
+          payload: {
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            taskId: result.subtask.id,
+            key: result.subtask.key,
+            title: result.subtask.title,
+            previousStatus: subtask.status,
+            status: result.subtask.status,
+            actorId: input.userId,
+            parentTaskId: parent.id,
+            subtaskCompletion: true,
+          },
+        });
+      }
+
       return result;
     },
   };

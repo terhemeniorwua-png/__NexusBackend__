@@ -72,18 +72,24 @@ export function createAutomationWorker(deps: AutomationWorkerDependencies): Auto
   let running = false;
   let lastScheduleAt = 0;
   let lastMaintenanceAt = 0;
+  // Rotating cursor over overdue tasks. Without it, a workspace with more than
+  // one page of overdue work would repeatedly scan the same oldest 200 tasks
+  // and starve the rest.
+  let dueDateCursor: string | null = null;
 
   async function enqueueDueDatePassed(currentTime: Date): Promise<number> {
-    // Find tasks whose due date has passed and are not in a terminal/completed state.
-    // Emit idempotent automation events per task (eventKey includes due timestamp bucket).
+    // Find tasks whose due date has passed and are not in a terminal state.
+    // Event keys include the due timestamp, so a due date that is moved and
+    // passes again produces a new event while repeated scans are idempotent.
     try {
       const dueTasks = await deps.prisma.task.findMany({
         where: {
           dueDate: { lte: currentTime },
           deletedAt: null,
           archivedAt: null,
-          status: { notIn: ['APPROVED', 'ARCHIVED'] as never[] },
-          project: { workspaceId: { not: '' } },
+          completedAt: null,
+          status: { not: 'APPROVED' },
+          project: { deletedAt: null, workspace: { deletedAt: null } },
         },
         select: {
           id: true,
@@ -94,9 +100,13 @@ export function createAutomationWorker(deps: AutomationWorkerDependencies): Auto
           assignees: { select: { userId: true } },
           project: { select: { workspaceId: true } },
         },
+        ...(dueDateCursor ? { cursor: { id: dueDateCursor }, skip: 1 } : {}),
         take: 200,
-        orderBy: { dueDate: 'asc' },
+        orderBy: { id: 'asc' },
       });
+
+      if (dueTasks.length < 200) dueDateCursor = null;
+      else dueDateCursor = dueTasks[dueTasks.length - 1]?.id ?? null;
 
       let queued = 0;
       for (const task of dueTasks) {
@@ -124,6 +134,9 @@ export function createAutomationWorker(deps: AutomationWorkerDependencies): Auto
       }
       return queued;
     } catch (error) {
+      // A cursor that no longer resolves (task deleted mid-cycle) must not
+      // wedge every future pass.
+      dueDateCursor = null;
       log.warn('automation_due_date_scan_failed', { error });
       return 0;
     }

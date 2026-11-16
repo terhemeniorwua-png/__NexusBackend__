@@ -8,6 +8,7 @@ import {
 } from '../src/modules/automation/automation.engine';
 import { enqueueAutomationRuns } from '../src/modules/automation/automation.events';
 import { createAutomationService } from '../src/modules/automation/automation.service';
+import { createAutomationWorker } from '../src/modules/automation/automation.worker';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 
 const silentLogger = {
@@ -482,6 +483,245 @@ describe('Phase 20 automation database integration', { skip: skipReason || false
           automationId: automation.id,
         }),
       /workspace/i,
+    );
+  });
+
+  test('SET_FIELD updates the payload task and records completion when approving', async () => {
+    const task = await prisma.task.create({
+      data: {
+        projectId,
+        key: `SET-${Date.now()}`,
+        title: 'Field target',
+        creatorId: ownerId,
+        status: 'ASSIGNED',
+      },
+    });
+    const automation = await createAutomation({
+      trigger: 'EVENT_TASK_STATUS_CHANGED',
+      action: 'SET_FIELD',
+      actionConfig: { field: 'status', value: 'APPROVED' },
+    });
+
+    await enqueueAutomationRuns(
+      {
+        workspaceId,
+        trigger: 'EVENT_TASK_STATUS_CHANGED',
+        eventKey: `set-field-${automation.id}`,
+        payload: { workspaceId, projectId, taskId: task.id, status: 'ASSIGNED' },
+      },
+      prisma,
+      silentLogger,
+    );
+    await processPendingRuns({ prisma, logger: silentLogger });
+
+    const run = await prisma.automationRun.findFirstOrThrow({
+      where: { automationId: automation.id },
+    });
+    assert.equal(run.status, 'SUCCEEDED');
+
+    const updated = await prisma.task.findUniqueOrThrow({ where: { id: task.id } });
+    assert.equal(updated.status, 'APPROVED');
+    assert.ok(updated.completedAt);
+  });
+
+  test('SET_FIELD rejects unsupported fields and records the failure reason', async () => {
+    const task = await prisma.task.create({
+      data: {
+        projectId,
+        key: `BADFIELD-${Date.now()}`,
+        title: 'Field rejection target',
+        creatorId: ownerId,
+        status: 'ASSIGNED',
+      },
+    });
+    const automation = await createAutomation({
+      trigger: 'EVENT_TASK_STATUS_CHANGED',
+      action: 'SET_FIELD',
+      actionConfig: { field: 'creatorId', value: ownerId },
+      maxRetries: 0,
+    });
+
+    await enqueueAutomationRuns(
+      {
+        workspaceId,
+        trigger: 'EVENT_TASK_STATUS_CHANGED',
+        eventKey: `set-field-invalid-${automation.id}`,
+        payload: { workspaceId, projectId, taskId: task.id },
+      },
+      prisma,
+      silentLogger,
+    );
+    await processPendingRuns({ prisma, logger: silentLogger });
+
+    const run = await prisma.automationRun.findFirstOrThrow({
+      where: { automationId: automation.id },
+    });
+    assert.equal(run.status, 'FAILED');
+    assert.match(run.error ?? '', /AUTOMATION_UNSUPPORTED_FIELD/);
+
+    const unchanged = await prisma.task.findUniqueOrThrow({ where: { id: task.id } });
+    assert.equal(unchanged.creatorId, ownerId);
+  });
+
+  test('ASSIGN adds the assignee and notifies them', async () => {
+    const task = await prisma.task.create({
+      data: {
+        projectId,
+        key: `ASSIGN-${Date.now()}`,
+        title: 'Assignment target',
+        creatorId: ownerId,
+        status: 'ASSIGNED',
+      },
+    });
+    const automation = await createAutomation({
+      trigger: 'EVENT_TASK_STATUS_CHANGED',
+      action: 'ASSIGN',
+      actionConfig: { userIds: memberId },
+    });
+
+    await enqueueAutomationRuns(
+      {
+        workspaceId,
+        trigger: 'EVENT_TASK_STATUS_CHANGED',
+        eventKey: `assign-${automation.id}`,
+        payload: { workspaceId, projectId, taskId: task.id },
+      },
+      prisma,
+      silentLogger,
+    );
+    await processPendingRuns({ prisma, logger: silentLogger });
+
+    const run = await prisma.automationRun.findFirstOrThrow({
+      where: { automationId: automation.id },
+    });
+    assert.equal(run.status, 'SUCCEEDED');
+
+    const assignee = await prisma.taskAssignee.findUnique({
+      where: { taskId_userId: { taskId: task.id, userId: memberId } },
+    });
+    assert.ok(assignee);
+
+    const notification = await prisma.notification.findFirst({
+      where: { userId: memberId, type: 'TASK_ASSIGNED' },
+      orderBy: { createdAt: 'desc' },
+    });
+    assert.ok(notification);
+    assert.equal(
+      (notification?.data as Record<string, unknown> | null)?.taskId,
+      task.id,
+    );
+  });
+
+  test('POST_MESSAGE posts to the configured channel', async () => {
+    const channel = await prisma.channel.create({
+      data: {
+        workspaceId,
+        type: 'WORKSPACE',
+        name: `automation-channel-${Date.now()}`,
+        createdById: ownerId,
+      },
+    });
+    const body = `Automation announcement ${Date.now()}`;
+    const automation = await createAutomation({
+      trigger: 'EVENT_TASK_CREATED',
+      action: 'POST_MESSAGE',
+      actionConfig: { channelId: channel.id, body },
+    });
+
+    await enqueueAutomationRuns(
+      {
+        workspaceId,
+        trigger: 'EVENT_TASK_CREATED',
+        eventKey: `post-message-${automation.id}`,
+        payload: { workspaceId, projectId },
+      },
+      prisma,
+      silentLogger,
+    );
+    await processPendingRuns({ prisma, logger: silentLogger });
+
+    const run = await prisma.automationRun.findFirstOrThrow({
+      where: { automationId: automation.id },
+    });
+    assert.equal(run.status, 'SUCCEEDED');
+
+    const message = await prisma.message.findFirst({
+      where: { channelId: channel.id, body },
+    });
+    assert.ok(message);
+    assert.equal(message?.authorId, ownerId);
+  });
+
+  test('a disabled automation skips an already queued run', async () => {
+    const automation = await createAutomation({
+      trigger: 'EVENT_TASK_CREATED',
+      action: 'SEND_NOTIFICATION',
+      actionConfig: { userIds: memberId, title: 'Disabled automation notice' },
+    });
+    const queued = await prisma.automationRun.create({
+      data: {
+        automationId: automation.id,
+        status: 'PENDING',
+        payload: { workspaceId, projectId, taskId: 'task-disabled' },
+      },
+    });
+    await prisma.automation.update({
+      where: { id: automation.id },
+      data: { enabled: false },
+    });
+
+    await processPendingRuns({ prisma, logger: silentLogger });
+
+    const run = await runById(queued.id);
+    assert.equal(run.status, 'SKIPPED');
+    const notification = await prisma.notification.findFirst({
+      where: { userId: memberId, title: 'Disabled automation notice' },
+    });
+    assert.equal(notification, null);
+  });
+
+  test('the worker queues one run per overdue task and does not duplicate it', async () => {
+    const automation = await createAutomation({
+      trigger: 'EVENT_TASK_DUE_DATE_PASSED',
+      action: 'SEND_NOTIFICATION',
+      actionConfig: { userIds: memberId, title: 'Task overdue notice' },
+    });
+    const dueDate = new Date('2026-01-01T00:00:00.000Z');
+    const task = await prisma.task.create({
+      data: {
+        projectId,
+        key: `DUE-${Date.now()}`,
+        title: 'Overdue target',
+        creatorId: ownerId,
+        status: 'ASSIGNED',
+        dueDate,
+      },
+    });
+
+    const workerDeps = {
+      prisma,
+      logger: silentLogger,
+      now: () => new Date('2026-12-01T00:00:00.000Z'),
+    };
+    const first = await createAutomationWorker(workerDeps).runOnce();
+    assert.ok(first.dueDateQueued >= 1);
+
+    const eventKey = `task.due_date_passed:${task.id}:${dueDate.toISOString()}`;
+    const runs = await prisma.automationRun.findMany({
+      where: { automationId: automation.id, eventKey },
+    });
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]?.status, 'SUCCEEDED');
+
+    // A fresh worker performs another scan; the durable event key must prevent
+    // a second run for the same overdue task.
+    const second = await createAutomationWorker(workerDeps).runOnce();
+    assert.equal(second.dueDateQueued, 0);
+    assert.equal(
+      await prisma.automationRun.count({
+        where: { automationId: automation.id, eventKey },
+      }),
+      1,
     );
   });
 });

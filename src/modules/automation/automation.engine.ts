@@ -8,6 +8,7 @@ import type {
   Prisma,
   PrismaClient,
   TaskPriority,
+  TaskStatus,
   WorkspaceRole,
 } from '@prisma/client';
 import { recordAuditEvent } from '../../services/audit';
@@ -17,6 +18,7 @@ import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import { ProjectCapability, requireProjectAccess } from '../authorization/project.policy';
 import { generateTaskKey } from '../tasks/task.service';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { createAutomationRunQueue } from './automation.queue';
 import { createMessageService } from '../messaging/message.service';
 
 /**
@@ -43,6 +45,14 @@ const MAX_BACKOFF_MS = 60 * 60_000;
 const MIN_BACKOFF_MS = 60_000;
 
 const TASK_PRIORITIES: readonly TaskPriority[] = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'];
+const TASK_STATUSES: readonly TaskStatus[] = [
+  'ASSIGNED',
+  'IN_PROGRESS',
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'APPROVED',
+  'CHANGES_REQUESTED',
+];
 
 export interface AutomationEngineDependencies {
   prisma: PrismaClient;
@@ -476,23 +486,75 @@ async function executeSetFieldAction(
     capability: ProjectCapability.ManageTask,
   });
 
-  const data: Record<string, unknown> = {};
-  const allowed: Record<string, (v: string) => unknown> = {
-    status: (v) => v,
-    priority: (v) => v,
-    category: (v) => (v === 'null' || v === '' ? null : v),
-    title: (v) => v,
-    description: (v) => (v === 'null' ? null : v),
-    dueDate: (v) => (v === 'null' || v === '' ? null : new Date(v)),
-    startDate: (v) => (v === 'null' || v === '' ? null : new Date(v)),
-  };
-  const mapper = allowed[field];
-  if (!mapper) {
-    throw new AppError(400, 'AUTOMATION_UNSUPPORTED_FIELD', `Field "${field}" cannot be set by automation`);
+  const data: Prisma.TaskUpdateInput = {};
+  switch (field) {
+    case 'status': {
+      const status = rawValue.toUpperCase();
+      if (!(TASK_STATUSES as readonly string[]).includes(status)) {
+        throw new AppError(
+          400,
+          'AUTOMATION_INVALID_FIELD_VALUE',
+          `"${rawValue}" is not a valid task status`,
+        );
+      }
+      data.status = status as TaskStatus;
+      // Keep the completion timestamp consistent with the tasks API. Without
+      // this, reporting would count a task as open after automation approved it.
+      data.completedAt = status === 'APPROVED' ? new Date() : null;
+      break;
+    }
+    case 'priority': {
+      const priority = rawValue.toUpperCase();
+      if (!(TASK_PRIORITIES as readonly string[]).includes(priority)) {
+        throw new AppError(
+          400,
+          'AUTOMATION_INVALID_FIELD_VALUE',
+          `"${rawValue}" is not a valid task priority`,
+        );
+      }
+      data.priority = priority as TaskPriority;
+      break;
+    }
+    case 'category':
+      data.category = rawValue === '' || rawValue === 'null' ? null : rawValue;
+      break;
+    case 'title': {
+      const title = rawValue.trim();
+      if (!title) {
+        throw new AppError(400, 'AUTOMATION_INVALID_FIELD_VALUE', 'A task title cannot be empty');
+      }
+      data.title = title.slice(0, 300);
+      break;
+    }
+    case 'description':
+      data.description = rawValue === 'null' ? null : rawValue;
+      break;
+    case 'dueDate':
+    case 'startDate': {
+      if (rawValue === '' || rawValue === 'null') {
+        data[field] = null;
+        break;
+      }
+      const date = new Date(rawValue);
+      if (Number.isNaN(date.getTime())) {
+        throw new AppError(
+          400,
+          'AUTOMATION_INVALID_FIELD_VALUE',
+          `"${rawValue}" is not a valid date`,
+        );
+      }
+      data[field] = date;
+      break;
+    }
+    default:
+      throw new AppError(
+        400,
+        'AUTOMATION_UNSUPPORTED_FIELD',
+        `Field "${field}" cannot be set by automation`,
+      );
   }
-  data[field] = mapper(rawValue);
 
-  await deps.prisma.task.update({ where: { id: task.id }, data: data as Prisma.TaskUpdateInput });
+  await deps.prisma.task.update({ where: { id: task.id }, data });
   await recordAuditEvent(deps.prisma, {
     workspaceId: automation.workspaceId,
     actorId: automation.createdById,
@@ -522,7 +584,7 @@ async function executeAssignAction(
   const workspaceRole = await assertOwnerCanManage(deps.prisma, automation);
   const task = await deps.prisma.task.findFirst({
     where: { id: taskId, deletedAt: null, project: { workspaceId: automation.workspaceId } },
-    select: { id: true, projectId: true, key: true },
+    select: { id: true, projectId: true, key: true, title: true },
   });
   if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'Target task not found for automation action');
 
@@ -549,6 +611,23 @@ async function executeAssignAction(
         create: { taskId: task.id, userId: member.userId, assignedBy: automation.createdById },
         update: {},
       });
+
+      // Mirror the normal assignment side effect. The engine does not emit a
+      // task.assigned domain event, so an automation that assigns work cannot
+      // recursively trigger itself.
+      if (member.userId !== automation.createdById) {
+        await createNotification(tx, {
+          userId: member.userId,
+          type: 'TASK_ASSIGNED',
+          title: 'Task assigned to you',
+          data: {
+            workspaceId: automation.workspaceId,
+            projectId: task.projectId,
+            taskId: task.id,
+            automationId: automation.id,
+          },
+        });
+      }
     }
     await recordAuditEvent(tx, {
       workspaceId: automation.workspaceId,
@@ -556,7 +635,12 @@ async function executeAssignAction(
       action: 'automation.task_assigned',
       targetType: 'Task',
       targetId: task.id,
-      metadata: { automationId: automation.id, assigneeIds: activeMembers.map((m) => m.userId), key: task.key },
+      metadata: {
+        automationId: automation.id,
+        assigneeIds: activeMembers.map((m) => m.userId),
+        key: task.key,
+        title: task.title,
+      },
     });
   });
 }
@@ -682,6 +766,32 @@ export async function enqueueScheduledRuns(
     skipDuplicates: true,
   });
 
+  if (result.count > 0) {
+    // Push the newly created runs onto the Redis queue. The periodic database
+    // poll remains a fallback, but the normal path should not wait for it.
+    try {
+      const runs = await deps.prisma.automationRun.findMany({
+        where: {
+          automationId: { in: automations.map((automation) => automation.id) },
+          eventKey: { in: [dailyKey, weeklyKey] },
+          status: 'PENDING',
+        },
+        select: { id: true },
+      });
+      if (runs.length > 0) {
+        await createAutomationRunQueue({ logger: deps.logger ?? defaultLogger }).enqueueMany(
+          runs.map((run) => run.id),
+        );
+      }
+    } catch (error) {
+      // Queue dispatch is best effort; the DB polling fallback will pick these up.
+      (deps.logger ?? defaultLogger).warn('automation_schedule_queue_dispatch_failed', {
+        error,
+        queued: result.count,
+      });
+    }
+  }
+
   return { queued: result.count };
 }
 
@@ -783,4 +893,104 @@ export async function processPendingRuns(
   });
 
   return executeClaimedRuns(deps, claimed, now);
+}
+
+/**
+ * Execute a set of runs that the caller has already claimed.
+ *
+ * Claiming is separate from execution so the Redis consumer can claim one run
+ * by id while the polling fallback claims a batch. Both paths share exactly the
+ * same permission checks, retry policy and run-history semantics.
+ */
+async function executeClaimedRuns(
+  deps: AutomationEngineDependencies,
+  claimed: ClaimedRun[],
+  now: Date,
+): Promise<ProcessRunsResult> {
+  const log = deps.logger ?? defaultLogger;
+  const result: ProcessRunsResult = {
+    claimed: claimed.length,
+    succeeded: 0,
+    retried: 0,
+    failed: 0,
+    skipped: 0,
+  };
+
+  for (const run of claimed) {
+    const automation = run.automation;
+
+    // The automation may have been disabled or deleted while the run waited in
+    // the queue. Never execute work the workspace has since switched off.
+    if (!automation.enabled || automation.deletedAt) {
+      await deps.prisma.automationRun.updateMany({
+        where: { id: run.id, status: 'RUNNING' },
+        data: { status: 'SKIPPED', completedAt: now, error: null },
+      });
+      result.skipped += 1;
+      continue;
+    }
+
+    const payload = asPayload(run.payload);
+    if (!conditionMatches(automation.condition, payload)) {
+      await deps.prisma.automationRun.updateMany({
+        where: { id: run.id, status: 'RUNNING' },
+        data: { status: 'SKIPPED', completedAt: now, error: null },
+      });
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      await executeAutomationAction(deps, automation, payload, run.id);
+      await deps.prisma.automationRun.updateMany({
+        where: { id: run.id, status: 'RUNNING' },
+        data: {
+          status: 'SUCCEEDED',
+          completedAt: now,
+          attempts: { increment: 1 },
+          error: null,
+        },
+      });
+      result.succeeded += 1;
+    } catch (error) {
+      const attempts = run.attempts + 1;
+      const maxAttempts = Math.max(1, automation.maxRetries + 1);
+      const message =
+        error instanceof AppError
+          ? `${error.code}: ${error.message}`.slice(0, 500)
+          : error instanceof Error
+            ? error.message.slice(0, 500)
+            : 'The automation action failed';
+
+      if (attempts >= maxAttempts) {
+        await deps.prisma.automationRun.updateMany({
+          where: { id: run.id, status: 'RUNNING' },
+          data: { status: 'FAILED', completedAt: now, attempts, error: message },
+        });
+        result.failed += 1;
+      } else {
+        await deps.prisma.automationRun.updateMany({
+          where: { id: run.id, status: 'RUNNING' },
+          data: {
+            status: 'PENDING',
+            attempts,
+            error: message,
+            nextAttemptAt: new Date(now.getTime() + backoffFor(attempts)),
+          },
+        });
+        result.retried += 1;
+      }
+
+      log.error('automation_run_failed', {
+        automationId: automation.id,
+        runId: run.id,
+        action: automation.action,
+        attempts,
+        maxAttempts,
+        error: message,
+      });
+    }
+  }
+
+  return result;
 }
