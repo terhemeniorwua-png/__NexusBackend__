@@ -20,6 +20,7 @@ import { createQueueStatusProbe } from './services/workers/queue-status';
 import { createWorkerHealthRegistry } from './services/workers/worker-health';
 import { createAuditPruneWorker } from './services/workers/audit-prune.worker';
 import { createTaskDeadlineNotificationWorker } from './services/workers/task-deadline-notification.worker';
+import { createTaskRecurrenceWorker } from './services/workers/task-recurrence.worker';
 import { createSocketServer, type SocketServer } from './realtime/socket-server';
 
 export interface RunningServer {
@@ -85,6 +86,7 @@ export async function startServer(): Promise<RunningServer> {
     webhooks: workerHealth.register('webhooks'),
     auditPrune: workerHealth.register('audit-prune'),
     taskDeadlineNotification: workerHealth.register('task-deadline-notification'),
+    taskRecurrence: workerHealth.register('task-recurrence'),
   };
 
   const app = createApp({
@@ -181,6 +183,16 @@ export async function startServer(): Promise<RunningServer> {
   });
   taskDeadlineNotificationWorker.start();
 
+  const taskRecurrenceWorker = createTaskRecurrenceWorker({
+    prisma: getPrismaClient(),
+    logger,
+    pollIntervalMs: config.taskRecurrencePollIntervalMs,
+    health: workerRecorders.taskRecurrence,
+  });
+  if (config.taskRecurrenceWorkerEnabled) {
+    taskRecurrenceWorker.start();
+  }
+
   try {
     await listen(server, config.port);
   } catch (error) {
@@ -194,6 +206,7 @@ export async function startServer(): Promise<RunningServer> {
       webhookWorker.stop(),
       auditPruneWorker.stop(),
       taskDeadlineNotificationWorker.stop(),
+      taskRecurrenceWorker.stop(),
     ]);
     await Promise.allSettled([disconnectRedis(), disconnectDatabase()]);
     throw error;
@@ -243,6 +256,7 @@ export async function startServer(): Promise<RunningServer> {
       webhookWorker.stop(),
       auditPruneWorker.stop(),
       taskDeadlineNotificationWorker.stop(),
+      taskRecurrenceWorker.stop(),
       disconnectRedis(),
       disconnectDatabase(),
     ]);

@@ -34,6 +34,10 @@ import { createProjectRolesRouter } from '../modules/projects/project-roles.rout
 import { createPrivacyRouter } from '../modules/privacy/privacy.routes';
 import { createChannelRouter } from '../modules/channels/channel.routes';
 import { createTaskRouter } from '../modules/tasks/task.routes';
+import { createCustomFieldRouter } from '../modules/tasks/custom-field.routes';
+import { createSavedViewRouter } from '../modules/tasks/saved-view.routes';
+import { createTaskTemplateRouter } from '../modules/tasks/task-template.routes';
+import { createProjectTemplateRouter } from '../modules/projects/project-template.routes';
 import { createTaskWorkDocumentRouter } from '../modules/task-work-documents/task-work-document.routes';
 import { createTaskBlockerRouter } from '../modules/task-blockers/task-blocker.routes';
 import { createTaskTimeEntryRouter } from '../modules/task-time-entries/task-time-entry.routes';
@@ -113,6 +117,10 @@ export function createApiRouter({
   // /workspaces/:workspaceId/projects/:projectId/tasks/…
   // The task router uses mergeParams to access workspaceId and projectId.
   router.use('/workspaces/:workspaceId/projects/:projectId/tasks', createTaskRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/custom-fields', createCustomFieldRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/task-views', createSavedViewRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/task-templates', createTaskTemplateRouter({ config }));
+  router.use('/workspaces/:workspaceId/project-templates', createProjectTemplateRouter({ config }));
   router.use(
     '/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/work-documents',
     createTaskWorkDocumentRouter({ config }),

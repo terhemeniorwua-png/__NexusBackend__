@@ -8,11 +8,16 @@ import { AiProviderError, AiUnavailableError } from '../../services/providers/ai
 import { AppError } from '../../utils/errors';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import {
+  ChannelCapability,
   ProjectCapability,
+  requireChannelAccess,
   requireProjectAccess,
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from '../authorization';
+import { assertAiWorkspaceEntitled } from './ai-access';
+import { createCalendarService } from '../calendar/calendar.service';
+import { createMessageService } from '../messaging/message.service';
 import type { RequestContext } from '../auth/auth.types';
 import { createDocumentService } from '../documents/document.service';
 import { createTaskService } from '../tasks/task.service';
@@ -34,6 +39,8 @@ export interface AiActionServiceDependencies {
   prisma?: PrismaClient;
   taskService?: ReturnType<typeof createTaskService>;
   documentService?: ReturnType<typeof createDocumentService>;
+  messageService?: ReturnType<typeof createMessageService>;
+  calendarService?: ReturnType<typeof createCalendarService>;
   logger?: Logger;
   now?: () => Date;
 }
@@ -79,6 +86,8 @@ export function createAiActionService(
   const now = dependencies.now ?? (() => new Date());
   const taskService = dependencies.taskService ?? createTaskService(prisma);
   const documentService = dependencies.documentService ?? createDocumentService(prisma);
+  const messageService = dependencies.messageService ?? createMessageService(prisma);
+  const calendarService = dependencies.calendarService ?? createCalendarService(prisma);
 
   async function checkActionPermission(
     userId: string,
@@ -153,6 +162,32 @@ export function createAiActionService(
           'The notification recipient is not an active workspace member',
         );
       }
+      return;
+    }
+
+    if (actionType === 'POST_MESSAGE') {
+      await requireChannelAccess(prisma, {
+        userId,
+        workspaceId,
+        channelId: String(payload.channelId),
+        capability: ChannelCapability.View,
+      });
+      return;
+    }
+
+    if (actionType === 'SCHEDULE_EVENT') {
+      // Workspace access already verified; project access (if any) is enforced by calendar service.
+      const projectId = typeof payload.projectId === 'string' ? payload.projectId : null;
+      if (projectId) {
+        await requireProjectAccess(prisma, {
+          userId,
+          workspaceId,
+          projectId,
+          workspaceRole: access.effectiveRole,
+          capability: ProjectCapability.ViewProject,
+        });
+      }
+      return;
     }
   }
 
@@ -191,7 +226,7 @@ export function createAiActionService(
       validated.data as unknown as Record<string, unknown>,
     );
 
-    switch (proposal.actionType) {
+    switch (proposal.actionType as string) {
       case 'CREATE_TASK': {
         const { projectId, ...taskInput } = validated.data as unknown as CreateTaskInput & {
           projectId: string;
@@ -282,6 +317,52 @@ export function createAiActionService(
         return { recipientId, notified: true };
       }
 
+      case 'POST_MESSAGE': {
+        const { channelId, body, parentId } = validated.data as unknown as {
+          channelId: string;
+          body: string;
+          parentId?: string | null;
+        };
+        const message = await messageService.send({
+          userId: proposal.userId,
+          workspaceId: proposal.workspaceId,
+          channelId,
+          body,
+          ...(parentId ? { parentId } : {}),
+        });
+        return { messageId: message.id, channelId };
+      }
+
+      case 'SCHEDULE_EVENT': {
+        const eventInput = validated.data as unknown as {
+          title: string;
+          description?: string | null;
+          location?: string | null;
+          startAt: string;
+          endAt: string;
+          allDay?: boolean;
+          status?: string;
+          visibility?: string;
+          projectId?: string | null;
+          inviteeIds?: string[];
+        };
+        const event = await calendarService.create({
+          userId: proposal.userId,
+          workspaceId: proposal.workspaceId,
+          title: eventInput.title,
+          startAt: eventInput.startAt,
+          endAt: eventInput.endAt,
+          allDay: eventInput.allDay ?? false,
+          status: eventInput.status ?? 'CONFIRMED',
+          visibility: eventInput.visibility ?? 'PUBLIC',
+          ...(eventInput.description !== undefined ? { description: eventInput.description } : {}),
+          ...(eventInput.location !== undefined ? { location: eventInput.location } : {}),
+          ...(eventInput.projectId !== undefined ? { projectId: eventInput.projectId } : {}),
+          ...(eventInput.inviteeIds ? { inviteeIds: eventInput.inviteeIds } : {}),
+        });
+        return { eventId: event.id, title: event.title };
+      }
+
       default:
         throw new AppError(
           400,
@@ -308,6 +389,7 @@ export function createAiActionService(
         );
       }
 
+      await assertAiWorkspaceEntitled(prisma, input.workspaceId);
       await checkActionPermission(
         userId,
         input.workspaceId,
@@ -338,7 +420,7 @@ export function createAiActionService(
           workspaceId: input.workspaceId,
           userId,
           conversationId: input.conversationId ?? null,
-          actionType: input.actionType,
+          actionType: input.actionType as any,
           title: input.title ?? `${input.actionType.replaceAll('_', ' ').toLowerCase()}`,
           summary: input.summary ?? null,
           payload: validated.data as unknown as Prisma.InputJsonValue,
@@ -415,6 +497,7 @@ export function createAiActionService(
       context: RequestContext = {},
     ) {
       const proposal = await findOwnedProposal(userId, proposalId);
+      await assertAiWorkspaceEntitled(prisma, proposal.workspaceId);
       await checkActionPermission(
         userId,
         proposal.workspaceId,
@@ -565,6 +648,7 @@ export function createAiActionService(
 
       // Re-check permission immediately before the mutation. An approval is
       // not a permanent grant: a role or membership may have changed since.
+      await assertAiWorkspaceEntitled(prisma, proposal.workspaceId);
       await checkActionPermission(
         userId,
         proposal.workspaceId,

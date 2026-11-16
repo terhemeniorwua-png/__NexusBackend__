@@ -14,11 +14,44 @@ import { ChannelCapability, requireChannelAccess } from '../modules/authorizatio
  * (`channel:{id}`). Only authenticated members of the relevant workspace
  * or channel can join.
  *
+ * Handshake auth is token-based (not cookie-based): clients must pass a
+ * short-lived access token in `socket.handshake.auth.token`. This allows
+ * browser clients connecting directly cross-site (where session cookies are
+ * not sent) to authenticate the Socket.IO handshake.
+ *
  * Redis adapter is optional and used only when `REDIS_URL` is configured.
  */
 
 export interface SocketServer {
   close: () => Promise<void>;
+}
+
+type SocketHandshake = {
+  handshake: { auth?: Record<string, unknown> };
+  data: Record<string, unknown>;
+};
+
+export function createSocketAuthMiddleware(config: AppConfig) {
+  return async (socket: SocketHandshake, next: (err?: Error) => void): Promise<void> => {
+    try {
+      const token = socket.handshake.auth?.token;
+      if (typeof token !== 'string' || !token) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Authentication token is required');
+      }
+
+      // Verify the access token using the existing service
+      const { verifyAccessToken } = await import('../modules/auth/access-token.service');
+      const payload = verifyAccessToken(config, token);
+      socket.data.userId = payload.sub;
+      const workspaceId = socket.handshake.auth?.workspaceId;
+      if (typeof workspaceId === 'string' && workspaceId) {
+        socket.data.workspaceId = workspaceId;
+      }
+      next();
+    } catch (_error) {
+      next(new Error('Authentication failed'));
+    }
+  };
 }
 
 export async function createSocketServer(
@@ -54,24 +87,8 @@ export async function createSocketServer(
 
   setIo(io);
 
-  // Authentication middleware
-  io.use(async (socket, next) => {
-    try {
-      const token = socket.handshake.auth?.token as string | undefined;
-      if (!token) {
-        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Authentication token is required');
-      }
-
-      // Verify the access token using the existing service
-      const { verifyAccessToken } = await import('../modules/auth/access-token.service');
-      const payload = verifyAccessToken(config, token);
-      socket.data.userId = payload.sub;
-      socket.data.workspaceId = socket.handshake.auth?.workspaceId as string | undefined;
-      next();
-    } catch (_error) {
-      next(new Error('Authentication failed'));
-    }
-  });
+  // Authentication middleware (token-based handshake auth)
+  io.use(createSocketAuthMiddleware(config) as never);
 
   io.on('connection', (socket) => {
     const userId = socket.data.userId as string;

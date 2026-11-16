@@ -148,6 +148,64 @@ export function createAiRouter({
     },
   );
 
+  // Compatibility/orchestration endpoints
+  router.post(
+    '/query',
+    requireAuth,
+    requireActive,
+    validate({ body: aiChatBodySchema }),
+    async (req, res) => {
+      const body = req.validated!.body as AiChatBody;
+      sendSuccess(res, await service.chat({ userId: userId(req), ...body }, requestMeta(req)));
+    },
+  );
+
+  router.post(
+    '/query/stream',
+    requireAuth,
+    requireActive,
+    validate({ body: aiChatBodySchema }),
+    async (req, res) => {
+      if (!service.isConfigured()) {
+        throw new AppError(
+          503,
+          'AI_NOT_CONFIGURED',
+          'The AI service is not configured. Enable it through the AI environment variables.',
+        );
+      }
+
+      const body = req.validated!.body as AiChatBody;
+      res.status(200);
+      res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+      res.setHeader('cache-control', 'no-cache, no-transform');
+      res.setHeader('connection', 'keep-alive');
+      res.setHeader('x-accel-buffering', 'no');
+      res.flushHeaders?.();
+
+      const abort = new AbortController();
+      req.on('close', () => abort.abort());
+
+      try {
+        for await (const event of service.streamChat(
+          { userId: userId(req), ...body },
+          requestMeta(req),
+        )) {
+          if (abort.signal.aborted) break;
+          sseWrite(res, event);
+        }
+      } catch (error) {
+        sseWrite(res, {
+          type: 'error',
+          code: error instanceof AppError ? error.code : 'AI_STREAM_FAILED',
+          message:
+            error instanceof AppError ? error.message : 'The AI stream could not be completed',
+        });
+      } finally {
+        res.end();
+      }
+    },
+  );
+
   router.get(
     '/conversations',
     requireAuth,
@@ -206,6 +264,34 @@ export function createAiRouter({
   // -------------------------------------------------------------------------
   // Nexus Write (Phase 22)
   // -------------------------------------------------------------------------
+
+  router.post(
+    '/write',
+    requireAuth,
+    requireActive,
+    async (req, res) => {
+      const body = req.body ?? {};
+      if (body && typeof body === 'object' && Array.isArray((body as any).features)) {
+        const parsed = aiWritingAnalyzeSchema.safeParse(body);
+        if (!parsed.success) {
+          throw new AppError(400, 'VALIDATION_ERROR', 'Invalid AI write/analyze payload', {
+            details: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })),
+          });
+        }
+        const value = parsed.data as AiWritingAnalyzeBody;
+        sendSuccess(res, await writingService.analyze({ userId: userId(req), ...value }));
+        return;
+      }
+      const parsed = aiWritingRewriteSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new AppError(400, 'VALIDATION_ERROR', 'Invalid AI write payload', {
+          details: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })),
+        });
+      }
+      const value = parsed.data as AiWritingRewriteBody;
+      sendSuccess(res, await writingService.rewrite({ userId: userId(req), ...value }));
+    },
+  );
 
   router.post(
     '/writing/analyze',

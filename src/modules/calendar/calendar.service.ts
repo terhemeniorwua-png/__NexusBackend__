@@ -310,16 +310,24 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       });
       if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
 
-      await prisma.eventInvitation.upsert({
-        where: { eventId_userId: { eventId: input.eventId, userId: input.targetUserId } },
-        create: { eventId: input.eventId, userId: input.targetUserId },
-        update: {},
-      });
+      await assertCanManageEvent(prisma, input, event);
 
-      await createNotification(prisma, {
-        userId: input.targetUserId, type: 'MEETING_INVITE',
-        title: `Event invitation: ${event.title}`,
-        data: { workspaceId: input.workspaceId, eventId: event.id },
+      await prisma.$transaction(async (tx) => {
+        await tx.eventInvitation.upsert({
+          where: { eventId_userId: { eventId: input.eventId, userId: input.targetUserId } },
+          create: { eventId: input.eventId, userId: input.targetUserId },
+          update: {},
+        });
+        await createNotification(tx, {
+          userId: input.targetUserId, type: 'MEETING_INVITE',
+          title: `Event invitation: ${event.title}`,
+          data: { workspaceId: input.workspaceId, eventId: event.id },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId, actorId: input.userId,
+          action: 'calendar.invitee_added', targetType: 'CalendarEvent', targetId: event.id,
+          metadata: { inviteeUserId: input.targetUserId },
+        });
       });
     },
 
@@ -331,10 +339,23 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
         capability: WorkspaceCapability.ViewWorkspace,
       });
 
-      await assertEventVisible(prisma, input);
+      const event = await prisma.calendarEvent.findFirst({
+        where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
+        select: { id: true, createdById: true },
+      });
+      if (!event) throw new AppError(404, 'EVENT_NOT_FOUND', 'That event does not exist');
 
-      await prisma.eventInvitation.deleteMany({
-        where: { eventId: input.eventId, userId: input.targetUserId },
+      await assertCanManageEvent(prisma, input, event);
+
+      await prisma.$transaction(async (tx) => {
+        await tx.eventInvitation.deleteMany({
+          where: { eventId: input.eventId, userId: input.targetUserId },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId, actorId: input.userId,
+          action: 'calendar.invitee_removed', targetType: 'CalendarEvent', targetId: input.eventId,
+          metadata: { inviteeUserId: input.targetUserId },
+        });
       });
     },
 
@@ -343,13 +364,22 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
     ): Promise<void> {
       const invitation = await prisma.eventInvitation.findUnique({
         where: { eventId_userId: { eventId: input.eventId, userId: input.userId } },
-        include: { event: true },
+        include: { event: { select: { id: true, workspaceId: true, deletedAt: true } } },
       });
-      if (!invitation) throw new AppError(404, 'INVITATION_NOT_FOUND', 'You are not invited to this event');
+      if (!invitation || invitation.event.workspaceId !== input.workspaceId || invitation.event.deletedAt) {
+        throw new AppError(404, 'INVITATION_NOT_FOUND', 'You are not invited to this event');
+      }
 
-      await prisma.eventInvitation.update({
-        where: { id: invitation.id },
-        data: { status: input.status },
+      await prisma.$transaction(async (tx) => {
+        await tx.eventInvitation.update({
+          where: { id: invitation.id },
+          data: { status: input.status },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId, actorId: input.userId,
+          action: 'calendar.invitation_responded', targetType: 'CalendarEvent', targetId: input.eventId,
+          metadata: { status: input.status },
+        });
       });
     },
 

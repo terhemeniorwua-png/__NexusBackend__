@@ -38,10 +38,19 @@ import {
 import { createTaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import { createMentionEmailNotifier } from '../../services/mention-email-notifier';
 import { createTaskService } from './task.service';
+import { createTaskAdvancedService } from './task-advanced.service';
+import {
+  recurrenceParamsSchema,
+  setTaskCustomFieldValuesSchema,
+  upsertRecurrenceSchema,
+  type SetTaskCustomFieldValuesInput,
+  type UpsertRecurrenceInput,
+} from './task-advanced.schemas';
 
 export interface TaskRouterOptions {
   config: AppConfig;
   service?: ReturnType<typeof createTaskService>;
+  advancedService?: ReturnType<typeof createTaskAdvancedService>;
 }
 
 function context(req: Request) {
@@ -60,6 +69,7 @@ export function createTaskRouter({
     assignmentNotifier: createTaskAssignmentNotifier(config),
     mentionNotifier: createMentionEmailNotifier(config),
   }),
+  advancedService = createTaskAdvancedService(),
 }: TaskRouterOptions): Router {
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);
@@ -604,6 +614,82 @@ export function createTaskRouter({
           context(req),
         ),
       );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Task custom field values
+  // -------------------------------------------------------------------------
+
+  router.get(
+    '/:taskId/custom-fields',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      sendSuccess(res, await advancedService.getTaskCustomFieldValues({ userId: userId(req), workspaceId, projectId, taskId }));
+    },
+  );
+
+  router.put(
+    '/:taskId/custom-fields',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: setTaskCustomFieldValuesSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      const body = req.validated!.body as SetTaskCustomFieldValuesInput;
+      sendSuccess(res, await advancedService.setTaskCustomFieldValues({ userId: userId(req), workspaceId, projectId, taskId, values: body.values }, context(req)));
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Recurrence
+  // -------------------------------------------------------------------------
+
+  router.get(
+    '/:taskId/recurrence',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: recurrenceParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      sendSuccess(res, await advancedService.getRecurrence({ userId: userId(req), workspaceId, projectId, taskId }));
+    },
+  );
+
+  router.put(
+    '/:taskId/recurrence',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: recurrenceParamsSchema, body: upsertRecurrenceSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      const body = req.validated!.body as UpsertRecurrenceInput;
+      sendSuccess(res, await advancedService.upsertRecurrence({ userId: userId(req), workspaceId, projectId, taskId, ...body }, context(req)));
+    },
+  );
+
+  router.delete(
+    '/:taskId/recurrence',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: recurrenceParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      sendSuccess(res, await advancedService.deleteRecurrence({ userId: userId(req), workspaceId, projectId, taskId }, context(req)));
+    },
+  );
+
+  router.post(
+    '/:taskId/recurrence/generate',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: recurrenceParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
+      sendSuccess(res, await advancedService.generateNextRecurrence({ userId: userId(req), workspaceId, projectId, taskId }, context(req)), 201);
     },
   );
 
