@@ -194,7 +194,7 @@ function runTests(rawDbUrl: string): void {
       AVATAR_MAX_FILE_SIZE_BYTES: String(2 * 1024 * 1024),
       AVATAR_MAX_DIMENSION: '512',
       AVATAR_MAX_PIXELS: String(512 * 512),
-      AVATAR_RATE_LIMIT_MAX: '1000',
+      AVATAR_RATE_LIMIT_MAX: '100',
       RATE_LIMIT_NAMESPACE: `avatar-upload-test-${tag}`,
       OBJECT_STORAGE_ENDPOINT: objectStorageEndpoint,
       OBJECT_STORAGE_BUCKET: 'nexus-test-private',

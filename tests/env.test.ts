@@ -133,6 +133,8 @@ test('parseEnv forces secure cookies in production', () => {
     NODE_ENV: 'production',
     EMAIL_PROVIDER: 'smtp',
     EMAIL_SMTP_HOST: 'smtp.example.com',
+    AUTH_COOKIE_SECURE: 'true',
+    CORS_CREDENTIALS: 'true',
   });
 
   assert.equal(config.cookieSecure, true);
