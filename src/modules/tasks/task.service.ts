@@ -456,6 +456,21 @@ export function createTaskService(
           assigneeId,
           actorId: input.userId,
         });
+        await enqueueAutomationRunsSafely({
+          workspaceId: input.workspaceId,
+          trigger: 'EVENT_TASK_ASSIGNED' as never,
+          eventKey: `task.assigned:${created.id}:${assigneeId}`,
+          payload: {
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            taskId: created.id,
+            key: created.key,
+            title: created.title,
+            status: created.status,
+            assigneeId,
+            actorId: input.userId,
+          },
+        });
       }
 
       return created;
@@ -670,6 +685,22 @@ export function createTaskService(
         ),
         task: { id: updatedTask.id, key: (updatedTask as { key?: string }).key, status: updatedTask.status },
       });
+      if (input.status !== undefined && input.status !== existing.status) {
+        await enqueueAutomationRunsSafely({
+          workspaceId: input.workspaceId,
+          trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
+          eventKey: `task.status_changed:${updatedTask.id}:${existing.status}:${updatedTask.status}:${Date.now()}`,
+          payload: {
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            taskId: updatedTask.id,
+            key: (updatedTask as { key?: string }).key,
+            previousStatus: existing.status,
+            status: updatedTask.status,
+            actorId: input.userId,
+          },
+        });
+      }
       return updatedTask;
     },
 
@@ -844,6 +875,20 @@ export function createTaskService(
           completedAt: completed.completedAt?.toISOString() ?? null,
         },
       });
+      await enqueueAutomationRunsSafely({
+        workspaceId: input.workspaceId,
+        trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
+        eventKey: `task.status_changed:${completed.id}:${existing.status}:${completed.status}:${completed.completedAt?.toISOString() ?? Date.now()}`,
+        payload: {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: completed.id,
+          key: existing.key,
+          previousStatus: existing.status,
+          status: completed.status,
+          actorId: input.userId,
+        },
+      });
 
       return completed;
     },
@@ -993,6 +1038,19 @@ export function createTaskService(
           actorId: input.userId,
         });
       }
+      await enqueueAutomationRunsSafely({
+        workspaceId: input.workspaceId,
+        trigger: 'EVENT_TASK_ASSIGNED' as never,
+        eventKey: `task.assigned:${task.id}:${input.targetUserId}`,
+        payload: {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: task.id,
+          key: task.key,
+          assigneeId: input.targetUserId,
+          actorId: input.userId,
+        },
+      });
 
       return result;
     },

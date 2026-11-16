@@ -75,14 +75,29 @@ export interface AnalyticsSnapshot {
   subscription: SubscriptionInfo | null;
 }
 
+export interface ScopedAnalyticsInput {
+  userId: string;
+  workspaceId: string;
+  projectId?: string | null;
+  range?: '7d' | '30d' | '90d' | 'custom';
+  startDate?: Date | null;
+  endDate?: Date | null;
+}
+
 export interface AnalyticsService {
   getSnapshot(input: {
     userId: string;
     workspaceId?: string | null;
+    projectId?: string | null;
     range?: '7d' | '30d' | '90d' | 'custom';
     startDate?: Date | null;
     endDate?: Date | null;
   }): Promise<AnalyticsSnapshot>;
+  tasksByStatus(input: ScopedAnalyticsInput): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; items: StatusCount[] }>;
+  tasksByAssignee(input: ScopedAnalyticsInput): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; items: Array<{ assigneeId: string | null; assigneeName: string | null; count: number }> }>;
+  tasksThroughput(input: ScopedAnalyticsInput): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; created: number; completed: number; items: Array<{ date: string; created: number; completed: number }> }>;
+  tasksWorkload(input: ScopedAnalyticsInput): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; items: Array<{ assigneeId: string | null; assigneeName: string | null; openTasks: number; overdueTasks: number }> }>;
+  timeLogged(input: ScopedAnalyticsInput): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; totalMinutes: number; items: Array<{ userId: string; userName: string | null; minutes: number }> }>;
 }
 
 interface AnalyticsServiceDependencies {
@@ -182,18 +197,52 @@ export function createAnalyticsService({
     };
   }
 
+  async function ensureProjectInWorkspace(userId: string, workspaceId: string, projectId: string): Promise<void> {
+    await resolveWorkspaceScope({ userId, workspaceId });
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, workspaceId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist in this workspace');
+    }
+  }
+
+  async function resolveScopedWorkspace(userId: string, workspaceId: string, projectId?: string | null): Promise<{ workspaceId: string; projectId: string | null }> {
+    await resolveWorkspaceScope({ userId, workspaceId });
+    if (projectId) {
+      await ensureProjectInWorkspace(userId, workspaceId, projectId);
+      return { workspaceId, projectId };
+    }
+    return { workspaceId, projectId: null };
+  }
+
+  function taskScopeWhere(workspaceId: string, projectId?: string | null) {
+    return {
+      project: {
+        workspaceId,
+        deletedAt: null,
+        ...(projectId ? { id: projectId } : {}),
+      },
+      deletedAt: null,
+    };
+  }
+
   return {
     async getSnapshot(input): Promise<AnalyticsSnapshot> {
-      const { range = '30d', startDate, endDate, workspaceId, userId } = input;
+      const { range = '30d', startDate, endDate, workspaceId, userId, projectId } = input;
       const { start, end, days } = rangeBounds({ range, startDate, endDate });
 
       const scope = await resolveWorkspaceScope({ userId, workspaceId });
+      if (workspaceId && projectId) {
+        await ensureProjectInWorkspace(userId, workspaceId, projectId);
+      }
       const workspaceIdFilter =
         scope.workspaceIds.length > 0
           ? { in: scope.workspaceIds }
           : { equals: null as unknown as string };
 
-      const cacheKey = `analytics:${userId}:${scope.workspaceIds.sort().join(',')}:${range}:${start.toISOString()}:${end.toISOString()}`;
+      const cacheKey = `analytics:${userId}:${scope.workspaceIds.sort().join(',')}:${projectId ?? 'all'}:${range}:${start.toISOString()}:${end.toISOString()}`;
 
       return cache.getOrSet(
         cacheKey,
@@ -229,7 +278,7 @@ export function createAnalyticsService({
           }));
 
           const taskWhere = {
-            project: { workspace: workspaceWhere },
+            project: { workspace: workspaceWhere, deletedAt: null, ...(projectId ? { id: projectId } : {}) },
             deletedAt: null,
           };
 
@@ -395,6 +444,139 @@ export function createAnalyticsService({
         },
         { ttlSeconds: config.analyticsCacheTtlSeconds },
       );
+    },
+
+    async tasksByStatus(input): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; items: StatusCount[] }> {
+      const { range = '30d', startDate, endDate } = input;
+      const { days } = rangeBounds({ range, startDate, endDate });
+      const scope = await resolveScopedWorkspace(input.userId, input.workspaceId, input.projectId);
+      const rows = await prisma.task.groupBy({
+        by: ['status'],
+        where: taskScopeWhere(scope.workspaceId, scope.projectId),
+        _count: { status: true },
+      });
+      return {
+        workspaceId: scope.workspaceId,
+        projectId: scope.projectId,
+        rangeDays: days,
+        items: rows.map((r) => ({ status: r.status, count: r._count.status })),
+      };
+    },
+
+    async tasksByAssignee(input): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; items: Array<{ assigneeId: string | null; assigneeName: string | null; count: number }> }> {
+      const { range = '30d', startDate, endDate } = input;
+      const { days } = rangeBounds({ range, startDate, endDate });
+      const scope = await resolveScopedWorkspace(input.userId, input.workspaceId, input.projectId);
+      const tasks = await prisma.task.findMany({
+        where: taskScopeWhere(scope.workspaceId, scope.projectId),
+        select: {
+          assignees: { select: { userId: true, user: { select: { name: true } } } },
+        },
+      });
+      const map = new Map<string | null, { name: string | null; count: number }>();
+      for (const t of tasks) {
+        if (!t.assignees.length) {
+          const cur = map.get(null) ?? { name: null, count: 0 };
+          cur.count += 1;
+          map.set(null, cur);
+          continue;
+        }
+        for (const a of t.assignees) {
+          const cur = map.get(a.userId) ?? { name: a.user.name ?? null, count: 0 };
+          cur.count += 1;
+          map.set(a.userId, cur);
+        }
+      }
+      const items = [...map.entries()].map(([assigneeId, v]) => ({ assigneeId, assigneeName: v.name, count: v.count }));
+      items.sort((a, b) => b.count - a.count);
+      return { workspaceId: scope.workspaceId, projectId: scope.projectId, rangeDays: days, items };
+    },
+
+    async tasksThroughput(input): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; created: number; completed: number; items: Array<{ date: string; created: number; completed: number }> }> {
+      const { range = '30d', startDate, endDate } = input;
+      const { start, end, days } = rangeBounds({ range, startDate, endDate });
+      const scope = await resolveScopedWorkspace(input.userId, input.workspaceId, input.projectId);
+      const where = taskScopeWhere(scope.workspaceId, scope.projectId);
+      const [createdRows, completedRows] = await Promise.all([
+        prisma.task.findMany({ where: { ...where, createdAt: { gte: start, lte: end } }, select: { createdAt: true } }),
+        prisma.task.findMany({ where: { ...where, completedAt: { gte: start, lte: end } }, select: { completedAt: true } }),
+      ]);
+      const byDate = new Map<string, { created: number; completed: number }>();
+      for (const r of createdRows) {
+        const d = r.createdAt.toISOString().slice(0, 10);
+        const cur = byDate.get(d) ?? { created: 0, completed: 0 };
+        cur.created += 1;
+        byDate.set(d, cur);
+      }
+      for (const r of completedRows) {
+        if (!r.completedAt) continue;
+        const d = r.completedAt.toISOString().slice(0, 10);
+        const cur = byDate.get(d) ?? { created: 0, completed: 0 };
+        cur.completed += 1;
+        byDate.set(d, cur);
+      }
+      const items = [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, v]) => ({ date, ...v }));
+      return { workspaceId: scope.workspaceId, projectId: scope.projectId, rangeDays: days, created: createdRows.length, completed: completedRows.length, items };
+    },
+
+    async tasksWorkload(input): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; items: Array<{ assigneeId: string | null; assigneeName: string | null; openTasks: number; overdueTasks: number }> }> {
+      const { range = '30d', startDate, endDate } = input;
+      const { end, days } = rangeBounds({ range, startDate, endDate });
+      const scope = await resolveScopedWorkspace(input.userId, input.workspaceId, input.projectId);
+      const tasks = await prisma.task.findMany({
+        where: taskScopeWhere(scope.workspaceId, scope.projectId),
+        select: {
+          status: true,
+          dueDate: true,
+          assignees: { select: { userId: true, user: { select: { name: true } } } },
+        },
+      });
+      const terminal = new Set(['APPROVED', 'ARCHIVED', 'COMPLETED']);
+      const map = new Map<string | null, { name: string | null; openTasks: number; overdueTasks: number }>();
+      for (const t of tasks) {
+        const open = !terminal.has(t.status as string);
+        if (!open) continue;
+        const overdue = Boolean(t.dueDate && t.dueDate < end);
+        const assignees = t.assignees.length ? t.assignees : [{ userId: null as string | null, user: { name: null as string | null } }];
+        for (const a of assignees) {
+          const key = a.userId;
+          const cur = map.get(key) ?? { name: a.user?.name ?? null, openTasks: 0, overdueTasks: 0 };
+          cur.openTasks += 1;
+          if (overdue) cur.overdueTasks += 1;
+          if (!cur.name && a.user?.name) cur.name = a.user.name;
+          map.set(key, cur);
+        }
+      }
+      const items = [...map.entries()].map(([assigneeId, v]) => ({ assigneeId, assigneeName: v.name, openTasks: v.openTasks, overdueTasks: v.overdueTasks })).sort((a, b) => b.openTasks - a.openTasks);
+      return { workspaceId: scope.workspaceId, projectId: scope.projectId, rangeDays: days, items };
+    },
+
+    async timeLogged(input): Promise<{ workspaceId: string; projectId: string | null; rangeDays: number; totalMinutes: number; items: Array<{ userId: string; userName: string | null; minutes: number }> }> {
+      const { range = '30d', startDate, endDate } = input;
+      const { start, end, days } = rangeBounds({ range, startDate, endDate });
+      const scope = await resolveScopedWorkspace(input.userId, input.workspaceId, input.projectId);
+      const entries = await prisma.taskTimeEntry.findMany({
+        where: {
+          startedAt: { gte: start, lte: end },
+          task: taskScopeWhere(scope.workspaceId, scope.projectId),
+        },
+        select: {
+          userId: true,
+          durationMinutes: true,
+          user: { select: { name: true } },
+        },
+      });
+      const map = new Map<string, { name: string | null; minutes: number }>();
+      let total = 0;
+      for (const e of entries) {
+        total += e.durationMinutes;
+        const cur = map.get(e.userId) ?? { name: e.user?.name ?? null, minutes: 0 };
+        cur.minutes += e.durationMinutes;
+        if (!cur.name && e.user?.name) cur.name = e.user.name;
+        map.set(e.userId, cur);
+      }
+      const items = [...map.entries()].map(([userId, v]) => ({ userId, userName: v.name, minutes: v.minutes })).sort((a, b) => b.minutes - a.minutes);
+      return { workspaceId: scope.workspaceId, projectId: scope.projectId, rangeDays: days, totalMinutes: total, items };
     },
   };
 }

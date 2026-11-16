@@ -3,6 +3,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 
 type Input = { userId: string; workspaceId: string };
 
@@ -76,7 +77,7 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
         }
       }
 
-      return prisma.formResponse.create({
+      const response = await prisma.formResponse.create({
         data: {
           formId: input.formId,
           submittedBy: input.userId,
@@ -89,6 +90,24 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
           },
         },
       });
+
+      await enqueueAutomationRunsSafely(
+        {
+          workspaceId: form.workspaceId,
+          trigger: 'EVENT_FORM_SUBMITTED' as never,
+          eventKey: `form.submitted:${form.id}:${response.id}`,
+          payload: {
+            workspaceId: form.workspaceId,
+            formId: form.id,
+            formTitle: form.title,
+            responseId: response.id,
+            submittedBy: input.userId,
+          },
+        },
+        prisma,
+      );
+
+      return response;
     },
 
     async listResponses(input: Input & { formId: string; cursor?: string; limit: number }) {

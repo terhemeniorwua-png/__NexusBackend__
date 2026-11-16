@@ -3,31 +3,40 @@ import type { WorkerHealthRecorder } from '../../services/workers/worker-health'
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import {
   enqueueScheduledRuns,
+  processAutomationRunById,
   processPendingRuns,
   type AutomationEngineDependencies,
   type ProcessRunsResult,
   type ScheduledRunsResult,
 } from './automation.engine';
+import { createAutomationRunQueue } from './automation.queue';
+import { enqueueAutomationRunsSafely } from './automation.events';
 
 /**
  * Automation worker.
  *
- * The worker runs inside the API process and polls the durable
- * `AutomationRun` table. PostgreSQL is the source of truth: a restart does not
- * lose queued runs, and the claim in `processPendingRuns` prevents two
- * instances from executing the same run.
+ * Executes automation runs via a Redis-backed background job queue (primary)
+ * with durable PostgreSQL run history/retries and a DB polling fallback.
  *
- * Scheduled triggers are materialised into normal queued runs, so they share
- * the same retry, idempotency and history behaviour as event triggers.
+ * - Producers persist `AutomationRun` rows (idempotent by automationId+eventKey)
+ *   and dispatch run IDs to Redis.
+ * - This worker consumes run IDs from Redis and processes them by ID, claiming
+ *   each run in PostgreSQL (FOR UPDATE SKIP LOCKED) so concurrent workers do not
+ *   double-execute.
+ * - A periodic DB polling pass picks up missed queue messages, delayed retries,
+ *   and stale recovery.
+ * - Scheduled triggers and due-date-passed triggers are materialized into queued
+ *   runs on a schedule.
  */
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const SCHEDULE_INTERVAL_MS = 5 * 60_000;
+const REDIS_DEQUEUE_TIMEOUT_SECONDS = 5;
 
 export interface AutomationWorker {
   start(): void;
   stop(): Promise<void>;
-  runOnce(): Promise<{ runs: ProcessRunsResult; scheduled: ScheduledRunsResult }>;
+  runOnce(): Promise<{ runs: ProcessRunsResult; scheduled: ScheduledRunsResult; dueDateQueued: number }>;
 }
 
 export interface AutomationWorkerDependencies {
@@ -41,6 +50,10 @@ export interface AutomationWorkerDependencies {
   health?: WorkerHealthRecorder;
 }
 
+function emptyResult(): ProcessRunsResult {
+  return { claimed: 0, succeeded: 0, retried: 0, failed: 0, skipped: 0 };
+}
+
 export function createAutomationWorker(deps: AutomationWorkerDependencies): AutomationWorker {
   const log = deps.logger ?? defaultLogger;
   const now = deps.now ?? deps.engine?.now ?? (() => new Date());
@@ -52,50 +65,146 @@ export function createAutomationWorker(deps: AutomationWorkerDependencies): Auto
     logger: deps.engine?.logger ?? log,
     now,
   };
+  const queue = createAutomationRunQueue({ logger: log });
 
   let timer: NodeJS.Timeout | null = null;
   let stopped = true;
   let running = false;
-  let lastScheduleAt: Date | null = null;
+  let lastScheduleAt = 0;
+  let lastMaintenanceAt = 0;
 
-  async function runOnce(): Promise<{
-    runs: ProcessRunsResult;
-    scheduled: ScheduledRunsResult;
-  }> {
-    const currentTime = now();
+  async function enqueueDueDatePassed(currentTime: Date): Promise<number> {
+    // Find tasks whose due date has passed and are not in a terminal/completed state.
+    // Emit idempotent automation events per task (eventKey includes due timestamp bucket).
+    try {
+      const dueTasks = await deps.prisma.task.findMany({
+        where: {
+          dueDate: { lte: currentTime },
+          deletedAt: null,
+          archivedAt: null,
+          status: { notIn: ['APPROVED', 'ARCHIVED'] as never[] },
+          project: { workspaceId: { not: '' } },
+        },
+        select: {
+          id: true,
+          projectId: true,
+          status: true,
+          priority: true,
+          dueDate: true,
+          assignees: { select: { userId: true } },
+          project: { select: { workspaceId: true } },
+        },
+        take: 200,
+        orderBy: { dueDate: 'asc' },
+      });
+
+      let queued = 0;
+      for (const task of dueTasks) {
+        const dueIso = task.dueDate ? task.dueDate.toISOString() : 'none';
+        const eventKey = `task.due_date_passed:${task.id}:${dueIso}`;
+        queued += await enqueueAutomationRunsSafely(
+          {
+            workspaceId: task.project.workspaceId,
+            trigger: 'EVENT_TASK_DUE_DATE_PASSED' as never,
+            eventKey,
+            payload: {
+              eventKey,
+              workspaceId: task.project.workspaceId,
+              projectId: task.projectId,
+              taskId: task.id,
+              status: task.status,
+              priority: task.priority,
+              dueDate: task.dueDate?.toISOString() ?? null,
+              assigneeIds: task.assignees.map((a) => a.userId).join(','),
+            },
+          },
+          deps.prisma,
+          log,
+        );
+      }
+      return queued;
+    } catch (error) {
+      log.warn('automation_due_date_scan_failed', { error });
+      return 0;
+    }
+  }
+
+  async function runMaintenance(currentTime: Date): Promise<{ scheduled: ScheduledRunsResult; dueDateQueued: number; runs: ProcessRunsResult }> {
     let scheduled: ScheduledRunsResult = { queued: 0 };
+    let dueDateQueued = 0;
 
-    if (!lastScheduleAt || currentTime.getTime() - lastScheduleAt.getTime() >= scheduleIntervalMs) {
-      lastScheduleAt = currentTime;
-      scheduled = await enqueueScheduledRuns(engine, currentTime);
-      if (scheduled.queued > 0) {
-        log.info('automation_scheduled_runs_queued', { ...scheduled });
+    if (currentTime.getTime() - lastScheduleAt >= scheduleIntervalMs) {
+      lastScheduleAt = currentTime.getTime();
+      try {
+        scheduled = await enqueueScheduledRuns(engine, currentTime);
+      } catch (error) {
+        log.error('automation_schedule_enqueue_failed', { error });
+      }
+      dueDateQueued = await enqueueDueDatePassed(currentTime);
+      if (scheduled.queued > 0 || dueDateQueued > 0) {
+        log.info('automation_scheduled_or_due_enqueued', { ...scheduled, dueDateQueued });
       }
     }
 
-    const runs = await processPendingRuns(engine);
-    if (runs.claimed > 0) {
-      log.info('automation_run_pass_complete', { ...runs });
+    let runs = emptyResult();
+    if (currentTime.getTime() - lastMaintenanceAt >= pollIntervalMs) {
+      lastMaintenanceAt = currentTime.getTime();
+      try {
+        runs = await processPendingRuns(engine);
+        if (runs.claimed > 0) {
+          log.info('automation_db_poll_pass_complete', { ...runs });
+        }
+      } catch (error) {
+        log.error('automation_db_poll_failed', { error });
+      }
     }
 
-    return { runs, scheduled };
+    return { scheduled, dueDateQueued, runs };
   }
 
-  async function tick(): Promise<void> {
-    if (stopped) return;
-    running = true;
-    deps.health?.passStarted();
-    try {
-      await runOnce();
-      deps.health?.succeeded();
-    } catch (error) {
-      log.error('automation_run_pass_failed', { error });
-      deps.health?.failed(error);
-    } finally {
-      running = false;
-      if (!stopped) {
-        timer = setTimeout(() => void tick(), pollIntervalMs);
-        timer.unref();
+  async function runOnce(): Promise<{ runs: ProcessRunsResult; scheduled: ScheduledRunsResult; dueDateQueued: number }> {
+    const currentTime = now();
+    const maintenance = await runMaintenance(currentTime);
+    // Also drain any immediately due queued work from Redis once (non-blocking fallback handled by loop)
+    return maintenance;
+  }
+
+  async function loop(): Promise<void> {
+    while (!stopped) {
+      running = true;
+      deps.health?.passStarted();
+      try {
+        const currentTime = now();
+        const maintenance = await runMaintenance(currentTime);
+
+        // Consume from Redis queue (primary execution path)
+        let runId: string | null = null;
+        try {
+          runId = await queue.dequeue(REDIS_DEQUEUE_TIMEOUT_SECONDS);
+        } catch (error) {
+          log.warn('automation_queue_consume_error', { error });
+        }
+
+        if (runId) {
+          try {
+            const result = await processAutomationRunById(engine, runId);
+            if (result.claimed > 0) {
+              log.debug('automation_run_processed_from_queue', { runId, ...result });
+            }
+            void maintenance; // keep variable used
+          } catch (error) {
+            log.error('automation_queue_run_failed', { runId, error });
+          }
+        }
+
+        deps.health?.succeeded();
+      } catch (error) {
+        log.error('automation_worker_loop_failed', { error });
+        deps.health?.failed(error);
+        // avoid hot loop on persistent failure
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } finally {
+        running = false;
       }
     }
   }
@@ -105,14 +214,19 @@ export function createAutomationWorker(deps: AutomationWorkerDependencies): Auto
       if (!stopped) return;
       stopped = false;
       deps.health?.started();
-      timer = setTimeout(() => void tick(), 0);
+      // Kick off maintenance immediately, then enter queue-consuming loop.
+      timer = setTimeout(() => void loop(), 0);
       timer.unref();
     },
     async stop(): Promise<void> {
       stopped = true;
       if (timer) clearTimeout(timer);
       timer = null;
-      while (running) await new Promise((resolve) => setTimeout(resolve, 25));
+      // allow in-flight dequeue (bounded by BRPOP timeout) to finish
+      const deadline = Date.now() + (REDIS_DEQUEUE_TIMEOUT_SECONDS + 2) * 1000;
+      while (running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       deps.health?.stopped();
     },
     runOnce,

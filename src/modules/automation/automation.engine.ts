@@ -17,6 +17,7 @@ import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import { ProjectCapability, requireProjectAccess } from '../authorization/project.policy';
 import { generateTaskKey } from '../tasks/task.service';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { createMessageService } from '../messaging/message.service';
 
 /**
  * Automation execution engine.
@@ -433,6 +434,167 @@ async function executeWebhookAction(
   }
 }
 
+function resolveTargetTaskId(
+  automation: Automation,
+  payload: Record<string, unknown>,
+): string | null {
+  const config = asStringRecord(automation.actionConfig);
+  const fromConfig = config.taskId;
+  const fromPayload = typeof payload.taskId === 'string' ? payload.taskId : null;
+  return fromConfig || fromPayload;
+}
+
+async function executeSetFieldAction(
+  deps: AutomationEngineDependencies,
+  automation: Automation,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const config = asStringRecord(automation.actionConfig);
+  const taskId = resolveTargetTaskId(automation, payload);
+  const field = config.field?.trim();
+  const rawValue = config.value;
+  if (!taskId || !field || rawValue === undefined) {
+    throw new AppError(
+      400,
+      'AUTOMATION_INVALID_ACTION_CONFIG',
+      'SET_FIELD requires a taskId (in config or payload), field, and value',
+    );
+  }
+
+  const workspaceRole = await assertOwnerCanManage(deps.prisma, automation);
+  const task = await deps.prisma.task.findFirst({
+    where: { id: taskId, deletedAt: null, project: { workspaceId: automation.workspaceId } },
+    select: { id: true, projectId: true, key: true },
+  });
+  if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'Target task not found for automation action');
+
+  await requireProjectAccess(deps.prisma, {
+    userId: automation.createdById,
+    workspaceId: automation.workspaceId,
+    projectId: task.projectId,
+    workspaceRole,
+    capability: ProjectCapability.ManageTask,
+  });
+
+  const data: Record<string, unknown> = {};
+  const allowed: Record<string, (v: string) => unknown> = {
+    status: (v) => v,
+    priority: (v) => v,
+    category: (v) => (v === 'null' || v === '' ? null : v),
+    title: (v) => v,
+    description: (v) => (v === 'null' ? null : v),
+    dueDate: (v) => (v === 'null' || v === '' ? null : new Date(v)),
+    startDate: (v) => (v === 'null' || v === '' ? null : new Date(v)),
+  };
+  const mapper = allowed[field];
+  if (!mapper) {
+    throw new AppError(400, 'AUTOMATION_UNSUPPORTED_FIELD', `Field "${field}" cannot be set by automation`);
+  }
+  data[field] = mapper(rawValue);
+
+  await deps.prisma.task.update({ where: { id: task.id }, data: data as Prisma.TaskUpdateInput });
+  await recordAuditEvent(deps.prisma, {
+    workspaceId: automation.workspaceId,
+    actorId: automation.createdById,
+    action: 'automation.task_field_set',
+    targetType: 'Task',
+    targetId: task.id,
+    metadata: { automationId: automation.id, field, value: rawValue, key: task.key },
+  });
+}
+
+async function executeAssignAction(
+  deps: AutomationEngineDependencies,
+  automation: Automation,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const config = asStringRecord(automation.actionConfig);
+  const taskId = resolveTargetTaskId(automation, payload);
+  const assigneeIds = splitList(config.userIds ?? config.userId ?? config.assigneeId);
+  if (!taskId || assigneeIds.length === 0) {
+    throw new AppError(
+      400,
+      'AUTOMATION_INVALID_ACTION_CONFIG',
+      'ASSIGN requires a taskId (in config or payload) and userIds/userId/assigneeId',
+    );
+  }
+
+  const workspaceRole = await assertOwnerCanManage(deps.prisma, automation);
+  const task = await deps.prisma.task.findFirst({
+    where: { id: taskId, deletedAt: null, project: { workspaceId: automation.workspaceId } },
+    select: { id: true, projectId: true, key: true },
+  });
+  if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'Target task not found for automation action');
+
+  await requireProjectAccess(deps.prisma, {
+    userId: automation.createdById,
+    workspaceId: automation.workspaceId,
+    projectId: task.projectId,
+    workspaceRole,
+    capability: ProjectCapability.ManageTask,
+  });
+
+  const activeMembers = await deps.prisma.workspaceMembership.findMany({
+    where: { workspaceId: automation.workspaceId, userId: { in: assigneeIds }, status: 'ACTIVE' },
+    select: { userId: true },
+  });
+  if (activeMembers.length === 0) {
+    throw new AppError(400, 'AUTOMATION_NO_RECIPIENTS', 'No active workspace member matches assignees');
+  }
+
+  await deps.prisma.$transaction(async (tx) => {
+    for (const member of activeMembers) {
+      await tx.taskAssignee.upsert({
+        where: { taskId_userId: { taskId: task.id, userId: member.userId } },
+        create: { taskId: task.id, userId: member.userId, assignedBy: automation.createdById },
+        update: {},
+      });
+    }
+    await recordAuditEvent(tx, {
+      workspaceId: automation.workspaceId,
+      actorId: automation.createdById,
+      action: 'automation.task_assigned',
+      targetType: 'Task',
+      targetId: task.id,
+      metadata: { automationId: automation.id, assigneeIds: activeMembers.map((m) => m.userId), key: task.key },
+    });
+  });
+}
+
+async function executePostMessageAction(
+  deps: AutomationEngineDependencies,
+  automation: Automation,
+  _payload: Record<string, unknown>,
+): Promise<void> {
+  const config = asStringRecord(automation.actionConfig);
+  const channelId = config.channelId?.trim();
+  const body = (config.body ?? config.message ?? '').trim();
+  if (!channelId || !body) {
+    throw new AppError(
+      400,
+      'AUTOMATION_INVALID_ACTION_CONFIG',
+      'POST_MESSAGE requires channelId and body/message',
+    );
+  }
+
+  await assertOwnerCanManage(deps.prisma, automation);
+  const channel = await deps.prisma.channel.findFirst({
+    where: { id: channelId, workspaceId: automation.workspaceId, deletedAt: null },
+    select: { id: true, workspaceId: true },
+  });
+  if (!channel) {
+    throw new AppError(404, 'CHANNEL_NOT_FOUND', 'Target channel not found for automation action');
+  }
+
+  const messageService = createMessageService(deps.prisma);
+  await messageService.send({
+    userId: automation.createdById,
+    workspaceId: automation.workspaceId,
+    channelId: channel.id,
+    body,
+  });
+}
+
 export async function executeAutomationAction(
   deps: AutomationEngineDependencies,
   automation: Automation,
@@ -451,6 +613,15 @@ export async function executeAutomationAction(
       return;
     case 'SEND_WEBHOOK':
       await executeWebhookAction(deps, automation, payload, runId);
+      return;
+    case 'SET_FIELD':
+      await executeSetFieldAction(deps, automation, payload);
+      return;
+    case 'ASSIGN':
+      await executeAssignAction(deps, automation, payload);
+      return;
+    case 'POST_MESSAGE':
+      await executePostMessageAction(deps, automation, payload);
       return;
     default:
       throw new AppError(400, 'AUTOMATION_UNKNOWN_ACTION', 'Unsupported automation action');
@@ -526,14 +697,9 @@ type ClaimedRun = AutomationRun & { automation: Automation };
  * once, and silently repeating a task creation or notification would be worse
  * than surfacing the failure.
  */
-export async function processPendingRuns(
-  deps: AutomationEngineDependencies,
-  options: { limit?: number } = {},
-): Promise<ProcessRunsResult> {
-  const now = deps.now?.() ?? new Date();
-  const limit = options.limit ?? BATCH_SIZE;
-  const log = deps.logger ?? defaultLogger;
 
+
+async function recoverStaleRuns(deps: AutomationEngineDependencies, now: Date): Promise<void> {
   await deps.prisma.automationRun.updateMany({
     where: {
       status: 'RUNNING',
@@ -545,6 +711,50 @@ export async function processPendingRuns(
       error: 'Execution did not finish before the stale-run timeout',
     },
   });
+}
+
+/**
+ * Claim and execute a specific queued run by ID (used by Redis job queue consumers).
+ */
+export async function processAutomationRunById(
+  deps: AutomationEngineDependencies,
+  runId: string,
+): Promise<ProcessRunsResult> {
+  const now = deps.now?.() ?? new Date();
+  await recoverStaleRuns(deps, now);
+
+  const claimed = await deps.prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "AutomationRun"
+      WHERE "id" = ${runId}::uuid AND "status" = 'PENDING' AND "nextAttemptAt" <= ${now}
+      FOR UPDATE SKIP LOCKED
+    `;
+    if (rows.length === 0) return [] as ClaimedRun[];
+    await tx.automationRun.updateMany({
+      where: { id: runId },
+      data: { status: 'RUNNING', startedAt: now },
+    });
+    return tx.automationRun.findMany({
+      where: { id: runId },
+      include: { automation: true },
+    });
+  });
+
+  return executeClaimedRuns(deps, claimed, now);
+}
+
+/**
+ * Claim and execute due runs (DB polling fallback / maintenance).
+ */
+export async function processPendingRuns(
+  deps: AutomationEngineDependencies,
+  options: { limit?: number } = {},
+): Promise<ProcessRunsResult> {
+  const now = deps.now?.() ?? new Date();
+  const limit = options.limit ?? BATCH_SIZE;
+
+  await recoverStaleRuns(deps, now);
 
   const claimed = await deps.prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
@@ -572,83 +782,5 @@ export async function processPendingRuns(
     });
   });
 
-  const result: ProcessRunsResult = {
-    claimed: claimed.length,
-    succeeded: 0,
-    retried: 0,
-    failed: 0,
-    skipped: 0,
-  };
-
-  for (const run of claimed) {
-    const automation = run.automation;
-
-    if (!automation.enabled || automation.deletedAt) {
-      await deps.prisma.automationRun.updateMany({
-        where: { id: run.id, status: 'RUNNING' },
-        data: { status: 'SKIPPED', completedAt: now, error: null },
-      });
-      result.skipped += 1;
-      continue;
-    }
-
-    const payload = asPayload(run.payload);
-    if (!conditionMatches(automation.condition, payload)) {
-      await deps.prisma.automationRun.updateMany({
-        where: { id: run.id, status: 'RUNNING' },
-        data: { status: 'SKIPPED', completedAt: now, error: null },
-      });
-      result.skipped += 1;
-      continue;
-    }
-
-    try {
-      await executeAutomationAction(deps, automation, payload, run.id);
-      await deps.prisma.automationRun.updateMany({
-        where: { id: run.id, status: 'RUNNING' },
-        data: {
-          status: 'SUCCEEDED',
-          completedAt: now,
-          attempts: { increment: 1 },
-          error: null,
-        },
-      });
-      result.succeeded += 1;
-    } catch (error) {
-      const attempts = run.attempts + 1;
-      const maxAttempts = Math.max(1, automation.maxRetries + 1);
-      const message =
-        error instanceof Error ? error.message.slice(0, 500) : 'The automation action failed';
-
-      if (attempts >= maxAttempts) {
-        await deps.prisma.automationRun.updateMany({
-          where: { id: run.id, status: 'RUNNING' },
-          data: { status: 'FAILED', completedAt: now, attempts, error: message },
-        });
-        result.failed += 1;
-      } else {
-        await deps.prisma.automationRun.updateMany({
-          where: { id: run.id, status: 'RUNNING' },
-          data: {
-            status: 'PENDING',
-            attempts,
-            error: message,
-            nextAttemptAt: new Date(now.getTime() + backoffFor(attempts)),
-          },
-        });
-        result.retried += 1;
-      }
-
-      log.error('automation_run_failed', {
-        automationId: automation.id,
-        runId: run.id,
-        action: automation.action,
-        attempts,
-        maxAttempts,
-        error: message,
-      });
-    }
-  }
-
-  return result;
+  return executeClaimedRuns(deps, claimed, now);
 }

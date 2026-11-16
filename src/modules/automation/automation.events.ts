@@ -2,14 +2,16 @@ import type { AutomationTrigger, Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import { enqueueWebhookEventSafely } from '../webhooks/webhook.events';
+import { createAutomationRunQueue } from './automation.queue';
 
 /**
  * Automation event registration.
  *
  * Application services publish a domain event here. The publisher does not
  * execute an automation synchronously: it only writes a queued run per matching
- * automation. The worker in `automation.worker.ts` executes the queue, which
- * keeps request latency predictable and makes failures retryable.
+ * automation and dispatches run IDs to the Redis-backed job queue. The worker
+ * in `automation.worker.ts` consumes the queue (with DB polling fallback),
+ * which keeps request latency predictable and makes failures retryable.
  *
  * Idempotency is enforced by the `(automationId, eventKey)` unique index. A
  * replayed HTTP request or a duplicate domain event therefore cannot create a
@@ -59,6 +61,29 @@ export async function enqueueAutomationRuns(
   });
 
   if (result.count > 0) {
+    // Dispatch newly created/claimable runs to the Redis job queue.
+    try {
+      const runs = await client.automationRun.findMany({
+        where: {
+          automationId: { in: automations.map((a) => a.id) },
+          eventKey: event.eventKey,
+          status: 'PENDING',
+        },
+        select: { id: true },
+      });
+      if (runs.length > 0) {
+        await createAutomationRunQueue({ logger: log }).enqueueMany(runs.map((r) => r.id));
+      }
+    } catch (error) {
+      // Queue dispatch is best-effort; DB polling fallback will pick up runs.
+      log.warn('automation_queue_dispatch_failed', {
+        workspaceId: event.workspaceId,
+        trigger: event.trigger,
+        eventKey: event.eventKey,
+        error,
+      });
+    }
+
     log.debug('automation_runs_enqueued', {
       workspaceId: event.workspaceId,
       trigger: event.trigger,

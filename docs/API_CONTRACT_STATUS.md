@@ -41,6 +41,11 @@ Audit of routes registered in `src/routes/index.ts` and module route files versu
 | ai | `POST /ai/writing/summarize` | yes | yes | no | yes |
 | ai | `POST /ai/writing/translate` | yes | yes | no | yes |
 | analytics | `GET /analytics` | yes | yes | no | yes |
+| analytics | `GET /analytics/tasks/by-status` | yes | yes | no | yes |
+| analytics | `GET /analytics/tasks/by-assignee` | yes | yes | no | yes |
+| analytics | `GET /analytics/tasks/throughput` | yes | yes | no | yes |
+| analytics | `GET /analytics/tasks/workload` | yes | yes | no | yes |
+| analytics | `GET /analytics/time-logged` | yes | yes | no | yes |
 | auth | `POST /auth/2fa/challenge` | yes | yes | no | yes |
 | auth | `POST /auth/2fa/confirm` | yes | yes | no | yes |
 | auth | `POST /auth/2fa/disable` | yes | yes | no | yes |
