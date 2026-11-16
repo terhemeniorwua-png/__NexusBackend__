@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { FileProvider } from './types';
 
 const G = 'https://graph.microsoft.com/v1.0/me/drive';

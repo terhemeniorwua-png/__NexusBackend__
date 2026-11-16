@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { randomUUID } from 'node:crypto';
 import type { AiActionProposal, Prisma, PrismaClient } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
