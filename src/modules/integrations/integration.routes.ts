@@ -203,8 +203,12 @@ export function createIntegrationRouter({
     validate({ params: disconnectParamsSchema, body: updateIntegrationSchema }),
     async (req, res) => {
       const { integrationId } = req.validated!.params as { integrationId: string };
-      const { enabled } = req.validated!.body as UpdateIntegrationInput;
-      sendSuccess(res, await service.setEnabled({ userId: userId(req), integrationId, enabled }));
+      const body = req.validated!.body as UpdateIntegrationInput;
+      if (body.config !== undefined) {
+        sendSuccess(res, await service.updateConfig({ userId: userId(req), integrationId, config: body.config }));
+        return;
+      }
+      sendSuccess(res, await service.setEnabled({ userId: userId(req), integrationId, enabled: body.enabled! }));
     },
   );
 
@@ -242,6 +246,17 @@ export function createIntegrationRouter({
     },
   );
 
+  router.get(
+    '/:integrationId/status',
+    requireAuth,
+    requireActive,
+    validate({ params: disconnectParamsSchema }),
+    async (req, res) => {
+      const { integrationId } = req.validated!.params as { integrationId: string };
+      sendSuccess(res, await service.getStatus({ userId: userId(req), integrationId }));
+    },
+  );
+
   router.post(
     '/:integrationId/sync-jobs/:jobId/retry',
     requireAuth,
@@ -256,7 +271,7 @@ export function createIntegrationRouter({
     },
   );
 
-  // Slack step 1 (authenticated): the frontend asks for the Slack consent URL.
+  // Slack: workspace-level connect (workspace admins only).
   router.get(
     '/slack/authorize',
     requireAuth,
@@ -269,11 +284,21 @@ export function createIntegrationRouter({
         workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
       });
+      if (isSlackDefaultConnectEnabled()) {
+        const integration = await service.connect({
+          userId: userId(req),
+          provider: 'SLACK',
+          workspaceId,
+          ...(await slackDefaultConnection()),
+        });
+        sendSuccess(res, { integration, connected: true });
+        return;
+      }
       sendSuccess(res, { url: await buildSlackAuthorizeUrl({ userId: userId(req), workspaceId }) });
     },
   );
 
-  // Slack step 2 (public): Slack redirects the browser here. Identity comes from the signed state.
+  // Slack callback (public): identity and workspace come from the signed, single-use state.
   router.get('/slack/callback', async (req, res) => {
     const done = (status: 'connected' | 'denied' | 'error') =>
       res.redirect(302, slackResultUrl(status));
@@ -292,8 +317,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('slack_oauth_failed', { error: err });
+    } catch {
+      logger.warn('slack_oauth_failed');
       return done('error');
     }
   });
@@ -312,11 +337,11 @@ export function createIntegrationRouter({
         userId: claims.userId,
         provider: 'SLACK',
         workspaceId: claims.workspaceId,
-        ...slackDefaultConnection(),
+        ...(await slackDefaultConnection()),
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('slack_default_connect_failed', { error: err });
+    } catch {
+      logger.warn('slack_default_connect_failed');
       return done('error');
     }
   });
@@ -355,8 +380,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('google_drive_oauth_failed', { error: err });
+    } catch {
+      logger.warn('google_drive_oauth_failed');
       return done('error');
     }
   });
@@ -397,8 +422,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('dropbox_oauth_failed', { error: err });
+    } catch {
+      logger.warn('dropbox_oauth_failed');
       return done('error');
     }
   });
@@ -432,20 +457,26 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('gmail_oauth_failed', { error: err });
+    } catch {
+      logger.warn('gmail_oauth_failed');
       return done('error');
     }
   });
 
-  // GitHub is a personal connection (workspaceId null).
+  // GitHub: per-workspace connection (workspace admins only).
   router.get(
     '/github/authorize',
     requireAuth,
     requireActive,
     validate({ query: githubAuthorizeQuerySchema }),
     async (req, res) => {
-      sendSuccess(res, { url: await buildGithubAuthorizeUrl({ userId: userId(req) }) });
+      const { workspaceId } = req.validated!.query as { workspaceId: string };
+      await requireWorkspaceAccess(getPrismaClient(), {
+        userId: userId(req),
+        workspaceId,
+        capability: WorkspaceCapability.UpdateWorkspace,
+      });
+      sendSuccess(res, { url: await buildGithubAuthorizeUrl({ userId: userId(req), workspaceId }) });
     },
   );
 
@@ -459,28 +490,36 @@ export function createIntegrationRouter({
     if (!code) return done('error');
     try {
       const claims = await verifyGithubState(state);
-      const token = await exchangeGithubCode(code);
+      const token = await exchangeGithubCode({ code, codeVerifier: claims.codeVerifier });
       await service.connect({
         userId: claims.userId,
         provider: 'GITHUB',
-        workspaceId: null,
+        workspaceId: claims.workspaceId,
         ...token,
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('github_oauth_failed', { error: err });
+    } catch {
+      logger.warn('github_oauth_failed');
       return done('error');
     }
   });
 
-  // Google Calendar is a personal connection (workspaceId null).
+  // Google Calendar: per-workspace connection (workspace admins only).
   router.get(
     '/google-calendar/authorize',
     requireAuth,
     requireActive,
     validate({ query: calendarAuthorizeQuerySchema }),
     async (req, res) => {
-      sendSuccess(res, { url: await buildCalendarAuthorizeUrl({ userId: userId(req) }) });
+      const { workspaceId } = req.validated!.query as { workspaceId: string };
+      await requireWorkspaceAccess(getPrismaClient(), {
+        userId: userId(req),
+        workspaceId,
+        capability: WorkspaceCapability.UpdateWorkspace,
+      });
+      sendSuccess(res, {
+        url: await buildCalendarAuthorizeUrl({ userId: userId(req), workspaceId }),
+      });
     },
   );
 
@@ -494,16 +533,16 @@ export function createIntegrationRouter({
     if (!code) return done('error');
     try {
       const claims = await verifyCalendarState(state);
-      const token = await exchangeCalendarCode(code);
+      const token = await exchangeCalendarCode({ code, codeVerifier: claims.codeVerifier });
       await service.connect({
         userId: claims.userId,
         provider: 'GOOGLE_CALENDAR',
-        workspaceId: null,
+        workspaceId: claims.workspaceId,
         ...token,
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('google_calendar_oauth_failed', { error: err });
+    } catch {
+      logger.warn('google_calendar_oauth_failed');
       return done('error');
     }
   });
@@ -537,8 +576,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch (err) {
-      logger.warn('outlook_calendar_oauth_failed', { error: err });
+    } catch {
+      logger.warn('outlook_calendar_oauth_failed');
       return done('error');
     }
   });
@@ -577,8 +616,8 @@ export function createIntegrationRouter({
           ...token,
         });
         return done('connected');
-      } catch (err) {
-        logger.warn(p.log, { error: err });
+      } catch {
+        logger.warn(p.log);
         return done('error');
       }
     });

@@ -1,5 +1,15 @@
 # API Contract Status
 
+## feat/integrations-import updates
+
+- **Integrations OAuth (Google Calendar, Slack, GitHub):** per-workspace connections with workspace admin/manager permission (`UpdateWorkspace`) for connect/authorize flows; CSRF-protected signed OAuth state with short expiry and single-use nonce (when Redis available); PKCE (S256) for Google Calendar and GitHub; tokens encrypted at rest (AES-256-GCM via `INTEGRATION_ENCRYPTION_KEY`) and never returned in API responses/logs; connect/disconnect/refresh-failure audit events.
+- **New/updated endpoints:** `GET /integrations/{integrationId}/status`, `PATCH /integrations/{integrationId}` accepts `config` (e.g. Slack channel) in addition to `enabled`, Google Calendar and GitHub authorize/callback now workspace-scoped.
+- **Webhooks:** GitHub integration webhooks accept `GITHUB_INTEGRATION_WEBHOOK_SECRET` (fallback to app secret) with HMAC (`X-Hub-Signature-256`) verification and replay protection via delivery id.
+- **Importers:** `POST /imports/dry-run` (preview, creates nothing), `POST /imports/{importId}/confirm` (idempotent enqueue), `GET /imports`, `GET /imports/{importId}` for ClickUp/Trello/CSV with user-email mapping, warnings, external-id idempotency, and background execution/reporting.
+- **Docs:** `docs/INTEGRATIONS_SETUP.md` added; OpenAPI updated with status/import paths.
+- **Migration:** `20261118130000_integrations_imports_sync` (additive).
+
+
 Audit of routes registered in `src/routes/index.ts` and module route files versus `docs/openapi.yaml`.
 
 - Registered HTTP routes audited: **411**
