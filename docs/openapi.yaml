@@ -10508,174 +10508,266 @@ paths:
     get:
       tags:
       - Files
-      operationId: get_workspaces_workspaceId_files
-      summary: GET /workspaces/{workspaceId}/files (registered route; contract aligned to implementation)
-      security:
+      operationId: listWorkspaceFiles
+      summary: List workspace files (cursor pagination)
+      security: &id001
       - bearerAuth: []
+      parameters:
+      - &id002
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+      - in: query
+        name: projectId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: taskId
+        required: false
+        schema:
+          type: string
+          format: uuid
       responses:
         '200':
-          description: Success (see implementation for response shape).
+          description: File list
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items: &id003
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                            workspaceId:
+                              type: string
+                              format: uuid
+                            projectId:
+                              type:
+                              - string
+                              - 'null'
+                              format: uuid
+                            taskId:
+                              type:
+                              - string
+                              - 'null'
+                              format: uuid
+                            uploadedById:
+                              type: string
+                              format: uuid
+                            fileName:
+                              type: string
+                            mimeType:
+                              type: string
+                            sizeBytes:
+                              type: integer
+                            createdAt:
+                              type: string
+                              format: date-time
+                          required:
+                          - id
+                          - workspaceId
+                          - projectId
+                          - taskId
+                          - uploadedById
+                          - fileName
+                          - mimeType
+                          - sizeBytes
+                          - createdAt
+                      nextCursor:
+                        type:
+                        - string
+                        - 'null'
+                        format: uuid
+                      totalBytes:
+                        type: integer
+                    required:
+                    - items
+                    - nextCursor
+                    - totalBytes
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
         '404':
           description: Not found
-      parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
     post:
       tags:
       - Files
-      operationId: post_workspaces_workspaceId_files
-      summary: POST /workspaces/{workspaceId}/files (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
-      responses:
-        '200':
-          description: Success (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
-        '404':
-          description: Not found
-        '201':
-          description: Created (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+      operationId: uploadWorkspaceFile
+      summary: Upload a file (multipart/form-data)
+      security: *id001
       parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
+      - *id002
       requestBody:
-        required: false
+        required: true
         content:
-          application/json:
+          multipart/form-data:
             schema:
               type: object
-              additionalProperties: true
-  /workspaces/{workspaceId}/files/{fileId}:
-    delete:
-      tags:
-      - Files
-      operationId: delete_workspaces_workspaceId_files_fileId
-      summary: DELETE /workspaces/{workspaceId}/files/{fileId} (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Required file (max 50 MB, allowed MIME types per backend schema)
+                projectId:
+                  type: string
+                  format: uuid
+                taskId:
+                  type: string
+                  format: uuid
+              required:
+              - file
       responses:
-        '200':
-          description: Success (see implementation for response shape).
+        '201':
+          description: Uploaded file
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
+                properties:
+                  success:
+                    type: boolean
+                  data: *id003
         '400':
           description: Bad request
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
-        '404':
-          description: Not found
-      parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: fileId
-        required: true
-        schema:
-          type: string
+        '413':
+          description: File too large
+        '415':
+          description: Unsupported file type
+  /workspaces/{workspaceId}/files/{fileId}:
     get:
       tags:
       - Files
-      operationId: get_workspaces_workspaceId_files_fileId
-      summary: GET /workspaces/{workspaceId}/files/{fileId} (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
+      operationId: downloadWorkspaceFile
+      summary: Download a file (raw bytes, Content-Disposition attachment)
+      security: *id001
+      parameters:
+      - *id002
+      - &id004
+        in: path
+        name: fileId
+        required: true
+        schema:
+          type: string
+          format: uuid
       responses:
         '200':
-          description: Success (see implementation for response shape).
+          description: File content
           content:
-            application/json:
+            application/octet-stream:
               schema:
-                type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
         '404':
           description: Not found
+    delete:
+      tags:
+      - Files
+      operationId: deleteWorkspaceFile
+      summary: Delete a file
+      security: *id001
       parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: fileId
-        required: true
-        schema:
-          type: string
+      - *id002
+      - *id004
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      ok:
+                        type: boolean
+                        enum:
+                        - true
+                    required:
+                    - ok
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
   /workspaces/{workspaceId}/files/usage:
     get:
       tags:
       - Files
-      operationId: get_workspaces_workspaceId_files_usage
-      summary: GET /workspaces/{workspaceId}/files/usage (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
+      operationId: getWorkspaceFileUsage
+      summary: Get workspace file storage usage
+      security: *id001
+      parameters:
+      - *id002
       responses:
         '200':
-          description: Success (see implementation for response shape).
+          description: Usage
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      totalBytes:
+                        type: integer
+                      fileCount:
+                        type: integer
+                    required:
+                    - totalBytes
+                    - fileCount
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
-        '404':
-          description: Not found
-      parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
   /workspaces/{workspaceId}/forms:
     get:
       tags:
