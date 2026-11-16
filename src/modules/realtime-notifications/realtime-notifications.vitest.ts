@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ioMocks = vi.hoisted(() => ({
@@ -24,7 +25,6 @@ vi.mock('../../middleware/authenticate', () => ({
 }));
 
 import {
-  domainEvents,
   emitDomainEvent,
   registerDefaultDomainEventHandlers,
 } from '../../realtime/domain-events';
@@ -312,7 +312,7 @@ describe('notifications API and service contract', () => {
       service,
     });
     app.use('/notifications', router);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+     
     app.use((err: any, _req: any, res: any, _next: any) => {
       res.status(err.statusCode || 500).json({ success: false, error: { code: err.code || 'ERR', message: err.message } });
     });
