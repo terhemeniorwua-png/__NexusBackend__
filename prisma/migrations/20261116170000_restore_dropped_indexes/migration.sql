@@ -1,0 +1,20 @@
+-- Restores raw-SQL indexes dropped by 20261116143641_user (Prisma does not model them)
+CREATE INDEX IF NOT EXISTS "AuditLog_securityEvent_idx" ON "AuditLog"("securityEvent");
+CREATE INDEX IF NOT EXISTS "Channel_name_trgm_idx" ON "Channel" USING GIN ("name" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Department_name_trgm_idx" ON "Department" USING GIN ("name" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Document_content_trgm_idx" ON "Document" USING GIN ("content" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Document_title_trgm_idx" ON "Document" USING GIN ("title" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "FileAttachment_extractedText_trgm_idx" ON "FileAttachment" USING GIN ("extractedText" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "FileAttachment_fileName_trgm_idx" ON "FileAttachment" USING GIN ("fileName" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Meeting_title_trgm_idx" ON "Meeting" USING GIN ("title" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Message_body_trgm_idx" ON "Message" USING GIN ("body" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Project_description_trgm_idx" ON "Project" USING GIN ("description" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Project_key_trgm_idx" ON "Project" USING GIN ("key" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Project_name_trgm_idx" ON "Project" USING GIN ("name" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Task_description_trgm_idx" ON "Task" USING GIN ("description" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Task_title_trgm_idx" ON "Task" USING GIN ("title" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Team_name_trgm_idx" ON "Team" USING GIN ("name" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "User_email_trgm_idx" ON "User" USING GIN ("email" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "User_name_trgm_idx" ON "User" USING GIN ("name" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Workspace_name_trgm_idx" ON "Workspace" USING GIN ("name" gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS "Workspace_slug_trgm_idx" ON "Workspace" USING GIN ("slug" gin_trgm_ops);
