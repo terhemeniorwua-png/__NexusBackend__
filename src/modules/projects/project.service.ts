@@ -260,7 +260,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       context: RequestContext,
     ) {
       const requestStartedAt = new Date();
-      const initialAccess = await authorize(input, ProjectPermission.ManageMembers);
+      const initialAccess = await authorize(input, ProjectPermission.View);
       if (input.newOwnerId === initialAccess.project.ownerId)
         throw new AppError(
           400,
@@ -299,6 +299,18 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           403,
           'PROJECT_TRANSFER_FORBIDDEN',
           'Only the project owner or a workspace administrator can transfer ownership',
+        );
+      }
+
+      // Org owners/admins only hold read access on projects they are not members of, so the
+      // owner-or-workspace-admin check above is the transfer rule. Non-admin owners must
+      // still hold ManageMembers.
+      if (!initiallyAdmin && !initialAccess.permissions.includes(ProjectPermission.ManageMembers)) {
+        throw new AppError(
+          403,
+          'PERMISSION_DENIED',
+          'Your project role does not allow this action',
+          { requiredPermission: ProjectPermission.ManageMembers },
         );
       }
 
@@ -353,15 +365,26 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
             'Only the project owner or a workspace administrator can transfer ownership',
           );
 
-        await authorizeProject(tx, {
+        const txAccess = await authorizeProject(tx, {
           actor: {
             userId: input.userId,
             workspaceId: input.workspaceId,
             workspaceRole: actorRole,
           },
           projectId: input.projectId,
-          permission: ProjectPermission.ManageMembers,
+          permission: ProjectPermission.View,
         });
+        if (
+          !actorIsWorkspaceAdmin &&
+          !txAccess.permissions.includes(ProjectPermission.ManageMembers)
+        ) {
+          throw new AppError(
+            403,
+            'PERMISSION_DENIED',
+            'Your project role does not allow this action',
+            { requiredPermission: ProjectPermission.ManageMembers },
+          );
+        }
 
         await tx.$queryRaw<Array<{ id: string }>>`
           SELECT wm."id" FROM "WorkspaceMembership" wm
@@ -628,11 +651,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           const myMembership = await tx.projectMembership.findUnique({
             where: { projectId_userId: { projectId: row.id, userId: input.userId } },
           });
-          return toSummary(
-            row,
-            access.projectRole ??
-              (myMembership?.role ?? null),
-          );
+          return toSummary(row, access.projectRole ?? myMembership?.role ?? null);
         });
       } catch (error) {
         return mapConflict(error);
