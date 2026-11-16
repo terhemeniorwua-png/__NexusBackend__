@@ -377,9 +377,19 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
         throw new AppError(403, 'COMMENT_DELETE_FORBIDDEN', 'You can only delete your own comments');
       }
 
-      await prisma.documentComment.update({
-        where: { id: comment.id },
-        data: { deletedAt: new Date() },
+      await prisma.$transaction(async (tx) => {
+        await tx.documentComment.update({
+          where: { id: comment.id },
+          data: { deletedAt: new Date() },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'document.comment_deleted',
+          targetType: 'DocumentComment',
+          targetId: comment.id,
+          metadata: { documentId: input.documentId },
+        });
       });
     },
   };

@@ -9761,285 +9761,375 @@ paths:
     get:
       tags:
       - Documents
-      operationId: get_workspaces_workspaceId_documents
-      summary: GET /workspaces/{workspaceId}/documents (registered route; contract aligned to implementation)
-      security:
+      operationId: listDocuments
+      summary: List documents (cursor pagination)
+      security: &id001
       - bearerAuth: []
-      responses:
-        '200':
-          description: Success (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
-        '404':
-          description: Not found
       parameters:
-      - in: path
+      - &id002
+        in: path
         name: workspaceId
         required: true
         schema:
           type: string
+          format: uuid
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+      - in: query
+        name: projectId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: taskId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: search
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items: &id003
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                            workspaceId:
+                              type: string
+                              format: uuid
+                            projectId:
+                              type:
+                              - string
+                              - 'null'
+                              format: uuid
+                            taskId:
+                              type:
+                              - string
+                              - 'null'
+                              format: uuid
+                            title:
+                              type: string
+                            content:
+                              type: string
+                            authorId:
+                              type: string
+                              format: uuid
+                            authorName:
+                              type: string
+                            revisionCount:
+                              type: integer
+                            commentCount:
+                              type: integer
+                            createdAt:
+                              type: string
+                              format: date-time
+                            updatedAt:
+                              type: string
+                              format: date-time
+                          required:
+                          - id
+                          - workspaceId
+                          - projectId
+                          - taskId
+                          - title
+                          - content
+                          - authorId
+                          - authorName
+                          - revisionCount
+                          - commentCount
+                          - createdAt
+                          - updatedAt
+                      nextCursor:
+                        type:
+                        - string
+                        - 'null'
+                        format: uuid
+                    required:
+                    - items
+                    - nextCursor
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
     post:
       tags:
       - Documents
-      operationId: post_workspaces_workspaceId_documents
-      summary: POST /workspaces/{workspaceId}/documents (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
-      responses:
-        '200':
-          description: Success (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
-        '404':
-          description: Not found
-        '201':
-          description: Created (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+      operationId: createDocument
+      summary: Create a document
+      security: *id001
       parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
+      - *id002
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: true
-  /workspaces/{workspaceId}/documents/{documentId}:
-    delete:
-      tags:
-      - Documents
-      operationId: delete_workspaces_workspaceId_documents_documentId
-      summary: DELETE /workspaces/{workspaceId}/documents/{documentId} (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                projectId:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+                taskId:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+              required:
+              - title
       responses:
-        '200':
-          description: Success (see implementation for response shape).
+        '201':
+          description: Created
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
+                properties:
+                  success:
+                    type: boolean
+                  data: *id003
         '400':
           description: Bad request
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
-        '404':
-          description: Not found
-      parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: documentId
-        required: true
-        schema:
-          type: string
+  /workspaces/{workspaceId}/documents/{documentId}:
     get:
       tags:
       - Documents
-      operationId: get_workspaces_workspaceId_documents_documentId
-      summary: GET /workspaces/{workspaceId}/documents/{documentId} (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
+      operationId: getDocument
+      summary: Get a document
+      security: *id001
+      parameters:
+      - *id002
+      - &id004
+        in: path
+        name: documentId
+        required: true
+        schema:
+          type: string
+          format: uuid
       responses:
         '200':
-          description: Success (see implementation for response shape).
+          description: Document
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
+                properties:
+                  success:
+                    type: boolean
+                  data: *id003
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
         '404':
           description: Not found
-      parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: documentId
-        required: true
-        schema:
-          type: string
     patch:
       tags:
       - Documents
-      operationId: patch_workspaces_workspaceId_documents_documentId
-      summary: PATCH /workspaces/{workspaceId}/documents/{documentId} (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
-      responses:
-        '200':
-          description: Success (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
-        '404':
-          description: Not found
+      operationId: updateDocument
+      summary: Update a document
+      security: *id001
       parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: documentId
-        required: true
-        schema:
-          type: string
+      - *id002
+      - *id004
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: true
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+              description: At least one of title or content required
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data: *id003
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+    delete:
+      tags:
+      - Documents
+      operationId: deleteDocument
+      summary: Delete a document
+      security: *id001
+      parameters:
+      - *id002
+      - *id004
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      ok:
+                        type: boolean
+                        enum:
+                        - true
+                    required:
+                    - ok
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
   /workspaces/{workspaceId}/documents/{documentId}/comments:
     get:
       tags:
       - Documents
-      operationId: get_workspaces_workspaceId_documents_documentId_comments
-      summary: GET /workspaces/{workspaceId}/documents/{documentId}/comments (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
+      operationId: listDocumentComments
+      summary: List document comments
+      security: *id001
+      parameters:
+      - *id002
+      - *id004
       responses:
         '200':
-          description: Success (see implementation for response shape).
+          description: Comments
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items: &id005
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        documentId:
+                          type: string
+                          format: uuid
+                        authorId:
+                          type: string
+                          format: uuid
+                        authorName:
+                          type: string
+                        body:
+                          type: string
+                        editedAt:
+                          type:
+                          - string
+                          - 'null'
+                          format: date-time
+                        createdAt:
+                          type: string
+                          format: date-time
+                      required:
+                      - id
+                      - documentId
+                      - authorId
+                      - authorName
+                      - body
+                      - editedAt
+                      - createdAt
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
         '404':
           description: Not found
-      parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: documentId
-        required: true
-        schema:
-          type: string
     post:
       tags:
       - Documents
-      operationId: post_workspaces_workspaceId_documents_documentId_comments
-      summary: POST /workspaces/{workspaceId}/documents/{documentId}/comments (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
-      responses:
-        '200':
-          description: Success (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
-        '404':
-          description: Not found
-        '201':
-          description: Created (see implementation for response shape).
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
+      operationId: addDocumentComment
+      summary: Add a document comment
+      security: *id001
       parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: documentId
-        required: true
-        schema:
-          type: string
+      - *id002
+      - *id004
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: true
-  /workspaces/{workspaceId}/documents/{documentId}/comments/{commentId}:
-    delete:
-      tags:
-      - Documents
-      operationId: delete_workspaces_workspaceId_documents_documentId_comments_commentId
-      summary: DELETE /workspaces/{workspaceId}/documents/{documentId}/comments/{commentId} (registered route; contract aligned
-        to implementation)
-      security:
-      - bearerAuth: []
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 10000
+              required:
+              - body
       responses:
-        '200':
-          description: Success (see implementation for response shape).
+        '201':
+          description: Created
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
+                properties:
+                  success:
+                    type: boolean
+                  data: *id005
         '400':
           description: Bad request
         '401':
@@ -10048,57 +10138,97 @@ paths:
           description: Forbidden
         '404':
           description: Not found
+  /workspaces/{workspaceId}/documents/{documentId}/comments/{commentId}:
+    delete:
+      tags:
+      - Documents
+      operationId: deleteDocumentComment
+      summary: Delete a document comment
+      security: *id001
       parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: documentId
-        required: true
-        schema:
-          type: string
+      - *id002
+      - *id004
       - in: path
         name: commentId
         required: true
         schema:
           type: string
-  /workspaces/{workspaceId}/documents/{documentId}/revisions:
-    get:
-      tags:
-      - Documents
-      operationId: get_workspaces_workspaceId_documents_documentId_revisions
-      summary: GET /workspaces/{workspaceId}/documents/{documentId}/revisions (registered route; contract aligned to implementation)
-      security:
-      - bearerAuth: []
+          format: uuid
       responses:
         '200':
-          description: Success (see implementation for response shape).
+          description: Deleted
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
-        '400':
-          description: Bad request
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      ok:
+                        type: boolean
+                        enum:
+                        - true
+                    required:
+                    - ok
         '401':
           description: Unauthorized
         '403':
           description: Forbidden
         '404':
           description: Not found
+  /workspaces/{workspaceId}/documents/{documentId}/revisions:
+    get:
+      tags:
+      - Documents
+      operationId: listDocumentRevisions
+      summary: List document revisions
+      security: *id001
       parameters:
-      - in: path
-        name: workspaceId
-        required: true
-        schema:
-          type: string
-      - in: path
-        name: documentId
-        required: true
-        schema:
-          type: string
+      - *id002
+      - *id004
+      responses:
+        '200':
+          description: Revisions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        authorId:
+                          type: string
+                          format: uuid
+                        authorName:
+                          type: string
+                        content:
+                          type: string
+                        createdAt:
+                          type: string
+                          format: date-time
+                      required:
+                      - id
+                      - authorId
+                      - authorName
+                      - content
+                      - createdAt
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
   /workspaces/{workspaceId}/events:
     get:
       tags:
@@ -10510,10 +10640,10 @@ paths:
       - Files
       operationId: listWorkspaceFiles
       summary: List workspace files (cursor pagination)
-      security: &id001
+      security: &id006
       - bearerAuth: []
       parameters:
-      - &id002
+      - &id007
         in: path
         name: workspaceId
         required: true
@@ -10561,7 +10691,7 @@ paths:
                     properties:
                       items:
                         type: array
-                        items: &id003
+                        items: &id008
                           type: object
                           properties:
                             id:
@@ -10624,9 +10754,9 @@ paths:
       - Files
       operationId: uploadWorkspaceFile
       summary: Upload a file (multipart/form-data)
-      security: *id001
+      security: *id006
       parameters:
-      - *id002
+      - *id007
       requestBody:
         required: true
         content:
@@ -10656,7 +10786,7 @@ paths:
                 properties:
                   success:
                     type: boolean
-                  data: *id003
+                  data: *id008
         '400':
           description: Bad request
         '401':
@@ -10673,10 +10803,10 @@ paths:
       - Files
       operationId: downloadWorkspaceFile
       summary: Download a file (raw bytes, Content-Disposition attachment)
-      security: *id001
+      security: *id006
       parameters:
-      - *id002
-      - &id004
+      - *id007
+      - &id009
         in: path
         name: fileId
         required: true
@@ -10706,10 +10836,10 @@ paths:
       - Files
       operationId: deleteWorkspaceFile
       summary: Delete a file
-      security: *id001
+      security: *id006
       parameters:
-      - *id002
-      - *id004
+      - *id007
+      - *id009
       responses:
         '200':
           description: Deleted
@@ -10741,9 +10871,9 @@ paths:
       - Files
       operationId: getWorkspaceFileUsage
       summary: Get workspace file storage usage
-      security: *id001
+      security: *id006
       parameters:
-      - *id002
+      - *id007
       responses:
         '200':
           description: Usage
