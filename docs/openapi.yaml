@@ -15218,6 +15218,653 @@ paths:
         required: true
         schema:
           type: string
+  /workspaces/{workspaceId}/projects/{projectId}/custom-fields:
+    get:
+      tags: [Tasks]
+      operationId: listProjectCustomFields
+      summary: List custom fields defined for a project
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Custom fields
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    post:
+      tags: [Tasks]
+      operationId: createProjectCustomField
+      summary: Create a custom field for a project
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              properties:
+                name: { type: string }
+                key: { type: string }
+                type: { type: string, enum: [TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX] }
+                description: { type: string, nullable: true }
+                options: { type: array, items: { type: object, additionalProperties: true }, nullable: true }
+                required: { type: boolean }
+                position: { type: integer }
+      responses:
+        '201':
+          description: Created custom field
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}:
+    patch:
+      tags: [Tasks]
+      operationId: updateProjectCustomField
+      summary: Update a project custom field
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: fieldId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Updated custom field
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    delete:
+      tags: [Tasks]
+      operationId: deleteProjectCustomField
+      summary: Delete a project custom field
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: fieldId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/custom-fields:
+    get:
+      tags: [Tasks]
+      operationId: getTaskCustomFieldValues
+      summary: Get custom field values for a task
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Task custom field values
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    put:
+      tags: [Tasks]
+      operationId: setTaskCustomFieldValues
+      summary: Set custom field values for a task
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      fieldId: { type: string, format: uuid }
+                      value: {}
+                    required: [fieldId]
+              required: [values]
+      responses:
+        '200':
+          description: Updated values
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/task-views:
+    get:
+      tags: [Tasks]
+      operationId: listTaskSavedViews
+      summary: List saved task views for a project (own and shared)
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Saved views
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    post:
+      tags: [Tasks]
+      operationId: createTaskSavedView
+      summary: Create a saved task view
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                isShared: { type: boolean }
+                config:
+                  type: object
+                  properties:
+                    filters: { type: object, additionalProperties: true }
+                    sort: { type: object, additionalProperties: true, nullable: true }
+                    group: { type: object, additionalProperties: true, nullable: true }
+              required: [name]
+      responses:
+        '201':
+          description: Created saved view
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/task-views/{viewId}:
+    patch:
+      tags: [Tasks]
+      operationId: updateTaskSavedView
+      summary: Update a saved task view (owner only)
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: viewId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Updated saved view
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    delete:
+      tags: [Tasks]
+      operationId: deleteTaskSavedView
+      summary: Delete a saved task view (owner only)
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: viewId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/recurrence:
+    get:
+      tags: [Tasks]
+      operationId: getTaskRecurrence
+      summary: Get recurrence rule for a task
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Recurrence rule
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    put:
+      tags: [Tasks]
+      operationId: upsertTaskRecurrence
+      summary: Create or update a task recurrence rule
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                frequency: { type: string, enum: [DAILY, WEEKLY, MONTHLY] }
+                interval: { type: integer, minimum: 1 }
+                daysOfWeek: { type: array, items: { type: integer } }
+                dayOfMonth: { type: integer, nullable: true }
+                endsAt: { type: string, format: date-time, nullable: true }
+                maxOccurrences: { type: integer, nullable: true }
+                nextRunAt: { type: string, format: date-time, nullable: true }
+                active: { type: boolean }
+              required: [frequency]
+      responses:
+        '200':
+          description: Upserted recurrence rule
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    delete:
+      tags: [Tasks]
+      operationId: deleteTaskRecurrence
+      summary: Delete a task recurrence rule
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/recurrence/generate:
+    post:
+      tags: [Tasks]
+      operationId: generateTaskRecurrence
+      summary: Generate the next recurring task instance
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Generated task
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/task-templates:
+    get:
+      tags: [Tasks]
+      operationId: listTaskTemplates
+      summary: List task templates for a project
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Task templates
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    post:
+      tags: [Tasks]
+      operationId: createTaskTemplate
+      summary: Create a task template for a project
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string, nullable: true }
+                data: { type: object, additionalProperties: true }
+              required: [name]
+      responses:
+        '201':
+          description: Created task template
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/task-templates/{templateId}:
+    patch:
+      tags: [Tasks]
+      operationId: updateTaskTemplate
+      summary: Update a task template
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Updated task template
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    delete:
+      tags: [Tasks]
+      operationId: deleteTaskTemplate
+      summary: Delete a task template
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/projects/{projectId}/task-templates/{templateId}/create-task:
+    post:
+      tags: [Tasks]
+      operationId: createTaskFromTemplate
+      summary: Create a task from a task template
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '201':
+          description: Created task
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/project-templates:
+    get:
+      tags: [Projects]
+      operationId: listProjectTemplates
+      summary: List project templates in a workspace
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Project templates
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    post:
+      tags: [Projects]
+      operationId: createProjectTemplate
+      summary: Create a project template in a workspace
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string, nullable: true }
+                data: { type: object, additionalProperties: true }
+              required: [name]
+      responses:
+        '201':
+          description: Created project template
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/project-templates/{templateId}:
+    patch:
+      tags: [Projects]
+      operationId: updateProjectTemplate
+      summary: Update a project template
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Updated project template
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    delete:
+      tags: [Projects]
+      operationId: deleteProjectTemplate
+      summary: Delete a project template
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /workspaces/{workspaceId}/project-templates/{templateId}/create-project:
+    post:
+      tags: [Projects]
+      operationId: createProjectFromTemplate
+      summary: Create a project from a project template
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                key: { type: string }
+                description: { type: string, nullable: true }
+              required: [name, key]
+      responses:
+        '201':
+          description: Created project
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
 components:
   securitySchemes:
     bearerAuth:
