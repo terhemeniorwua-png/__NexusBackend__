@@ -46,6 +46,12 @@ import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 import { createFormRouter } from '../modules/forms/form.routes';
 import { createSearchRouter } from '../modules/search/search.routes';
 import { createIntegrationRouter } from '../modules/integrations/integration.routes';
+import {
+  createDevIntegrationCallbackRouter,
+  createProjectRepositoryRouter,
+  createTaskDevLinkRouter,
+  createWorkspaceDevIntegrationRouter,
+} from '../modules/dev-integrations/dev-integration.routes';
 import { createAutomationRouter } from '../modules/automation/automation.routes';
 import { createWebhookRouter } from '../modules/webhooks/webhook.routes';
 import { createAiRouter } from '../modules/ai/ai.routes';
@@ -130,6 +136,11 @@ export function createApiRouter({
   router.use('/search', createSearchRouter({ config }));
   // Integrations are user-scoped (optionally workspace-scoped via query)
   router.use('/integrations', createIntegrationRouter({ config }));
+  // Dev/source-control integrations (Phase 5, GitHub App workspace connections)
+  router.use('/dev-integrations', createDevIntegrationCallbackRouter({ config }));
+  router.use('/workspaces/:workspaceId/dev-integrations', createWorkspaceDevIntegrationRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/repositories', createProjectRepositoryRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links', createTaskDevLinkRouter({ config }));
   // Automations are workspace-scoped
   router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));
   // Outbound webhook subscriptions are workspace-scoped

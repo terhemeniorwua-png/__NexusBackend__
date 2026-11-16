@@ -10,6 +10,9 @@ import { requestId } from './middleware/request-id';
 import { createEmailWebhookRouter } from './modules/webhooks/email-webhook.routes';
 import { createPaystackWebhookRouter } from './modules/billing/paystack-webhook.routes';
 import { createGoogleOAuthCallbackRouter } from './modules/auth/google-oauth.routes';
+import { createDevIntegrationCallbackRouter } from './modules/dev-integrations/dev-integration.routes';
+import { createGithubWebhookRouter } from './modules/dev-integrations/github-webhook.routes';
+import { createGitlabWebhookRouter } from './modules/dev-integrations/gitlab-webhook.routes';
 import { createApiRouter } from './routes';
 import type { RateLimitRedisClient } from './services/cache/rate-limit-store';
 import { createReadinessProbe, type ReadinessProbe } from './services/health';
@@ -70,9 +73,27 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // signature is calculated over the raw request body.
   app.use(`${config.apiPrefix}/webhooks`, createEmailWebhookRouter({ config }));
   app.use(`${config.apiPrefix}/webhooks`, createPaystackWebhookRouter({ config }));
+  app.use(`${config.apiPrefix}/webhooks`, createGithubWebhookRouter({ config }));
+  app.use(`${config.apiPrefix}/webhooks`, createGitlabWebhookRouter({ config }));
 
   if (config.googleCallbackUrl) {
     app.use(new URL(config.googleCallbackUrl).pathname, createGoogleOAuthCallbackRouter(config));
+  }
+
+  if (config.githubAppCallbackUrl) {
+    try {
+      app.use(new URL(config.githubAppCallbackUrl).pathname, createDevIntegrationCallbackRouter({ config }));
+    } catch {
+      // invalid URL ignored; standard API route remains available
+    }
+  }
+
+  if (config.gitlabCallbackUrl) {
+    try {
+      app.use(new URL(config.gitlabCallbackUrl).pathname, createDevIntegrationCallbackRouter({ config }));
+    } catch {
+      // invalid URL ignored; standard API route remains available
+    }
   }
 
   app.use(

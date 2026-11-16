@@ -1019,6 +1019,138 @@ smoke-test deadline notifications, preferences, and worker health. **Never
 DB; never mutate applied migrations; never touch production outside this
 process.**
 
+## Dev/source-control integrations (Phase 5, workspace source control)
+
+Workspace-level source control connections behind a provider abstraction (`IntegrationConnection.provider`: `GITHUB` GitHub App, `GITLAB` GitLab OAuth). Nexus links to providers and shows repository/project development status; it does **not** host, edit, or store source code. Linked repositories are associated with projects and tasks.
+
+**Connection model (additive):** `IntegrationConnection` (workspace-scoped, provider `GITHUB|GITLAB`, status `PENDING|ACTIVE|DISCONNECTED|ERROR`, external account metadata, encrypted credentials at rest, `createdById`) with unique `(workspaceId, provider)`. `ProjectRepository` links a project to a connection/repo. `TaskDevLink` links tasks to branches/pull/merge requests/commits. `GitHubWebhookDelivery`/`GitLabWebhookDelivery` provide inbound webhook idempotency.
+
+**Security:** OAuth/install authorization uses signed, Redis-backed one-time state bound to the authenticated user and workspace (validated/consumed on callback). Credentials/tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY` (AES-256-GCM); no tokens/secrets/private keys are returned in API responses or logged. Outbound provider API calls use timeouts and graceful error handling. Rotated GitLab OAuth access tokens are persisted (encrypted) when refreshed. Disconnect removes/revokes stored credentials best-effort and marks the connection disconnected. Inbound webhooks verify authenticity (GitHub HMAC-SHA256 `X-Hub-Signature-256`, GitLab secret token `X-Gitlab-Token`) with constant-time comparison and are idempotent by provider delivery id. Backend authorization is authoritative.
+
+### Workspace dev-integration routes
+
+Mounted at `/api/v1/workspaces/:workspaceId/dev-integrations` (authenticated, active account).
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/connections` | — | `200 { success, data: DevConnectionSummary[] }` (no secrets) | 401, 403 workspace access/suspended | Active workspace membership (`workspace:view`) |
+| GET | `/github/start` | — | `200 { success, data: { url } }` (GitHub App install/authorization URL) | 401, 403 insufficient role, 503 not configured | Workspace manager (`workspace:update`, e.g. OWNER/PROJECT_MANAGER) |
+| GET | `/gitlab/start` | — | `200 { success, data: { url } }` (GitLab OAuth authorization URL) | 401, 403 insufficient role, 503 not configured | Workspace manager (`workspace:update`) |
+| DELETE | `/connections/:connectionId` | — | `200 { success, data: { ok: true, providerRevoked?: boolean } }` (stored credentials removed/revoked best-effort) | 401, 403, 404 not found | Workspace manager (`workspace:update`) |
+| GET | `/connections/:connectionId/repos` | — | `200 { success, data: DevRepositorySummary[] }` (repos/projects available to the connection) | 401, 403, 404, 409 not active, 502 provider unavailable | Active workspace membership (`workspace:view`) |
+
+**`DevConnectionSummary`**: `{ id, provider, workspaceId, status, externalAccount:{id,login,name}, scopes, createdById, lastError, createdAt, updatedAt }`.
+
+**`DevRepositorySummary`**: `{ externalRepoId, fullName, name?, ownerLogin?, defaultBranch, private?, htmlUrl? }` (GitLab `fullName` is project path with namespace).
+
+### OAuth/install callbacks
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/api/v1/dev-integrations/github/callback` (and optional alias mounted at `GITHUB_APP_CALLBACK_URL` pathname) | Public browser redirect endpoint. Validates/consumes signed one-time state (user/workspace bound), requires a GitHub App `installation_id`, fetches installation/account metadata, stores/updates encrypted workspace connection as `ACTIVE`, records audit, then redirects to frontend integrations page with `?devIntegration=github&status=connected\|denied\|error`. |
+| GET | `/api/v1/dev-integrations/gitlab/callback` (and optional alias mounted at `GITLAB_CALLBACK_URL` pathname) | Public browser redirect endpoint. Validates/consumes signed one-time state (user/workspace bound), exchanges authorization code for OAuth tokens, fetches GitLab user, stores/updates encrypted workspace connection as `ACTIVE`, records audit, then redirects to frontend integrations page with `?devIntegration=gitlab&status=connected\|denied\|error`. |
+
+### Project repository routes
+
+Mounted at `/api/v1/workspaces/:workspaceId/projects/:projectId/repositories` (authenticated, active account).
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/` | — | `200 { success, data: LinkedProjectRepository[] }` | 401, 403/404 project access | Project view (`project.view` / task.view-equivalent project visibility) |
+| POST | `/` | Body `{ "connectionId": uuid, "externalRepoId": string, "fullName": string, "defaultBranch"?: string\|null }` | `201 { success, data: LinkedProjectRepository }` | 400 validation, 401, 403, 404 connection/project not found, 409 already linked | Project management/update (`project.update`) |
+| DELETE | `/:repositoryId` | — | `200 { success, data: { ok: true } }` | 401, 403, 404 not found | Project management/update (`project.update`) |
+
+**`LinkedProjectRepository`**: `{ id, projectId, connectionId, provider, externalRepoId, fullName, defaultBranch, createdAt, updatedAt }`.
+
+### Environment variables
+
+**GitHub App (Features A–C)**
+- `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY` (server-side only)
+- `GITHUB_APP_CALLBACK_URL`, `GITHUB_APP_INSTALL_URL` (optional override)
+- `GITHUB_APP_WEBHOOK_SECRET` — inbound webhook signature secret
+
+**GitLab OAuth (Feature D)**
+- `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` (server-side only)
+- `GITLAB_CALLBACK_URL` — backend OAuth callback/redirect URI
+- `GITLAB_BASE_URL` — instance base URL (default `https://gitlab.com`)
+- `GITLAB_SCOPES` — OAuth scopes (default `read_api read_repository`, minimum read)
+- `GITLAB_WEBHOOK_SECRET` — inbound webhook secret token
+
+Requires existing `INTEGRATION_ENCRYPTION_KEY` (base64url, 32 bytes) for credential encryption at rest.
+
+### Provider setup (manual)
+
+**GitHub App:** create app with minimum read permissions (contents/metadata, pull requests, checks/statuses as needed), set callback and webhook URLs/secrets, install on target account/org, connect workspace and link repositories to projects.
+
+**GitLab OAuth application:** create application with minimum read scopes (`read_api`, `read_repository`), set redirect URI to `GITLAB_CALLBACK_URL` (e.g. `https://<backend>/api/v1/dev-integrations/gitlab/callback`). For inbound MR sync, configure project/group/system webhook to `https://<backend>/api/v1/webhooks/gitlab` with `GITLAB_WEBHOOK_SECRET` as secret token and subscribe to merge request events. Connect workspace and link projects.
+
+**Migrations (additive, local dev applied after verification; not applied to production):**
+- `20261117120000_phase5_dev_integration_connections` — dev integration connections and project repositories
+- `20261117130000_phase5b_task_dev_links` — task dev links
+- `20261117140000_phase5c_github_webhook_deliveries` — GitHub webhook idempotency
+- `20261117150000_phase5d_gitlab_webhook_deliveries` — GitLab webhook idempotency
+
+Production steps (ordered): backup DB and verify migration state, deploy backend, apply migrations in controlled window/staging then production (`prisma migrate deploy` only in controlled rollout), `prisma generate`, set provider env vars, configure provider apps/webhooks, restart/verify. Never `prisma migrate deploy` outside controlled rollout.
+
+### Feature B — Task development links (branches/PRs, no webhooks)
+
+Builds on Feature A linked project repositories. On-demand GitHub reads (mocked in tests, timeouts, no secrets exposed) and persisted task-to-dev-resource links for display in task workspace.
+
+**Repository dev-resource browsing (project-scoped)**
+| Method | Path | Request | Success (data) | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/branches` | Query `search?`, `page?`, `perPage?` | `200 { success, data: { items: DevBranchSummary[] } }` | 401, 403/404, 409 no active connection, 502 provider unavailable | `project.view` (project access) |
+| GET | `/workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/pull-requests` | Query `state?` (`open|closed|all`), `search?`, `page?`, `perPage?` | `200 { success, data: { items: DevPullRequestSummary[] } }` | 401, 403/404, 409, 502 | `project.view` |
+
+**`DevBranchSummary`:** `{ name, commitSha?, protected?, url? }`  
+**`DevPullRequestSummary`:** `{ externalId, number, title, state, url, headRef, baseRef, authorLogin?, updatedAt? }`
+
+**Task dev links**
+| Method | Path | Request | Success (data) | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links` | — | `200 { success, data: TaskDevLink[] }` | 401, 403/404 | Project/task view (`project.view`) |
+| POST | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links` | Body `{ projectRepositoryId, externalType: "BRANCH"|"PULL_REQUEST"|"COMMIT", externalId, externalNumber?, title?, url?, ref?, headRef?, baseRef?, state? }` | `201 { success, data: TaskDevLink }` | 400, 401, 403, 404 task/repo not found, 409 duplicate (`TASK_DEV_LINK_ALREADY_EXISTS`) | Task update (`project.task.update`) |
+| DELETE | `/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links/:devLinkId` | — | `200 { success, data: { ok: true } }` | 401, 403, 404 | Task update (`project.task.update`) |
+
+**`TaskDevLink`:** `{ id, taskId, projectId, projectRepositoryId, provider, externalType, externalId, externalNumber, title, url, ref, headRef, baseRef, state, repositoryFullName, linkedById, createdAt, updatedAt }` (no secrets).
+
+**Migration (additive, local dev applied after verification; not applied to production):** `20261117130000_phase5b_task_dev_links` adds `DevLinkType` and `TaskDevLink` with relations/indexes/constraints (FKs to Task/Project/ProjectRepository/User). Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, restart/verify.
+
+### Feature C — GitHub App inbound webhooks (idempotent state sync)
+
+Raw-body endpoint (mounted before JSON parsing) for GitHub App webhooks. Verifies authenticity, deduplicates deliveries, and syncs linked development state. **No inbound auto-linking**; GitHub only.
+
+| Method | Path | Auth | Behavior |
+| --- | --- | --- | --- |
+| POST | `/api/v1/webhooks/github` | Webhook signature (public endpoint, not session-authenticated) | Verifies `X-Hub-Signature-256` (HMAC-SHA256 over raw body) against `GITHUB_APP_WEBHOOK_SECRET` (constant-time). Requires `X-GitHub-Delivery` and `X-GitHub-Event`. Returns 401 if unverified, 400 if invalid/missing payload/headers, 503 if not configured, else 200 `{ success, data: { received: true, outcome } }` (`processed|duplicate|ignored`). |
+
+**Idempotency:** each `(provider, deliveryId)` processed once (`GitHubWebhookDelivery` unique key); retries/duplicates acknowledged without reapplying side effects.
+
+**Handled events (current):**
+- `pull_request`: updates existing linked `TaskDevLink` records (`provider=GITHUB`, `externalType=PULL_REQUEST`, matching PR id) with `title`, `externalNumber`, `url`, `headRef`/`ref`, `baseRef`, `state` (`open|closed|merged|draft`). No-op if none linked.
+- `installation` (`deleted`/`suspend`): best-effort marks matching active GITHUB `IntegrationConnection`(s) for the installation as `DISCONNECTED`, revokes stored credentials marker, records reason. Other installation actions acknowledged/ignored.
+- Other events: acknowledged idempotently (`ignored`) for forward compatibility.
+
+**Env/config:** `GITHUB_APP_WEBHOOK_SECRET` required for webhook verification; configure GitHub App webhook URL to `https://<backend>/api/v1/webhooks/github` and subscribe to at least `pull_request` and `installation` (minimum permissions/events).
+
+**Migration (additive, local dev applied after verification; not applied to production):** `20261117140000_phase5c_github_webhook_deliveries` adds `GitHubWebhookDelivery` idempotency table (unique provider+deliveryId, indexes). Production steps (ordered): backup DB and verify migration state, deploy backend, apply migration in controlled window (`prisma migrate deploy` only in controlled rollout, staging then production), `prisma generate`, configure GitHub App webhook/secret, restart/verify delivery signatures and idempotency.
+
+### Feature D — GitLab inbound webhooks (idempotent MR state sync)
+
+Raw-body endpoint (mounted before JSON parsing) for GitLab webhooks. Verifies authenticity, deduplicates deliveries, and syncs linked development state. **No inbound auto-linking**.
+
+| Method | Path | Auth | Behavior |
+| --- | --- | --- | --- |
+| POST | `/api/v1/webhooks/gitlab` | Webhook secret token (public endpoint, not session-authenticated) | Verifies `X-Gitlab-Token` against `GITLAB_WEBHOOK_SECRET` (constant-time). Uses `X-Gitlab-Event-UUID`/`X-Gitlab-Webhook-UUID` when present as delivery id (falls back to deterministic payload key). Returns 401 if unverified, 400 if invalid/missing payload, 503 if not configured, else 200 `{ success, data: { received: true, outcome } }` (`processed|duplicate|ignored`). |
+
+**Idempotency:** each `(provider, deliveryId)` processed once (`GitLabWebhookDelivery` unique key); retries/duplicates acknowledged without reapplying side effects.
+
+**Handled events (current):**
+- `merge_request`: updates existing linked `TaskDevLink` records (`provider=GITLAB`, `externalType=PULL_REQUEST`, matching MR id) with `title`, `externalNumber` (iid), `url`, `headRef`/`ref`, `baseRef`, and mapped `state` (`open|closed|merged|draft`). No-op if none linked.
+- Other events: acknowledged idempotently (`ignored`).
+
+**Env/config:** `GITLAB_WEBHOOK_SECRET` required; configure webhook URL to `https://<backend>/api/v1/webhooks/gitlab` with the same secret token and subscribe to merge request events (minimum scope/events).
+
 ## Updating this API reference
 
 After each backend phase that adds, changes, or removes an externally visible

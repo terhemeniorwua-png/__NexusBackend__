@@ -342,6 +342,8 @@ model User {
   meetingParticipations       MeetingParticipant[]         @relation("MeetingParticipants")
   searchHistory               SearchHistory[]
   webhookSubscriptions        WebhookSubscription[]        @relation("WebhookSubscriptionCreatedBy")
+  integrationConnectionsCreated IntegrationConnection[]     @relation("IntegrationConnectionsCreatedBy")
+  taskDevLinksLinked          TaskDevLink[]                @relation("TaskDevLinksLinked")
   aiConversations             AiConversation[]             @relation("AiConversationOwner")
   aiUsageRecords              AiUsageRecord[]              @relation("AiUsageRecordOwner")
   aiActionProposals           AiActionProposal[]           @relation("AiActionProposalOwner")
@@ -515,6 +517,7 @@ model Workspace {
   calendarEvents       CalendarEvent[]
   forms                Form[]
   integrations         Integration[]                @relation("WorkspaceIntegrations")
+  integrationConnections IntegrationConnection[]     @relation("WorkspaceIntegrationConnections")
   automations          Automation[]                 @relation("WorkspaceAutomations")
   meetings             Meeting[]
   auditLogs            AuditLog[]
@@ -924,6 +927,8 @@ model Project {
   documents      Document[]
   calendarEvents CalendarEvent[]
   meetings       Meeting[]
+  repositories   ProjectRepository[] @relation("ProjectRepositories")
+  taskDevLinks   TaskDevLink[]
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -1014,6 +1019,7 @@ model Task {
   documents        Document[]
   workDocuments    TaskDocument[]
   timeEntries      TaskTimeEntry[]
+  devLinks         TaskDevLink[]
 
   @@unique([projectId, key])
   @@index([projectId, status])
@@ -1794,6 +1800,140 @@ model IntegrationSyncJob {
 
   @@index([status, nextAttemptAt])
   @@index([integrationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Dev/source-control integrations (Phase 5)
+// ---------------------------------------------------------------------------
+
+enum DevIntegrationProvider {
+  GITHUB
+  GITLAB
+}
+
+enum IntegrationConnectionStatus {
+  PENDING
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+model IntegrationConnection {
+  id                   String                      @id @default(uuid())
+  provider             DevIntegrationProvider
+  workspaceId          String
+  status               IntegrationConnectionStatus @default(PENDING)
+  externalAccountId    String?
+  externalAccountLogin String?
+  externalAccountName  String?
+  encryptedCredentials String
+  scopes               String[]                    @default([])
+  createdById          String
+  lastError            String?
+  revokedAt            DateTime?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  workspace           Workspace           @relation("WorkspaceIntegrationConnections", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy           User                @relation("IntegrationConnectionsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  projectRepositories ProjectRepository[]
+
+  @@unique([workspaceId, provider])
+  @@index([workspaceId, status])
+  @@index([createdById])
+}
+
+model ProjectRepository {
+  id             String                 @id @default(uuid())
+  projectId      String
+  connectionId   String
+  provider       DevIntegrationProvider
+  externalRepoId String
+  fullName       String
+  defaultBranch  String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  project     Project               @relation("ProjectRepositories", fields: [projectId], references: [id], onDelete: Cascade)
+  connection  IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  taskDevLinks TaskDevLink[]
+
+  @@unique([projectId, provider, externalRepoId])
+  @@unique([connectionId, externalRepoId])
+  @@index([projectId])
+  @@index([connectionId])
+}
+
+enum DevLinkType {
+  BRANCH
+  PULL_REQUEST
+  COMMIT
+}
+
+model TaskDevLink {
+  id                  String                 @id @default(uuid())
+  taskId              String
+  projectId           String
+  projectRepositoryId String?
+  provider            DevIntegrationProvider
+  externalType        DevLinkType
+  externalId          String
+  externalNumber      Int?
+  title               String?
+  url                 String?
+  ref                 String?
+  headRef             String?
+  baseRef             String?
+  state               String?
+  repositoryFullName  String?
+  linkedById          String
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  task              Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectRepository ProjectRepository? @relation(fields: [projectRepositoryId], references: [id], onDelete: SetNull)
+  linkedBy          User               @relation("TaskDevLinksLinked", fields: [linkedById], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, provider, externalType, externalId])
+  @@index([taskId])
+  @@index([projectId])
+  @@index([projectRepositoryId])
+  @@index([linkedById])
+}
+
+model GitHubWebhookDelivery {
+  id                 String    @id @default(uuid())
+  provider           String    @default("GITHUB")
+  deliveryId         String
+  event              String
+  installationId     String?
+  repositoryFullName String?
+  status             String    @default("RECEIVED")
+  processedAt        DateTime?
+  error              String?
+  createdAt          DateTime  @default(now())
+
+  @@unique([provider, deliveryId])
+  @@index([event])
+  @@index([installationId])
+  @@index([createdAt])
+}
+
+model GitLabWebhookDelivery {
+  id                String    @id @default(uuid())
+  provider          String    @default("GITLAB")
+  deliveryId        String
+  event             String
+  projectIdExternal String?
+  status            String    @default("RECEIVED")
+  processedAt       DateTime?
+  error             String?
+  createdAt         DateTime  @default(now())
+
+  @@unique([provider, deliveryId])
+  @@index([event])
+  @@index([createdAt])
 }
 
 // ---------------------------------------------------------------------------
