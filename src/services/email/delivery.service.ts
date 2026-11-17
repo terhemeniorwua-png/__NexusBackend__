@@ -206,7 +206,8 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
    * Claims queued deliveries that are due. The claim is atomic, so two
    * workers never pick up the same row.
    */
-  async function claimDue(limit: number): Promise<ClaimedDelivery[]> {
+  async function claimDue(limit: number, excludeIds: readonly string[] = []): Promise<ClaimedDelivery[]> {
+    const excludeClause = excludeIds.length > 0 ? Prisma.sql`AND "id" NOT IN (${Prisma.join(excludeIds)})` : Prisma.empty;
     const rows = await client.$queryRaw<ClaimedDelivery[]>`
       UPDATE "EmailDelivery" AS d
       SET "status" = 'SENDING', "attempts" = d."attempts" + 1, "updatedAt" = NOW()
@@ -216,6 +217,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
         WHERE "status" = 'QUEUED'
           AND "nextAttemptAt" <= NOW()
           AND "attempts" < "maxAttempts"
+          ${excludeClause}
         ORDER BY "nextAttemptAt" ASC
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
@@ -259,7 +261,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
    * that already reached the limit becomes terminal; every other row returns
    * to the queue with the normal backoff and its attempt counter intact.
    */
-  async function recoverStaleSending(limit: number): Promise<{ requeued: number; failed: number }> {
+  async function recoverStaleSending(limit: number): Promise<{ requeued: number; failed: number; requeuedIds: string[] }> {
     const staleBefore = new Date(Date.now() - deps.config.emailSendingStaleMs);
     const rows = await client.emailDelivery.findMany({
       where: { status: 'SENDING', updatedAt: { lt: staleBefore } },
@@ -267,7 +269,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       orderBy: { updatedAt: 'asc' },
       take: limit,
     });
-    const recovered = { requeued: 0, failed: 0 };
+    const recovered = { requeued: 0, failed: 0, requeuedIds: [] as string[] };
 
     for (const row of rows) {
       if (row.attempts >= row.maxAttempts) {
@@ -312,6 +314,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
       }
 
       recovered.requeued += 1;
+      recovered.requeuedIds.push(row.id);
       log.warn('email_delivery_recovered', {
         deliveryId: row.id,
         template: row.template,
@@ -527,7 +530,7 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
   async function processPending(limit: number): Promise<DeliveryPassResult> {
     const recovered = await recoverStaleSending(limit);
     const exhausted = await failExhaustedQueued();
-    const claimed = await claimDue(limit);
+    const claimed = await claimDue(limit, recovered.requeuedIds);
     const result: DeliveryPassResult = {
       claimed: claimed.length,
       sent: 0,
