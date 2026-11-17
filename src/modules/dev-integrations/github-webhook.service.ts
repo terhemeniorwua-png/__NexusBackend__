@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */ // TODO(types): replace any with real types
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
@@ -89,8 +88,9 @@ export async function processGithubWebhook(input: {
         status: 'RECEIVED',
       },
     });
-  } catch (error: any) {
-    if (error?.code === 'P2002') {
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: string }).code : undefined;
+    if (code === 'P2002') {
       return 'duplicate';
     }
     throw error;

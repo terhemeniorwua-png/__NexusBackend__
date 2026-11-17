@@ -213,7 +213,6 @@ describe('calendar/events module (routes contract)', () => {
     const app = express();
     app.use(express.json());
     app.use('/workspaces/:workspaceId/events', createCalendarRouter({ config: {} as any, service }));
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     app.use((err: any, _req: any, res: any, _next: any) => res.status(err.statusCode || 500).json({ success: false, error: { code: err.code || 'ERR', message: err.message } }));
 
     await withServer(app, async (baseUrl) => {
