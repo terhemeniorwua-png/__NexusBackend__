@@ -560,6 +560,7 @@ model Workspace {
   ssoConfigs             WorkspaceSsoConfig[]
   ssoDomains             WorkspaceSsoDomain[]
   ssoOidcStates          SsoOidcState[]
+  ssoSamlStates          SsoSamlRequestState[]
   scimTokens             ScimToken[]        @relation("ScimTokenWorkspace")
   scimGroups             ScimGroup[]        @relation("ScimGroupWorkspace")
   @@index([ownerId])
@@ -2733,6 +2734,7 @@ model WorkspaceSsoConfig {
   createdBy  User                 @relation("WorkspaceSsoConfigCreator", fields: [createdById], references: [id], onDelete: Restrict)
   domains    WorkspaceSsoDomain[]
   oidcStates SsoOidcState[]
+  samlStates SsoSamlRequestState[]
 
   @@index([workspaceId, isEnabled])
   @@index([workspaceId, requireSso])
@@ -2785,6 +2787,31 @@ model SsoOidcState {
   @@index([expiresAt])
 }
 
+
+
+
+/// DB-backed SAML AuthnRequest state for InResponseTo validation and replay protection.
+/// Bound to workspace and browser (cookie), single-use, short-lived.
+model SsoSamlRequestState {
+  id                 String    @id @default(uuid())
+  workspaceId        String
+  configId           String?
+  /// SAML AuthnRequest ID (InResponseTo). Stored hashed for lookup/uniqueness.
+  requestIdHash      String    @unique
+  /// Original request ID needed for validation by SAML library.
+  requestId          String
+  browserBindingHash String
+  relayState         String?
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  createdAt          DateTime  @default(now())
+
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  config    WorkspaceSsoConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, expiresAt])
+  @@index([expiresAt])
+}
 
 
 // ---------------------------------------------------------------------------
