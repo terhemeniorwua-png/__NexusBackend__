@@ -457,6 +457,10 @@ accepted for frontend compatibility but does not make them workspace-shared.
 | GET | `/integrations/slack/authorize` | Workspace manager | Return a Slack OAuth URL for the selected workspace. |
 | GET | `/integrations/slack/callback` | Public OAuth callback | Consume state, exchange the Slack code, persist encrypted credentials, and redirect with status. |
 | GET | `/integrations/{integrationId}/slack/channels` | Workspace manager | List public Slack channels the connected bot can post to. |
+| GET | `/workspaces/{workspaceId}/integrations/google-calendar/calendars` | Workspace manager | List Google calendars the connected Google Calendar account can read. Expired tokens are refreshed; unusable tokens return a reconnect-required error. |
+| GET | `/workspaces/{workspaceId}/integrations/slack/channels` | Workspace manager | List public Slack channels the connected Slack bot can post to, with private flag and membership. Expired tokens are refreshed; unusable tokens return a reconnect-required error. |
+
+A saved `googleCalendarId` or `slackChannelId` must be one the matching picker endpoint currently returns for that connection; the config update path validates this before persisting.
 
 OAuth state is signed and single use, with a ten-minute lifetime. Integration
 tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY`. Gmail requests
