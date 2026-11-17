@@ -3937,8 +3937,7 @@ paths:
                         targetId:
                           type: string
                         actor:
-                          type: object
-                          nullable: true
+                          type: [object, 'null']
                           properties:
                             id:
                               type: string
@@ -3951,9 +3950,8 @@ paths:
                           type: string
                           format: date-time
                   nextCursor:
-                    type: string
+                    type: [string, 'null']
                     format: uuid
-                    nullable: true
         '401':
           description: Authentication is required.
         '403':
@@ -6346,8 +6344,7 @@ paths:
                   minLength: 1
                   maxLength: 100
                 description:
-                  type: string
-                  nullable: true
+                  type: [string, 'null']
                   maxLength: 500
                 teamId:
                   type: string
@@ -6405,8 +6402,7 @@ paths:
                   minLength: 1
                   maxLength: 100
                 description:
-                  type: string
-                  nullable: true
+                  type: [string, 'null']
                   maxLength: 500
       responses:
         '200':
@@ -15582,8 +15578,7 @@ paths:
                 type: { type: string, enum: [TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX] }
                 description: { type: [string, 'null'] }
                 options:
-                  type: array
-                  nullable: true
+                  type: [array, 'null']
                   items:
                     type: object
                     additionalProperties: false
@@ -16333,20 +16328,16 @@ components:
           type: integer
           minimum: 0
         lastPassStartedAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         lastSuccessAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         lastFailureAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         lastErrorCode:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: A stable error code. Raw messages are never returned.
     QueueStatus:
       type: object
@@ -19240,8 +19231,7 @@ components:
             totalSizeBytes:
               type: integer
         subscription:
-          type: object
-          nullable: true
+          type: [object, 'null']
           properties:
             plan:
               type:
