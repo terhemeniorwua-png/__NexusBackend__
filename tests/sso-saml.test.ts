@@ -2,45 +2,8 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import crypto from 'node:crypto';
 import { SignedXml } from 'xml-crypto';
-import { DOMParser } from '@xmldom/xmldom';
 import { validateSamlResponse } from '../src/modules/sso/saml.service';
 
-function generateKeyPairPem() {
-  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-  });
-  // extract cert-like public key in PEM for xml-crypto/node-saml (node-saml accepts cert PEM without headers in some cases, but better provide x509; easier to use public key cert)
-  // Create a self-signed cert for testing
-  const cert = crypto.createPublicKey(publicKey).export({ type: 'spki', format: 'pem' }) as string;
-  return { privateKey, publicKey, cert };
-}
-
-// For xml-crypto signing we need a key; node-saml validates against cert. We'll generate a self-signed cert.
-function generateSelfSignedCert() {
-  // Use openssl-like approach via node? Not directly. Easier: generate key pair and create minimal cert is complex in pure node.
-  // Alternative: use @peculiar/x509 if available? probably not. 
-  // Simpler: use xml-crypto with private key for signing and pass the certificate in PEM format that node-saml expects.
-  // node-saml's cert option can be a PEM certificate. Let's create one with crypto.X509Certificate? Node 15+ has X509Certificate but creating is limited.
-  // Fallback: sign with xml-crypto and configure node-saml to accept the signing cert by extracting from signature? No.
-  // Better approach: use a fixed test certificate/key pair generated as strings.
-  return null;
-}
-
-const { privateKey: TEST_PRIVATE_KEY, publicKey: TEST_PUBLIC_KEY } = crypto.generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-});
-
-// Create a minimal self-signed certificate using node's X509Certificate is read-only; we'll construct PEM cert via forge-like? not available.
-// Workaround: node-saml accepts the cert as the public key certificate body; we can try passing the public key PEM.
-// Actually @node-saml/node-saml uses xml-crypto which can work with cert strings. Let's try with a generated cert using a simple method.
-// We'll create cert with node:crypto's internal? No. Let's use a helper: create cert by spawning nothing - not available.
-// Alternative: build test around xml-crypto validation directly? No, requirement says "use @node-saml/node-saml (or another maintained library). Do not hand-write XML signature validation."
-
-// Generate a self-signed cert using a quick command if openssl exists, else use a static approach.
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -159,17 +122,17 @@ const baseConfig = {
 describe('SAML SSO validation (@node-saml/node-saml)', () => {
   test('rejects unsigned assertion', async () => {
     const saml = buildSignedResponse({ requestId: '_req1', sign: false });
-    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as any }));
+    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as never }));
   });
 
   test('rejects tampered signed assertion', async () => {
     const saml = buildSignedResponse({ requestId: '_req1', tamper: true });
-    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as any }));
+    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as never }));
   });
 
   test('rejects wrong audience', async () => {
     const saml = buildSignedResponse({ requestId: '_req1', audience: 'https://wrong-sp.example.com' });
-    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as any }));
+    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as never }));
   });
 
   test('rejects invalid InResponseTo (replay/unknown request) via state consumption', async () => {
@@ -178,12 +141,12 @@ describe('SAML SSO validation (@node-saml/node-saml)', () => {
     const db = { ssoSamlRequestState: { findUnique: async () => null } } as any;
     await assert.rejects(
       () => consumeSamlRequestState({ requestId: '_other', browserBindingValue: 'b' }, db),
-      (err: any) => err?.code === 'SSO_SAML_INRESPONSETO_INVALID',
+      (err: unknown) => (err as { code?: string } | null)?.code === 'SSO_SAML_INRESPONSETO_INVALID',
     );
   });
 
   test('rejects signature-wrapping sample', async () => {
     const saml = buildSignedResponse({ requestId: '_req1', wrapSignature: true });
-    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as any }));
+    await assert.rejects(() => validateSamlResponse({ samlResponseXmlOrBase64: saml, config: baseConfig as never }));
   });
 });

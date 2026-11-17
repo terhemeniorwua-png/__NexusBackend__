@@ -23,6 +23,16 @@ This document summarizes key security controls implemented in the Nexus backend.
 - **Session revocation on membership removal:** When SSO access/membership requiring SSO is removed, active sessions for the affected user are revoked so access is terminated promptly.
 - **Auditing:** SSO configuration changes, domain verification events, break-glass generation/use/failure, JIT provisioning blocks, and SSO login outcomes are recorded in the audit log; security-relevant events are flagged (`securityEvent=true`).
 
+## SCIM Provisioning (Workspace-scoped)
+
+- **Protocol:** SCIM 2.0 Users and Groups endpoints are mounted under `/scim/v2` and are authenticated exclusively with per-workspace bearer tokens (not Nexus sessions).
+- **Per-workspace bearer tokens:** Each SCIM token is bound to exactly one workspace. The plaintext bearer token is returned once at creation and never again; only its SHA-256 hash (`tokenHash`) is persisted. Tokens are revocable, may carry an expiry, and are rate-limited per token.
+- **Scope:** A SCIM token can only read/write users and groups within its own workspace. Cross-workspace access is rejected at the service layer.
+- **Users:** SCIM users map to Nexus users within the workspace (`User` + `WorkspaceMembership`). Creating a SCIM user provisions a Nexus account and membership; updating can change display name, emails, and active state.
+- **Groups:** SCIM groups map to Nexus teams. Group membership is reflected in team membership.
+- **Deprovisioning:** Deactivating a SCIM user sets the account to `DEACTIVATED`, suspends the workspace membership, and revokes all of the user's sessions, SCIM tokens, and workspace integration tokens. Data is never deleted on deactivate unless `hardDelete` is explicitly requested.
+- **Auditing:** Token creation/revocation, user provisioning/deactivation, and group changes are recorded in the audit log as security events.
+
 ## Authorization
 - Authorization is enforced server-side using workspace/project/team policies and capability checks.
 - Frontend checks are not trusted for access control.

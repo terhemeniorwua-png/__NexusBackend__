@@ -315,7 +315,7 @@ describe('SSO enforcement - require SSO blocks password login paths', () => {
       workspaceSsoDomain: {
         count: async () => 1,
       },
-    } as any;
+    } as never;
     const result = await userHasRequiredSsoWorkspace(db, 'user1');
     assert.equal(result.required, true);
     assert.equal(result.workspaceId, 'ws1');
@@ -333,10 +333,10 @@ describe('SSO enforcement - require SSO blocks password login paths', () => {
       workspaceSsoDomain: {
         count: async () => 1,
       },
-    } as any;
+    } as never;
     await assert.rejects(
       () => assertUserPasswordLoginAllowed(db, 'user1'),
-      (err: any) => err?.code === 'SSO_REQUIRED',
+      (err: unknown) => (err as { code?: string })?.code === 'SSO_REQUIRED',
     );
   });
 
@@ -349,7 +349,7 @@ describe('SSO enforcement - require SSO blocks password login paths', () => {
       workspaceSsoConfig: {
         findFirst: async () => null,
       },
-    } as any;
+    } as never;
     await assert.doesNotReject(() => assertUserPasswordLoginAllowed(db, 'user1'));
   });
 });
@@ -373,7 +373,7 @@ describe('SSO enforcement - config removal revokes sessions', () => {
         updateMany: async () => { revokedCalls++; return { count: 1 }; },
       },
       auditLog: { create: async () => ({}) },
-    } as any;
+    } as never;
     const result = await disableSsoConfig(db, 'admin1', 'ws1', 'cfg1');
     assert.equal(result.disabled, true);
     assert.equal(result.revokedSessions, 2);

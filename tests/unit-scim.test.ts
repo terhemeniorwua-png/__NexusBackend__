@@ -2,18 +2,27 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import type { PrismaClient, ScimTokenStatus, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'node:crypto';
 import { createScimService } from '../src/modules/scim/scim.service';
 import { AppError } from '../src/utils/errors';
 import {
   provisionScimUserSchema,
   patchScimUserSchema,
   provisionScimGroupSchema,
-  patchScimGroupSchema,
   scimListQuerySchema,
 } from '../src/modules/scim/scim.schemas';
 
+/**
+ * SCIM unit tests.
+ *
+ * These run without a database by using a small in-memory fake Prisma client.
+ * The fake is intentionally loosely typed (`any`) because it mirrors Prisma's
+ * dynamic operation arguments; it is test-only infrastructure.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 function hashSecret(value: string): string {
-  return require('node:crypto').createHash('sha256').update(value, 'utf8').digest('hex');
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 function whereOf<T extends Record<string, unknown>>(arg: T): T['where'] {
@@ -51,11 +60,7 @@ function makeFakePrisma(overrides: {
   return {
     $connect: async () => {},
     $disconnect: async () => {},
-    $transaction: async (fn: (tx: any) => Promise<unknown>) => {
-      const tx = buildTx(state);
-      console.log('DEBUG tx keys:', Object.keys(tx), 'user.update type:', typeof tx.user?.update);
-      return fn(tx);
-    },
+    $transaction: async (fn: (tx: any) => Promise<unknown>) => fn(buildTx(state)),
     scimToken: {
       findUnique: async (arg: any) =>
         Object.values(state.scimTokens).find((t: any) => t.tokenHash === whereOf(arg).tokenHash) ?? null,
@@ -198,6 +203,12 @@ function makeFakePrisma(overrides: {
         }
         return { count };
       },
+      findFirst: async (arg: any) => {
+        const w = whereOf(arg);
+        return Object.values(state.integrations).find(
+          (r: any) => r.userId === w.userId && r.workspaceId === w.workspaceId,
+        ) ?? null;
+      },
     },
     scimGroup: {
       findFirst: async (arg: any) => {
@@ -270,10 +281,13 @@ function buildTx(state: any) {
         return row;
       },
       update: async (arg: any) => {
-        console.log('DEBUG buildTx.user.update called');
         const row = state.users[whereOf(arg).id];
         Object.assign(row, arg.data, { updatedAt: new Date() });
         return row;
+      },
+      delete: async (arg: any) => {
+        delete state.users[whereOf(arg).id];
+        return { id: whereOf(arg).id };
       },
     },
     workspaceMembership: {
@@ -295,9 +309,33 @@ function buildTx(state: any) {
       },
       updateMany: async () => ({ count: 1 }),
     },
+    integration: {
+      updateMany: async (arg: any) => {
+        const w = whereOf(arg);
+        let count = 0;
+        for (const row of Object.values(state.integrations)) {
+          if (row.userId === w.userId && row.workspaceId === w.workspaceId) {
+            Object.assign(row, arg.data, { updatedAt: new Date() }); count += 1;
+          }
+        }
+        return { count };
+      },
+    },
     session: { updateMany: async () => ({ count: 1 }) },
-    integration: { updateMany: async () => ({ count: 1 }) },
-    scimToken: { updateMany: async () => ({ count: 1 }) },
+    scimToken: {
+      updateMany: async (arg: any) => {
+        const w = whereOf(arg);
+        let count = 0;
+        for (const row of Object.values(state.scimTokens)) {
+          let match = true;
+          for (const [k, v] of Object.entries(w)) {
+            if (row[k] !== v) { match = false; break; }
+          }
+          if (match) { Object.assign(row, arg.data, { updatedAt: new Date() }); count += 1; }
+        }
+        return { count };
+      },
+    },
     scimGroup: { findUnique: async (arg: any) => state.scimGroups[whereOf(arg).id] ?? null },
     teamMembership: {
       findMany: async (arg: any) =>
@@ -305,7 +343,6 @@ function buildTx(state: any) {
       delete: async () => ({ count: 1 }),
       upsert: async (arg: any) => arg.create,
     },
-    user: { delete: async (arg: any) => { delete state.users[whereOf(arg).id]; return { id: whereOf(arg).id }; } },
   };
 }
 
@@ -485,7 +522,6 @@ describe('deactivation revokes sessions and tokens', () => {
   test('deactivateUser revokes sessions, SCIM tokens and integration tokens', async () => {
     const state = baseState();
     const prisma = makeFakePrisma(state) as any;
-    console.log('DEBUG prisma keys:', Object.keys(prisma), 'has $transaction:', typeof prisma['\$transaction']);
     const service = createScimService({ prisma });
 
     // Create a SCIM token for userA1.
@@ -511,7 +547,7 @@ describe('deactivation revokes sessions and tokens', () => {
     assert.equal(membership.status, 'SUSPENDED');
 
     // SCIM token revoked.
-    const tokenRow = await prisma.scimToken.findFirst({ where: { id: scimToken.id } });
+    const tokenRow = await prisma.scimToken.findFirst({ where: { id: scimToken.id, workspaceId: workspaceA } });
     assert.equal(tokenRow.status, 'REVOKED' as ScimTokenStatus);
 
     // Integration token disabled/revoked.

@@ -175,35 +175,38 @@ export async function requireWorkspaceAccess(
   }
 
   // When a workspace requires SSO, only SSO sessions (or valid, time-limited break-glass
-  // sessions for owners) may access it. This also invalidates access that existed before
-  // require-SSO was switched on (e.g. existing password/social sessions).
-  const ssoConfig = await client.workspaceSsoConfig.findFirst({
-    where: { workspaceId: workspace.id, isEnabled: true, requireSso: true },
-    select: { breakGlassEnabled: true },
-  });
-  if (ssoConfig) {
-    const verifiedDomainCount = await client.workspaceSsoDomain.count({
-      where: { workspaceId: workspace.id, verifiedAt: { not: null } },
+  // sessions for owners) may access it. Enforced when request auth/session context is provided.
+  // This also invalidates access that existed before require-SSO was switched on.
+  const hasRequestAuthContext = Boolean(input.auth?.sessionId || input.auth?.authMethod);
+  if (hasRequestAuthContext) {
+    const ssoConfig = await client.workspaceSsoConfig.findFirst({
+      where: { workspaceId: workspace.id, isEnabled: true, requireSso: true },
+      select: { breakGlassEnabled: true },
     });
-    if (verifiedDomainCount > 0) {
-      let authMethod = input.auth?.authMethod?.toLowerCase();
-      let session: any = null;
-      if (input.auth?.sessionId) {
-        session = await client.session.findUnique({ where: { id: input.auth.sessionId } });
-        if (session) authMethod = String(session.authMethod ?? 'PASSWORD').toLowerCase();
-      }
+    if (ssoConfig) {
+      const verifiedDomainCount = await client.workspaceSsoDomain.count({
+        where: { workspaceId: workspace.id, verifiedAt: { not: null } },
+      });
+      if (verifiedDomainCount > 0) {
+        let authMethod = input.auth?.authMethod?.toLowerCase();
+        let session: any = null;
+        if (input.auth?.sessionId) {
+          session = await client.session.findUnique({ where: { id: input.auth.sessionId } });
+          if (session) authMethod = String(session.authMethod ?? 'PASSWORD').toLowerCase();
+        }
 
-      const isBreakGlassValid = () => {
-        if (authMethod !== 'break_glass') return false;
-        if (session?.authMethodExpiresAt && new Date(session.authMethodExpiresAt).getTime() <= Date.now()) return false;
-        const isOwner = effectiveRole === 'OWNER' ||
-          membership.organizationRole === 'COMPANY_OWNER' ||
-          membership.organizationRole === 'INSTITUTION_OWNER';
-        return Boolean(ssoConfig.breakGlassEnabled) && isOwner;
-      };
+        const isBreakGlassValid = () => {
+          if (authMethod !== 'break_glass') return false;
+          if (session?.authMethodExpiresAt && new Date(session.authMethodExpiresAt).getTime() <= Date.now()) return false;
+          const isOwner = effectiveRole === 'OWNER' ||
+            membership.organizationRole === 'COMPANY_OWNER' ||
+            membership.organizationRole === 'INSTITUTION_OWNER';
+          return Boolean(ssoConfig.breakGlassEnabled) && isOwner;
+        };
 
-      if (authMethod !== 'sso' && !isBreakGlassValid()) {
-        throw new AppError(403, 'SSO_REQUIRED', 'This workspace requires SSO sign-in');
+        if (authMethod !== 'sso' && !isBreakGlassValid()) {
+          throw new AppError(403, 'SSO_REQUIRED', 'This workspace requires SSO sign-in');
+        }
       }
     }
   }
