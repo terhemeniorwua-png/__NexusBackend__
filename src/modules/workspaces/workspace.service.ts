@@ -37,6 +37,7 @@ import type {
 } from './workspace.schemas';
 import type { DepartmentSummary, WorkspaceMember, WorkspaceSummary } from './workspace.types';
 import { reassignOpenTasksBeforeMemberRemoval } from './task-reassignment';
+import { revokeSsoSessionsForMember } from '../sso/sso.service';
 import {
   assertCanAssignOrganizationRole,
   assertMayManageOrganizationMember,
@@ -1572,6 +1573,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       for (const notice of reassigned) {
         await taskAssignmentNotifier.notify(notice);
       }
+
+      await revokeSsoSessionsForMember(client, access.workspace.id, input.targetUserId).catch(() => undefined);
     },
 
     async suspendMember(input, ctx): Promise<WorkspaceMember> {
@@ -1679,6 +1682,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         return changed;
       });
 
+      await revokeSsoSessionsForMember(client, access.workspace.id, input.targetUserId).catch(() => undefined);
       return toMember(updated, access.workspace.ownerId);
     },
 

@@ -117,6 +117,33 @@ const envSchema = z
     AVATAR_MAX_DIMENSION: z.coerce.number().int().min(256).max(8192).default(4096),
     AVATAR_MAX_PIXELS: z.coerce.number().int().min(65_536).max(40_000_000).default(16_000_000),
     AVATAR_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
+    SSO_ENABLED: booleanString.default(false),
+    SSO_REQUIRE: booleanString.default(false),
+    SSO_PROVIDERS: z
+      .array(
+        z.object({
+          type: z.enum(["oidc", "saml"]),
+          name: z.string(),
+          clientId: z.string().trim(),
+          clientSecret: z.string().trim(),
+          redirectUrl: z.string().trim(),
+          verifiedDomains: z.string().default(""),
+        })
+      )
+      .default([]),
+    SSO_BREAK_GLASS_CODES: z
+      .array(z.string())
+      .default([])
+        .describe("Owner break-glass codes for require-SSO mode. Each code is a one-time use token."),
+
+    // --- SCIM (System for Cross-domain Identity Management) ------------------
+    //
+    // SCIM 2.0 provisioning is authenticated with per-workspace bearer tokens.
+    // Tokens are hashed at rest, shown once at creation, revocable, rate
+    // limited, and scoped to exactly one workspace.
+    SCIM_ENABLED: booleanString.default(false),
+    SCIM_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    SCIM_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
 
     // Frontend routes that receive the single-use links. They are configurable
     // so the frontend contract can change without a backend deployment.
@@ -676,6 +703,9 @@ export interface AppConfig {
   authPasswordRateLimitMax: number;
   authVerificationRateLimitMax: number;
   totpEncryptionKey: string;
+  scimEnabled: boolean;
+  scimRateLimitWindowMs: number;
+  scimRateLimitMax: number;
   avatarMaxFileSizeBytes: number;
   avatarMaxDimension: number;
   avatarMaxPixels: number;
@@ -856,6 +886,9 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
     authPasswordRateLimitMax: values.AUTH_PASSWORD_RATE_LIMIT_MAX,
     authVerificationRateLimitMax: values.AUTH_VERIFICATION_RATE_LIMIT_MAX,
     totpEncryptionKey: values.TOTP_ENCRYPTION_KEY,
+    scimEnabled: values.SCIM_ENABLED,
+    scimRateLimitWindowMs: values.SCIM_RATE_LIMIT_WINDOW_MS,
+    scimRateLimitMax: values.SCIM_RATE_LIMIT_MAX,
     avatarMaxFileSizeBytes: values.AVATAR_MAX_FILE_SIZE_BYTES,
     avatarMaxDimension: values.AVATAR_MAX_DIMENSION,
     avatarMaxPixels: values.AVATAR_MAX_PIXELS,

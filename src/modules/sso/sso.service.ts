@@ -5,6 +5,8 @@ import { AppError } from '../../utils/errors';
 import { verifyOAuthState, type OAuthStateClaims } from '../integrations/oauth-state';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
 import { getPrismaClient } from '../../db/prisma';
+import { encryptIntegrationToken } from '../integrations/token-crypto';
+import { createNotification } from '../../services/notifications';
 import { recordAuditEvent } from '../../services/audit';
 import { generateSecureToken, hashSecret, safeCompare } from '../../utils/crypto';
 
@@ -40,6 +42,7 @@ export interface SsoConfigInput {
   isEnabled?: boolean;
   requireSso?: boolean;
   breakGlassEnabled?: boolean;
+  jitProvisioningEnabled?: boolean;
 }
 
 export interface DomainVerificationRequest {
@@ -92,10 +95,10 @@ async function requireOwnerAdmin(
 }
 
 function toPublicConfig(config: WorkspaceSsoConfig & { domains?: any[] }) {
-  const { clientSecret, breakGlassCodeHashes, ...rest } = config as any;
+  const { clientSecretCiphertext, breakGlassCodeHashes, ...rest } = config as any;
   return {
     ...rest,
-    hasClientSecret: Boolean(clientSecret),
+    hasClientSecret: Boolean(clientSecretCiphertext),
     breakGlassCodeCount: Array.isArray(breakGlassCodeHashes) ? breakGlassCodeHashes.length : 0,
   };
 }
@@ -148,7 +151,7 @@ export async function createSsoConfig(
       providerName: input.providerName,
       issuer: input.issuer ?? null,
       clientId: input.clientId ?? null,
-      clientSecret: input.clientSecret ?? null,
+      clientSecretCiphertext: input.clientSecret ? encryptIntegrationToken(input.clientSecret) : null,
       metadataUrl: input.metadataUrl ?? null,
       certificate: input.certificate ?? null,
       authorizationUrl: input.authorizationUrl ?? null,
@@ -160,6 +163,7 @@ export async function createSsoConfig(
       isEnabled: Boolean(input.isEnabled),
       requireSso: false,
       breakGlassEnabled: Boolean(input.breakGlassEnabled),
+      jitProvisioningEnabled: Boolean(input.jitProvisioningEnabled),
       createdById: userId,
     },
     include: { domains: true },
@@ -202,7 +206,7 @@ export async function updateSsoConfig(
       providerName: input.providerName ?? existing.providerName,
       issuer: input.issuer !== undefined ? input.issuer : existing.issuer,
       clientId: input.clientId !== undefined ? input.clientId : existing.clientId,
-      clientSecret: input.clientSecret !== undefined ? input.clientSecret : existing.clientSecret,
+      clientSecretCiphertext: input.clientSecret !== undefined ? (input.clientSecret ? encryptIntegrationToken(input.clientSecret) : null) : existing.clientSecretCiphertext,
       metadataUrl: input.metadataUrl !== undefined ? input.metadataUrl : existing.metadataUrl,
       certificate: input.certificate !== undefined ? input.certificate : existing.certificate,
       authorizationUrl: input.authorizationUrl !== undefined ? input.authorizationUrl : existing.authorizationUrl,
@@ -213,6 +217,7 @@ export async function updateSsoConfig(
       isEnabled: input.isEnabled ?? existing.isEnabled,
       requireSso: input.requireSso ?? existing.requireSso,
       breakGlassEnabled: input.breakGlassEnabled ?? existing.breakGlassEnabled,
+      jitProvisioningEnabled: (input as any).jitProvisioningEnabled ?? (existing as any).jitProvisioningEnabled,
       status: (input.isEnabled ?? existing.isEnabled) ? 'ACTIVE' : 'DRAFT',
     },
     include: { domains: true },
@@ -401,6 +406,36 @@ export async function consumeBreakGlassCode(
     userAgent: context.userAgent,
   } as any);
 
+  // Notify other owners
+  try {
+    const workspace = await db.workspace.findUnique({ where: { id: workspaceId }, select: { name: true, ownerId: true } });
+    const ownerMembers = await db.workspaceMembership.findMany({
+      where: {
+        workspaceId,
+        status: 'ACTIVE',
+        OR: [
+          { role: 'OWNER' },
+          { organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] } },
+        ],
+      },
+      select: { userId: true },
+    });
+    const ownerIds = new Set<string>(ownerMembers.map((m) => m.userId));
+    if (workspace?.ownerId) ownerIds.add(workspace.ownerId);
+    ownerIds.delete(actorUserId);
+    for (const ownerId of ownerIds) {
+      await createNotification(db, {
+        userId: ownerId,
+        type: 'SECURITY_ALERT' as any,
+        title: 'SSO break-glass access used',
+        body: `A break-glass recovery code was used to access workspace${workspace?.name ? ` "${workspace.name}"` : ''}.`,
+        data: { workspaceId, actorUserId, configId: config.id },
+      }).catch(() => undefined);
+    }
+  } catch {
+    // notification failure must not block audited break-glass use
+  }
+
   return { ok: true, remainingCodes: hashes.length };
 }
 
@@ -514,4 +549,246 @@ export async function revokeSsoSessionsForMember(
     data: { revokedAt: new Date(), revokedReason: 'SSO_MEMBERSHIP_REMOVED' },
   });
   return result.count;
+}
+
+/**
+ * Returns true if the user is an active member of any workspace that requires SSO
+ * (enabled, requireSso, and at least one verified domain).
+ */
+export async function userHasRequiredSsoWorkspace(
+  db: PrismaClient,
+  userId: string,
+): Promise<{ required: boolean; workspaceId?: string }> {
+  // Find active memberships and check if any of those workspaces require SSO.
+  const memberships = await db.workspaceMembership.findMany({
+    where: { userId, status: 'ACTIVE' },
+    select: { workspaceId: true },
+  });
+  if (memberships.length === 0) return { required: false };
+
+  for (const m of memberships) {
+    const req = await checkRequireSso(db, m.workspaceId);
+    if (req.required) return { required: true, workspaceId: m.workspaceId };
+  }
+  return { required: false };
+}
+
+/**
+ * Password login/reset/session creation paths must be refused when the workspace requires SSO.
+ * This checks if the user belongs to any workspace with SSO required.
+ */
+export async function assertUserPasswordLoginAllowed(
+  db: PrismaClient,
+  userId: string,
+): Promise<void> {
+  const { required, workspaceId } = await userHasRequiredSsoWorkspace(db, userId);
+  if (required) {
+    throw new AppError(
+      403,
+      'SSO_REQUIRED',
+      'This account must sign in using single sign-on (SSO).',
+      workspaceId ? { details: { workspaceId } } : undefined,
+    );
+  }
+}
+
+export async function disableSsoConfig(
+  db: PrismaClient,
+  userId: string,
+  workspaceId: string,
+  configId: string,
+): Promise<{ disabled: boolean; revokedSessions: number }> {
+  await requireOwnerAdmin(db, userId, workspaceId);
+  const config = await db.workspaceSsoConfig.findFirst({ where: { id: configId, workspaceId } });
+  if (!config) throw new AppError(404, 'SSO_CONFIG_NOT_FOUND', 'SSO configuration not found');
+
+  const wasRequiringSso = config.isEnabled && config.requireSso;
+
+  await db.workspaceSsoConfig.update({
+    where: { id: configId },
+    data: { isEnabled: false, requireSso: false, status: 'DISABLED' },
+  });
+
+  let revokedSessions = 0;
+  if (wasRequiringSso) {
+    const members = await db.workspaceMembership.findMany({ where: { workspaceId, status: 'ACTIVE' }, select: { userId: true } });
+    for (const m of members) {
+      const result = await db.session.updateMany({
+        where: { userId: m.userId, revokedAt: null },
+        data: { revokedAt: new Date(), revokedReason: 'SSO_CONFIG_REMOVED' },
+      });
+      revokedSessions += result.count;
+    }
+  }
+
+  await recordAuditEvent(db, {
+    workspaceId,
+    actorId: userId,
+    action: SsoAuditAction.ConfigDisabled,
+    targetType: 'WorkspaceSsoConfig',
+    targetId: configId,
+    metadata: { revokedSessions, wasRequiringSso },
+  } as any);
+
+  return { disabled: true, revokedSessions };
+}
+
+export async function deleteSsoConfig(
+  db: PrismaClient,
+  userId: string,
+  workspaceId: string,
+  configId: string,
+): Promise<{ deleted: boolean; revokedSessions: number }> {
+  await requireOwnerAdmin(db, userId, workspaceId);
+  const config = await db.workspaceSsoConfig.findFirst({ where: { id: configId, workspaceId } });
+  if (!config) throw new AppError(404, 'SSO_CONFIG_NOT_FOUND', 'SSO configuration not found');
+
+  const wasRequiringSso = config.isEnabled && config.requireSso;
+
+  let revokedSessions = 0;
+  if (wasRequiringSso) {
+    const members = await db.workspaceMembership.findMany({ where: { workspaceId, status: 'ACTIVE' }, select: { userId: true } });
+    for (const m of members) {
+      const result = await db.session.updateMany({
+        where: { userId: m.userId, revokedAt: null },
+        data: { revokedAt: new Date(), revokedReason: 'SSO_CONFIG_REMOVED' },
+      });
+      revokedSessions += result.count;
+    }
+  }
+
+  await db.workspaceSsoConfig.delete({ where: { id: configId } });
+
+  await recordAuditEvent(db, {
+    workspaceId,
+    actorId: userId,
+    action: SsoAuditAction.ConfigDisabled,
+    targetType: 'WorkspaceSsoConfig',
+    targetId: configId,
+    metadata: { revokedSessions, wasRequiringSso, deleted: true },
+  } as any);
+
+  return { deleted: true, revokedSessions };
+}
+
+
+
+/**
+ * True if the user's verified email domain belongs to any workspace that requires SSO
+ * and has that domain verified. Used to block password/social login paths when SSO is required.
+ */
+export async function isEmailDomainInRequireSsoWorkspace(
+  db: PrismaClient,
+  email: string,
+): Promise<{ required: boolean; workspaceId?: string }> {
+  const domain = normalizeDomain((email || '').split('@')[1] || '');
+  if (!domain) return { required: false };
+
+  const domains = await db.workspaceSsoDomain.findMany({
+    where: { domain, verifiedAt: { not: null } },
+    select: { workspaceId: true },
+  });
+  for (const d of domains) {
+    const req = await checkRequireSso(db, d.workspaceId);
+    if (req.required) return { required: true, workspaceId: d.workspaceId };
+  }
+  return { required: false };
+}
+
+export async function assertEmailNotInRequireSsoWorkspace(
+  db: PrismaClient,
+  email: string,
+): Promise<void> {
+  const { required, workspaceId } = await isEmailDomainInRequireSsoWorkspace(db, email);
+  if (required) {
+    throw new AppError(
+      403,
+      'SSO_REQUIRED',
+      'This account must sign in using single sign-on (SSO).',
+      workspaceId ? { details: { workspaceId } } : undefined,
+    );
+  }
+}
+
+
+
+export async function consumeBreakGlassCodeForLogin(
+  db: PrismaClient,
+  workspaceId: string,
+  code: string,
+  actorUserId: string,
+  context: { ip?: string; userAgent?: string } = {},
+): Promise<{ configId: string; remainingCodes: number }> {
+  const config = await db.workspaceSsoConfig.findFirst({
+    where: { workspaceId, requireSso: true, breakGlassEnabled: true, isEnabled: true },
+  });
+  if (!config) {
+    throw new AppError(403, 'SSO_BREAK_GLASS_UNAVAILABLE', 'Break-glass access is not available');
+  }
+
+  const hashes = Array.isArray(config.breakGlassCodeHashes) ? (config.breakGlassCodeHashes as string[]) : [];
+  const idx = hashes.findIndex((h) => safeCompare(h, hashSecret(code)));
+  if (idx === -1) {
+    await recordAuditEvent(db, {
+      workspaceId,
+      actorId: actorUserId,
+      action: SsoAuditAction.BreakGlassFailed,
+      targetType: 'WorkspaceSsoConfig',
+      targetId: config.id,
+      metadata: { reason: 'invalid_code' },
+      ip: context.ip,
+      userAgent: context.userAgent,
+    } as any);
+    throw new AppError(403, 'SSO_BREAK_GLASS_INVALID', 'Invalid break-glass code');
+  }
+
+  // One-time use: remove consumed hash
+  hashes.splice(idx, 1);
+  await db.workspaceSsoConfig.update({
+    where: { id: config.id },
+    data: { breakGlassCodeHashes: hashes as any },
+  });
+
+  await recordAuditEvent(db, {
+    workspaceId,
+    actorId: actorUserId,
+    action: SsoAuditAction.BreakGlassUsed,
+    targetType: 'WorkspaceSsoConfig',
+    targetId: config.id,
+    metadata: { remainingCodes: hashes.length, login: true },
+    ip: context.ip,
+    userAgent: context.userAgent,
+  } as any);
+
+  // Notify other owners
+  try {
+    const workspace = await db.workspace.findUnique({ where: { id: workspaceId }, select: { name: true, ownerId: true } });
+    const ownerMembers = await db.workspaceMembership.findMany({
+      where: {
+        workspaceId,
+        status: 'ACTIVE',
+        OR: [
+          { role: 'OWNER' },
+          { organizationRole: { in: ['COMPANY_OWNER', 'INSTITUTION_OWNER'] } },
+        ],
+      },
+      select: { userId: true },
+    });
+    const ownerIds = new Set<string>(ownerMembers.map((m) => m.userId));
+    if (workspace?.ownerId) ownerIds.add(workspace.ownerId);
+    ownerIds.delete(actorUserId);
+    for (const ownerId of ownerIds) {
+      await createNotification(db, {
+        userId: ownerId,
+        type: 'SECURITY_ALERT' as any,
+        title: 'SSO break-glass access used',
+        body: `A break-glass recovery code was used to access workspace${workspace?.name ? ` "${workspace.name}"` : ''}.`,
+        data: { workspaceId, actorUserId, configId: config.id },
+      }).catch(() => undefined);
+    }
+  } catch {
+    // notification failure must not block audited break-glass use
+  }
+
+  return { configId: config.id, remainingCodes: hashes.length };
 }

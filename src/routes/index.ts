@@ -47,6 +47,8 @@ import { createWebhookRouter } from '../modules/webhooks/webhook.routes';
 import { createAiRouter } from '../modules/ai/ai.routes';
 import { createAuditRouter } from '../modules/audit/audit.routes';
 import { createAnalyticsRouter } from '../modules/analytics/analytics.routes';
+import ssoRouter from '../modules/sso/sso.routes';
+import { createScimRouter } from '../modules/scim/scim.routes';
 
 interface ApiRouterOptions {
   config: AppConfig;
@@ -117,6 +119,11 @@ export function createApiRouter({
   router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));
   // Outbound webhook subscriptions are workspace-scoped
   router.use('/workspaces/:workspaceId/webhooks', createWebhookRouter({ config }));
+  // SSO (OIDC/SAML)
+  router.use('/sso', ssoRouter);
+
+  // SCIM 2.0 provisioning (per-workspace bearer tokens)
+  router.use('/scim', createScimRouter({ config }));
   // AI service proxy (Phases 21-23)
   router.use('/ai', createAiRouter({ config }));
   // Workspace audit log API (Phase 26)

@@ -109,6 +109,20 @@ export const SecurityAuditAction = {
   DepartmentMemberRemoved: 'institution.department_member_removed',
   AiActionApproved: 'ai.action_approved',
   AiActionExecuted: 'ai.action_executed',
+  SsoConfigCreated: 'workspace.sso_config_created',
+  SsoConfigUpdated: 'workspace.sso_config_updated',
+  SsoConfigEnabled: 'workspace.sso_config_enabled',
+  SsoConfigDisabled: 'workspace.sso_config_disabled',
+  SsoRequireEnabled: 'workspace.require_sso_enabled',
+  SsoRequireDisabled: 'workspace.require_sso_disabled',
+  SsoDomainVerificationRequested: 'workspace.sso_domain_verification_requested',
+  SsoDomainVerified: 'workspace.sso_domain_verified',
+  SsoBreakGlassUsed: 'workspace.sso_break_glass_used',
+  SsoBreakGlassFailed: 'workspace.sso_break_glass_failed',
+  SsoBreakGlassCodesGenerated: 'workspace.sso_break_glass_codes_generated',
+  SsoJitProvisionBlocked: 'workspace.sso_jit_provision_blocked',
+  SsoLoginSucceeded: 'workspace.sso_login_succeeded',
+  SsoLoginFailed: 'workspace.sso_login_failed',
 } as const;
 
 export type SecurityAuditActionValue =
