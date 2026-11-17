@@ -20,6 +20,7 @@ import { generateTaskKey } from '../tasks/task.service';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { createAutomationRunQueue } from './automation.queue';
 import { createMessageService } from '../messaging/message.service';
+import type { SlackEventNotifier } from '../integrations/slack.events';
 
 /**
  * Automation execution engine.
@@ -62,6 +63,8 @@ export interface AutomationEngineDependencies {
   /** Override the SSRF guard in tests; production always uses the default. */
   resolveWebhookUrl?: (raw: string) => Promise<URL>;
   notificationType?: NotificationType;
+  /** Backs the explicit `SEND_SLACK_MESSAGE` automation action. */
+  slackNotifier?: SlackEventNotifier;
 }
 
 export interface ProcessRunsResult {
@@ -679,6 +682,41 @@ async function executePostMessageAction(
   });
 }
 
+async function executeSlackMessageAction(
+  deps: AutomationEngineDependencies,
+  automation: Automation,
+  runId: string,
+): Promise<void> {
+  await assertOwnerCanManage(deps.prisma, automation);
+  if (!deps.slackNotifier) {
+    throw new AppError(
+      503,
+      'SLACK_NOTIFIER_UNAVAILABLE',
+      'Slack notifications are not available in this deployment',
+    );
+  }
+
+  const result = await deps.slackNotifier.automationAction({
+    workspaceId: automation.workspaceId,
+    automationId: automation.id,
+    automationName: automation.name,
+    runId,
+    trigger: automation.trigger,
+  });
+
+  // `duplicate` means this run already queued its message and `disabled` means
+  // the workspace turned Slack notifications off; both are successful no-ops.
+  // A missing integration or channel is a real misconfiguration and must be
+  // visible instead of silently doing nothing.
+  if (!result.queued && result.reason === 'not_configured') {
+    throw new AppError(
+      409,
+      'SLACK_NOT_CONFIGURED',
+      'Connect Slack and choose a notification channel before running this automation',
+    );
+  }
+}
+
 export async function executeAutomationAction(
   deps: AutomationEngineDependencies,
   automation: Automation,
@@ -706,6 +744,9 @@ export async function executeAutomationAction(
       return;
     case 'POST_MESSAGE':
       await executePostMessageAction(deps, automation, payload);
+      return;
+    case 'SEND_SLACK_MESSAGE':
+      await executeSlackMessageAction(deps, automation, runId);
       return;
     default:
       throw new AppError(400, 'AUTOMATION_UNKNOWN_ACTION', 'Unsupported automation action');
