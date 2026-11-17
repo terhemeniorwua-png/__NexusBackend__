@@ -15,6 +15,7 @@ import {
   TeamCapability,
   WorkspaceCapability,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { getPrismaClient } from '../../db/prisma';
 import {
   projectOrganizationParamsSchema,
@@ -58,6 +59,7 @@ export function createProjectOrganizationRouter({
         userId,
         workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const { project } = await authorizeProject(prisma, {
         actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
@@ -77,7 +79,8 @@ export function createProjectOrganizationRouter({
           teamId,
           workspaceRole: workspace.effectiveRole,
           capability: TeamCapability.UpdateTeam,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
         teamDepartmentId = team.team.departmentId;
         if (input.teamId !== undefined && input.teamId !== project.teamId && teamDepartmentId) {
           departmentId = input.departmentId === undefined ? teamDepartmentId : departmentId;
@@ -98,7 +101,8 @@ export function createProjectOrganizationRouter({
           workspaceId,
           departmentId,
           capability: DepartmentCapability.ManageProjects,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
       }
 
       const updated = await prisma.$transaction(async (tx) => {

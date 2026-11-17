@@ -5,6 +5,7 @@ import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { ProjectPermission, authorizeProject, requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import type { AppConfig } from '../../config/env';
 import { githubAppProvider } from './providers/github-app.provider';
 import { gitlabProvider } from './providers/gitlab.provider';
@@ -130,7 +131,8 @@ export function createDevIntegrationService(
       userId,
       workspaceId,
       capability: WorkspaceCapability.UpdateWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
   }
 
   async function requireProjectRepoManager(userId: string, workspaceId: string, projectId: string) {
@@ -138,7 +140,8 @@ export function createDevIntegrationService(
       userId,
       workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     await authorizeProject(prisma, {
       actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
       projectId,
@@ -152,7 +155,8 @@ export function createDevIntegrationService(
       userId,
       workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     await authorizeProject(prisma, {
       actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
       projectId,
@@ -166,7 +170,8 @@ export function createDevIntegrationService(
       userId,
       workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     await authorizeProject(prisma, {
       actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
       projectId,
@@ -185,7 +190,8 @@ export function createDevIntegrationService(
       userId,
       workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     await authorizeProject(prisma, {
       actor: { userId, workspaceId, workspaceRole: workspace.effectiveRole },
       projectId,
@@ -201,7 +207,7 @@ export function createDevIntegrationService(
 
   async function getActiveLinkedRepository(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     projectId: string;
     repositoryId: string;
   }) {
@@ -218,7 +224,7 @@ export function createDevIntegrationService(
   }
 
   return {
-    async startConnect(input: { userId: string; workspaceId: string; provider: DevIntegrationProvider }) {
+    async startConnect(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; provider: DevIntegrationProvider }) {
       await requireWorkspaceManager(input.userId, input.workspaceId);
       const providerImpl = providerFor(input.provider);
       const result = await providerImpl.startConnect({ config, userId: input.userId, workspaceId: input.workspaceId });
@@ -233,11 +239,11 @@ export function createDevIntegrationService(
       return result;
     },
 
-    async startGithubConnect(input: { userId: string; workspaceId: string }) {
+    async startGithubConnect(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
       return this.startConnect({ ...input, provider: 'GITHUB' });
     },
 
-    async startGitlabConnect(input: { userId: string; workspaceId: string }) {
+    async startGitlabConnect(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
       return this.startConnect({ ...input, provider: 'GITLAB' });
     },
 
@@ -298,12 +304,13 @@ export function createDevIntegrationService(
       return this.handleCallback({ provider: 'GITLAB', query: input.query });
     },
 
-    async listConnections(input: { userId: string; workspaceId: string }): Promise<DevConnectionSummary[]> {
+    async listConnections(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }): Promise<DevConnectionSummary[]> {
       // Workspace members can see connection status (no secrets). Management actions are separately protected.
       await requireWorkspaceAccess(prisma, {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const rows = await prisma.integrationConnection.findMany({
         where: { workspaceId: input.workspaceId },
@@ -312,7 +319,7 @@ export function createDevIntegrationService(
       return rows.map(toConnectionSummary);
     },
 
-    async disconnect(input: { userId: string; workspaceId: string; connectionId: string }) {
+    async disconnect(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; connectionId: string }) {
       await requireWorkspaceManager(input.userId, input.workspaceId);
       const connection = await prisma.integrationConnection.findFirst({
         where: { id: input.connectionId, workspaceId: input.workspaceId },
@@ -362,7 +369,7 @@ export function createDevIntegrationService(
 
     async listAvailableRepositories(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       connectionId: string;
     }): Promise<DevRepositorySummary[]> {
       // Any active workspace member can list available repos from an active workspace connection
@@ -371,6 +378,7 @@ export function createDevIntegrationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const connection = await prisma.integrationConnection.findFirst({
         where: { id: input.connectionId, workspaceId: input.workspaceId },
@@ -398,7 +406,7 @@ export function createDevIntegrationService(
       }
     },
 
-    async listProjectRepositories(input: { userId: string; workspaceId: string; projectId: string }): Promise<LinkedProjectRepository[]> {
+    async listProjectRepositories(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string }): Promise<LinkedProjectRepository[]> {
       await requireProjectViewer(input.userId, input.workspaceId, input.projectId);
       const rows = await prisma.projectRepository.findMany({
         where: { projectId: input.projectId, project: { workspaceId: input.workspaceId } },
@@ -409,7 +417,7 @@ export function createDevIntegrationService(
 
     async linkRepository(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
       connectionId: string;
       externalRepoId: string;
@@ -457,7 +465,7 @@ export function createDevIntegrationService(
 
     async unlinkRepository(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
       repositoryId: string;
     }) {
@@ -480,7 +488,7 @@ export function createDevIntegrationService(
 
     async listRepositoryBranches(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
       repositoryId: string;
       search?: string;
@@ -509,7 +517,7 @@ export function createDevIntegrationService(
 
     async listRepositoryPullRequests(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
       repositoryId: string;
       search?: string;
@@ -540,7 +548,7 @@ export function createDevIntegrationService(
 
     async listTaskDevLinks(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
       taskId: string;
     }): Promise<TaskDevLinkSummary[]> {
@@ -554,7 +562,7 @@ export function createDevIntegrationService(
 
     async linkTaskDevLink(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
       taskId: string;
       projectRepositoryId: string;
@@ -623,7 +631,7 @@ export function createDevIntegrationService(
 
     async unlinkTaskDevLink(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
       taskId: string;
       devLinkId: string;

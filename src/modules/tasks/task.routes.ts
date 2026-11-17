@@ -3,6 +3,7 @@ import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import { sendSuccess } from '../../utils/http';
 import {
   addAssigneeSchema,
@@ -53,14 +54,14 @@ export interface TaskRouterOptions {
   advancedService?: ReturnType<typeof createTaskAdvancedService>;
 }
 
-function context(req: Request) {
+function requestContext(req: Request) {
   return { ip: req.ip, userAgent: req.header('user-agent') };
 }
 
-function userId(req: Request): string {
+function authCtx(req: Request) {
   if (!req.auth)
     throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-  return req.auth.userId;
+  return req.auth;
 }
 
 export function createTaskRouter({
@@ -95,7 +96,7 @@ export function createTaskRouter({
       const query = req.validated!.query as ListTasksQuery;
       sendSuccess(
         res,
-        await service.list({ userId: userId(req), workspaceId, projectId, ...query }),
+        await service.list({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, ...query }),
       );
     },
   );
@@ -117,8 +118,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.create(
-          { userId: userId(req), workspaceId, projectId, ...body },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, ...body },
+          requestContext(req),
         ),
         201,
       );
@@ -142,7 +143,7 @@ export function createTaskRouter({
       };
       sendSuccess(
         res,
-        await service.get({ userId: userId(req), workspaceId, projectId, taskId }),
+        await service.get({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId }),
       );
     },
   );
@@ -162,8 +163,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.update(
-          { userId: userId(req), workspaceId, projectId, taskId, ...body },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, ...body },
+          requestContext(req),
         ),
       );
     },
@@ -183,8 +184,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.remove(
-          { userId: userId(req), workspaceId, projectId, taskId },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId },
+          requestContext(req),
         ),
       );
     },
@@ -208,8 +209,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.archive(
-          { userId: userId(req), workspaceId, projectId, taskId },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId },
+          requestContext(req),
         ),
       );
     },
@@ -229,8 +230,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.restore(
-          { userId: userId(req), workspaceId, projectId, taskId },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId },
+          requestContext(req),
         ),
       );
     },
@@ -254,8 +255,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.complete(
-          { userId: userId(req), workspaceId, projectId, taskId },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId },
+          requestContext(req),
         ),
       );
     },
@@ -275,8 +276,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.reopen(
-          { userId: userId(req), workspaceId, projectId, taskId },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId },
+          requestContext(req),
         ),
       );
     },
@@ -302,13 +303,13 @@ export function createTaskRouter({
         res,
         await service.addAssignee(
           {
-            userId: userId(req),
+            userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
             workspaceId,
             projectId,
             taskId,
             targetUserId: body.targetUserId,
           },
-          context(req),
+          requestContext(req),
         ),
         201,
       );
@@ -332,13 +333,13 @@ export function createTaskRouter({
         res,
         await service.removeAssignee(
           {
-            userId: userId(req),
+            userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
             workspaceId,
             projectId,
             taskId,
             targetUserId,
           },
-          context(req),
+          requestContext(req),
         ),
       );
     },
@@ -364,13 +365,13 @@ export function createTaskRouter({
         res,
         await service.addDependency(
           {
-            userId: userId(req),
+            userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
             workspaceId,
             projectId,
             taskId,
             dependsOnTaskId: body.dependsOnTaskId,
           },
-          context(req),
+          requestContext(req),
         ),
         201,
       );
@@ -393,13 +394,13 @@ export function createTaskRouter({
         res,
         await service.removeDependency(
           {
-            userId: userId(req),
+            userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
             workspaceId,
             projectId,
             taskId,
             dependsOnTaskId,
           },
-          context(req),
+          requestContext(req),
         ),
       );
     },
@@ -424,7 +425,7 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.listComments({
-          userId: userId(req),
+          userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
           workspaceId,
           projectId,
           taskId,
@@ -445,7 +446,7 @@ export function createTaskRouter({
         projectId: string;
         taskId: string;
       };
-      sendSuccess(res, await service.getWorkspace({ userId: userId(req), workspaceId, projectId, taskId }));
+      sendSuccess(res, await service.getWorkspace({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId }));
     },
   );
 
@@ -464,7 +465,7 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.listActivity({
-          userId: userId(req),
+          userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
           workspaceId,
           projectId,
           taskId,
@@ -490,8 +491,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.submit(
-          { userId: userId(req), workspaceId, projectId, taskId, ...body },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, ...body },
+          requestContext(req),
         ),
       );
     },
@@ -512,8 +513,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.review(
-          { userId: userId(req), workspaceId, projectId, taskId, ...body },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, ...body },
+          requestContext(req),
         ),
       );
     },
@@ -535,8 +536,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.completeSubtask(
-          { userId: userId(req), workspaceId, projectId, taskId, subtaskId, ...body },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, subtaskId, ...body },
+          requestContext(req),
         ),
       );
     },
@@ -557,8 +558,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.addComment(
-          { userId: userId(req), workspaceId, projectId, taskId, ...body },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, ...body },
+          requestContext(req),
         ),
         201,
       );
@@ -582,14 +583,14 @@ export function createTaskRouter({
         res,
         await service.updateComment(
           {
-            userId: userId(req),
+            userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
             workspaceId,
             projectId,
             taskId,
             commentId,
             body: body.body,
           },
-          context(req),
+          requestContext(req),
         ),
       );
     },
@@ -610,8 +611,8 @@ export function createTaskRouter({
       sendSuccess(
         res,
         await service.deleteComment(
-          { userId: userId(req), workspaceId, projectId, taskId, commentId },
-          context(req),
+          { userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, commentId },
+          requestContext(req),
         ),
       );
     },
@@ -628,7 +629,7 @@ export function createTaskRouter({
     validate({ params: taskParamsSchema }),
     async (req, res) => {
       const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
-      sendSuccess(res, await advancedService.getTaskCustomFieldValues({ userId: userId(req), workspaceId, projectId, taskId }));
+      sendSuccess(res, await advancedService.getTaskCustomFieldValues({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId }));
     },
   );
 
@@ -640,7 +641,7 @@ export function createTaskRouter({
     async (req, res) => {
       const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
       const body = req.validated!.body as SetTaskCustomFieldValuesInput;
-      sendSuccess(res, await advancedService.setTaskCustomFieldValues({ userId: userId(req), workspaceId, projectId, taskId, values: body.values }, context(req)));
+      sendSuccess(res, await advancedService.setTaskCustomFieldValues({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, values: body.values }, requestContext(req)));
     },
   );
 
@@ -655,7 +656,7 @@ export function createTaskRouter({
     validate({ params: recurrenceParamsSchema }),
     async (req, res) => {
       const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
-      sendSuccess(res, await advancedService.getRecurrence({ userId: userId(req), workspaceId, projectId, taskId }));
+      sendSuccess(res, await advancedService.getRecurrence({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId }));
     },
   );
 
@@ -667,7 +668,7 @@ export function createTaskRouter({
     async (req, res) => {
       const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
       const body = req.validated!.body as UpsertRecurrenceInput;
-      sendSuccess(res, await advancedService.upsertRecurrence({ userId: userId(req), workspaceId, projectId, taskId, ...body }, context(req)));
+      sendSuccess(res, await advancedService.upsertRecurrence({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId, ...body }, requestContext(req)));
     },
   );
 
@@ -678,7 +679,7 @@ export function createTaskRouter({
     validate({ params: recurrenceParamsSchema }),
     async (req, res) => {
       const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
-      sendSuccess(res, await advancedService.deleteRecurrence({ userId: userId(req), workspaceId, projectId, taskId }, context(req)));
+      sendSuccess(res, await advancedService.deleteRecurrence({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId }, requestContext(req)));
     },
   );
 
@@ -689,7 +690,7 @@ export function createTaskRouter({
     validate({ params: recurrenceParamsSchema }),
     async (req, res) => {
       const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
-      sendSuccess(res, await advancedService.generateNextRecurrence({ userId: userId(req), workspaceId, projectId, taskId }, context(req)), 201);
+      sendSuccess(res, await advancedService.generateNextRecurrence({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, taskId }, requestContext(req)), 201);
     },
   );
 

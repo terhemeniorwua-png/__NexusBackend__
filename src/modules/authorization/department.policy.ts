@@ -1,6 +1,7 @@
 import type { Department, DepartmentMembership, PrismaClient } from '@prisma/client';
 import { AppError } from '../../utils/errors';
-import { isOrganizationAdminRole, isOrganizationOwnerRole } from './organization-role';
+import { effectiveWorkspaceRole, isOrganizationAdminRole, isOrganizationOwnerRole } from './organization-role';
+import { assertWorkspaceSsoAccess, type WorkspaceAccessContext } from './workspace.policy';
 
 export const DepartmentCapability = {
   View: 'department:view',
@@ -25,8 +26,17 @@ export async function requireDepartmentAccess(
     workspaceId: string;
     departmentId: string;
     capability: DepartmentCapabilityValue;
+    context: WorkspaceAccessContext;
   },
 ): Promise<DepartmentAccess> {
+  if (!input.context) {
+    throw new AppError(
+      403,
+      'WORKSPACE_ACCESS_CONTEXT_REQUIRED',
+      'Workspace access requires a valid session or system context',
+    );
+  }
+
   const department = await client.department.findFirst({
     where: { id: input.departmentId, workspaceId: input.workspaceId },
   });
@@ -46,6 +56,18 @@ export async function requireDepartmentAccess(
   if (workspaceMembership.workspace.type !== 'INSTITUTION') {
     throw new AppError(404, 'DEPARTMENT_NOT_FOUND', 'That department does not exist');
   }
+
+  const effectiveRole = effectiveWorkspaceRole(
+    workspaceMembership.workspace.type,
+    workspaceMembership.role,
+    workspaceMembership.organizationRole,
+  );
+  await assertWorkspaceSsoAccess(client, {
+    workspaceId: input.workspaceId,
+    context: input.context,
+    effectiveRole,
+    membership: workspaceMembership,
+  });
 
   const organizationAdministrator =
     isOrganizationOwnerRole(workspaceMembership.organizationRole) ||

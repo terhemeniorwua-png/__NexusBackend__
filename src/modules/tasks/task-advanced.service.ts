@@ -6,6 +6,7 @@ import {
   ProjectPermission,
   authorizeProject,
   requireWorkspaceAccess,
+  type WorkspaceAccessContext,
   WorkspaceCapability,
 } from '../authorization';
 import type { RequestContext } from '../auth/auth.types';
@@ -101,7 +102,7 @@ function validateCustomFieldValue(
 
 async function authorizeProjectAccess(
   prisma: PrismaClient,
-  input: { userId: string; workspaceId: string; projectId: string },
+  input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string },
   permission: (typeof ProjectPermission)[keyof typeof ProjectPermission],
   resource?: { kind: 'task'; taskId: string },
 ) {
@@ -109,6 +110,7 @@ async function authorizeProjectAccess(
     userId: input.userId,
     workspaceId: input.workspaceId,
     capability: WorkspaceCapability.ViewWorkspace,
+    context: input.context,
   });
   return authorizeProject(prisma, {
     actor: { userId: input.userId, workspaceId: input.workspaceId, workspaceRole: workspace.effectiveRole },
@@ -269,7 +271,7 @@ async function generateRecurrenceInstanceForRule(
 export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient()) {
   return {
     // Custom fields
-    async listCustomFields(input: { userId: string; workspaceId: string; projectId: string }) {
+    async listCustomFields(input: { userId: string; workspaceId: string; projectId: string; context: WorkspaceAccessContext }) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
       return prisma.projectCustomField.findMany({
         where: { projectId: input.projectId },
@@ -277,7 +279,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       });
     },
 
-    async createCustomField(input: { userId: string; workspaceId: string; projectId: string } & CreateCustomFieldInput, context: Ctx) {
+    async createCustomField(input: { userId: string; workspaceId: string; projectId: string; context: WorkspaceAccessContext } & CreateCustomFieldInput, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
       const keyBase = input.key || slugifyKey(input.name);
       let key = keyBase;
@@ -303,7 +305,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return field;
     },
 
-    async updateCustomField(input: { userId: string; workspaceId: string; projectId: string; fieldId: string } & UpdateCustomFieldInput, context: Ctx) {
+    async updateCustomField(input: { userId: string; workspaceId: string; projectId: string; fieldId: string; context: WorkspaceAccessContext } & UpdateCustomFieldInput, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
       const existing = await prisma.projectCustomField.findFirst({ where: { id: input.fieldId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'CUSTOM_FIELD_NOT_FOUND', 'Custom field not found');
@@ -321,7 +323,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return field;
     },
 
-    async deleteCustomField(input: { userId: string; workspaceId: string; projectId: string; fieldId: string }, context: Ctx) {
+    async deleteCustomField(input: { userId: string; workspaceId: string; projectId: string; fieldId: string; context: WorkspaceAccessContext }, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
       const existing = await prisma.projectCustomField.findFirst({ where: { id: input.fieldId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'CUSTOM_FIELD_NOT_FOUND', 'Custom field not found');
@@ -331,7 +333,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async setTaskCustomFieldValues(
-      input: { userId: string; workspaceId: string; projectId: string; taskId: string; values: Array<{ fieldId: string; value?: unknown }> },
+      input: { userId: string; workspaceId: string; projectId: string; taskId: string; context: WorkspaceAccessContext; values: Array<{ fieldId: string; value?: unknown }> },
       context: Ctx,
     ) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
@@ -363,7 +365,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return { taskId: task.id, values: results };
     },
 
-    async getTaskCustomFieldValues(input: { userId: string; workspaceId: string; projectId: string; taskId: string }) {
+    async getTaskCustomFieldValues(input: { userId: string; workspaceId: string; projectId: string; taskId: string; context: WorkspaceAccessContext }) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView, { kind: 'task', taskId: input.taskId });
       const task = await prisma.task.findFirst({ where: { id: input.taskId, projectId: input.projectId, deletedAt: null }, select: { id: true } });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
@@ -371,7 +373,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     // Saved views
-    async listSavedViews(input: { userId: string; workspaceId: string; projectId: string }) {
+    async listSavedViews(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string }) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
       return prisma.taskSavedView.findMany({
         where: { projectId: input.projectId, OR: [{ ownerId: input.userId }, { isShared: true }] },
@@ -379,7 +381,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       });
     },
 
-    async createSavedView(input: { userId: string; workspaceId: string; projectId: string } & CreateSavedViewInput, context: Ctx) {
+    async createSavedView(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string } & CreateSavedViewInput, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
       const view = await prisma.taskSavedView.create({
         data: {
@@ -394,7 +396,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return view;
     },
 
-    async updateSavedView(input: { userId: string; workspaceId: string; projectId: string; viewId: string } & UpdateSavedViewInput, context: Ctx) {
+    async updateSavedView(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string; viewId: string } & UpdateSavedViewInput, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
       const existing = await prisma.taskSavedView.findFirst({ where: { id: input.viewId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'SAVED_VIEW_NOT_FOUND', 'Saved view not found');
@@ -419,7 +421,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return view;
     },
 
-    async deleteSavedView(input: { userId: string; workspaceId: string; projectId: string; viewId: string }, context: Ctx) {
+    async deleteSavedView(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string; viewId: string }, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
       const existing = await prisma.taskSavedView.findFirst({ where: { id: input.viewId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'SAVED_VIEW_NOT_FOUND', 'Saved view not found');
@@ -435,14 +437,14 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     // Recurrence
-    async getRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string }) {
+    async getRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string; context: WorkspaceAccessContext }) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView, { kind: 'task', taskId: input.taskId });
       const rule = await prisma.taskRecurrenceRule.findUnique({ where: { taskId: input.taskId } });
       if (!rule) throw new AppError(404, 'RECURRENCE_NOT_FOUND', 'Recurrence rule not found');
       return rule;
     },
 
-    async upsertRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string } & UpsertRecurrenceInput, context: Ctx) {
+    async upsertRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string; context: WorkspaceAccessContext } & UpsertRecurrenceInput, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
       const task = await prisma.task.findFirst({ where: { id: input.taskId, projectId: input.projectId, deletedAt: null }, select: { id: true, dueDate: true } });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
@@ -477,7 +479,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return rule;
     },
 
-    async deleteRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string }, context: Ctx) {
+    async deleteRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string; context: WorkspaceAccessContext }, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
       const existing = await prisma.taskRecurrenceRule.findUnique({ where: { taskId: input.taskId } });
       if (!existing) throw new AppError(404, 'RECURRENCE_NOT_FOUND', 'Recurrence rule not found');
@@ -486,7 +488,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return { taskId: input.taskId, deleted: true };
     },
 
-    async generateNextRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string }, context: Ctx) {
+    async generateNextRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string; context: WorkspaceAccessContext }, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskCreate);
       const source = await prisma.task.findFirst({
         where: { id: input.taskId, projectId: input.projectId, deletedAt: null },
@@ -538,17 +540,17 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     // Task templates (project-scoped)
-    async listTaskTemplates(input: { userId: string; workspaceId: string; projectId: string }) {
+    async listTaskTemplates(input: { userId: string; workspaceId: string; projectId: string; context: WorkspaceAccessContext }) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
       return prisma.taskTemplate.findMany({ where: { projectId: input.projectId }, orderBy: { updatedAt: 'desc' } });
     },
-    async createTaskTemplate(input: { userId: string; workspaceId: string; projectId: string } & CreateTaskTemplateInput, context: Ctx) {
+    async createTaskTemplate(input: { userId: string; workspaceId: string; projectId: string; context: WorkspaceAccessContext } & CreateTaskTemplateInput, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
       const tpl = await prisma.taskTemplate.create({ data: { workspaceId: input.workspaceId, projectId: input.projectId, name: input.name, description: input.description ?? null, data: input.data as unknown as Prisma.InputJsonValue, createdById: input.userId } });
       await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'project.task_template_created', targetType: 'TaskTemplate', targetId: tpl.id, metadata: { projectId: input.projectId }, ...context });
       return tpl;
     },
-    async updateTaskTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string } & UpdateTaskTemplateInput, context: Ctx) {
+    async updateTaskTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string; context: WorkspaceAccessContext } & UpdateTaskTemplateInput, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
       const existing = await prisma.taskTemplate.findFirst({ where: { id: input.templateId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'TASK_TEMPLATE_NOT_FOUND', 'Task template not found');
@@ -556,7 +558,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'project.task_template_updated', targetType: 'TaskTemplate', targetId: tpl.id, metadata: { projectId: input.projectId }, ...context });
       return tpl;
     },
-    async deleteTaskTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string }, context: Ctx) {
+    async deleteTaskTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string; context: WorkspaceAccessContext }, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
       const existing = await prisma.taskTemplate.findFirst({ where: { id: input.templateId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'TASK_TEMPLATE_NOT_FOUND', 'Task template not found');
@@ -564,7 +566,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'project.task_template_deleted', targetType: 'TaskTemplate', targetId: existing.id, metadata: { projectId: input.projectId }, ...context });
       return { id: existing.id, deleted: true };
     },
-    async createTaskFromTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string; title?: string; assigneeIds?: string[]; startDate?: string | null; dueDate?: string | null }, context: Ctx) {
+    async createTaskFromTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string; context: WorkspaceAccessContext; title?: string; assigneeIds?: string[]; startDate?: string | null; dueDate?: string | null }, context: Ctx) {
       await authorizeProjectAccess(prisma, input, ProjectPermission.TaskCreate);
       const tpl = await prisma.taskTemplate.findFirst({ where: { id: input.templateId, projectId: input.projectId } });
       if (!tpl) throw new AppError(404, 'TASK_TEMPLATE_NOT_FOUND', 'Task template not found');
@@ -601,34 +603,34 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     // Project templates (workspace-scoped)
-    async listProjectTemplates(input: { userId: string; workspaceId: string }) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+    async listProjectTemplates(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace, context: input.context });
       return prisma.projectTemplate.findMany({ where: { workspaceId: input.workspaceId }, orderBy: { updatedAt: 'desc' } });
     },
-    async createProjectTemplate(input: { userId: string; workspaceId: string } & CreateProjectTemplateInput, context: Ctx) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+    async createProjectTemplate(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & CreateProjectTemplateInput, context: Ctx) {
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const tpl = await prisma.projectTemplate.create({ data: { workspaceId: input.workspaceId, name: input.name, description: input.description ?? null, data: input.data as unknown as Prisma.InputJsonValue, createdById: input.userId } });
       await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'workspace.project_template_created', targetType: 'ProjectTemplate', targetId: tpl.id, metadata: {}, ...context });
       return tpl;
     },
-    async updateProjectTemplate(input: { userId: string; workspaceId: string; templateId: string } & UpdateProjectTemplateInput, context: Ctx) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+    async updateProjectTemplate(input: { userId: string; workspaceId: string; templateId: string; context: WorkspaceAccessContext } & UpdateProjectTemplateInput, context: Ctx) {
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const existing = await prisma.projectTemplate.findFirst({ where: { id: input.templateId, workspaceId: input.workspaceId } });
       if (!existing) throw new AppError(404, 'PROJECT_TEMPLATE_NOT_FOUND', 'Project template not found');
       const tpl = await prisma.projectTemplate.update({ where: { id: existing.id }, data: { ...(input.name !== undefined ? { name: input.name } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.data !== undefined ? { data: input.data as unknown as Prisma.InputJsonValue } : {}) } });
       await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'workspace.project_template_updated', targetType: 'ProjectTemplate', targetId: tpl.id, metadata: {}, ...context });
       return tpl;
     },
-    async deleteProjectTemplate(input: { userId: string; workspaceId: string; templateId: string }, context: Ctx) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+    async deleteProjectTemplate(input: { userId: string; workspaceId: string; templateId: string; context: WorkspaceAccessContext }, context: Ctx) {
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const existing = await prisma.projectTemplate.findFirst({ where: { id: input.templateId, workspaceId: input.workspaceId } });
       if (!existing) throw new AppError(404, 'PROJECT_TEMPLATE_NOT_FOUND', 'Project template not found');
       await prisma.projectTemplate.delete({ where: { id: existing.id } });
       await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'workspace.project_template_deleted', targetType: 'ProjectTemplate', targetId: existing.id, metadata: {}, ...context });
       return { id: existing.id, deleted: true };
     },
-    async createProjectFromTemplate(input: { userId: string; workspaceId: string; templateId: string; name: string; key: string; description?: string | null }, context: Ctx) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+    async createProjectFromTemplate(input: { userId: string; workspaceId: string; templateId: string; context: WorkspaceAccessContext; name: string; key: string; description?: string | null }, context: Ctx) {
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const tpl = await prisma.projectTemplate.findFirst({ where: { id: input.templateId, workspaceId: input.workspaceId } });
       if (!tpl) throw new AppError(404, 'PROJECT_TEMPLATE_NOT_FOUND', 'Project template not found');
       const data = (tpl.data as Record<string, unknown>) || {};

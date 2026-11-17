@@ -3,6 +3,7 @@ import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import { sendSuccess } from '../../utils/http';
 import {
   createDocumentCommentSchema,
@@ -23,9 +24,9 @@ export interface DocumentRouterOptions {
   service?: ReturnType<typeof createDocumentService>;
 }
 
-function userId(req: Request): string {
+function authCtx(req: Request) {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in');
-  return req.auth.userId;
+  return req.auth;
 }
 
 export function createDocumentRouter({
@@ -41,7 +42,7 @@ export function createDocumentRouter({
     async (req, res) => {
       const { workspaceId } = req.validated!.params as { workspaceId: string };
       const query = req.validated!.query as ListDocumentsQuery;
-      sendSuccess(res, await service.list({ userId: userId(req), workspaceId, ...query }));
+      sendSuccess(res, await service.list({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, ...query }));
     });
 
   router.post('/', requireAuth, requireActiveAccount,
@@ -49,14 +50,14 @@ export function createDocumentRouter({
     async (req, res) => {
       const { workspaceId } = req.validated!.params as { workspaceId: string };
       const body = req.validated!.body as CreateDocumentInput;
-      sendSuccess(res, await service.create({ userId: userId(req), workspaceId, ...body }), 201);
+      sendSuccess(res, await service.create({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, ...body }), 201);
     });
 
   router.get('/:documentId', requireAuth, requireActiveAccount,
     validate({ params: documentParamsSchema }),
     async (req, res) => {
       const { workspaceId, documentId } = req.validated!.params as { workspaceId: string; documentId: string };
-      sendSuccess(res, await service.get({ userId: userId(req), workspaceId, documentId }));
+      sendSuccess(res, await service.get({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, documentId }));
     });
 
   router.patch('/:documentId', requireAuth, requireActiveAccount,
@@ -64,14 +65,14 @@ export function createDocumentRouter({
     async (req, res) => {
       const { workspaceId, documentId } = req.validated!.params as { workspaceId: string; documentId: string };
       const body = req.validated!.body as UpdateDocumentInput;
-      sendSuccess(res, await service.update({ userId: userId(req), workspaceId, documentId, ...body }));
+      sendSuccess(res, await service.update({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, documentId, ...body }));
     });
 
   router.delete('/:documentId', requireAuth, requireActiveAccount,
     validate({ params: documentParamsSchema }),
     async (req, res) => {
       const { workspaceId, documentId } = req.validated!.params as { workspaceId: string; documentId: string };
-      await service.delete({ userId: userId(req), workspaceId, documentId });
+      await service.delete({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, documentId });
       sendSuccess(res, { ok: true });
     });
 
@@ -79,14 +80,14 @@ export function createDocumentRouter({
     validate({ params: documentParamsSchema }),
     async (req, res) => {
       const { workspaceId, documentId } = req.validated!.params as { workspaceId: string; documentId: string };
-      sendSuccess(res, await service.listRevisions({ userId: userId(req), workspaceId, documentId }));
+      sendSuccess(res, await service.listRevisions({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, documentId }));
     });
 
   router.get('/:documentId/comments', requireAuth, requireActiveAccount,
     validate({ params: documentParamsSchema }),
     async (req, res) => {
       const { workspaceId, documentId } = req.validated!.params as { workspaceId: string; documentId: string };
-      sendSuccess(res, await service.listComments({ userId: userId(req), workspaceId, documentId }));
+      sendSuccess(res, await service.listComments({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, documentId }));
     });
 
   router.post('/:documentId/comments', requireAuth, requireActiveAccount,
@@ -94,14 +95,14 @@ export function createDocumentRouter({
     async (req, res) => {
       const { workspaceId, documentId } = req.validated!.params as { workspaceId: string; documentId: string };
       const { body } = req.validated!.body as { body: string };
-      sendSuccess(res, await service.addComment({ userId: userId(req), workspaceId, documentId, body }), 201);
+      sendSuccess(res, await service.addComment({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, documentId, body }), 201);
     });
 
   router.delete('/:documentId/comments/:commentId', requireAuth, requireActiveAccount,
     validate({ params: documentCommentParamsSchema }),
     async (req, res) => {
       const { workspaceId, documentId, commentId } = req.validated!.params as { workspaceId: string; documentId: string; commentId: string };
-      await service.deleteComment({ userId: userId(req), workspaceId, documentId, commentId });
+      await service.deleteComment({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, documentId, commentId });
       sendSuccess(res, { ok: true });
     });
 

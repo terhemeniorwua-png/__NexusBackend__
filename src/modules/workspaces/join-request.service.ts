@@ -20,6 +20,7 @@ import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
 import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import {
   assertCanAssignOrganizationRole,
   effectiveWorkspaceRole,
@@ -53,7 +54,7 @@ export interface JoinRequestService {
     offset: number;
   }): Promise<DiscoveredWorkspace[]>;
   create(
-    input: { userId: string; workspaceId: string } & CreateJoinRequestInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & CreateJoinRequestInput,
     ctx: RequestContext,
   ): Promise<JoinRequestSummary>;
   createByCode(
@@ -63,15 +64,15 @@ export interface JoinRequestService {
   listMine(userId: string): Promise<JoinRequestSummary[]>;
   listForWorkspace(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     status: ListJoinRequestsQuery['status'];
   }): Promise<JoinRequestSummary[]>;
   approve(
-    input: { userId: string; workspaceId: string; requestId: string } & ApproveJoinRequestInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; requestId: string } & ApproveJoinRequestInput,
     ctx: RequestContext,
   ): Promise<JoinRequestSummary>;
   reject(
-    input: { userId: string; workspaceId: string; requestId: string } & RejectJoinRequestInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; requestId: string } & RejectJoinRequestInput,
     ctx: RequestContext,
   ): Promise<JoinRequestSummary>;
   withdraw(
@@ -79,11 +80,11 @@ export interface JoinRequestService {
     ctx: RequestContext,
   ): Promise<JoinRequestSummary>;
   rotateCode(
-    input: { userId: string; workspaceId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext },
     ctx: RequestContext,
   ): Promise<JoinCodeResult>;
   disableCode(
-    input: { userId: string; workspaceId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext },
     ctx: RequestContext,
   ): Promise<{ workspaceId: string; joinCodeEnabled: false }>;
 }
@@ -169,6 +170,7 @@ export function createJoinRequestService(
     to: string;
     name: string;
     workspaceId: string;
+    context: WorkspaceAccessContext;
     workspaceName: string;
     approved: boolean;
     role?: string | null;
@@ -263,7 +265,7 @@ export function createJoinRequestService(
   }
 
   async function createRequest(
-    input: { userId: string; workspaceId: string; message?: string | null },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; message?: string | null },
     ctx: RequestContext,
     options: { requirePublic: boolean },
   ): Promise<JoinRequestSummary> {
@@ -479,6 +481,7 @@ export function createJoinRequestService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewJoinRequests,
+             context: input.context,
       });
 
       await expireStale(access.workspace.id);
@@ -500,6 +503,7 @@ export function createJoinRequestService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageJoinRequests,
+             context: input.context,
       });
 
       const request = await client.joinRequest.findFirst({
@@ -721,6 +725,7 @@ export function createJoinRequestService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageJoinRequests,
+             context: input.context,
       });
 
       const request = await client.joinRequest.findFirst({
@@ -872,6 +877,7 @@ export function createJoinRequestService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageJoinRequests,
+             context: input.context,
       });
 
       if (access.workspace.type === 'INDIVIDUAL') {
@@ -917,6 +923,7 @@ export function createJoinRequestService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageJoinRequests,
+             context: input.context,
       });
 
       await client.$transaction(async (tx) => {

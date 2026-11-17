@@ -17,6 +17,7 @@ import {
   WorkspaceCapability,
   type ProjectPermissionValue,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import {
   effectiveWorkspaceRole,
   isOrganizationRoleForWorkspace,
@@ -25,7 +26,7 @@ import type { RequestContext } from '../auth/auth.types';
 import type { CreateProjectInput, ListProjectsQuery, UpdateProjectInput } from './project.schemas';
 import { projectVisibleToUser } from './project-visibility';
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 type ProjectSummary = Pick<
   Project,
   | 'id'
@@ -88,7 +89,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       userId: input.userId,
       workspaceId: input.workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     return authorizeProject(prisma, {
       actor: {
         userId: input.userId,
@@ -105,6 +107,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       const access = await requireWorkspaceAccess(prisma, {
         ...input,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const manager =
         access.effectiveRole === 'OWNER' || access.effectiveRole === 'PROJECT_MANAGER';
@@ -162,6 +165,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       const workspace = await requireWorkspaceAccess(prisma, {
         ...input,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       let teamDepartmentId: string | null = null;
       if (input.teamId) {
@@ -170,7 +174,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           teamId: input.teamId,
           workspaceRole: workspace.effectiveRole,
           capability: TeamCapability.ViewTeam,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
         if (team.team.status !== 'ACTIVE' || team.team.deletedAt)
           throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
         teamDepartmentId = team.team.departmentId;
@@ -180,7 +185,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           ...input,
           departmentId: input.departmentId,
           capability: DepartmentCapability.ManageProjects,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
       }
       if (teamDepartmentId && input.departmentId && teamDepartmentId !== input.departmentId) {
         throw new AppError(
@@ -583,7 +589,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           teamId,
           workspaceRole: access.workspaceRole,
           capability: TeamCapability.ViewTeam,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
         if (team.team.status !== 'ACTIVE' || team.team.deletedAt)
           throw new AppError(404, 'TEAM_NOT_FOUND', 'That team does not exist');
         if (team.team.departmentId) {
@@ -601,7 +608,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
           ...input,
           departmentId,
           capability: DepartmentCapability.ManageProjects,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
       if (
         (input.visibility ?? access.project.visibility) === 'DEPARTMENT_TEAM' &&
         !teamId &&

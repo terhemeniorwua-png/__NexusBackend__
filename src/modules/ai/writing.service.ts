@@ -11,6 +11,7 @@ import {
 import { AppError } from '../../utils/errors';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { createAiUsageService } from './ai-usage.service';
 
 /**
@@ -162,7 +163,8 @@ export function createWritingService(
       userId,
       workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
   }
 
   return {

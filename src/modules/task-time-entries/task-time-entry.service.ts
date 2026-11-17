@@ -9,8 +9,9 @@ import {
   authorizeProject,
   requireWorkspaceAccess,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 
-type Input = { userId: string; workspaceId: string; projectId: string; taskId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string; taskId: string };
 
 const entryInclude = {
   user: { select: { id: true, name: true } },
@@ -48,7 +49,8 @@ export function createTaskTimeEntryService(prisma: PrismaClient = getPrismaClien
       userId: input.userId,
       workspaceId: input.workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     const access = await authorizeProject(prisma, {
       actor: {
         userId: input.userId,
@@ -112,7 +114,8 @@ export function createTaskTimeEntryService(prisma: PrismaClient = getPrismaClien
           userId: input.userId,
           workspaceId: input.workspaceId,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
         try {
           await authorizeProject(prisma, {
             actor: {

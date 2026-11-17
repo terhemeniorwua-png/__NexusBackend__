@@ -3,7 +3,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, type WorkspaceAccessContext } from '../workspaces/authorization';
 import { ProjectCapability, requireProjectAccess } from '../authorization/project.policy';
 import { projectVisibleToUser } from '../projects/project-visibility';
 
@@ -39,13 +39,14 @@ function toSummary(row: {
   };
 }
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 /** Events on projects the caller cannot see are hidden. Unrestricted legacy managers bypass. */
-async function eventScope(prisma: PrismaClient, input: { userId: string; workspaceId: string }): Promise<Prisma.CalendarEventWhereInput> {
+async function eventScope(prisma: PrismaClient, input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }): Promise<Prisma.CalendarEventWhereInput> {
   const ws = await requireWorkspaceAccess(prisma, {
     userId: input.userId, workspaceId: input.workspaceId,
     capability: WorkspaceCapability.ViewWorkspace,
+    context: input.context,
   });
   const unrestricted = (ws.effectiveRole === 'OWNER' || ws.effectiveRole === 'PROJECT_MANAGER') && !ws.membership.organizationRole;
   if (unrestricted) return {};
@@ -56,7 +57,7 @@ async function eventScope(prisma: PrismaClient, input: { userId: string; workspa
   return { OR: [{ projectId: null }, { projectId: { in: visible.map((p) => p.id) } }] };
 }
 
-async function assertEventVisible(prisma: PrismaClient, input: { userId: string; workspaceId: string; eventId: string }): Promise<void> {
+async function assertEventVisible(prisma: PrismaClient, input: { userId: string; workspaceId: string; eventId: string; context: WorkspaceAccessContext }): Promise<void> {
   const found = await prisma.calendarEvent.findFirst({
     where: { id: input.eventId, workspaceId: input.workspaceId, deletedAt: null, ...(await eventScope(prisma, input)) },
     select: { id: true },
@@ -68,13 +69,14 @@ async function assertEventVisible(prisma: PrismaClient, input: { userId: string;
 /** Only the creator, or a workspace OWNER / PROJECT_MANAGER, may change or remove an event. */
 async function assertCanManageEvent(
   prisma: PrismaClient,
-  input: { userId: string; workspaceId: string },
+  input: { userId: string; workspaceId: string; context: WorkspaceAccessContext },
   event: { createdById: string },
 ): Promise<void> {
   if (event.createdById === input.userId) return;
   const ws = await requireWorkspaceAccess(prisma, {
     userId: input.userId, workspaceId: input.workspaceId,
     capability: WorkspaceCapability.ViewWorkspace,
+    context: input.context,
   });
   if (ws.effectiveRole !== 'OWNER' && ws.effectiveRole !== 'PROJECT_MANAGER') {
     throw new AppError(403, 'EVENT_EDIT_FORBIDDEN', 'Only the creator or a manager can change this event');
@@ -94,6 +96,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       const ws = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       if (input.projectId) {
         await requireProjectAccess(prisma, {
@@ -150,6 +153,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const event = await prisma.calendarEvent.findFirst({
@@ -169,6 +173,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const events = await prisma.calendarEvent.findMany({
@@ -205,6 +210,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const event = await prisma.calendarEvent.findFirst({
@@ -216,6 +222,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       if (input.projectId && input.projectId !== event.projectId) {
@@ -254,6 +261,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const event = await prisma.calendarEvent.findFirst({
@@ -279,6 +287,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const event = await prisma.calendarEvent.findFirst({
@@ -303,6 +312,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const event = await prisma.calendarEvent.findFirst({
@@ -337,6 +347,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const event = await prisma.calendarEvent.findFirst({
@@ -389,6 +400,7 @@ export function createCalendarService(prisma: PrismaClient = getPrismaClient()) 
       await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       await assertEventVisible(prisma, input);

@@ -41,6 +41,7 @@ import {
   type UpdateWorkspaceInput,
 } from './workspace.schemas';
 import { createWorkspaceService, type WorkspaceService } from './workspace.service';
+import { userWorkspaceAccessContext } from './authorization';
 
 /**
  * Workspace routes.
@@ -63,15 +64,14 @@ function context(req: Request): RequestContext {
   };
 }
 
-function requireUser(req: Request): string {
+function requireAuthCtx(req: Request) {
   const auth = req.auth;
-
   if (!auth) {
     throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
   }
-
-  return auth.userId;
+  return auth;
 }
+function requireUser(req: Request): string { return requireAuthCtx(req).userId; }
 
 export function createWorkspaceRouter({
   config,
@@ -125,7 +125,7 @@ export function createWorkspaceRouter({
     validate({ params: workspaceIdParamsSchema }),
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
-      const workspace = await service.get({ userId: requireUser(req), workspaceId });
+      const workspace = await service.get({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId });
 
       sendSuccess(res, workspace);
     },
@@ -140,7 +140,7 @@ export function createWorkspaceRouter({
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const input = req.validated?.body as UpdateWorkspaceInput;
       const workspace = await service.update(
-        { userId: requireUser(req), workspaceId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, ...input },
         context(req),
       );
 
@@ -150,25 +150,25 @@ export function createWorkspaceRouter({
 
   router.post('/:workspaceId/owner-transfers/:transferId/accept', requireAuth, requireActiveAccount, validate({ params: ownershipTransferParamsSchema }), async (req, res) => {
     const { workspaceId, transferId } = req.validated?.params as { workspaceId: string; transferId: string };
-    const result = await service.acceptOwnershipTransfer({ userId: requireUser(req), workspaceId, transferId }, context(req));
+    const result = await service.acceptOwnershipTransfer({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, transferId }, context(req));
     sendSuccess(res, result);
   });
 
   router.post('/:workspaceId/owner-transfers/:transferId/reject', requireAuth, requireActiveAccount, validate({ params: ownershipTransferParamsSchema }), async (req, res) => {
     const { workspaceId, transferId } = req.validated?.params as { workspaceId: string; transferId: string };
-    const result = await service.rejectOwnershipTransfer({ userId: requireUser(req), workspaceId, transferId }, context(req));
+    const result = await service.rejectOwnershipTransfer({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, transferId }, context(req));
     sendSuccess(res, result);
   });
 
   router.post('/:workspaceId/owner-transfers/:transferId/billing-acceptance', requireAuth, requireActiveAccount, validate({ params: ownershipTransferParamsSchema }), async (req, res) => {
     const { workspaceId, transferId } = req.validated?.params as { workspaceId: string; transferId: string };
-    const result = await service.acceptOwnershipBilling({ userId: requireUser(req), workspaceId, transferId }, context(req));
+    const result = await service.acceptOwnershipBilling({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, transferId }, context(req));
     sendSuccess(res, result);
   });
 
   router.post('/:workspaceId/admin-owner/:userId', requireAuth, requireActiveAccount, validate({ params: adminOwnerAssignmentParamsSchema }), async (req, res) => {
     const { workspaceId, userId: newOwnerId } = req.validated?.params as { workspaceId: string; userId: string };
-    const result = await service.resolveDeletedOwner({ actorId: requireUser(req), workspaceId, newOwnerId }, context(req));
+    const result = await service.resolveDeletedOwner({ actorId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, newOwnerId }, context(req));
     sendSuccess(res, result);
   });
 
@@ -180,7 +180,7 @@ export function createWorkspaceRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const workspace = await service.archive(
-        { userId: requireUser(req), workspaceId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId },
         context(req),
       );
 
@@ -196,7 +196,7 @@ export function createWorkspaceRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const workspace = await service.restore(
-        { userId: requireUser(req), workspaceId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId },
         context(req),
       );
 
@@ -212,7 +212,7 @@ export function createWorkspaceRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
 
-      await service.remove({ userId: requireUser(req), workspaceId }, context(req));
+      await service.remove({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId }, context(req));
 
       sendSuccess(res, { id: workspaceId, deleted: true });
     },
@@ -225,7 +225,7 @@ export function createWorkspaceRouter({
     validate({ params: workspaceIdParamsSchema }),
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
-      const workspace = await service.switchTo({ userId: requireUser(req), workspaceId });
+      const workspace = await service.switchTo({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId });
 
       sendSuccess(res, workspace);
     },
@@ -243,7 +243,7 @@ export function createWorkspaceRouter({
       };
       const input = req.validated?.body as TransferOwnershipInput;
       const workspace = await service.transferOwnership(
-        { userId: requireUser(req), workspaceId, newOwnerId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, newOwnerId, ...input },
         context(req),
       );
 
@@ -258,7 +258,7 @@ export function createWorkspaceRouter({
     validate({ params: workspaceIdParamsSchema }),
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
-      const members = await service.listMembers({ userId: requireUser(req), workspaceId });
+      const members = await service.listMembers({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId });
 
       sendSuccess(res, members);
     },
@@ -271,7 +271,7 @@ export function createWorkspaceRouter({
     validate({ params: workspaceIdParamsSchema }),
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
-      const departments = await service.listDepartments({ userId: requireUser(req), workspaceId });
+      const departments = await service.listDepartments({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId });
       sendSuccess(res, departments);
     },
   );
@@ -285,7 +285,7 @@ export function createWorkspaceRouter({
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const input = req.validated?.body as CreateDepartmentInput;
       const department = await service.createDepartment(
-        { userId: requireUser(req), workspaceId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, ...input },
         context(req),
       );
       sendSuccess(res, department, 201);
@@ -304,7 +304,7 @@ export function createWorkspaceRouter({
       };
       const input = req.validated?.body as UpdateDepartmentInput;
       const department = await service.updateDepartment(
-        { userId: requireUser(req), workspaceId, departmentId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, departmentId, ...input },
         context(req),
       );
       sendSuccess(res, department);
@@ -323,7 +323,7 @@ export function createWorkspaceRouter({
       };
       const input = req.validated?.body as DepartmentMemberInput;
       await service.assignDepartmentMember(
-        { userId: requireUser(req), workspaceId, departmentId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, departmentId, ...input },
         context(req),
       );
       sendSuccess(res, { userId: input.targetUserId, assigned: true });
@@ -342,7 +342,7 @@ export function createWorkspaceRouter({
         targetUserId: string;
       };
       await service.removeDepartmentMember(
-        { userId: requireUser(req), workspaceId, departmentId, targetUserId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, departmentId, targetUserId },
         context(req),
       );
       sendSuccess(res, { userId: targetUserId, removed: true });
@@ -358,7 +358,7 @@ export function createWorkspaceRouter({
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const input = req.validated?.body as AddMemberInput;
       const member = await service.addMember(
-        { userId: requireUser(req), workspaceId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, ...input },
         context(req),
       );
 
@@ -378,7 +378,7 @@ export function createWorkspaceRouter({
       };
       const input = req.validated?.body as UpdateMemberRoleInput;
       const member = await service.updateMemberRole(
-        { userId: requireUser(req), workspaceId, targetUserId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, targetUserId, ...input },
         context(req),
       );
 
@@ -399,7 +399,7 @@ export function createWorkspaceRouter({
       const input = req.validated?.body as RemoveWorkspaceMemberInput;
 
       await service.removeMember(
-        { userId: requireUser(req), workspaceId, targetUserId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, targetUserId, ...input },
         context(req),
       );
 
@@ -418,7 +418,7 @@ export function createWorkspaceRouter({
         userId: string;
       };
       const member = await service.suspendMember(
-        { userId: requireUser(req), workspaceId, targetUserId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, targetUserId },
         context(req),
       );
 
@@ -437,7 +437,7 @@ export function createWorkspaceRouter({
         userId: string;
       };
       const member = await service.restoreMember(
-        { userId: requireUser(req), workspaceId, targetUserId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, targetUserId },
         context(req),
       );
 
@@ -453,8 +453,10 @@ export function createWorkspaceRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const { status } = req.validated?.query as ListInvitationsQuery;
+      const auth = requireAuthCtx(req);
       const invitations = await invitationService.list({
-        userId: requireUser(req),
+        userId: auth.userId,
+        context: userWorkspaceAccessContext(auth),
         workspaceId,
         status,
       });
@@ -473,7 +475,7 @@ export function createWorkspaceRouter({
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const input = req.validated?.body as CreateInvitationInput;
       const result = await invitationService.create(
-        { userId: requireUser(req), workspaceId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, ...input },
         context(req),
       );
 
@@ -493,7 +495,7 @@ export function createWorkspaceRouter({
         invitationId: string;
       };
       const result = await invitationService.resend(
-        { userId: requireUser(req), workspaceId, invitationId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, invitationId },
         context(req),
       );
 
@@ -511,8 +513,10 @@ export function createWorkspaceRouter({
         workspaceId: string;
         invitationId: string;
       };
+      const auth = requireAuthCtx(req);
       const invitation = await invitationService.revoke({
-        userId: requireUser(req),
+        userId: auth.userId,
+        context: userWorkspaceAccessContext(auth),
         workspaceId,
         invitationId,
       });

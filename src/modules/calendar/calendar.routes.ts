@@ -18,99 +18,110 @@ import {
   type UpdateEventInput,
 } from './calendar.schemas';
 import { createCalendarService } from './calendar.service';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 
 export interface CalendarRouterOptions {
   config: AppConfig;
   service?: ReturnType<typeof createCalendarService>;
 }
 
-function userId(req: Request): string {
+function requireAuth(req: Request) {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in');
-  return req.auth.userId;
+  return req.auth;
 }
+function userId(req: Request): string { return requireAuth(req).userId; }
 
 export function createCalendarRouter({
   config,
   service = createCalendarService(),
 }: CalendarRouterOptions): Router {
   const router = Router({ mergeParams: true });
-  const requireAuth = createRequireAuth(config);
+  const requireAuthMiddleware = createRequireAuth(config);
   const requireActiveAccount = createRequireActiveAccount();
 
-  router.get('/', requireAuth, requireActiveAccount,
+  router.get('/', requireAuthMiddleware, requireActiveAccount,
     validate({ params: calendarWorkspaceParamsSchema, query: listEventsQuerySchema }),
     async (req, res) => {
       const { workspaceId } = req.validated!.params as { workspaceId: string };
       const query = req.validated!.query as ListEventsQuery;
-      sendSuccess(res, await service.list({ userId: userId(req), workspaceId, ...query }));
+      const auth = requireAuth(req);
+      sendSuccess(res, await service.list({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), ...query }));
     });
 
-  router.post('/', requireAuth, requireActiveAccount,
+  router.post('/', requireAuthMiddleware, requireActiveAccount,
     validate({ params: calendarWorkspaceParamsSchema, body: createEventSchema }),
     async (req, res) => {
       const { workspaceId } = req.validated!.params as { workspaceId: string };
       const body = req.validated!.body as CreateEventInput;
-      sendSuccess(res, await service.create({ userId: userId(req), workspaceId, ...body }), 201);
+      const auth = requireAuth(req);
+      sendSuccess(res, await service.create({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), ...body }), 201);
     });
 
-  router.get('/:eventId', requireAuth, requireActiveAccount,
+  router.get('/:eventId', requireAuthMiddleware, requireActiveAccount,
     validate({ params: eventParamsSchema }),
     async (req, res) => {
       const { workspaceId, eventId } = req.validated!.params as { workspaceId: string; eventId: string };
-      sendSuccess(res, await service.get({ userId: userId(req), workspaceId, eventId }));
+      const auth = requireAuth(req);
+      sendSuccess(res, await service.get({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId }));
     });
 
-  router.patch('/:eventId', requireAuth, requireActiveAccount,
+  router.patch('/:eventId', requireAuthMiddleware, requireActiveAccount,
     validate({ params: eventParamsSchema, body: updateEventSchema }),
     async (req, res) => {
       const { workspaceId, eventId } = req.validated!.params as { workspaceId: string; eventId: string };
       const body = req.validated!.body as UpdateEventInput;
-      sendSuccess(res, await service.update({ userId: userId(req), workspaceId, eventId, ...body }));
+      const auth = requireAuth(req);
+      sendSuccess(res, await service.update({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId, ...body }));
     });
 
-  router.post('/:eventId/cancel', requireAuth, requireActiveAccount,
+  router.post('/:eventId/cancel', requireAuthMiddleware, requireActiveAccount,
     validate({ params: eventParamsSchema }),
     async (req, res) => {
       const { workspaceId, eventId } = req.validated!.params as { workspaceId: string; eventId: string };
-      await service.cancel({ userId: userId(req), workspaceId, eventId });
+      const auth = requireAuth(req);
+      await service.cancel({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId });
       sendSuccess(res, { ok: true });
     });
 
-  router.delete('/:eventId', requireAuth, requireActiveAccount,
+  router.delete('/:eventId', requireAuthMiddleware, requireActiveAccount,
     validate({ params: eventParamsSchema }),
     async (req, res) => {
       const { workspaceId, eventId } = req.validated!.params as { workspaceId: string; eventId: string };
-      await service.delete({ userId: userId(req), workspaceId, eventId });
+      const auth = requireAuth(req);
+      await service.delete({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId });
       sendSuccess(res, { ok: true });
     });
 
-  router.get('/:eventId/invitations', requireAuth, requireActiveAccount,
+  router.get('/:eventId/invitations', requireAuthMiddleware, requireActiveAccount,
     validate({ params: eventParamsSchema }),
     async (req, res) => {
       const { workspaceId, eventId } = req.validated!.params as { workspaceId: string; eventId: string };
-      sendSuccess(res, await service.listInvitations({ userId: userId(req), workspaceId, eventId }));
+      const auth = requireAuth(req);
+      sendSuccess(res, await service.listInvitations({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId }));
     });
 
-  router.post('/:eventId/invitations', requireAuth, requireActiveAccount,
+  router.post('/:eventId/invitations', requireAuthMiddleware, requireActiveAccount,
     validate({ params: eventParamsSchema, body: invitationSchema }),
     async (req, res) => {
       const { workspaceId, eventId } = req.validated!.params as { workspaceId: string; eventId: string };
       const { userId: targetUserId } = req.validated!.body as { userId: string };
-      await service.addInvitee({ userId: userId(req), workspaceId, eventId, targetUserId });
+      const auth = requireAuth(req);
+      await service.addInvitee({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId, targetUserId });
       sendSuccess(res, { ok: true }, 201);
     });
 
-  router.delete('/:eventId/invitations/:userId', requireAuth, requireActiveAccount,
+  router.delete('/:eventId/invitations/:userId', requireAuthMiddleware, requireActiveAccount,
     validate({ params: invitationParamsSchema }),
     async (req, res) => {
       const { workspaceId, eventId, userId: targetUserId } = req.validated!.params as {
         workspaceId: string; eventId: string; userId: string;
       };
-      await service.removeInvitee({ userId: userId(req), workspaceId, eventId, targetUserId });
+      const auth = requireAuth(req);
+      await service.removeInvitee({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId, targetUserId });
       sendSuccess(res, { ok: true });
     });
 
-  router.post('/:eventId/respond', requireAuth, requireActiveAccount,
+  router.post('/:eventId/respond', requireAuthMiddleware, requireActiveAccount,
     validate({
       params: eventParamsSchema,
       body: z.object({ status: z.enum(['ACCEPTED', 'DECLINED', 'TENTATIVE']) }),
@@ -118,7 +129,8 @@ export function createCalendarRouter({
     async (req, res) => {
       const { workspaceId, eventId } = req.validated!.params as { workspaceId: string; eventId: string };
       const { status } = req.validated!.body as { status: 'ACCEPTED' | 'DECLINED' | 'TENTATIVE' };
-      await service.respondToInvitation({ userId: userId(req), workspaceId, eventId, status });
+      const auth = requireAuth(req);
+      await service.respondToInvitation({ userId: auth.userId, workspaceId, context: userWorkspaceAccessContext(auth), eventId, status });
       sendSuccess(res, { ok: true });
     });
 

@@ -10,7 +10,7 @@ import {
   authorizeProject,
   getProjectAuthorization,
 } from '../authorization';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, type WorkspaceAccessContext } from '../workspaces/authorization';
 import { extractTextFromUpload } from './text-extraction';
 
 export interface FileSummary {
@@ -25,7 +25,7 @@ export interface FileSummary {
   createdAt: string;
 }
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 export function createFileService(
   prisma: PrismaClient = getPrismaClient(),
@@ -80,6 +80,7 @@ export function createFileService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       // If uploading to a project, verify project access
@@ -146,6 +147,7 @@ export function createFileService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const file = await prisma.fileAttachment.findFirst({
@@ -189,6 +191,7 @@ export function createFileService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       if (input.projectId) {
@@ -234,6 +237,7 @@ export function createFileService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const file = await prisma.fileAttachment.findFirst({
@@ -307,6 +311,7 @@ export function createFileService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const [agg, count] = await Promise.all([

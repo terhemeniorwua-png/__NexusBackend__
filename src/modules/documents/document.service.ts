@@ -3,7 +3,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireProjectAccess, ProjectCapability } from '../authorization/project.policy';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, type WorkspaceAccessContext } from '../workspaces/authorization';
 import { projectVisibleToUser } from '../projects/project-visibility';
 
 export interface DocumentSummary {
@@ -31,7 +31,7 @@ export interface DocumentCommentSummary {
   createdAt: string;
 }
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 export function createDocumentService(prisma: PrismaClient = getPrismaClient()) {
   const include = {
@@ -102,6 +102,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const projectIds = await documentProjectIds({
@@ -136,6 +137,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const doc = await prisma.document.findFirst({
@@ -162,6 +164,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       if (input.projectId) {
@@ -225,6 +228,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const doc = await prisma.document.findFirst({
@@ -272,6 +276,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const doc = await prisma.document.findFirst({
@@ -364,6 +369,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       const workspace = await requireWorkspaceAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       const comment = await prisma.documentComment.findFirst({

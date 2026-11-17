@@ -5,15 +5,15 @@ import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import { z } from 'zod';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, userWorkspaceAccessContext } from '../workspaces/authorization';
 import { getPrismaClient } from '../../db/prisma';
 
 export interface AuditRouterOptions {
   config: AppConfig;
 }
-function userId(req: Request): string {
+function requireAuthContext(req: Request) {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in');
-  return req.auth.userId;
+  return req.auth;
 }
 
 const auditQuerySchema = z.object({
@@ -52,10 +52,12 @@ export function createAuditRouter({ config }: AuditRouterOptions): Router {
       };
 
       // Only workspace owners/managers can access audit logs
+      const auth = requireAuthContext(req);
       const access = await requireWorkspaceAccess(prisma, {
-        userId: userId(req),
+        userId: auth.userId,
         workspaceId,
         capability: WorkspaceCapability.ManageMembers,
+        context: userWorkspaceAccessContext(auth),
       });
       if (access.effectiveRole !== 'OWNER' && access.effectiveRole !== 'PROJECT_MANAGER') {
         throw new AppError(

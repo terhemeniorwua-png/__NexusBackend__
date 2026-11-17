@@ -5,6 +5,7 @@ import { validate } from '../../middleware/validation';
 import { createRateLimiter } from '../../middleware/rate-limit';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import {
   addTeamMemberSchema,
   changeTeamLeadSchema,
@@ -64,14 +65,10 @@ function context(req: Request) {
   };
 }
 
-function requireUser(req: Request): string {
+function requireAuthCtx(req: Request) {
   const auth = req.auth;
-
-  if (!auth) {
-    throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-  }
-
-  return auth.userId;
+  if (!auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+  return auth;
 }
 
 export function createTeamRouter({
@@ -102,7 +99,7 @@ export function createTeamRouter({
     async (req, res) => {
       const { workspaceId, teamId } = req.validated?.params as { workspaceId: string; teamId: string };
       const { status } = req.validated?.query as { status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REVOKED' | 'EXPIRED' | 'ALL' };
-      sendSuccess(res, await invitationService.listTeam({ userId: requireUser(req), workspaceId, teamId, status }));
+      sendSuccess(res, await invitationService.listTeam({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId, status }));
     },
   );
 
@@ -116,7 +113,7 @@ export function createTeamRouter({
       const { workspaceId, teamId } = req.validated?.params as { workspaceId: string; teamId: string };
       const { targetUserId } = req.validated?.body as { targetUserId: string };
       const result = await invitationService.createTeam(
-        { userId: requireUser(req), workspaceId, teamId, targetUserId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId, targetUserId },
         context(req),
       );
       sendSuccess(res, result, 201);
@@ -135,7 +132,8 @@ export function createTeamRouter({
         invitationId: string;
       };
       const invitation = await invitationService.revokeTeam({
-        userId: requireUser(req),
+        userId: requireAuthCtx(req).userId,
+        context: userWorkspaceAccessContext(requireAuthCtx(req)),
         workspaceId,
         teamId,
         invitationId,
@@ -152,7 +150,7 @@ export function createTeamRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const { includeArchived } = req.validated?.query as ListTeamsQuery;
-      const teams = await service.list({ userId: requireUser(req), workspaceId, includeArchived });
+      const teams = await service.list({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, includeArchived });
 
       sendSuccess(res, teams);
     },
@@ -167,7 +165,7 @@ export function createTeamRouter({
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const input = req.validated?.body as CreateTeamInput;
       const team = await service.create(
-        { userId: requireUser(req), workspaceId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, ...input },
         context(req),
       );
 
@@ -185,7 +183,7 @@ export function createTeamRouter({
         workspaceId: string;
         teamId: string;
       };
-      const team = await service.get({ userId: requireUser(req), workspaceId, teamId });
+      const team = await service.get({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId });
 
       sendSuccess(res, team);
     },
@@ -203,7 +201,7 @@ export function createTeamRouter({
       };
       const input = req.validated?.body as UpdateTeamInput;
       const team = await service.update(
-        { userId: requireUser(req), workspaceId, teamId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId, ...input },
         context(req),
       );
 
@@ -222,7 +220,7 @@ export function createTeamRouter({
         teamId: string;
       };
       const team = await service.archive(
-        { userId: requireUser(req), workspaceId, teamId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId },
         context(req),
       );
 
@@ -241,7 +239,7 @@ export function createTeamRouter({
         teamId: string;
       };
 
-      await service.remove({ userId: requireUser(req), workspaceId, teamId }, context(req));
+      await service.remove({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId }, context(req));
 
       sendSuccess(res, { id: teamId, deleted: true });
     },
@@ -261,7 +259,7 @@ export function createTeamRouter({
         workspaceId: string;
         teamId: string;
       };
-      const members = await service.listMembers({ userId: requireUser(req), workspaceId, teamId });
+      const members = await service.listMembers({ userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId });
 
       sendSuccess(res, members);
     },
@@ -278,9 +276,11 @@ export function createTeamRouter({
         teamId: string;
       };
       const input = req.validated?.body as AddTeamMemberInput;
+      const auth = requireAuthCtx(req);
       const member = await service.addMember(
         {
-          userId: requireUser(req),
+          userId: auth.userId,
+          context: userWorkspaceAccessContext(auth),
           workspaceId,
           teamId,
           targetUserId: input.userId,
@@ -310,7 +310,7 @@ export function createTeamRouter({
       };
       const input = req.validated?.body as UpdateTeamMemberRoleInput;
       const member = await service.updateMemberRole(
-        { userId: requireUser(req), workspaceId, teamId, targetUserId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId, targetUserId, ...input },
         context(req),
       );
 
@@ -335,7 +335,7 @@ export function createTeamRouter({
       };
 
       await service.removeMember(
-        { userId: requireUser(req), workspaceId, teamId, targetUserId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId, targetUserId },
         context(req),
       );
 
@@ -359,7 +359,7 @@ export function createTeamRouter({
       };
       const input = req.validated?.body as ChangeTeamLeadInput;
       const team = await service.changeLead(
-        { userId: requireUser(req), workspaceId, teamId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, teamId, ...input },
         context(req),
       );
 

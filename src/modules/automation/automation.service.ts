@@ -2,7 +2,7 @@ import type { AutomationActionType, AutomationTrigger, PrismaClient } from '@pri
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, type WorkspaceAccessContext } from '../workspaces/authorization';
 import { z } from 'zod';
 
 const uuid = z.string().uuid();
@@ -162,12 +162,12 @@ export const listAutomationRunsQuerySchema = z
 
 export type CreateAutomationInput = z.infer<typeof createAutomationSchema>;
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 export function createAutomationService(prisma: PrismaClient = getPrismaClient()) {
   return {
     async create(input: Input & CreateAutomationInput) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const auto = await prisma.$transaction(async (tx) => {
         const created = await tx.automation.create({ data: { workspaceId: input.workspaceId, createdById: input.userId, name: input.name, trigger: input.trigger as AutomationTrigger, condition: input.condition ?? undefined, action: input.action as AutomationActionType, actionConfig: input.actionConfig, enabled: input.enabled ?? true, maxRetries: input.maxRetries ?? 3 } });
         await recordAuditEvent(tx, { workspaceId: input.workspaceId, actorId: input.userId, action: 'automation.created', targetType: 'Automation', targetId: created.id, metadata: { name: input.name, trigger: input.trigger } });
@@ -177,26 +177,26 @@ export function createAutomationService(prisma: PrismaClient = getPrismaClient()
     },
 
     async list(input: Input) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace, context: input.context });
       return prisma.automation.findMany({ where: { workspaceId: input.workspaceId, deletedAt: null }, orderBy: { name: 'asc' } });
     },
 
     async get(input: Input & { automationId: string }) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace, context: input.context });
       const auto = await prisma.automation.findFirst({ where: { id: input.automationId, workspaceId: input.workspaceId, deletedAt: null }, include: { runs: { orderBy: { createdAt: 'desc' }, take: 10 } } });
       if (!auto) throw new AppError(404, 'AUTOMATION_NOT_FOUND', 'That automation does not exist');
       return auto;
     },
 
     async update(input: Input & { automationId: string; name?: string; enabled?: boolean }) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const auto = await prisma.automation.findFirst({ where: { id: input.automationId, workspaceId: input.workspaceId, deletedAt: null } });
       if (!auto) throw new AppError(404, 'AUTOMATION_NOT_FOUND', 'That automation does not exist');
       return prisma.automation.update({ where: { id: auto.id }, data: { ...(input.name !== undefined ? { name: input.name } : {}), ...(input.enabled !== undefined ? { enabled: input.enabled } : {}) } });
     },
 
     async delete(input: Input & { automationId: string }) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const auto = await prisma.automation.findFirst({ where: { id: input.automationId, workspaceId: input.workspaceId, deletedAt: null } });
       if (!auto) throw new AppError(404, 'AUTOMATION_NOT_FOUND', 'That automation does not exist');
       await prisma.automation.update({ where: { id: auto.id }, data: { deletedAt: new Date() } });
@@ -207,7 +207,7 @@ export function createAutomationService(prisma: PrismaClient = getPrismaClient()
     },
 
     async listRuns(input: Input & { automationId: string; limit?: number }) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace, context: input.context });
       const automation = await prisma.automation.findFirst({
         where: { id: input.automationId, workspaceId: input.workspaceId, deletedAt: null },
         select: { id: true },
@@ -226,7 +226,7 @@ export function createAutomationService(prisma: PrismaClient = getPrismaClient()
      * executes, so retrying never grants access that has since been removed.
      */
     async retryRun(input: Input & { automationId: string; runId: string }) {
-      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace });
+      await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.UpdateWorkspace, context: input.context });
       const automation = await prisma.automation.findFirst({
         where: { id: input.automationId, workspaceId: input.workspaceId, deletedAt: null },
         select: { id: true },

@@ -5,6 +5,7 @@ import { createRequireActiveAccount, createRequireAuth } from '../../middleware/
 import { validate } from '../../middleware/validation';
 import { createS3CompatibleObjectStorage } from '../../services/storage/private-object-storage';
 import { AppError } from '../../utils/errors';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import { sendSuccess } from '../../utils/http';
 import {
   ALLOWED_MIME_TYPES,
@@ -21,9 +22,9 @@ export interface FileRouterOptions {
   service?: ReturnType<typeof createFileService>;
 }
 
-function userId(req: Request): string {
+function authCtx(req: Request) {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in');
-  return req.auth.userId;
+  return req.auth;
 }
 
 export function createFileRouter({
@@ -64,7 +65,7 @@ export function createFileRouter({
       sendSuccess(
         res,
         await service.list({
-          userId: userId(req),
+          userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
           workspaceId,
           projectId: query.projectId,
           taskId: query.taskId,
@@ -83,7 +84,7 @@ export function createFileRouter({
     validate({ params: fileWorkspaceParamsSchema }),
     async (req, res) => {
       const { workspaceId } = req.validated!.params as { workspaceId: string };
-      sendSuccess(res, await service.getUsage({ userId: userId(req), workspaceId }));
+      sendSuccess(res, await service.getUsage({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId }));
     },
   );
 
@@ -122,7 +123,7 @@ export function createFileRouter({
       sendSuccess(
         res,
         await service.upload({
-          userId: userId(req),
+          userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
           workspaceId,
           fileName: req.file.originalname,
           mimeType,
@@ -147,7 +148,7 @@ export function createFileRouter({
         workspaceId: string;
         fileId: string;
       };
-      const result = await service.download({ userId: userId(req), workspaceId, fileId });
+      const result = await service.download({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, fileId });
       res.setHeader('Content-Type', result.contentType);
       res.setHeader(
         'Content-Disposition',
@@ -168,7 +169,7 @@ export function createFileRouter({
         workspaceId: string;
         fileId: string;
       };
-      await service.delete({ userId: userId(req), workspaceId, fileId });
+      await service.delete({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, fileId });
       sendSuccess(res, { ok: true });
     },
   );

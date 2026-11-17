@@ -20,6 +20,7 @@ import { createIntegrationService } from './integration.service';
 import { getPrismaClient } from '../../db/prisma';
 import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import type { WorkspaceAccessContext } from '../workspaces/authorization';
 import {
   buildSlackAuthorizeUrl,
   exchangeSlackCode,

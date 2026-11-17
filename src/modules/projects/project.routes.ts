@@ -28,6 +28,7 @@ import { createProjectService } from './project.service';
 import { getProjectAuthorization, projectAssignableRoles } from '../authorization';
 import { getPrismaClient } from '../../db/prisma';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import type { WorkspaceAccessContext } from '../workspaces/authorization';
 
 export interface ProjectRouterOptions {
   config: AppConfig;
@@ -93,6 +94,7 @@ export function createProjectRouter({
         userId: currentUserId,
         workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const authorization = await getProjectAuthorization(
         client,
@@ -314,7 +316,7 @@ export function createProjectRouter({
         workspaceId,
         projectId,
         userId: targetUserId,
-      } = req.validated!.params as { workspaceId: string; projectId: string; userId: string };
+      } = req.validated!.params as { workspaceId: string; context: WorkspaceAccessContext; projectId: string; userId: string };
       const body = req.validated!.body as { role: ProjectRole };
       sendSuccess(
         res,
@@ -336,7 +338,7 @@ export function createProjectRouter({
         workspaceId,
         projectId,
         userId: targetUserId,
-      } = req.validated!.params as { workspaceId: string; projectId: string; userId: string };
+      } = req.validated!.params as { workspaceId: string; context: WorkspaceAccessContext; projectId: string; userId: string };
       sendSuccess(
         res,
         await service.removeMember(

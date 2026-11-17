@@ -16,6 +16,7 @@ import {
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { assertAiWorkspaceEntitled } from './ai-access';
 import { createCalendarService } from '../calendar/calendar.service';
 import { createMessageService } from '../messaging/message.service';
@@ -100,7 +101,8 @@ export function createAiActionService(
       userId,
       workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
 
     const requireProject = async (
       projectId: string,
@@ -150,6 +152,7 @@ export function createAiActionService(
         userId,
         workspaceId,
         capability: WorkspaceCapability.ManageMembers,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const recipientId = String(payload.recipientId);
       const recipient = await prisma.workspaceMembership.findUnique({
@@ -172,6 +175,7 @@ export function createAiActionService(
         workspaceId,
         channelId: String(payload.channelId),
         capability: ChannelCapability.View,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       return;
     }
@@ -458,6 +462,7 @@ export function createAiActionService(
         userId,
         workspaceId: options.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
 
       const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
@@ -487,6 +492,7 @@ export function createAiActionService(
         userId,
         workspaceId: proposal.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       return proposalSummary(proposal);
     },

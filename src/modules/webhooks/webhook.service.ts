@@ -7,6 +7,7 @@ import { logger } from '../../utils/logger';
 import { assertSafeWebhookUrl } from '../automation/automation.engine';
 import { decryptIntegrationToken, encryptIntegrationToken } from '../integrations/token-crypto';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import type { WorkspaceAccessContext } from '../workspaces/authorization';
 
 /**
  * Workspace outbound webhooks (Phase 19).
@@ -21,7 +22,7 @@ import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/autho
  * returned once, when the subscription is created or its secret is rotated.
  */
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 const DELIVERY_BATCH_SIZE = 25;
 const STALE_DELIVERY_RUNNING_MS = 5 * 60_000;
@@ -147,6 +148,7 @@ export function createWebhookService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
 
       const secret = input.secret ?? randomBytes(32).toString('hex');
@@ -182,6 +184,7 @@ export function createWebhookService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const rows = await prisma.webhookSubscription.findMany({
         where: { workspaceId: input.workspaceId },
@@ -204,6 +207,7 @@ export function createWebhookService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const existing = await requireWebhook(input.workspaceId, input.webhookId);
 
@@ -244,6 +248,7 @@ export function createWebhookService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const existing = await requireWebhook(input.workspaceId, input.webhookId);
       await prisma.$transaction(async (tx) => {
@@ -264,6 +269,7 @@ export function createWebhookService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const subscription = await requireWebhook(input.workspaceId, input.webhookId);
       const rows = await prisma.webhookDelivery.findMany({
@@ -279,6 +285,7 @@ export function createWebhookService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const subscription = await requireWebhook(input.workspaceId, input.webhookId);
       const delivery = await prisma.webhookDelivery.findFirst({

@@ -8,6 +8,7 @@ import {
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { projectVisibleToUser } from '../projects/project-visibility';
 import type { AiSourceReference } from '../../services/providers/ai';
 
@@ -104,6 +105,7 @@ export function createAiContextService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       const unrestricted =
         !access.membership.organizationRole &&

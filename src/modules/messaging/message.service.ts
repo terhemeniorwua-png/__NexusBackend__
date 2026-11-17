@@ -3,6 +3,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireChannelAccess, ChannelCapability } from '../authorization/channel.policy';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { emitDomainEvent } from '../../realtime/domain-events';
 import { emitToChannel } from '../../realtime/io-registry';
 
@@ -71,7 +72,7 @@ function toSummary(row: {
   };
 }
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 // Managers are workspace owners and project managers, matching requireChannelAccess.
 export function assertCanPost(access: { channel: { postPolicy: string }; workspaceRole: string }): void {
@@ -96,6 +97,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       // Cannot send to archived channels
@@ -162,6 +164,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
       if (access.channel.archivedAt) {
         throw new AppError(409, 'CHANNEL_ARCHIVED', 'Cannot send messages to an archived channel');
@@ -206,6 +209,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
       const row = await prisma.message.findFirst({
         where: { id: input.messageId, channelId: input.channelId, type: 'VOICE', deletedAt: null },
@@ -228,6 +232,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       const messages = await prisma.message.findMany({
@@ -259,6 +264,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       const replies = await prisma.message.findMany({
@@ -282,6 +288,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       const message = await prisma.message.findFirst({
@@ -324,6 +331,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       const message = await prisma.message.findFirst({
@@ -368,6 +376,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.Update,
+              context: input.context,
       });
 
       const message = await prisma.message.findFirst({
@@ -407,6 +416,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.Update,
+              context: input.context,
       });
 
       const message = await prisma.message.findFirst({
@@ -446,6 +456,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       const message = await prisma.message.findFirst({
@@ -489,6 +500,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       await prisma.messageReaction.deleteMany({
@@ -511,6 +523,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       // Upsert the read receipt for the channel — one per user per channel
@@ -541,6 +554,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         workspaceId: input.workspaceId,
         channelId: input.channelId,
         capability: ChannelCapability.View,
+        context: input.context,
       });
 
       // Get the last read message for this user in this channel

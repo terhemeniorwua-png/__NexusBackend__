@@ -4,6 +4,7 @@ import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import { sendSuccess } from '../../utils/http';
 import {
   addReactionSchema,
@@ -24,9 +25,9 @@ export interface MessageRouterOptions {
   service?: ReturnType<typeof createMessageService>;
 }
 
-function userId(req: Request): string {
+function authCtx(req: Request) {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in');
-  return req.auth.userId;
+  return req.auth;
 }
 
 export function createMessageRouter({
@@ -73,7 +74,7 @@ export function createMessageRouter({
         throw new AppError(400, 'VOICE_DURATION_INVALID', 'Voice messages must be between 0.5 seconds and 5 minutes');
       }
       const message = await service.sendVoice({
-        userId: userId(req), workspaceId, channelId, audio: file.buffer, mime, durationMs,
+        userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, audio: file.buffer, mime, durationMs,
       });
       sendSuccess(res, message, 201);
     },
@@ -88,7 +89,7 @@ export function createMessageRouter({
       const { workspaceId, channelId, messageId } = req.validated!.params as {
         workspaceId: string; channelId: string; messageId: string;
       };
-      const audio = await service.getAudio({ userId: userId(req), workspaceId, channelId, messageId });
+      const audio = await service.getAudio({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, messageId });
       res.setHeader('Content-Type', audio.mime);
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Cache-Control', 'private, max-age=3600');
@@ -108,7 +109,7 @@ export function createMessageRouter({
       };
       const body = req.validated!.body as SendMessageInput;
       const message = await service.send({
-        userId: userId(req),
+        userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
         workspaceId,
         channelId,
         body: body.body,
@@ -131,7 +132,7 @@ export function createMessageRouter({
       };
       const query = req.validated!.query as ListMessagesQuery;
       const result = await service.list({
-        userId: userId(req),
+        userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
         workspaceId,
         channelId,
         cursor: query.cursor,
@@ -155,7 +156,7 @@ export function createMessageRouter({
       };
       sendSuccess(
         res,
-        await service.getReplies({ userId: userId(req), workspaceId, channelId, messageId }),
+        await service.getReplies({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, messageId }),
       );
     },
   );
@@ -174,7 +175,7 @@ export function createMessageRouter({
       const body = req.validated!.body as EditMessageInput;
       sendSuccess(
         res,
-        await service.edit({ userId: userId(req), workspaceId, channelId, messageId, body: body.body }),
+        await service.edit({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, messageId, body: body.body }),
       );
     },
   );
@@ -190,7 +191,7 @@ export function createMessageRouter({
         channelId: string;
         messageId: string;
       };
-      await service.delete({ userId: userId(req), workspaceId, channelId, messageId });
+      await service.delete({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, messageId });
       sendSuccess(res, { ok: true });
     },
   );
@@ -208,7 +209,7 @@ export function createMessageRouter({
       };
       sendSuccess(
         res,
-        await service.pin({ userId: userId(req), workspaceId, channelId, messageId }),
+        await service.pin({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, messageId }),
       );
     },
   );
@@ -226,7 +227,7 @@ export function createMessageRouter({
       };
       sendSuccess(
         res,
-        await service.unpin({ userId: userId(req), workspaceId, channelId, messageId }),
+        await service.unpin({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, messageId }),
       );
     },
   );
@@ -246,7 +247,7 @@ export function createMessageRouter({
       sendSuccess(
         res,
         await service.addReaction({
-          userId: userId(req),
+          userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
           workspaceId,
           channelId,
           messageId,
@@ -270,7 +271,7 @@ export function createMessageRouter({
       };
       const query = req.validated!.query as AddReactionInput;
       await service.removeReaction({
-        userId: userId(req),
+        userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)),
         workspaceId,
         channelId,
         messageId,
@@ -291,7 +292,7 @@ export function createMessageRouter({
         channelId: string;
         messageId: string;
       };
-      await service.markRead({ userId: userId(req), workspaceId, channelId, messageId });
+      await service.markRead({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId, messageId });
       sendSuccess(res, { ok: true });
     },
   );
@@ -308,7 +309,7 @@ export function createMessageRouter({
       };
       sendSuccess(
         res,
-        await service.getUnreadCount({ userId: userId(req), workspaceId, channelId }),
+        await service.getUnreadCount({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, channelId }),
       );
     },
   );

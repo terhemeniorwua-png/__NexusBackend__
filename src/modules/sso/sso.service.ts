@@ -4,6 +4,7 @@ import { Prisma, type PrismaClient, type WorkspaceRole, type WorkspaceSsoConfig 
 import { AppError } from '../../utils/errors';
 import { verifyOAuthState, type OAuthStateClaims } from '../integrations/oauth-state';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { getPrismaClient } from '../../db/prisma';
 import { encryptIntegrationToken } from '../integrations/token-crypto';
 import { createNotification } from '../../services/notifications';
@@ -88,7 +89,8 @@ async function requireOwnerAdmin(
     userId,
     workspaceId,
     capability: WorkspaceCapability.UpdateWorkspace,
-  });
+         context: (input as { context: WorkspaceAccessContext }).context,
+      });
   if (!isSsoAdminRole(access.membership)) {
     throw new AppError(403, 'INSUFFICIENT_ROLE', 'Only workspace owners and administrators may manage SSO settings');
   }

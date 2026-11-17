@@ -15,6 +15,7 @@ import {
   WorkspaceCapability,
   type ProjectAuthorizationResource,
   type ProjectPermissionValue,
+  type WorkspaceAccessContext,
 } from '../authorization';
 import type { RequestContext } from '../auth/auth.types';
 import type {
@@ -30,7 +31,7 @@ import type {
   UpdateTaskInput,
 } from './task.schemas';
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 const taskInclude = {
   creator: { select: { id: true, name: true } },
@@ -325,6 +326,7 @@ export function createTaskService(
       userId: input.userId,
       workspaceId: input.workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
+      context: input.context,
     });
     return authorizeProject(prisma, {
       actor: {
@@ -1417,6 +1419,7 @@ export function createTaskService(
             userId: mentionedUserId,
             workspaceId: input.workspaceId,
             capability: WorkspaceCapability.ViewWorkspace,
+            context: input.context,
           });
           await authorizeProject(prisma, {
             actor: {

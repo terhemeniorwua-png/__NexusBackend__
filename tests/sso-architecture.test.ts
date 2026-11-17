@@ -46,4 +46,34 @@ describe('SSO/session architecture guards', () => {
     assert.match(routes, /SSO_ENABLED/);
     assert.match(routes, /SSO_DISABLED/);
   });
+
+  test('routes under src/modules do not call workspace data functions directly without going through requireWorkspaceAccess', () => {
+    const modulesDir = path.resolve('src/modules');
+    const offenders: string[] = [];
+    for (const file of walk(modulesDir)) {
+      if (!file.endsWith('.routes.ts')) continue;
+      // sso.routes.ts enforces SSO config access via service/policy; auth routes are not workspace-data routes
+      const rel = path.relative(process.cwd(), file);
+      if (rel.endsWith('sso/sso.routes.ts') || rel.includes('/auth/')) continue;
+      const content = fs.readFileSync(file, 'utf8');
+      // Route handlers must not perform direct DB/workspace data access; they should delegate to services
+      // that enforce requireWorkspaceAccess with context.
+      const directDb =
+        /\bgetPrismaClient\s*\(/.test(content) ||
+        /\bprisma\s*\.\w+\.(find|findFirst|findUnique|findMany|create|createMany|update|updateMany|delete|deleteMany|upsert|count|aggregate)\s*\(/.test(content);
+      if (!directDb) continue;
+      // If a route does direct DB access, it must also go through requireWorkspaceAccess with an explicit context
+      const hasAccessCheck = /requireWorkspaceAccess\s*\(/.test(content);
+      const hasContext = /userWorkspaceAccessContext\s*\(|context\s*:\s*/.test(content);
+      if (!hasAccessCheck || !hasContext) {
+        offenders.push(rel);
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `Route files with direct workspace/data DB access must go through requireWorkspaceAccess with context: ${offenders.join(', ')}`,
+    );
+  });
+
 });

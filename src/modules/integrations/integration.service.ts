@@ -4,6 +4,7 @@ import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import type { WorkspaceAccessContext } from '../workspaces/authorization';
 import {
   createProviderLifecycle,
   toIntegrationError,
@@ -120,6 +121,7 @@ export function createIntegrationService(
         userId,
         workspaceId: integration.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       return;
     }
@@ -128,6 +130,7 @@ export function createIntegrationService(
         userId,
         workspaceId: integration.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       return;
     }
@@ -234,7 +237,8 @@ export function createIntegrationService(
           capability: workspaceLevel
             ? WorkspaceCapability.UpdateWorkspace
             : WorkspaceCapability.ViewWorkspace,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
       }
 
       const accessTokenCiphertext = encryptToken(input.accessToken);
@@ -359,13 +363,15 @@ export function createIntegrationService(
           userId: input.userId,
           workspaceId: integration.workspaceId,
           capability: WorkspaceCapability.UpdateWorkspace,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
       } else if (integration.workspaceId) {
         await requireWorkspaceAccess(prisma, {
           userId: input.userId,
           workspaceId: integration.workspaceId,
           capability: WorkspaceCapability.UpdateWorkspace,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
       } else if (integration.userId !== input.userId) {
         throw new AppError(404, 'INTEGRATION_NOT_FOUND', 'That integration does not exist');
       }
@@ -435,7 +441,8 @@ export function createIntegrationService(
           userId: input.userId,
           workspaceId: input.workspaceId,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
       }
 
       const integrations = await prisma.integration.findMany({
@@ -798,6 +805,7 @@ export function createIntegrationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
 
       const integration = await prisma.integration.findFirst({
@@ -867,6 +875,7 @@ export function createIntegrationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       return slackNotifications.enqueue(input);
     },

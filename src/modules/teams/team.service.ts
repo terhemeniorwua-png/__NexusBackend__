@@ -1,6 +1,7 @@
 import type { PrismaClient, Team, TeamMembership, TeamRole, User } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import type { RequestContext } from '../auth/auth.types';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { TeamAuditAction, recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
@@ -38,37 +39,37 @@ import type { TeamMemberSummary, TeamSummary } from './team.types';
 
 export interface TeamService {
   create(
-    input: { userId: string; workspaceId: string } & CreateTeamInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & CreateTeamInput,
     ctx: RequestContext,
   ): Promise<TeamSummary>;
   list(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     includeArchived?: boolean;
   }): Promise<TeamSummary[]>;
-  get(input: { userId: string; workspaceId: string; teamId: string }): Promise<TeamSummary>;
+  get(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; teamId: string }): Promise<TeamSummary>;
   update(
-    input: { userId: string; workspaceId: string; teamId: string } & UpdateTeamInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; teamId: string } & UpdateTeamInput,
     ctx: RequestContext,
   ): Promise<TeamSummary>;
   archive(
-    input: { userId: string; workspaceId: string; teamId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; teamId: string },
     ctx: RequestContext,
   ): Promise<TeamSummary>;
   remove(
-    input: { userId: string; workspaceId: string; teamId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; teamId: string },
     ctx: RequestContext,
   ): Promise<void>;
   listMembers(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     teamId: string;
   }): Promise<TeamMemberSummary[]>;
   addMember(
     input: {
       /** The calling user (must have permission to manage members) */
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       teamId: string;
       /** The workspace member to add to the team */
       targetUserId: string;
@@ -79,18 +80,18 @@ export interface TeamService {
   updateMemberRole(
     input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       teamId: string;
       targetUserId: string;
     } & UpdateTeamMemberRoleInput,
     ctx: RequestContext,
   ): Promise<TeamMemberSummary>;
   removeMember(
-    input: { userId: string; workspaceId: string; teamId: string; targetUserId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; teamId: string; targetUserId: string },
     ctx: RequestContext,
   ): Promise<void>;
   changeLead(
-    input: { userId: string; workspaceId: string; teamId: string } & ChangeTeamLeadInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; teamId: string } & ChangeTeamLeadInput,
     ctx: RequestContext,
   ): Promise<TeamSummary>;
 }
@@ -168,6 +169,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+             context: input.context,
       });
 
       // Validate leadId if provided — the lead must be a workspace member.
@@ -193,7 +195,8 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
           workspaceId: workspace.id,
           departmentId: input.departmentId,
           capability: DepartmentCapability.ManageTeams,
-        });
+               context: input.context,
+      });
       }
 
       const creatorRole: TeamRole =
@@ -274,6 +277,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       const teams = await client.team.findMany({
@@ -297,6 +301,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       await requireTeamAccess(client, {
@@ -305,6 +310,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.ViewTeam,
+             context: input.context,
       });
 
       const { team, memberCount } = await loadTeamWithCount(input.teamId, workspace.id);
@@ -317,6 +323,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       const { team } = await requireTeamAccess(client, {
@@ -325,6 +332,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.UpdateTeam,
+             context: input.context,
       });
 
       if (input.departmentId !== undefined && input.departmentId !== team.departmentId) {
@@ -334,7 +342,8 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
             workspaceId: workspace.id,
             departmentId: team.departmentId,
             capability: DepartmentCapability.ManageTeams,
-          });
+                 context: input.context,
+      });
         }
         if (input.departmentId) {
           await requireDepartmentAccess(client, {
@@ -342,7 +351,8 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
             workspaceId: workspace.id,
             departmentId: input.departmentId,
             capability: DepartmentCapability.ManageTeams,
-          });
+                 context: input.context,
+      });
         }
       }
 
@@ -398,6 +408,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       await requireTeamAccess(client, {
@@ -406,6 +417,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.ArchiveTeam,
+             context: input.context,
       });
 
       const archived = await client.$transaction(async (tx) => {
@@ -443,6 +455,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       const { team } = await requireTeamAccess(client, {
@@ -451,6 +464,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.DeleteTeam,
+             context: input.context,
       });
 
       // Collect the team members before the soft delete so we can notify them.
@@ -496,6 +510,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       await requireTeamAccess(client, {
@@ -504,6 +519,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.ViewMembers,
+             context: input.context,
       });
 
       const memberships = await client.teamMembership.findMany({
@@ -520,6 +536,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       const { team } = await requireTeamAccess(client, {
@@ -528,6 +545,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.ManageMembers,
+             context: input.context,
       });
 
       // The user being added must be a workspace member.
@@ -608,6 +626,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       const { team } = await requireTeamAccess(client, {
@@ -616,6 +635,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.ManageMembers,
+             context: input.context,
       });
 
       const target = await client.teamMembership.findUnique({
@@ -684,6 +704,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       const { team } = await requireTeamAccess(client, {
@@ -692,6 +713,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.ManageMembers,
+             context: input.context,
       });
 
       const target = await client.teamMembership.findUnique({
@@ -747,6 +769,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       await requireTeamAccess(client, {
@@ -755,6 +778,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         teamId: input.teamId,
         workspaceRole: membership.role,
         capability: TeamCapability.ManageMembers,
+             context: input.context,
       });
 
       // If a new lead is specified, they must be a workspace member.

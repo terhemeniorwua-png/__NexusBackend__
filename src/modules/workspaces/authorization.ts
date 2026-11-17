@@ -16,6 +16,15 @@ export {
   assertMayManageMember,
   assertMayAssignRole,
   assertOwnershipSafe,
+  createSystemWorkspaceContext,
+  userWorkspaceAccessContext,
 } from '../authorization/workspace.policy';
 
-export type { WorkspaceCapabilityValue, WorkspaceAccess } from '../authorization/workspace.policy';
+export type {
+  WorkspaceCapabilityValue,
+  WorkspaceAccess,
+  WorkspaceAccessContext,
+  UserWorkspaceAccessContext,
+  SystemWorkspaceAccessContext,
+  WorkspaceAccessAuthMethod,
+} from '../authorization/workspace.policy';

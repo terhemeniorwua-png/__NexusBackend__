@@ -4,6 +4,7 @@ import { createRequireActiveAccount, createRequireAuth } from '../../middleware/
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import { createTaskAdvancedService } from './task-advanced.service';
 import {
   createCustomFieldSchema,
@@ -20,9 +21,9 @@ export interface CustomFieldRouterOptions {
 }
 
 function context(req: Request) { return { ip: req.ip, userAgent: req.header('user-agent') }; }
-function userId(req: Request): string {
+function authCtx(req: Request) {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-  return req.auth.userId;
+  return req.auth;
 }
 
 export function createCustomFieldRouter({ config, service = createTaskAdvancedService() }: CustomFieldRouterOptions): Router {
@@ -32,24 +33,24 @@ export function createCustomFieldRouter({ config, service = createTaskAdvancedSe
 
   router.get('/', requireAuth, requireActive, validate({ params: taskWorkspaceProjectParamsSchema }), async (req, res) => {
     const { workspaceId, projectId } = req.validated!.params as { workspaceId: string; projectId: string };
-    sendSuccess(res, await service.listCustomFields({ userId: userId(req), workspaceId, projectId }));
+    sendSuccess(res, await service.listCustomFields({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId }));
   });
 
   router.post('/', requireAuth, requireActive, validate({ params: taskWorkspaceProjectParamsSchema, body: createCustomFieldSchema }), async (req, res) => {
     const { workspaceId, projectId } = req.validated!.params as { workspaceId: string; projectId: string };
     const body = req.validated!.body as CreateCustomFieldInput;
-    sendSuccess(res, await service.createCustomField({ userId: userId(req), workspaceId, projectId, ...body }, context(req)), 201);
+    sendSuccess(res, await service.createCustomField({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, ...body }, context(req)), 201);
   });
 
   router.patch('/:fieldId', requireAuth, requireActive, validate({ params: customFieldParamsSchema, body: updateCustomFieldSchema }), async (req, res) => {
     const { workspaceId, projectId, fieldId } = req.validated!.params as { workspaceId: string; projectId: string; fieldId: string };
     const body = req.validated!.body as UpdateCustomFieldInput;
-    sendSuccess(res, await service.updateCustomField({ userId: userId(req), workspaceId, projectId, fieldId, ...body }, context(req)));
+    sendSuccess(res, await service.updateCustomField({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, fieldId, ...body }, context(req)));
   });
 
   router.delete('/:fieldId', requireAuth, requireActive, validate({ params: customFieldParamsSchema }), async (req, res) => {
     const { workspaceId, projectId, fieldId } = req.validated!.params as { workspaceId: string; projectId: string; fieldId: string };
-    sendSuccess(res, await service.deleteCustomField({ userId: userId(req), workspaceId, projectId, fieldId }, context(req)));
+    sendSuccess(res, await service.deleteCustomField({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, projectId, fieldId }, context(req)));
   });
 
   return router;

@@ -5,6 +5,7 @@ import { createRequireActiveAccount, createRequireAuth } from '../../middleware/
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import { createTaskAdvancedService } from '../tasks/task-advanced.service';
 import {
   createProjectFromTemplateSchema,
@@ -22,9 +23,9 @@ export interface ProjectTemplateRouterOptions {
 function context(req: Request) {
   return { ip: req.ip, userAgent: req.header('user-agent') };
 }
-function userId(req: Request): string {
+function authCtx(req: Request) {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-  return req.auth.userId;
+  return req.auth;
 }
 
 const paramsSchema = z.object({ workspaceId: z.string().uuid() });
@@ -37,30 +38,30 @@ export function createProjectTemplateRouter({ config, service = createTaskAdvanc
 
   router.get('/', requireAuth, requireActive, validate({ params: paramsSchema }), async (req, res) => {
     const { workspaceId } = req.validated!.params as { workspaceId: string };
-    sendSuccess(res, await service.listProjectTemplates({ userId: userId(req), workspaceId }));
+    sendSuccess(res, await service.listProjectTemplates({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId }));
   });
 
   router.post('/', requireAuth, requireActive, validate({ params: paramsSchema, body: createProjectTemplateSchema }), async (req, res) => {
     const { workspaceId } = req.validated!.params as { workspaceId: string };
     const body = req.validated!.body as CreateProjectTemplateInput;
-    sendSuccess(res, await service.createProjectTemplate({ userId: userId(req), workspaceId, ...body }, context(req)), 201);
+    sendSuccess(res, await service.createProjectTemplate({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, ...body }, context(req)), 201);
   });
 
   router.patch('/:templateId', requireAuth, requireActive, validate({ params: templateParamsSchema, body: updateProjectTemplateSchema }), async (req, res) => {
     const { workspaceId, templateId } = req.validated!.params as { workspaceId: string; templateId: string };
     const body = req.validated!.body as UpdateProjectTemplateInput;
-    sendSuccess(res, await service.updateProjectTemplate({ userId: userId(req), workspaceId, templateId, ...body }, context(req)));
+    sendSuccess(res, await service.updateProjectTemplate({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, templateId, ...body }, context(req)));
   });
 
   router.delete('/:templateId', requireAuth, requireActive, validate({ params: templateParamsSchema }), async (req, res) => {
     const { workspaceId, templateId } = req.validated!.params as { workspaceId: string; templateId: string };
-    sendSuccess(res, await service.deleteProjectTemplate({ userId: userId(req), workspaceId, templateId }, context(req)));
+    sendSuccess(res, await service.deleteProjectTemplate({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, templateId }, context(req)));
   });
 
   router.post('/:templateId/create-project', requireAuth, requireActive, validate({ params: templateParamsSchema, body: createProjectFromTemplateSchema }), async (req, res) => {
     const { workspaceId, templateId } = req.validated!.params as { workspaceId: string; templateId: string };
     const body = req.validated!.body as { name: string; key: string; description?: string | null };
-    sendSuccess(res, await service.createProjectFromTemplate({ userId: userId(req), workspaceId, templateId, ...body }, context(req)), 201);
+    sendSuccess(res, await service.createProjectFromTemplate({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, templateId, ...body }, context(req)), 201);
   });
 
   return router;

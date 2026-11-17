@@ -25,6 +25,7 @@ import {
   roleCan,
   requireWorkspaceAccess,
   WorkspaceCapability,
+  type WorkspaceAccessContext,
 } from './authorization';
 import type {
   AddMemberInput,
@@ -77,25 +78,25 @@ export interface WorkspaceService {
     ctx: RequestContext,
   ): Promise<WorkspaceSummary>;
   list(userId: string): Promise<WorkspaceSummary[]>;
-  get(input: { userId: string; workspaceId: string }): Promise<WorkspaceSummary>;
+  get(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }): Promise<WorkspaceSummary>;
   update(
-    input: { userId: string; workspaceId: string } & UpdateWorkspaceInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & UpdateWorkspaceInput,
     ctx: RequestContext,
   ): Promise<WorkspaceSummary>;
   archive(
-    input: { userId: string; workspaceId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext },
     ctx: RequestContext,
   ): Promise<WorkspaceSummary>;
   restore(
-    input: { userId: string; workspaceId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext },
     ctx: RequestContext,
   ): Promise<WorkspaceSummary>;
-  remove(input: { userId: string; workspaceId: string }, ctx: RequestContext): Promise<void>;
-  switchTo(input: { userId: string; workspaceId: string }): Promise<WorkspaceSummary>;
-  listMembers(input: { userId: string; workspaceId: string }): Promise<WorkspaceMember[]>;
-  listDepartments(input: { userId: string; workspaceId: string }): Promise<DepartmentSummary[]>;
+  remove(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }, ctx: RequestContext): Promise<void>;
+  switchTo(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }): Promise<WorkspaceSummary>;
+  listMembers(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }): Promise<WorkspaceMember[]>;
+  listDepartments(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }): Promise<DepartmentSummary[]>;
   createDepartment(
-    input: { userId: string; workspaceId: string } & CreateDepartmentInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & CreateDepartmentInput,
     ctx: RequestContext,
   ): Promise<DepartmentSummary>;
   updateDepartment(
@@ -103,23 +104,24 @@ export interface WorkspaceService {
       userId: string;
       workspaceId: string;
       departmentId: string;
+      context: WorkspaceAccessContext;
     } & UpdateDepartmentInput,
     ctx: RequestContext,
   ): Promise<DepartmentSummary>;
   assignDepartmentMember(
-    input: { userId: string; workspaceId: string; departmentId: string } & DepartmentMemberInput,
+    input: { userId: string; workspaceId: string; departmentId: string; context: WorkspaceAccessContext } & DepartmentMemberInput,
     ctx: RequestContext,
   ): Promise<void>;
   removeDepartmentMember(
-    input: { userId: string; workspaceId: string; departmentId: string; targetUserId: string },
+    input: { userId: string; workspaceId: string; departmentId: string; targetUserId: string; context: WorkspaceAccessContext },
     ctx: RequestContext,
   ): Promise<void>;
   addMember(
-    input: { userId: string; workspaceId: string } & AddMemberInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & AddMemberInput,
     ctx: RequestContext,
   ): Promise<WorkspaceMember>;
   updateMemberRole(
-    input: { userId: string; workspaceId: string; targetUserId: string } & UpdateMemberRoleInput,
+    input: { userId: string; workspaceId: string; targetUserId: string; context: WorkspaceAccessContext } & UpdateMemberRoleInput,
     ctx: RequestContext,
   ): Promise<WorkspaceMember>;
   removeMember(
@@ -127,16 +129,17 @@ export interface WorkspaceService {
       userId: string;
       workspaceId: string;
       targetUserId: string;
+      context: WorkspaceAccessContext;
       reassignTasksToUserId?: string | undefined;
     },
     ctx: RequestContext,
   ): Promise<void>;
   suspendMember(
-    input: { userId: string; workspaceId: string; targetUserId: string },
+    input: { userId: string; workspaceId: string; targetUserId: string; context: WorkspaceAccessContext },
     ctx: RequestContext,
   ): Promise<WorkspaceMember>;
   restoreMember(
-    input: { userId: string; workspaceId: string; targetUserId: string },
+    input: { userId: string; workspaceId: string; targetUserId: string; context: WorkspaceAccessContext },
     ctx: RequestContext,
   ): Promise<WorkspaceMember>;
   transferOwnership(
@@ -144,14 +147,15 @@ export interface WorkspaceService {
       userId: string;
       workspaceId: string;
       newOwnerId: string;
+      context: WorkspaceAccessContext;
     } & TransferOwnershipInput,
     ctx: RequestContext,
   ): Promise<{ transferId: string; status: 'PENDING' }>;
   listIncomingOwnershipTransfers(input: { userId: string; limit: number; offset: number }): Promise<unknown>;
-  acceptOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string }, ctx: RequestContext): Promise<{ workspaceId: string; billingAcceptanceRequired: boolean }>;
-  rejectOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string }, ctx: RequestContext): Promise<{ workspaceId: string; status: 'REJECTED' }>;
-  acceptOwnershipBilling(input: { userId: string; workspaceId: string; transferId: string }, ctx: RequestContext): Promise<{ workspaceId: string }>;
-  resolveDeletedOwner(input: { actorId: string; workspaceId: string; newOwnerId: string }, ctx: RequestContext): Promise<{ workspaceId: string; status: 'SUSPENDED' }>;
+  acceptOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string; context: WorkspaceAccessContext }, ctx: RequestContext): Promise<{ workspaceId: string; billingAcceptanceRequired: boolean }>;
+  rejectOwnershipTransfer(input: { userId: string; workspaceId: string; transferId: string; context: WorkspaceAccessContext }, ctx: RequestContext): Promise<{ workspaceId: string; status: 'REJECTED' }>;
+  acceptOwnershipBilling(input: { userId: string; workspaceId: string; transferId: string; context: WorkspaceAccessContext }, ctx: RequestContext): Promise<{ workspaceId: string }>;
+  resolveDeletedOwner(input: { actorId: string; workspaceId: string; newOwnerId: string; context: WorkspaceAccessContext }, ctx: RequestContext): Promise<{ workspaceId: string; status: 'SUSPENDED' }>;
 }
 
 interface WorkspaceCounts {
@@ -492,6 +496,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
 
       return toSummary(
@@ -507,6 +512,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+        context: input.context,
       });
 
       if (input.visibility !== undefined) {
@@ -554,6 +560,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ArchiveWorkspace,
+        context: input.context,
       });
 
       if (access.workspace.isPersonal) {
@@ -608,6 +615,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ArchiveWorkspace,
         allowArchived: true,
+        context: input.context,
       });
 
       const restored = await client.$transaction(async (tx) => {
@@ -669,6 +677,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.DeleteWorkspace,
         allowArchived: true,
+        context: input.context,
       });
 
       if (access.workspace.isPersonal) {
@@ -716,6 +725,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
         allowArchived: true,
+        context: input.context,
       });
 
       if (access.workspace.status !== 'ACTIVE') {
@@ -735,6 +745,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewMembers,
+        context: input.context,
       });
 
       const memberships = await client.workspaceMembership.findMany({
@@ -751,6 +762,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       if (access.workspace.type !== 'INSTITUTION') {
         throw new AppError(
@@ -787,6 +799,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
+        context: input.context,
       });
       if (access.workspace.type !== 'INSTITUTION') {
         throw new AppError(
@@ -840,6 +853,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         departmentId: input.departmentId,
         capability: DepartmentCapability.Update,
+        context: input.context,
       });
       if (access.department.name !== input.name) {
         const duplicate = await client.department.findUnique({
@@ -900,6 +914,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         departmentId: input.departmentId,
         capability: DepartmentCapability.ManageMembers,
+        context: input.context,
       });
       const actorMembership = await client.workspaceMembership.findUniqueOrThrow({
         where: {
@@ -977,6 +992,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         workspaceId: input.workspaceId,
         departmentId: input.departmentId,
         capability: DepartmentCapability.ManageMembers,
+        context: input.context,
       });
       const target = await client.departmentMembership.findUnique({
         where: {
@@ -1035,6 +1051,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageMembers,
+        context: input.context,
       });
 
       if (input.organizationRole) {
@@ -1178,6 +1195,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageMembers,
+        context: input.context,
       });
 
       const target = await client.workspaceMembership.findUnique({
@@ -1365,6 +1383,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageMembers,
+        context: input.context,
       });
 
       const target = await client.workspaceMembership.findUnique({
@@ -1583,6 +1602,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageMembers,
+        context: input.context,
       });
 
       if (input.targetUserId === input.userId) {
@@ -1692,6 +1712,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageMembers,
+        context: input.context,
       });
 
       const target = await client.workspaceMembership.findUnique({
@@ -1776,6 +1797,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.TransferOwnership,
+             context: input.context,
       });
       if (input.newOwnerId === input.userId) {
         throw new AppError(400, 'TRANSFER_TO_SELF', 'You cannot transfer ownership to yourself');

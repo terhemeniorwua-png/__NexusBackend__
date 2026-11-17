@@ -7,6 +7,7 @@ import { validate } from '../../middleware/validation';
 import type { RequestContext } from '../auth/auth.types';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
+import { userWorkspaceAccessContext } from './authorization';
 import { createJoinRequestService, type JoinRequestService } from './join-request.service';
 import {
   approveJoinRequestSchema,
@@ -46,15 +47,12 @@ function context(req: Request): RequestContext {
   };
 }
 
-function requireUser(req: Request): string {
+function requireAuthCtx(req: Request) {
   const auth = req.auth;
-
-  if (!auth) {
-    throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
-  }
-
-  return auth.userId;
+  if (!auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in to continue');
+  return auth;
 }
+function requireUser(req: Request): string { return requireAuthCtx(req).userId; }
 
 export function createJoinRequestRouter({
   config,
@@ -121,7 +119,7 @@ export function createJoinRequestRouter({
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const input = req.validated?.body as CreateJoinRequestInput;
       const request = await service.create(
-        { userId: requireUser(req), workspaceId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, ...input },
         context(req),
       );
 
@@ -138,7 +136,8 @@ export function createJoinRequestRouter({
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const query = req.validated?.query as ListJoinRequestsQuery;
       const requests = await service.listForWorkspace({
-        userId: requireUser(req),
+        userId: requireAuthCtx(req).userId,
+        context: userWorkspaceAccessContext(requireAuthCtx(req)),
         workspaceId,
         status: query.status,
       });
@@ -159,7 +158,7 @@ export function createJoinRequestRouter({
       };
       const input = req.validated?.body as ApproveJoinRequestInput;
       const request = await service.approve(
-        { userId: requireUser(req), workspaceId, requestId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, requestId, ...input },
         context(req),
       );
 
@@ -179,7 +178,7 @@ export function createJoinRequestRouter({
       };
       const input = req.validated?.body as RejectJoinRequestInput;
       const request = await service.reject(
-        { userId: requireUser(req), workspaceId, requestId, ...input },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId, requestId, ...input },
         context(req),
       );
 
@@ -208,7 +207,7 @@ export function createJoinRequestRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const code = await service.rotateCode(
-        { userId: requireUser(req), workspaceId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId },
         context(req),
       );
 
@@ -224,7 +223,7 @@ export function createJoinRequestRouter({
     async (req, res) => {
       const { workspaceId } = req.validated?.params as { workspaceId: string };
       const result = await service.disableCode(
-        { userId: requireUser(req), workspaceId },
+        { userId: requireAuthCtx(req).userId, context: userWorkspaceAccessContext(requireAuthCtx(req)), workspaceId },
         context(req),
       );
 

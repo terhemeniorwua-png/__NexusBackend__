@@ -4,6 +4,7 @@ import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import type { WorkspaceAccessContext } from '../workspaces/authorization';
 
 export type ImportSource = 'CLICKUP' | 'TRELLO' | 'CSV';
 
@@ -209,12 +210,13 @@ async function previewTrello(apiToken: string, options: Record<string, unknown>)
 }
 
 export function createImportService(prisma: PrismaClient = getPrismaClient()) {
-  async function requireWorkspace(input: { userId: string; workspaceId: string }) {
+  async function requireWorkspace(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
     await requireWorkspaceAccess(prisma, {
       userId: input.userId,
       workspaceId: input.workspaceId,
       capability: WorkspaceCapability.UpdateWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
   }
 
   async function createPreview(input: Input & { workspaceId: string; source: ImportSource; csv?: string; apiToken?: string; options?: Record<string, unknown> }) {
@@ -340,7 +342,8 @@ export function createImportService(prisma: PrismaClient = getPrismaClient()) {
       userId: input.userId,
       workspaceId: job.workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     return toJobSummary(job);
   }
 
@@ -349,7 +352,8 @@ export function createImportService(prisma: PrismaClient = getPrismaClient()) {
       userId: input.userId,
       workspaceId: input.workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     const jobs = await prisma.importJob.findMany({
       where: { workspaceId: input.workspaceId },
       orderBy: { createdAt: 'desc' },

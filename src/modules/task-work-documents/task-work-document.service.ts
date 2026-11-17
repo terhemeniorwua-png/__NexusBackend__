@@ -9,10 +9,12 @@ import {
   authorizeProject,
   requireWorkspaceAccess,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import type { ProjectAuthorizationResource, ProjectPermissionValue } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { MAX_CONTENT_BYTES } from './task-work-document.schemas';
 
-type Input = { userId: string; workspaceId: string; projectId: string; taskId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext; projectId: string; taskId: string };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -143,7 +145,8 @@ export function createTaskWorkDocumentService(prisma: PrismaClient = getPrismaCl
       userId: input.userId,
       workspaceId: input.workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
     return authorizeProject(prisma, {
       actor: {
         userId: input.userId,

@@ -1,6 +1,7 @@
 import type { PrismaClient, Team, TeamMembership, TeamRole, WorkspaceRole } from '@prisma/client';
 import { AppError } from '../../utils/errors';
 import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
+import { assertWorkspaceSsoAccess, type WorkspaceAccessContext } from './workspace.policy';
 
 /**
  * Team-level authorization policy.
@@ -122,8 +123,17 @@ export async function requireTeamAccess(
     teamId: string;
     workspaceRole: WorkspaceRole;
     capability: TeamCapabilityValue;
+    context: WorkspaceAccessContext;
   },
 ): Promise<TeamAccess> {
+  if (!input.context) {
+    throw new AppError(
+      403,
+      'WORKSPACE_ACCESS_CONTEXT_REQUIRED',
+      'Workspace access requires a valid session or system context',
+    );
+  }
+
   const team = await client.team.findFirst({
     where: {
       id: input.teamId,
@@ -163,6 +173,13 @@ export async function requireTeamAccess(
     workspaceMembership.role,
     workspaceMembership.organizationRole,
   );
+
+  await assertWorkspaceSsoAccess(client, {
+    workspaceId: input.workspaceId,
+    context: input.context,
+    effectiveRole,
+    membership: workspaceMembership,
+  });
 
   if (workspaceMembership.organizationRole === 'INSTITUTION_DEPARTMENT_HEAD') {
     if (!team.departmentId) {

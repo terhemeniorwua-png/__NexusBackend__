@@ -5,6 +5,7 @@ import { getPrismaClient } from '../../db/prisma';
 import { sendSuccess } from '../../utils/http';
 import { AppError } from '../../utils/errors';
 import { projectRoleDefinitions, requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 
 export interface ProjectRolesRouterOptions {
   config: AppConfig;
@@ -39,6 +40,7 @@ export function createProjectRolesRouter({ config }: ProjectRolesRouterOptions):
         userId,
         workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
 
       sendSuccess(res, { items: projectRoleDefinitions() });

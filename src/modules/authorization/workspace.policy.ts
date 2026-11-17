@@ -2,6 +2,51 @@ import type { PrismaClient, Workspace, WorkspaceMembership, WorkspaceRole } from
 import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
 import { AppError } from '../../utils/errors';
 
+export type WorkspaceAccessAuthMethod = 'password' | 'social' | 'sso' | 'break_glass';
+
+export interface UserWorkspaceAccessContext {
+  kind: 'user';
+  sessionId: string;
+  authMethod: WorkspaceAccessAuthMethod;
+  authMethodExpiresAt?: Date | string | null;
+}
+
+const SYSTEM_WORKSPACE_ACCESS_CONTEXT_BRAND: unique symbol = Symbol('SystemWorkspaceAccessContext');
+
+export interface SystemWorkspaceAccessContext {
+  readonly kind: 'system';
+  readonly reason: string;
+  readonly [SYSTEM_WORKSPACE_ACCESS_CONTEXT_BRAND]: true;
+}
+
+/**
+ * Session/auth context required for workspace access checks.
+ * - `user`: derived from an authenticated request/session (e.g. req.auth). Never omit.
+ * - `system`: explicit server-only context for background jobs/internal calls with no user session.
+ *   Must be constructed via createSystemWorkspaceContext() in server code; never derived from request input.
+ */
+export type WorkspaceAccessContext = UserWorkspaceAccessContext | SystemWorkspaceAccessContext;
+
+export function createSystemWorkspaceContext(reason: string): SystemWorkspaceAccessContext {
+  if (!reason || typeof reason !== 'string') {
+    throw new Error('system workspace access context requires a justification reason');
+  }
+  return { kind: 'system', reason, [SYSTEM_WORKSPACE_ACCESS_CONTEXT_BRAND]: true };
+}
+
+export function userWorkspaceAccessContext(auth: {
+  sessionId: string;
+  authMethod: WorkspaceAccessAuthMethod;
+  authMethodExpiresAt?: Date | string | null;
+}): UserWorkspaceAccessContext {
+  return {
+    kind: 'user',
+    sessionId: auth.sessionId,
+    authMethod: auth.authMethod,
+    ...(auth.authMethodExpiresAt !== undefined ? { authMethodExpiresAt: auth.authMethodExpiresAt } : {}),
+  };
+}
+
 /**
  * Workspace-level authorization policy.
  *
@@ -98,12 +143,95 @@ export interface WorkspaceAccess {
   effectiveRole: WorkspaceRole;
 }
 
+function isSystemWorkspaceAccessContext(
+  context: unknown,
+): context is SystemWorkspaceAccessContext {
+  return (
+    typeof context === 'object' &&
+    context !== null &&
+    (context as { kind?: unknown }).kind === 'system' &&
+    (context as Record<symbol, unknown>)[SYSTEM_WORKSPACE_ACCESS_CONTEXT_BRAND] === true &&
+    typeof (context as { reason?: unknown }).reason === 'string' &&
+    (context as { reason: string }).reason.length > 0
+  );
+}
+
+function isUserWorkspaceAccessContext(context: unknown): context is UserWorkspaceAccessContext {
+  if (typeof context !== 'object' || context === null) return false;
+  const c = context as Partial<UserWorkspaceAccessContext>;
+  if (c.kind !== 'user') return false;
+  if (typeof c.sessionId !== 'string' || c.sessionId.length === 0) return false;
+  return (
+    c.authMethod === 'password' ||
+    c.authMethod === 'social' ||
+    c.authMethod === 'sso' ||
+    c.authMethod === 'break_glass'
+  );
+}
+
+export async function assertWorkspaceSsoAccess(
+  client: PrismaClient,
+  input: {
+    workspaceId: string;
+    context: WorkspaceAccessContext;
+    effectiveRole: WorkspaceRole;
+    membership: Pick<WorkspaceMembership, 'organizationRole'>;
+  },
+): Promise<void> {
+  if (!isSystemWorkspaceAccessContext(input.context) && !isUserWorkspaceAccessContext(input.context)) {
+    throw new AppError(
+      403,
+      'WORKSPACE_ACCESS_CONTEXT_REQUIRED',
+      'Workspace access requires a valid session or system context',
+    );
+  }
+  if (!isUserWorkspaceAccessContext(input.context)) {
+    // System contexts are explicit server-only; SSO session checks are not applicable.
+    return;
+  }
+  const context = input.context;
+  const ssoConfig = await client.workspaceSsoConfig.findFirst({
+    where: { workspaceId: input.workspaceId, isEnabled: true, requireSso: true },
+    select: { breakGlassEnabled: true },
+  });
+  if (!ssoConfig) return;
+  const verifiedDomainCount = await client.workspaceSsoDomain.count({
+    where: { workspaceId: input.workspaceId, verifiedAt: { not: null } },
+  });
+  if (verifiedDomainCount === 0) return;
+
+  let authMethod = context.authMethod.toLowerCase();
+  let sessionAuthMethodExpiresAt: Date | null = null;
+
+  const session = await client.session.findUnique({ where: { id: context.sessionId } });
+  if (session) {
+    authMethod = String((session as { authMethod?: string }).authMethod ?? 'PASSWORD').toLowerCase();
+    const rawExp = (session as { authMethodExpiresAt?: Date | null }).authMethodExpiresAt;
+    sessionAuthMethodExpiresAt = rawExp ? new Date(rawExp) : null;
+  } else if (context.authMethodExpiresAt) {
+    sessionAuthMethodExpiresAt = new Date(context.authMethodExpiresAt);
+  }
+
+  const isBreakGlassValid = (): boolean => {
+    if (authMethod !== 'break_glass') return false;
+    if (sessionAuthMethodExpiresAt && sessionAuthMethodExpiresAt.getTime() <= Date.now()) return false;
+    const isOwner =
+      input.effectiveRole === 'OWNER' ||
+      input.membership.organizationRole === 'COMPANY_OWNER' ||
+      input.membership.organizationRole === 'INSTITUTION_OWNER';
+    return Boolean(ssoConfig.breakGlassEnabled) && isOwner;
+  };
+
+  if (authMethod !== 'sso' && !isBreakGlassValid()) {
+    throw new AppError(403, 'SSO_REQUIRED', 'This workspace requires SSO sign-in');
+  }
+}
+
 /**
  * Loads the workspace and proves the caller is authorised to use it.
  *
- * Throws `AppError` with an appropriate status and code when the workspace
- * does not exist, the caller is not a member, or the caller's role does not
- * hold the requested capability.
+ * The session/auth `context` is REQUIRED. Missing or invalid context is denied
+ * (fail closed) so SSO enforcement can never be skipped.
  */
 export async function requireWorkspaceAccess(
   client: PrismaClient,
@@ -111,10 +239,19 @@ export async function requireWorkspaceAccess(
     userId: string;
     workspaceId: string;
     capability: WorkspaceCapabilityValue;
+    context: WorkspaceAccessContext;
     allowArchived?: boolean;
-    auth?: { authMethod?: string; sessionId?: string };
   },
 ): Promise<WorkspaceAccess> {
+  const context = input.context;
+  if (!isSystemWorkspaceAccessContext(context) && !isUserWorkspaceAccessContext(context)) {
+    throw new AppError(
+      403,
+      'WORKSPACE_ACCESS_CONTEXT_REQUIRED',
+      'Workspace access requires a valid session or system context',
+    );
+  }
+
   const workspace = await client.workspace.findFirst({
     where: { id: input.workspaceId, deletedAt: null },
   });
@@ -139,8 +276,6 @@ export async function requireWorkspaceAccess(
     throw new AppError(403, 'WORKSPACE_ACCESS_DENIED', 'You are not a member of this workspace');
   }
 
-  // A suspended membership keeps the row (and its history) but grants no
-  // access until an administrator restores it.
   if (membership.status === 'SUSPENDED') {
     throw new AppError(
       403,
@@ -174,42 +309,12 @@ export async function requireWorkspaceAccess(
     );
   }
 
-  // When a workspace requires SSO, only SSO sessions (or valid, time-limited break-glass
-  // sessions for owners) may access it. Enforced when request auth/session context is provided.
-  // This also invalidates access that existed before require-SSO was switched on.
-  const hasRequestAuthContext = Boolean(input.auth?.sessionId || input.auth?.authMethod);
-  if (hasRequestAuthContext) {
-    const ssoConfig = await client.workspaceSsoConfig.findFirst({
-      where: { workspaceId: workspace.id, isEnabled: true, requireSso: true },
-      select: { breakGlassEnabled: true },
-    });
-    if (ssoConfig) {
-      const verifiedDomainCount = await client.workspaceSsoDomain.count({
-        where: { workspaceId: workspace.id, verifiedAt: { not: null } },
-      });
-      if (verifiedDomainCount > 0) {
-        let authMethod = input.auth?.authMethod?.toLowerCase();
-        let session: any = null;
-        if (input.auth?.sessionId) {
-          session = await client.session.findUnique({ where: { id: input.auth.sessionId } });
-          if (session) authMethod = String(session.authMethod ?? 'PASSWORD').toLowerCase();
-        }
-
-        const isBreakGlassValid = () => {
-          if (authMethod !== 'break_glass') return false;
-          if (session?.authMethodExpiresAt && new Date(session.authMethodExpiresAt).getTime() <= Date.now()) return false;
-          const isOwner = effectiveRole === 'OWNER' ||
-            membership.organizationRole === 'COMPANY_OWNER' ||
-            membership.organizationRole === 'INSTITUTION_OWNER';
-          return Boolean(ssoConfig.breakGlassEnabled) && isOwner;
-        };
-
-        if (authMethod !== 'sso' && !isBreakGlassValid()) {
-          throw new AppError(403, 'SSO_REQUIRED', 'This workspace requires SSO sign-in');
-        }
-      }
-    }
-  }
+  await assertWorkspaceSsoAccess(client, {
+    workspaceId: workspace.id,
+    context,
+    effectiveRole,
+    membership,
+  });
 
   return { workspace, membership, effectiveRole };
 }

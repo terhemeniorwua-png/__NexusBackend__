@@ -17,7 +17,7 @@ import { AppError } from '../../utils/errors';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import { ProjectCapability, requireProjectAccess } from '../authorization/project.policy';
 import { generateTaskKey } from '../tasks/task.service';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, createSystemWorkspaceContext } from '../workspaces/authorization';
 import { createAutomationRunQueue } from './automation.queue';
 import { createMessageService } from '../messaging/message.service';
 
@@ -228,6 +228,7 @@ async function assertOwnerCanManage(
     userId: automation.createdById,
     workspaceId: automation.workspaceId,
     capability: WorkspaceCapability.UpdateWorkspace,
+    context: createSystemWorkspaceContext('automation-engine:verify-owner-can-manage'),
   });
   return access.effectiveRole;
 }
@@ -676,6 +677,7 @@ async function executePostMessageAction(
     workspaceId: automation.workspaceId,
     channelId: channel.id,
     body,
+    context: createSystemWorkspaceContext('automation-engine:post-message-as-owner'),
   });
 }
 

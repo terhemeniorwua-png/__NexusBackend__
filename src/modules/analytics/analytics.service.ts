@@ -9,6 +9,7 @@ import {
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { projectVisibleToUser } from '../projects/project-visibility';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -93,7 +94,7 @@ export interface AnalyticsSnapshot {
 
 export interface ScopedAnalyticsInput {
   userId: string;
-  workspaceId: string;
+  workspaceId: string; context: WorkspaceAccessContext;
   projectId?: string | null;
   range?: '7d' | '30d' | '90d' | 'custom';
   startDate?: Date | null;
@@ -209,6 +210,7 @@ export function createAnalyticsService({
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: (input as { context: WorkspaceAccessContext }).context,
       });
       return {
         workspaceIds: [input.workspaceId],
@@ -245,7 +247,7 @@ export function createAnalyticsService({
   }
 
   interface ScopedWorkspace {
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     projectId: string | null;
     userId: string;
     /** True when the caller manages every project in the workspace. */
@@ -261,7 +263,8 @@ export function createAnalyticsService({
       userId,
       workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: (input as { context: WorkspaceAccessContext }).context,
+      });
 
     if (projectId) {
       // Project access is a separate grant: workspace membership alone must
@@ -310,7 +313,8 @@ export function createAnalyticsService({
           userId,
           workspaceId,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
         await requireProjectAccess(prisma, {
           userId,
           workspaceId,

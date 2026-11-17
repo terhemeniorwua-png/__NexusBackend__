@@ -13,6 +13,7 @@ import type { PrivateObjectStorage } from '../../services/storage/private-object
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import type {
   CreateInstitutionGroupInput,
   UpdateCompanyProfileInput,
@@ -93,12 +94,13 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
       userId,
       workspaceId,
       capability: write ? WorkspaceCapability.UpdateWorkspace : WorkspaceCapability.ViewWorkspace,
-    });
+           context: input.context,
+      });
     if (write) assertOrganizationAdmin(result);
     return result;
   }
 
-  async function getCompanyProfile(input: { userId: string; workspaceId: string }) {
+  async function getCompanyProfile(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
     const result = await access(input.userId, input.workspaceId);
     assertType(result.workspace.type, 'COMPANY');
     const profile = await db.companyProfile.findUnique({
@@ -111,7 +113,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
 
   async function getLogo(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     kind: OrganizationProfileKind;
   }) {
     const result = await access(input.userId, input.workspaceId);
@@ -222,7 +224,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   }
 
   async function updateCompanyProfile(
-    input: { userId: string; workspaceId: string } & UpdateCompanyProfileInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & UpdateCompanyProfileInput,
     context: Context,
   ) {
     const result = await access(input.userId, input.workspaceId, true);
@@ -248,7 +250,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
     });
   }
 
-  async function getInstitutionProfile(input: { userId: string; workspaceId: string }) {
+  async function getInstitutionProfile(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
     const result = await access(input.userId, input.workspaceId);
     assertType(result.workspace.type, 'INSTITUTION');
     const profile = await db.institutionProfile.findUnique({
@@ -264,7 +266,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   }
 
   async function updateInstitutionProfile(
-    input: { userId: string; workspaceId: string } & UpdateInstitutionProfileInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & UpdateInstitutionProfileInput,
     context: Context,
   ) {
     const result = await access(input.userId, input.workspaceId, true);
@@ -290,7 +292,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
     });
   }
 
-  async function listInstitutionGroups(input: { userId: string; workspaceId: string }) {
+  async function listInstitutionGroups(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
     const result = await access(input.userId, input.workspaceId);
     assertType(result.workspace.type, 'INSTITUTION');
     const canSeeAll =
@@ -308,7 +310,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
     });
   }
 
-  async function getNotificationPreferences(input: { userId: string; workspaceId: string }) {
+  async function getNotificationPreferences(input: { userId: string; workspaceId: string; context: WorkspaceAccessContext }) {
     await access(input.userId, input.workspaceId);
     const saved = await db.notificationPreference.findMany({
       where: { userId: input.userId, workspaceId: input.workspaceId },
@@ -325,7 +327,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   }
 
   async function updateNotificationPreferences(
-    input: { userId: string; workspaceId: string } & UpdateNotificationPreferencesInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & UpdateNotificationPreferencesInput,
     context: Context,
   ) {
     await access(input.userId, input.workspaceId);
@@ -391,7 +393,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   }
 
   async function createInstitutionGroup(
-    input: { userId: string; workspaceId: string } & CreateInstitutionGroupInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & CreateInstitutionGroupInput,
     context: Context,
   ) {
     const result = await access(input.userId, input.workspaceId, true);
@@ -428,7 +430,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   }
 
   async function updateInstitutionGroup(
-    input: { userId: string; workspaceId: string; groupId: string } & UpdateInstitutionGroupInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; groupId: string } & UpdateInstitutionGroupInput,
     context: Context,
   ) {
     const result = await access(input.userId, input.workspaceId, true);
@@ -478,7 +480,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   }
 
   async function deleteInstitutionGroup(
-    input: { userId: string; workspaceId: string; groupId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; groupId: string },
     context: Context,
   ) {
     const result = await access(input.userId, input.workspaceId, true);
@@ -502,7 +504,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   async function addInstitutionGroupMember(
     input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       groupId: string;
       targetUserId: string;
       role: 'LEAD' | 'MEMBER';
@@ -566,7 +568,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   }
 
   async function removeInstitutionGroupMember(
-    input: { userId: string; workspaceId: string; groupId: string; targetUserId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; groupId: string; targetUserId: string },
     context: Context,
   ) {
     const result = await access(input.userId, input.workspaceId, true);
@@ -605,7 +607,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
   async function updateInstitutionGroupMember(
     input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       groupId: string;
       targetUserId: string;
       role: 'LEAD' | 'MEMBER';
@@ -664,7 +666,7 @@ export function createOrganizationService(prisma?: PrismaClient, storage?: Priva
 
   async function listInstitutionGroupMembers(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     groupId: string;
   }) {
     const result = await access(input.userId, input.workspaceId);

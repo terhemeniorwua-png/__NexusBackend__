@@ -4,7 +4,7 @@ import { recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import type { CollaborationEmailNotifier } from '../../services/collaboration-email-notifier';
 import { AppError } from '../../utils/errors';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, type WorkspaceAccessContext } from '../workspaces/authorization';
 import { ProjectCapability, requireProjectAccess } from '../authorization/project.policy';
 import { projectVisibleToUser } from '../projects/project-visibility';
 
@@ -21,19 +21,20 @@ const isUnrestricted = (ws: { effectiveRole: string; membership: { organizationR
 
 async function meetingScopeFor(
   prisma: PrismaClient,
-  input: { userId: string; workspaceId: string },
+  input: { userId: string; workspaceId: string; context: WorkspaceAccessContext },
 ): Promise<Prisma.MeetingWhereInput> {
   const ws = await requireWorkspaceAccess(prisma, {
     userId: input.userId,
     workspaceId: input.workspaceId,
     capability: WorkspaceCapability.ViewWorkspace,
+    context: input.context,
   });
   return meetingVisibility(input.userId, isUnrestricted(ws));
 }
 
 async function assertMeetingVisible(
   prisma: PrismaClient,
-  input: { userId: string; workspaceId: string; meetingId: string },
+  input: { userId: string; workspaceId: string; meetingId: string; context: WorkspaceAccessContext },
 ): Promise<void> {
   const found = await prisma.meeting.findFirst({
     where: {
@@ -90,7 +91,7 @@ function toSummary(row: {
   };
 }
 
-type Input = { userId: string; workspaceId: string };
+type Input = { userId: string; workspaceId: string; context: WorkspaceAccessContext };
 
 export interface MeetingServiceDependencies {
   meetingNotifier?: CollaborationEmailNotifier;
@@ -176,6 +177,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       if (input.projectId) {
         await requireProjectAccess(prisma, {
@@ -233,6 +235,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       const m = await prisma.meeting.findFirst({
         where: {
@@ -254,6 +257,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       const meetings = await prisma.meeting.findMany({
         where: {
@@ -288,6 +292,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       const m = await prisma.meeting.findFirst({
         where: {
@@ -337,6 +342,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       const m = await prisma.meeting.findFirst({
         where: {
@@ -376,6 +382,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       const m = await prisma.meeting.findFirst({
         where: {
@@ -417,6 +424,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       const m = await prisma.meeting.findFirst({
         where: {
@@ -452,6 +460,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       const m = await prisma.meeting.findFirst({
         where: {
@@ -492,6 +501,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       await assertMeetingVisible(prisma, input);
       await prisma.$transaction(async (tx) => {
@@ -518,6 +528,7 @@ export function createMeetingService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+        context: input.context,
       });
       await assertMeetingVisible(prisma, input);
       const participants = await prisma.meetingParticipant.findMany({

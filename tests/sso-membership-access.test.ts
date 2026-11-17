@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../src/modules/authorization/workspace.policy';
 
+const userContext = { kind: 'user' as const, sessionId: 'sess-valid', authMethod: 'sso' as const };
+
 describe('membership checked on every request (workspace access)', () => {
   test('removed member loses access immediately even with an unexpired access token/session context', async () => {
     // Simulates a request where the caller still presents a valid session/token context,
@@ -20,7 +22,7 @@ describe('membership checked on every request (workspace access)', () => {
       workspaceMembership: {
         findUnique: async () => null, // membership removed
       },
-    } as any;
+    } as unknown as Parameters<typeof requireWorkspaceAccess>[0];
 
     await assert.rejects(
       () =>
@@ -28,9 +30,11 @@ describe('membership checked on every request (workspace access)', () => {
           userId: 'user-removed',
           workspaceId: 'ws1',
           capability: WorkspaceCapability.ViewWorkspace,
-          auth: { authMethod: 'sso', sessionId: 'sess-valid' },
-        } as any),
-      (err: any) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
+          context: userContext,
+        }),
+      (err: unknown) =>
+        (err as { code?: string }).code === 'WORKSPACE_ACCESS_DENIED' ||
+        (err as { statusCode?: number }).statusCode === 403,
     );
   });
 
@@ -55,7 +59,7 @@ describe('membership checked on every request (workspace access)', () => {
           status: 'SUSPENDED',
         }),
       },
-    } as any;
+    } as unknown as Parameters<typeof requireWorkspaceAccess>[0];
 
     await assert.rejects(
       () =>
@@ -63,9 +67,26 @@ describe('membership checked on every request (workspace access)', () => {
           userId: 'user1',
           workspaceId: 'ws1',
           capability: WorkspaceCapability.ViewWorkspace,
-          auth: { authMethod: 'sso', sessionId: 'sess-valid' },
-        } as any),
-      (err: any) => err?.code === 'MEMBERSHIP_SUSPENDED',
+          context: userContext,
+        }),
+      (err: unknown) => (err as { code?: string }).code === 'MEMBERSHIP_SUSPENDED',
+    );
+  });
+
+  test('missing session/auth context is denied (fail closed, never skips SSO check)', async () => {
+    const db = {
+      workspace: { findFirst: async () => ({ id: 'ws1', status: 'ACTIVE', type: 'COMPANY', deletedAt: null, ownerId: 'owner1' }) },
+      workspaceMembership: { findUnique: async () => ({ id: 'm1', workspaceId: 'ws1', userId: 'user1', role: 'MEMBER', organizationRole: null, status: 'ACTIVE' }) },
+    } as unknown as Parameters<typeof requireWorkspaceAccess>[0];
+
+    await assert.rejects(
+      () =>
+        requireWorkspaceAccess(db, {
+          userId: 'user1',
+          workspaceId: 'ws1',
+          capability: WorkspaceCapability.ViewWorkspace,
+        } as unknown as Parameters<typeof requireWorkspaceAccess>[1]),
+      (err: unknown) => (err as { code?: string }).code === 'WORKSPACE_ACCESS_CONTEXT_REQUIRED',
     );
   });
 });

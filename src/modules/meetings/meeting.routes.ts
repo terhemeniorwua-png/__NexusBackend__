@@ -3,6 +3,7 @@ import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
+import { userWorkspaceAccessContext } from '../workspaces/authorization';
 import { sendSuccess } from '../../utils/http';
 import { z } from 'zod';
 import {
@@ -21,7 +22,8 @@ import { RoomServiceClient, TrackType } from 'livekit-server-sdk';
 
 export interface MeetingRouterOptions { config: AppConfig; service?: ReturnType<typeof createMeetingService> }
 
-function userId(req: Request): string { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth.userId; }
+function authCtx(req: Request) { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth; }
+function userId(req: Request): string { return authCtx(req).userId; }
 
 export function createMeetingRouter({ config, service = createMeetingService(undefined, { meetingNotifier: createCollaborationEmailNotifier(config) }) }: MeetingRouterOptions): Router {
   const router = Router({ mergeParams: true });
@@ -31,28 +33,28 @@ export function createMeetingRouter({ config, service = createMeetingService(und
   router.get('/', requireAuth, requireActive, validate({ params: meetingWorkspaceParams, query: listMeetingsQuerySchema }), async (req, res) => {
     const { workspaceId } = req.validated!.params as { workspaceId: string };
     const q = req.validated!.query as ListMeetingsQuery;
-    sendSuccess(res, await service.list({ userId: userId(req), workspaceId, ...q }));
+    sendSuccess(res, await service.list({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, ...q }));
   });
 
   router.post('/', requireAuth, requireActive, validate({ params: meetingWorkspaceParams, body: createMeetingSchema }), async (req, res) => {
     const { workspaceId } = req.validated!.params as { workspaceId: string };
     const body = req.validated!.body as CreateMeetingInput;
-    sendSuccess(res, await service.create({ userId: userId(req), workspaceId, ...body }), 201);
+    sendSuccess(res, await service.create({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, ...body }), 201);
   });
 
   router.get('/:meetingId', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    sendSuccess(res, await service.get({ userId: userId(req), workspaceId, meetingId }));
+    sendSuccess(res, await service.get({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, meetingId }));
   });
 
   router.patch('/:meetingId', requireAuth, requireActive, validate({ params: meetingParamsSchema, body: updateMeetingSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
     const body = req.validated!.body as UpdateMeetingInput;
-    const callerId = userId(req);
-    const meeting = await service.update({ userId: callerId, workspaceId, meetingId, ...body });
+    const callerId = authCtx(req).userId;
+    const meeting = await service.update({ userId: callerId, workspaceId, meetingId, context: userWorkspaceAccessContext(authCtx(req)), ...body });
     if (body.status === 'LIVE') {
       try {
-        const people = await service.listParticipants({ userId: callerId, workspaceId, meetingId });
+        const people = await service.listParticipants({ userId: callerId, workspaceId, meetingId, context: userWorkspaceAccessContext(authCtx(req)) });
         const ws = await getPrismaClient().workspace.findUnique({ where: { id: workspaceId }, select: { name: true } });
         for (const p of people) {
           if (p.userId !== callerId && p.status === 'INVITED') {
@@ -93,15 +95,15 @@ export function createMeetingRouter({ config, service = createMeetingService(und
 
   router.delete('/:meetingId', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    await service.delete({ userId: userId(req), workspaceId, meetingId });
+    await service.delete({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, meetingId });
     sendSuccess(res, { ok: true });
   });
 
   router.post('/:meetingId/token', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    const uid = userId(req);
+    const uid = authCtx(req).userId;
     // Throws 403/404 unless this user may access the meeting.
-    const meeting = await service.get({ userId: uid, workspaceId, meetingId });
+    const meeting = await service.get({ userId: uid, workspaceId, meetingId, context: userWorkspaceAccessContext(authCtx(req)) });
     if (meeting.status === 'ENDED' || meeting.status === 'CANCELLED') {
       throw new AppError(409, 'MEETING_NOT_JOINABLE', 'This meeting is no longer available to join');
     }
@@ -120,17 +122,17 @@ export function createMeetingRouter({ config, service = createMeetingService(und
   // ---- Host controls ------------------------------------------------------
   const roomNameFor = (workspaceId: string, meetingId: string) => `ws:${workspaceId}:meeting:${meetingId}`;
   const roomClient = () => new RoomServiceClient(livekitConfig.httpUrl, livekitConfig.apiKey, livekitConfig.apiSecret);
-  async function requireHost(uid: string, workspaceId: string, meetingId: string) {
-    const meeting = await service.get({ userId: uid, workspaceId, meetingId });
+  async function requireHost(req: Request, uid: string, workspaceId: string, meetingId: string) {
+    const meeting = await service.get({ userId: uid, workspaceId, meetingId, context: userWorkspaceAccessContext(authCtx(req)) });
     if (meeting.createdById !== uid) throw new AppError(403, 'HOST_ONLY', 'Only the host can do this');
     return meeting;
   }
 
   router.post('/:meetingId/host/end', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    const uid = userId(req);
-    await requireHost(uid, workspaceId, meetingId);
-    const meeting = await service.update({ userId: uid, workspaceId, meetingId, status: 'ENDED' });
+    const uid = authCtx(req).userId;
+    await requireHost(req, uid, workspaceId, meetingId);
+    const meeting = await service.update({ userId: uid, workspaceId, meetingId, context: userWorkspaceAccessContext(authCtx(req)), status: 'ENDED' });
     try {
       // Closing the room disconnects everyone currently in the call.
       await roomClient().deleteRoom(roomNameFor(workspaceId, meetingId));
@@ -142,8 +144,8 @@ export function createMeetingRouter({ config, service = createMeetingService(und
 
   router.post('/:meetingId/host/mute-all', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    const uid = userId(req);
-    await requireHost(uid, workspaceId, meetingId);
+    const uid = authCtx(req).userId;
+    await requireHost(req, uid, workspaceId, meetingId);
     const room = roomNameFor(workspaceId, meetingId);
     let muted = 0;
     try {
@@ -167,8 +169,8 @@ export function createMeetingRouter({ config, service = createMeetingService(und
   router.post('/:meetingId/host/remove', requireAuth, requireActive, validate({ params: meetingParamsSchema, body: z.object({ userId: z.string().uuid() }) }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
     const { userId: targetId } = req.validated!.body as { userId: string };
-    const uid = userId(req);
-    await requireHost(uid, workspaceId, meetingId);
+    const uid = authCtx(req).userId;
+    await requireHost(req, uid, workspaceId, meetingId);
     if (targetId === uid) throw new AppError(400, 'CANNOT_REMOVE_SELF', 'You cannot remove yourself');
     try {
       await roomClient().removeParticipant(roomNameFor(workspaceId, meetingId), targetId);
@@ -180,9 +182,9 @@ export function createMeetingRouter({ config, service = createMeetingService(und
 
   router.post('/:meetingId/decline', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    const uid = userId(req);
+    const uid = authCtx(req).userId;
     // Throws 403/404 unless this user may see the meeting.
-    const meeting = await service.get({ userId: uid, workspaceId, meetingId });
+    const meeting = await service.get({ userId: uid, workspaceId, meetingId, context: userWorkspaceAccessContext(authCtx(req)) });
     const result = await getPrismaClient().meetingParticipant.updateMany({
       where: { meetingId, userId: uid, status: 'INVITED' },
       data: { status: 'DECLINED' },
@@ -201,31 +203,31 @@ export function createMeetingRouter({ config, service = createMeetingService(und
 
   router.post('/:meetingId/join', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    await service.join({ userId: userId(req), workspaceId, meetingId });
+    await service.join({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, meetingId });
     sendSuccess(res, { ok: true });
   });
 
   router.post('/:meetingId/leave', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    await service.leave({ userId: userId(req), workspaceId, meetingId });
+    await service.leave({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, meetingId });
     sendSuccess(res, { ok: true });
   });
 
   router.get('/:meetingId/participants', requireAuth, requireActive, validate({ params: meetingParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
-    sendSuccess(res, await service.listParticipants({ userId: userId(req), workspaceId, meetingId }));
+    sendSuccess(res, await service.listParticipants({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, meetingId }));
   });
 
   router.post('/:meetingId/participants', requireAuth, requireActive, validate({ params: meetingParamsSchema, body: z.object({ userId: z.string().uuid() }) }), async (req, res) => {
     const { workspaceId, meetingId } = req.validated!.params as { workspaceId: string; meetingId: string };
     const { userId: targetUserId } = req.validated!.body as { userId: string };
-    await service.addParticipant({ userId: userId(req), workspaceId, meetingId, targetUserId });
+    await service.addParticipant({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, meetingId, targetUserId });
     sendSuccess(res, { ok: true }, 201);
   });
 
   router.delete('/:meetingId/participants/:userId', requireAuth, requireActive, validate({ params: participantParamsSchema }), async (req, res) => {
     const { workspaceId, meetingId, userId: targetUserId } = req.validated!.params as { workspaceId: string; meetingId: string; userId: string };
-    await service.removeParticipant({ userId: userId(req), workspaceId, meetingId, targetUserId });
+    await service.removeParticipant({ userId: authCtx(req).userId, context: userWorkspaceAccessContext(authCtx(req)), workspaceId, meetingId, targetUserId });
     sendSuccess(res, { ok: true });
   });
 

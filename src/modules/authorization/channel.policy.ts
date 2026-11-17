@@ -2,6 +2,7 @@ import type { Channel, ChannelMembership, PrismaClient, WorkspaceRole } from '@p
 import { AppError } from '../../utils/errors';
 import { ProjectCapability, requireProjectAccess } from './project.policy';
 import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
+import { assertWorkspaceSsoAccess, type WorkspaceAccessContext } from './workspace.policy';
 
 export const ChannelCapability = {
   View: 'channel:view', Create: 'channel:create', Update: 'channel:update',
@@ -12,14 +13,18 @@ export type ChannelCapabilityValue = (typeof ChannelCapability)[keyof typeof Cha
 export interface ChannelAccess { channel: Channel; membership: ChannelMembership | null; workspaceRole: WorkspaceRole }
 
 export async function requireChannelAccess(client: PrismaClient, input: {
-  userId: string; workspaceId: string; channelId: string; capability: ChannelCapabilityValue;
+  userId: string; workspaceId: string; channelId: string; capability: ChannelCapabilityValue; context: WorkspaceAccessContext;
 }): Promise<ChannelAccess> {
+  if (!input.context) {
+    throw new AppError(403, 'WORKSPACE_ACCESS_CONTEXT_REQUIRED', 'Workspace access requires a valid session or system context');
+  }
   const channel = await client.channel.findFirst({ where: { id: input.channelId, workspaceId: input.workspaceId, deletedAt: null } });
   if (!channel) throw new AppError(404, 'CHANNEL_NOT_FOUND', 'That channel does not exist');
   const wm = await client.workspaceMembership.findUnique({ where: { workspaceId_userId: { workspaceId: input.workspaceId, userId: input.userId } }, include: { workspace: { select: { type: true } } } });
   if (!wm || wm.status !== 'ACTIVE') throw new AppError(404, 'CHANNEL_NOT_FOUND', 'That channel does not exist');
   if (wm.organizationRole && !isOrganizationRoleForWorkspace(wm.workspace.type, wm.organizationRole)) throw new AppError(403, 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH', 'The organization role is invalid');
   const workspaceRole = effectiveWorkspaceRole(wm.workspace.type, wm.role, wm.organizationRole);
+  await assertWorkspaceSsoAccess(client, { workspaceId: input.workspaceId, context: input.context, effectiveRole: workspaceRole, membership: wm });
   const manager = workspaceRole === 'OWNER' || workspaceRole === 'PROJECT_MANAGER';
   if (channel.archivedAt) {
     const managerCapabilities: ChannelCapabilityValue[] = [ChannelCapability.View, ChannelCapability.Archive, ChannelCapability.Delete];

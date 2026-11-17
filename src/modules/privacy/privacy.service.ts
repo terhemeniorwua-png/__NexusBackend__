@@ -1,4 +1,5 @@
 import {
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
   Prisma,
   type PrismaClient,
   type PrivacyRequestStatus,
@@ -101,7 +102,8 @@ export function createPrivacyService(client: PrismaClient = getPrismaClient()): 
           userId,
           workspaceId: target.task.project.workspaceId,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: (input as { context: WorkspaceAccessContext }).context,
+      });
         if (target.authorId !== userId) {
           await requireProjectAccess(client, {
             userId,

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { loadEnv } from '../../config/env';
 import { createRequireAuth } from '../../middleware/authenticate';
 import { getPrismaClient } from '../../db/prisma';
-import { requireWorkspaceAccess, WorkspaceCapability } from '../../modules/workspaces/authorization';
+import { requireWorkspaceAccess, WorkspaceCapability, userWorkspaceAccessContext } from '../../modules/workspaces/authorization';
 import { searchExternalFiles, importExternalFile } from './service';
 
 export const externalFilesRouter = Router();
@@ -11,7 +11,7 @@ export const externalFilesRouter = Router();
 const config = loadEnv();
 const requireAuth = createRequireAuth(config);
 
-type AuthRequest = Request & { auth?: { userId: string } };
+type AuthRequest = Request & { auth?: { userId: string; sessionId: string; authMethod: 'password' | 'social' | 'sso' | 'break_glass'; authMethodExpiresAt?: Date | null } };
 
 externalFilesRouter.get('/external-search', requireAuth, (async (req: AuthRequest, res, next) => {
   try {
@@ -43,10 +43,15 @@ externalFilesRouter.post('/import', requireAuth, (async (req: AuthRequest, res, 
       .strict()
       .parse(req.body);
 
+    if (!req.auth) {
+      res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required' } });
+      return;
+    }
     await requireWorkspaceAccess(getPrismaClient(), {
       userId,
       workspaceId: body.workspaceId,
       capability: WorkspaceCapability.UpdateWorkspace,
+      context: userWorkspaceAccessContext(req.auth),
     });
 
     res.status(201).json(await importExternalFile(userId, body.workspaceId, body.provider, body.externalId));

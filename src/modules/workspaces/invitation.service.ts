@@ -16,7 +16,7 @@ import { createNotification } from '../../services/notifications';
 import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
 import { AppError } from '../../utils/errors';
-import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability } from './authorization';
+import { assertMayAssignRole, requireWorkspaceAccess, WorkspaceCapability, type WorkspaceAccessContext } from './authorization';
 import {
   assertCanAssignOrganizationRole,
   effectiveWorkspaceRole,
@@ -54,37 +54,37 @@ import { TeamCapability, requireTeamAccess } from '../authorization';
 
 export interface InvitationService {
   create(
-    input: { userId: string; workspaceId: string } & CreateInvitationInput,
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext } & CreateInvitationInput,
     ctx: RequestContext,
   ): Promise<InvitationResult>;
   createTeam(
-    input: { userId: string; workspaceId: string; teamId: string; targetUserId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; teamId: string; targetUserId: string },
     ctx: RequestContext,
   ): Promise<InvitationResult>;
   listTeam(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     teamId: string;
     status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REVOKED' | 'EXPIRED' | 'ALL';
   }): Promise<InvitationSummary[]>;
   revokeTeam(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     teamId: string;
     invitationId: string;
   }): Promise<InvitationSummary>;
   list(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REVOKED' | 'EXPIRED' | 'ALL';
   }): Promise<InvitationSummary[]>;
   resend(
-    input: { userId: string; workspaceId: string; invitationId: string },
+    input: { userId: string; workspaceId: string; context: WorkspaceAccessContext; invitationId: string },
     ctx: RequestContext,
   ): Promise<InvitationResult>;
   revoke(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     invitationId: string;
   }): Promise<InvitationSummary>;
   preview(token: string): Promise<InvitationPreview>;
@@ -265,6 +265,7 @@ export function createInvitationService(
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageInvitations,
         allowArchived: true,
+             context: input.context,
       });
 
       if (access.workspace.status !== 'ACTIVE') {
@@ -425,6 +426,7 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       if (workspace.workspace.status !== 'ACTIVE') {
         throw new AppError(409, 'WORKSPACE_NOT_ACTIVE', 'This workspace is not active');
@@ -435,6 +437,7 @@ export function createInvitationService(
         teamId: input.teamId,
         workspaceRole: workspace.effectiveRole,
         capability: TeamCapability.ManageMembers,
+             context: input.context,
       });
       if (access.team.status !== 'ACTIVE') {
         throw new AppError(409, 'TEAM_NOT_ACTIVE', 'Invitations cannot be sent to this team');
@@ -559,6 +562,7 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await requireTeamAccess(client, {
         userId: input.userId,
@@ -566,6 +570,7 @@ export function createInvitationService(
         teamId: input.teamId,
         workspaceRole: workspace.effectiveRole,
         capability: TeamCapability.ManageMembers,
+             context: input.context,
       });
       await expireStale(workspace.workspace.id);
       const invitations = await client.invitation.findMany({
@@ -586,6 +591,7 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await requireTeamAccess(client, {
         userId: input.userId,
@@ -593,6 +599,7 @@ export function createInvitationService(
         teamId: input.teamId,
         workspaceRole: workspace.effectiveRole,
         capability: TeamCapability.ManageMembers,
+             context: input.context,
       });
       const invitation = await client.invitation.findFirst({
         where: {
@@ -640,6 +647,7 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewInvitations,
+             context: input.context,
       });
 
       await expireStale(access.workspace.id);
@@ -662,6 +670,7 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageInvitations,
+             context: input.context,
       });
 
       const invitation = await client.invitation.findFirst({
@@ -798,6 +807,7 @@ export function createInvitationService(
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ManageInvitations,
+             context: input.context,
       });
 
       const invitation = await client.invitation.findFirst({

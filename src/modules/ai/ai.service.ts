@@ -21,6 +21,7 @@ import {
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from '../authorization';
+import type { WorkspaceAccessContext } from '../authorization/workspace.policy';
 import { createTaskService } from '../tasks/task.service';
 import { createSearchService } from '../search/search.service';
 import type { RequestContext } from '../auth/auth.types';
@@ -172,14 +173,15 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
 
   async function buildTaskGenerationContext(input: {
     userId: string;
-    workspaceId: string;
+    workspaceId: string; context: WorkspaceAccessContext;
     projectId: string;
   }): Promise<string> {
     const workspace = await requireWorkspaceAccess(prisma, {
       userId: input.userId,
       workspaceId: input.workspaceId,
       capability: WorkspaceCapability.ViewWorkspace,
-    });
+           context: input.context,
+      });
     const access = await requireProjectAccess(prisma, {
       userId: input.userId,
       workspaceId: input.workspaceId,
@@ -293,6 +295,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         userId: input.userId,
         workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await assertAiWorkspaceEntitled(prisma, workspaceId);
     }
@@ -414,6 +417,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
 
       const createInput = {
@@ -461,14 +465,16 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
           userId: input.userId,
           workspaceId: input.workspaceId as string,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: input.context,
+      });
         await assertAiWorkspaceEntitled(prisma, input.workspaceId as string);
         await requireChannelAccess(prisma, {
           userId: input.userId,
           workspaceId: input.workspaceId as string,
           channelId: input.channelId,
           capability: ChannelCapability.View,
-        });
+               context: input.context,
+      });
 
         const where: { channelId: string; deletedAt: null } & { createdAt?: { gte?: Date; lte?: Date } } = {
           channelId: input.channelId,
@@ -577,7 +583,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
 
     async projectIntelligence(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       projectId: string;
     }): Promise<{
       projectId: string;
@@ -603,6 +609,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await assertAiWorkspaceEntitled(prisma, input.workspaceId);
       await usageService.assertWithinLimits(input.userId, input.workspaceId);
@@ -751,7 +758,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
 
     async myTasks(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
     }): Promise<{
       tasks: Array<{
         id: string;
@@ -769,6 +776,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await assertAiWorkspaceEntitled(prisma, input.workspaceId);
 
@@ -800,13 +808,14 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
 
     async dailyPlan(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
     }): Promise<{ plan: string; model: string; usage: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
       ensureConfigured();
       await requireWorkspaceAccess(prisma, {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await assertAiWorkspaceEntitled(prisma, input.workspaceId);
       await usageService.assertWithinLimits(input.userId, input.workspaceId);
@@ -882,13 +891,14 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
 
     async weeklyReport(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
     }): Promise<{ report: string; model: string; usage: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
       ensureConfigured();
       await requireWorkspaceAccess(prisma, {
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await assertAiWorkspaceEntitled(prisma, input.workspaceId);
       await usageService.assertWithinLimits(input.userId, input.workspaceId);
@@ -967,7 +977,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
 
     async knowledgeSearch(input: {
       userId: string;
-      workspaceId: string;
+      workspaceId: string; context: WorkspaceAccessContext;
       query: string;
       category?: string | null;
       limit?: number;
@@ -989,6 +999,7 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
         userId: input.userId,
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
+             context: input.context,
       });
       await assertAiWorkspaceEntitled(prisma, input.workspaceId);
       await usageService.assertWithinLimits(input.userId, input.workspaceId);
@@ -1103,7 +1114,8 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
           userId: input.userId,
           workspaceId: meeting.workspaceId,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: input.context,
+      });
       }
 
       const isParticipant = meeting.participants.some(
@@ -1351,7 +1363,8 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
           userId,
           workspaceId: options.workspaceId,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: input.context,
+      });
       }
 
       const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
@@ -1400,7 +1413,8 @@ export function createAiService(config: AppConfig, dependencies: AiServiceDepend
           userId,
           workspaceId,
           capability: WorkspaceCapability.ViewWorkspace,
-        });
+               context: input.context,
+      });
       }
       return usageService.summary(userId, { workspaceId });
     },
