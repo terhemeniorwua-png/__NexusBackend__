@@ -16067,6 +16067,255 @@ paths:
         '404': { description: "Not found (PROJECT_TEMPLATE_NOT_FOUND/WORKSPACE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '409': { description: "Conflict (PROJECT_KEY_TAKEN)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
+  /sso/workspaces/{workspaceId}/configs:
+    parameters:
+      - name: workspaceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [SSO]
+      operationId: listWorkspaceSsoConfigs
+      summary: List workspace SSO configurations
+      description: Owner or admin only. Returns SSO configurations without secret material.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: SSO configurations.
+        '401':
+          description: Authentication required.
+        '403':
+          description: Insufficient role.
+    post:
+      tags: [SSO]
+      operationId: createWorkspaceSsoConfig
+      summary: Create a workspace SSO configuration
+      description: Owner or admin only. Supports OIDC (Google Workspace, Microsoft Entra, Okta) and SAML. requireSso cannot be enabled until at least one domain is verified by DNS TXT. Secrets are write-only and never returned.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerType, providerName]
+              properties:
+                providerType: { type: string, enum: [OIDC, SAML] }
+                providerName: { type: string }
+                issuer: { type: [string, 'null'] }
+                clientId: { type: [string, 'null'] }
+                clientSecret: { type: [string, 'null'], writeOnly: true }
+                metadataUrl: { type: [string, 'null'] }
+                certificate: { type: [string, 'null'] }
+                authorizationUrl: { type: [string, 'null'] }
+                tokenUrl: { type: [string, 'null'] }
+                userInfoUrl: { type: [string, 'null'] }
+                redirectUri: { type: [string, 'null'] }
+                config: { type: [object, 'null'] }
+                isEnabled: { type: boolean }
+                requireSso: { type: boolean }
+                breakGlassEnabled: { type: boolean }
+      responses:
+        '201':
+          description: SSO configuration created.
+        '400':
+          description: Validation error, or require-SSO requested without a verified domain.
+        '401':
+          description: Authentication required.
+        '403':
+          description: Insufficient role.
+  /sso/workspaces/{workspaceId}/configs/{configId}:
+    parameters:
+      - name: workspaceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: configId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [SSO]
+      operationId: getWorkspaceSsoConfig
+      summary: Get a workspace SSO configuration
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: SSO configuration.
+        '404':
+          description: Not found.
+    patch:
+      tags: [SSO]
+      operationId: updateWorkspaceSsoConfig
+      summary: Update a workspace SSO configuration
+      description: Owner or admin only. Takes the same fields as create, all optional. Enabling requireSso needs a verified domain.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200':
+          description: Updated.
+        '400':
+          description: Domain not verified or invalid input.
+        '403':
+          description: Insufficient role.
+        '404':
+          description: Not found.
+  /sso/workspaces/{workspaceId}/configs/{configId}/domains:
+    parameters:
+      - name: workspaceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: configId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [SSO]
+      operationId: requestSsoDomainVerification
+      summary: Request DNS TXT domain verification
+      description: Owner or admin only. Returns the TXT record name and token to publish for the domain.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain: { type: string }
+      responses:
+        '201':
+          description: Verification record created with TXT token.
+        '400':
+          description: Invalid domain.
+  /sso/workspaces/{workspaceId}/domains/{domainId}/verify:
+    parameters:
+      - name: workspaceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: domainId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [SSO]
+      operationId: verifySsoDomainDnsTxt
+      summary: Verify an SSO domain via its DNS TXT record
+      description: Owner or admin only. Confirms the published TXT record matches the expected token.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Domain verified.
+        '400':
+          description: TXT record not found or mismatch.
+        '404':
+          description: Domain verification record not found.
+  /sso/workspaces/{workspaceId}/configs/{configId}/break-glass-codes:
+    parameters:
+      - name: workspaceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: configId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [SSO]
+      operationId: generateSsoBreakGlassCodes
+      summary: Generate owner break-glass recovery codes
+      description: Owner or admin only. Plaintext codes are returned once and only hashes are stored. Use is audited and rate limited.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                count: { type: integer, minimum: 1, maximum: 10 }
+      responses:
+        '201':
+          description: Break-glass codes generated.
+  /sso/workspaces/{workspaceId}/break-glass/consume:
+    parameters:
+      - name: workspaceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [SSO]
+      operationId: consumeSsoBreakGlassCode
+      summary: Consume a break-glass recovery code
+      description: Audited and rate-limited owner recovery path when require-SSO is on. Each code works once.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200':
+          description: Break-glass accepted.
+        '403':
+          description: Unavailable or invalid code.
+  /sso/workspaces/{workspaceId}/requirement:
+    parameters:
+      - name: workspaceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [SSO]
+      operationId: getWorkspaceSsoRequirement
+      summary: Get workspace SSO requirement status
+      description: Says whether SSO is required (enabled with a verified domain) and whether break-glass is available.
+      security: []
+      responses:
+        '200':
+          description: Requirement status.
+  /sso/callback/verify-state:
+    post:
+      tags: [SSO]
+      operationId: verifySsoCallbackState
+      summary: Verify signed OAuth or OIDC state
+      description: Validates signed state, nonce, provider and expiry. Rejects tampered or replayed states.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, state]
+              properties:
+                provider: { type: string }
+                state: { type: string }
+      responses:
+        '200':
+          description: State verified.
+        '400':
+          description: Invalid or expired state.
+
   /scim/v2/ServiceProviderConfig:
     get:
       tags: [SCIM]
