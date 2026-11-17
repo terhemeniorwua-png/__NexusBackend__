@@ -1,4 +1,5 @@
 import ssoRouter from '../modules/sso/sso.routes';
+import { createScimRouter } from '../modules/scim/scim.routes';
 import { Router } from 'express';
 import type { AppConfig } from '../config/env';
 import { createAuthRouter } from '../modules/auth/auth.routes';
@@ -183,5 +184,6 @@ export function createApiRouter({
   router.use('/analytics', createAnalyticsRouter({ config }));
 
   router.use('/sso', ssoRouter);
+  router.use('/scim/v2', createScimRouter({ config }));
   return router;
 }

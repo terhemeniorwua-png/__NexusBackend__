@@ -354,10 +354,11 @@ model User {
   createdTaskTemplates          TaskTemplate[]               @relation("TaskTemplateCreator")
   createdProjectTemplates       ProjectTemplate[]            @relation("ProjectTemplateCreator")
   importJobsCreated             ImportJob[]                  @relation("ImportJobsCreatedBy")
+  createdSsoConfigs             WorkspaceSsoConfig[]         @relation("WorkspaceSsoConfigCreator")
+  scimTokens                    ScimToken[]                  @relation("ScimTokenUser")
 
   @@index([status])
   @@index([createdAt])
-  createdSsoConfigs             WorkspaceSsoConfig[]         @relation("WorkspaceSsoConfigCreator")
   @@index([status, scheduledDeletionAt])
 }
 
@@ -559,6 +560,8 @@ model Workspace {
   ssoConfigs             WorkspaceSsoConfig[]
   ssoDomains             WorkspaceSsoDomain[]
   ssoOidcStates          SsoOidcState[]
+  scimTokens             ScimToken[]        @relation("ScimTokenWorkspace")
+  scimGroups             ScimGroup[]        @relation("ScimGroupWorkspace")
   @@index([ownerId])
   @@index([status])
   @@index([type])
@@ -896,6 +899,7 @@ model Team {
   channels     Channel[]
   joinRequests JoinRequest[]
 
+  scimGroups   ScimGroup[]      @relation("ScimGroupTeam")
   @@index([workspaceId])
   @@index([departmentId])
   @@index([leadId])
@@ -2779,6 +2783,60 @@ model SsoOidcState {
 
   @@index([workspaceId, expiresAt])
   @@index([expiresAt])
+}
+
+
+
+// ---------------------------------------------------------------------------
+// SCIM (System for Cross-domain Identity Management)
+// Provisioning is authenticated with per-workspace bearer tokens stored in
+// ScimToken. SCIM users map to Nexus users within a workspace; SCIM groups
+// map to Nexus teams.
+// ---------------------------------------------------------------------------
+
+enum ScimTokenStatus {
+  ACTIVE
+  REVOKED
+}
+
+model ScimToken {
+  id          String          @id @default(uuid())
+  workspaceId String
+  userId      String
+  name        String
+  tokenHash   String          @unique
+  scopes      String[]        @default([])
+  status      ScimTokenStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  workspace Workspace @relation("ScimTokenWorkspace", fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation("ScimTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([tokenHash])
+  @@index([workspaceId, status])
+}
+
+model ScimGroup {
+  id          String   @id @default(uuid())
+  workspaceId String
+  teamId      String
+  displayName String
+  externalId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace @relation("ScimGroupWorkspace", fields: [workspaceId], references: [id], onDelete: Cascade)
+  team      Team      @relation("ScimGroupTeam", fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, displayName])
+  @@index([workspaceId])
+  @@index([teamId])
 }
 
 
