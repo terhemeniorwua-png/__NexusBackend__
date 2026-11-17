@@ -152,6 +152,7 @@ export async function startServer(): Promise<RunningServer> {
     prisma: getPrismaClient(),
     logger,
     health: workerRecorders.automation,
+    engine: { slackNotifier: createSlackEventNotifier({ prisma: getPrismaClient() }) },
   });
   automationWorker.start();
 

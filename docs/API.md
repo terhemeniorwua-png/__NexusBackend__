@@ -456,6 +456,7 @@ accepted for frontend compatibility but does not make them workspace-shared.
 | GET | `/integrations/google-calendar/callback` | Public OAuth callback | Consume state, exchange the Google code, persist encrypted credentials, and redirect with status. |
 | GET | `/integrations/slack/authorize` | Workspace manager | Return a Slack OAuth URL for the selected workspace. |
 | GET | `/integrations/slack/callback` | Public OAuth callback | Consume state, exchange the Slack code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/{integrationId}/slack/channels` | Workspace manager | List public Slack channels the connected bot can post to. |
 
 OAuth state is signed and single use, with a ten-minute lifetime. Integration
 tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY`. Gmail requests
@@ -471,6 +472,27 @@ records `lastSyncedAt`; provider-specific data import remains a later
 integration stage. Live OAuth and revocation still require provider
 credentials and callback configuration, so external provider verification is
 environment-dependent.
+
+### Slack notifications
+
+Slack is a workspace-level integration. A message is only queued when the
+workspace has an ACTIVE, enabled Slack connection, a `slackChannelId` in
+`Integration.config`, and notifications are not disabled. Queued messages are
+stored as durable `OUTBOUND_EVENT` jobs, deduplicated by a stable event key, and
+retried with bounded exponential backoff; Slack `Retry-After` is honoured.
+
+Events: task assigned, task due soon, task overdue, form submitted, and the
+`SEND_SLACK_MESSAGE` automation action. `POST_MESSAGE` remains an internal chat
+action. Messages contain only the item title, status and deep link (forms: form
+name and link). Descriptions, comments, attachments, form answers, actor and
+assignee names, and automation error text are never sent. The form deep link is
+`{FRONTEND_URL}/app/forms/{encodedFormId}`; it resolves only when the
+recipient's active workspace matches the form's workspace.
+
+When Slack rejects the stored token, the integration is marked
+`needsReconnect`, pending outbound jobs fail without retry, and every ACTIVE
+workspace member receives one in-app `INTEGRATION_RECONNECT_REQUIRED`
+notification. Reconnecting clears the state.
 
 ## Outbound webhooks
 

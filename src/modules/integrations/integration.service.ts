@@ -565,6 +565,91 @@ export function createIntegrationService(
       };
     },
 
+    /**
+     * List the public Slack channels the connected bot can post to.
+     *
+     * Workspace-level connection: requires workspace update permission (via
+     * `findForCaller`). The stored token is decrypted only for this call and
+     * never returned. A revoked token immediately marks the integration as
+     * needing reconnection so the UI can prompt instead of retrying.
+     */
+    async slackChannels(input: Input & { integrationId: string }) {
+      const integration = await findForCaller(input.userId, input.integrationId);
+      if (integration.provider !== 'SLACK') {
+        throw new AppError(
+          400,
+          'INTEGRATION_NOT_SLACK',
+          'Channel listing is only available for Slack integrations',
+        );
+      }
+      if (integration.status === 'DISCONNECTED') {
+        throw new AppError(
+          409,
+          'INTEGRATION_DISCONNECTED',
+          'Reconnect Slack before listing channels',
+        );
+      }
+      if (!integration.enabled) {
+        throw new AppError(
+          409,
+          'INTEGRATION_DISABLED',
+          'Enable the Slack integration before listing channels',
+        );
+      }
+      if (integration.needsReconnect) {
+        throw new AppError(
+          409,
+          'SLACK_RECONNECT_REQUIRED',
+          'Reconnect Slack before listing channels',
+        );
+      }
+
+      let accessToken: string;
+      try {
+        accessToken = decryptIntegrationToken(integration.accessTokenCiphertext);
+      } catch {
+        throw new AppError(
+          409,
+          'SLACK_TOKEN_UNREADABLE',
+          'The stored Slack token cannot be read. Reconnect Slack.',
+        );
+      }
+
+      const result = await slackNotifications.listChannels({ accessToken });
+      if (!result.ok) {
+        if (result.revoked) {
+          const message = `SLACK_TOKEN_REVOKED: ${result.error}`;
+          await prisma.integration.updateMany({
+            where: { id: integration.id, needsReconnect: false },
+            data: {
+              status: 'ERROR',
+              needsReconnect: true,
+              lastError: message.slice(0, 500),
+            },
+          });
+          throw new AppError(
+            409,
+            'SLACK_RECONNECT_REQUIRED',
+            'Reconnect Slack before listing channels',
+          );
+        }
+        if (result.retryAfterMs !== undefined) {
+          throw new AppError(
+            429,
+            'SLACK_RATE_LIMITED',
+            'Slack is rate limiting channel listing. Try again shortly.',
+          );
+        }
+        throw new AppError(
+          502,
+          'SLACK_CHANNELS_UNAVAILABLE',
+          'Slack did not return a channel list. Try again later.',
+        );
+      }
+
+      return result.channels;
+    },
+
     async enqueueSync(input: Input & { integrationId: string }) {
       const integration = await findForCaller(input.userId, input.integrationId);
       if (integration.status === 'DISCONNECTED') {

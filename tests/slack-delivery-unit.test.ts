@@ -3,9 +3,12 @@ import test, { describe } from 'node:test';
 import type { PrismaClient } from '@prisma/client';
 import { Logger } from '../src/utils/logger';
 import {
+  buildSlackFormUrl,
   createSlackNotificationService,
   escapeSlackText,
+  listSlackChannels,
   postSlackMessage,
+  slackFormMessage,
   slackTaskMessage,
 } from '../src/modules/integrations/slack-notifications';
 import { createSlackEventNotifier } from '../src/modules/integrations/slack.events';
@@ -339,6 +342,9 @@ describe('Slack event notifier', () => {
         enqueueTaskDueSoon: async () => ({ queued: false }),
         enqueueTaskOverdue: async () => ({ queued: false }),
         enqueueAutomationRun: async () => ({ queued: false }),
+        enqueueFormSubmitted: async () => ({ queued: false }),
+        enqueueAutomationAction: async () => ({ queued: false }),
+        listChannels: async () => ({ ok: true, channels: [] }),
         enqueue: async () => ({ queued: false }),
         processJob: async () => 'failed',
       },
@@ -364,6 +370,9 @@ describe('Slack event notifier', () => {
           return { queued: true };
         },
         enqueueAutomationRun: async () => ({ queued: true }),
+        enqueueFormSubmitted: async () => ({ queued: true }),
+        enqueueAutomationAction: async () => ({ queued: true }),
+        listChannels: async () => ({ ok: true, channels: [] }),
         enqueue: async () => ({ queued: true }),
         processJob: async () => 'succeeded',
       },
@@ -389,5 +398,269 @@ describe('Slack event notifier', () => {
     });
 
     assert.deepEqual(seen, ['due_soon', 'overdue']);
+  });
+});
+
+describe('Slack form links', () => {
+  test('builds the exact frontend form URL from FRONTEND_URL', () => {
+    const previous = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://app.example.com/';
+    try {
+      assert.equal(
+        buildSlackFormUrl('form-123'),
+        'https://app.example.com/app/forms/form-123',
+      );
+      // The frontend resolves the workspace from the active workspace, so the
+      // URL must not carry a workspace segment or query parameter.
+      assert.ok(!buildSlackFormUrl('form-123').includes('workspace'));
+      assert.ok(!buildSlackFormUrl('form-123').includes('?'));
+    } finally {
+      if (previous === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previous;
+    }
+  });
+
+  test('encodes the form id', () => {
+    const previous = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    try {
+      assert.equal(
+        buildSlackFormUrl('a b/c?d'),
+        'https://app.example.com/app/forms/a%20b%2Fc%3Fd',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previous;
+    }
+  });
+
+  test('a form message carries only the form name and link', () => {
+    const text = slackFormMessage({
+      formTitle: 'Customer <survey>',
+      url: 'https://app.example.com/app/forms/form-123',
+    });
+
+    assert.deepEqual(text.split('\n'), [
+      '*Customer &lt;survey&gt;*',
+      '<https://app.example.com/app/forms/form-123|Open form>',
+    ]);
+  });
+});
+
+describe('Slack form and automation enqueue', () => {
+  test('queues one form submission with the exact URL and stable key', async () => {
+    const previous = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://app.example.com';
+    try {
+      let captured: Record<string, unknown> | null = null;
+      const service = createSlackNotificationService({
+        prisma: fakePrisma({
+          integration: { id: 'integration-1', config: { slackChannelId: 'C123' } },
+          onCreate: (data) => {
+            captured = data;
+          },
+        }),
+        logger: silentLogger(),
+      });
+
+      const result = await service.enqueueFormSubmitted({
+        workspaceId: 'ws-1',
+        formId: 'form-123',
+        formTitle: 'Customer survey',
+        responseId: 'response-1',
+      });
+
+      assert.deepEqual(result, { queued: true, jobId: 'job-1' });
+      assert.ok(captured);
+      const job = captured as Record<string, unknown>;
+      assert.equal(job.dedupeKey, 'form.submitted:form-123:response-1');
+      const payload = job.payload as { kind: string; text: string; metadata: unknown };
+      assert.equal(payload.kind, 'FORM_SUBMITTED');
+      assert.deepEqual(payload.text.split('\n'), [
+        '*Customer survey*',
+        '<https://app.example.com/app/forms/form-123|Open form>',
+      ]);
+      assert.deepEqual(payload.metadata, { formId: 'form-123', responseId: 'response-1' });
+    } finally {
+      if (previous === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previous;
+    }
+  });
+
+  test('queues an explicit automation action with a triggered status', async () => {
+    let captured: Record<string, unknown> | null = null;
+    const service = createSlackNotificationService({
+      prisma: fakePrisma({
+        integration: { id: 'integration-1', config: { slackChannelId: 'C123' } },
+        onCreate: (data) => {
+          captured = data;
+        },
+      }),
+      logger: silentLogger(),
+    });
+
+    const result = await service.enqueueAutomationAction({
+      workspaceId: 'ws-1',
+      automationId: 'automation-1',
+      automationName: 'Notify the team',
+      runId: 'run-1',
+      trigger: 'EVENT_TASK_COMPLETED',
+    });
+
+    assert.deepEqual(result, { queued: true, jobId: 'job-1' });
+    assert.ok(captured);
+    const job = captured as Record<string, unknown>;
+    assert.equal(job.dedupeKey, 'automation-action:run-1');
+    const payload = job.payload as { kind: string; text: string };
+    assert.equal(payload.kind, 'AUTOMATION');
+    assert.deepEqual(payload.text.split('\n'), [
+      '*Notify the team*',
+      'Status: Triggered',
+      'Trigger: EVENT_TASK_COMPLETED',
+    ]);
+  });
+});
+
+describe('listSlackChannels', () => {
+  test('maps public channels and follows bounded pagination', async () => {
+    const requested: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      requested.push(String(url));
+      const page = requested.length;
+      return jsonResponse({
+        ok: true,
+        channels:
+          page === 1
+            ? [
+                { id: 'C1', name: 'general', is_private: false, is_member: true },
+                { id: 'C2', name: 'random', is_private: false, is_member: false },
+              ]
+            : [{ id: 'C3', name: 'ops', is_private: false, is_member: true }],
+        response_metadata: { next_cursor: page === 1 ? 'cursor-2' : '' },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await listSlackChannels({
+      accessToken: 'xoxb-test',
+      fetchImpl,
+      slackApiUrl: 'https://slack.example.com/api/',
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.channels, [
+      { id: 'C1', name: 'general', private: false, member: true },
+      { id: 'C2', name: 'random', private: false, member: false },
+      { id: 'C3', name: 'ops', private: false, member: true },
+    ]);
+    assert.equal(requested.length, 2);
+    assert.ok(requested[0]?.includes('types=public_channel'));
+    assert.ok(requested[0]?.includes('exclude_archived=true'));
+    assert.ok(requested[1]?.includes('cursor=cursor-2'));
+  });
+
+  test('classifies revoked tokens', async () => {
+    const fetchImpl = (async () =>
+      jsonResponse({ ok: false, error: 'invalid_auth' })) as unknown as typeof fetch;
+    const result = await listSlackChannels({ accessToken: 'xoxb-test', fetchImpl });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.revoked, true);
+    assert.equal(result.error, 'invalid_auth');
+  });
+
+  test('honours Retry-After for channel listing', async () => {
+    const fetchImpl = (async () =>
+      jsonResponse({}, { status: 429, headers: { 'retry-after': '3' } })) as unknown as typeof fetch;
+    const result = await listSlackChannels({ accessToken: 'xoxb-test', fetchImpl });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.revoked, false);
+    assert.equal(result.retryAfterMs, 3000);
+  });
+});
+
+describe('Slack reconnect notice', () => {
+  test('notifies active members once when the token is revoked', async () => {
+    const { encryptIntegrationToken } = await import('../src/modules/integrations/token-crypto');
+    const previousKey = process.env.INTEGRATION_ENCRYPTION_KEY;
+    process.env.INTEGRATION_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64url');
+
+    const state: { claimed: boolean; notifications: Array<Record<string, unknown>> } = {
+      claimed: false,
+      notifications: [],
+    };
+    const prisma = {
+      integration: {
+        updateMany: async ({ where }: { where: { needsReconnect?: boolean } }) => {
+          if (where.needsReconnect === false) {
+            if (state.claimed) return { count: 0 };
+            state.claimed = true;
+            return { count: 1 };
+          }
+          return { count: 1 };
+        },
+      },
+      workspaceMembership: {
+        findMany: async () => [{ userId: 'user-1' }, { userId: 'user-2' }],
+      },
+      notificationPreference: { findUnique: async () => null },
+      notification: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          const row = {
+            id: `notification-${state.notifications.length + 1}`,
+            readAt: null,
+            createdAt: new Date('2026-11-17T10:00:00.000Z'),
+            ...data,
+          };
+          state.notifications.push(row);
+          return row;
+        },
+      },
+      integrationSyncJob: { updateMany: async () => ({ count: 1 }) },
+    } as unknown as PrismaClient;
+
+    const revokedFetch = (async () =>
+      jsonResponse({ ok: false, error: 'token_revoked' })) as unknown as typeof fetch;
+
+    try {
+      const service = createSlackNotificationService({
+        prisma,
+        logger: silentLogger(),
+        fetchImpl: revokedFetch,
+      });
+      const integration = {
+        id: 'integration-1',
+        workspaceId: 'ws-1',
+        status: 'ACTIVE',
+        enabled: true,
+        needsReconnect: false,
+        config: { slackChannelId: 'C123' },
+        accessTokenCiphertext: encryptIntegrationToken('xoxb-test'),
+      };
+      const job = {
+        id: 'job-1',
+        attempts: 0,
+        maxRetries: 5,
+        payload: { kind: 'TASK_ASSIGNED', text: 'hello', metadata: {} },
+        integration,
+      } as unknown as Parameters<typeof service.processJob>[0];
+
+      const first = await service.processJob(job, new Date('2026-11-17T10:00:00.000Z'));
+      assert.equal(first, 'revoked');
+      assert.equal(state.notifications.length, 2);
+      for (const notification of state.notifications) {
+        assert.equal(notification.type, 'INTEGRATION_RECONNECT_REQUIRED');
+        assert.equal(notification.link, '/settings/integrations');
+        assert.equal((notification.data as Record<string, unknown>).integrationId, 'integration-1');
+      }
+
+      // A later revoked job must not notify the workspace again.
+      await service.processJob(job, new Date('2026-11-17T10:01:00.000Z'));
+      assert.equal(state.notifications.length, 2);
+    } finally {
+      if (previousKey === undefined) delete process.env.INTEGRATION_ENCRYPTION_KEY;
+      else process.env.INTEGRATION_ENCRYPTION_KEY = previousKey;
+    }
   });
 });

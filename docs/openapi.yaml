@@ -725,6 +725,51 @@ paths:
           content:
             application/json:
               schema: { type: object, additionalProperties: true }
+  /integrations/{integrationId}/slack/channels:
+    get:
+      tags: [integrations]
+      operationId: listSlackChannels
+      summary: List public Slack channels the bot can post to
+      description: Workspace connections require workspace update permission. The stored token is decrypted for this call only and never returned. With the current scopes (channels:read) only public channels are listed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Public channels available to the bot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [channels]
+                    properties:
+                      channels:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, name, private, member]
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            private: { type: boolean }
+                            member: { type: boolean }
+        '401':
+          description: Authentication is required.
+        '409':
+          description: Slack is disconnected, disabled, needs reconnection, or the stored token is unreadable.
+        '429':
+          description: Slack is rate limiting channel listing.
+        '502':
+          description: Slack did not return a channel list.
   /imports/dry-run:
     post:
       tags: [imports]
@@ -19327,6 +19372,11 @@ paths:
       - MEETING_RESCHEDULED
       - MEETING_CANCELLED
       - PROJECT_UPDATE
+      - TASK_BLOCKER_REPORTED
+      - TASK_BLOCKER_RESOLVED
+      - TASK_DUE_SOON
+      - TASK_OVERDUE
+      - INTEGRATION_RECONNECT_REQUIRED
     InstitutionGroup:
       type: object
       required:
@@ -20375,6 +20425,7 @@ paths:
       - SET_FIELD
       - ASSIGN
       - POST_MESSAGE
+      - SEND_SLACK_MESSAGE
     AutomationRunStatus:
       type: string
       enum:
@@ -20531,6 +20582,8 @@ paths:
             ASSIGN: userIds (comma-separated), userId, or assigneeId.
 
             POST_MESSAGE: channelId and body (or message).
+
+            SEND_SLACK_MESSAGE: no required fields; posts the automation name and trigger to the workspace Slack channel.
 
             '
         enabled:

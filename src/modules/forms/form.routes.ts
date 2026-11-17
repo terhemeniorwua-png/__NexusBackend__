@@ -12,11 +12,12 @@ import {
   type SubmitResponseInput, type UpdateFormInput,
 } from './form.schemas';
 import { createFormService } from './form.service';
+import { createSlackEventNotifier } from '../integrations/slack.events';
 
 export interface FormRouterOptions { config: AppConfig; service?: ReturnType<typeof createFormService> }
 function userId(req: Request): string { if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Sign in'); return req.auth.userId; }
 
-export function createFormRouter({ config, service = createFormService() }: FormRouterOptions): Router {
+export function createFormRouter({ config, service = createFormService(undefined, { slackNotifier: createSlackEventNotifier() }) }: FormRouterOptions): Router {
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);
   const requireActive = createRequireActiveAccount();

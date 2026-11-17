@@ -2,6 +2,9 @@ import type { PrismaClient } from '@prisma/client';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import {
   createSlackNotificationService,
+  type AutomationActionSlackInput,
+  type EnqueueSlackNotificationResult,
+  type FormSubmittedSlackInput,
   type SlackNotificationService,
   type TaskAssignedSlackInput,
   type TaskDueSoonSlackInput,
@@ -15,8 +18,13 @@ import {
  * this notifier after their transaction commits, and it queues one durable
  * outbound job for the workspace's Slack integration. A missing integration, a
  * missing channel or a Slack outage must never fail the task/form write that
- * caused the event, so every call here is best-effort: failures are logged and
- * swallowed.
+ * caused the event, so every domain event here is best-effort: failures are
+ * logged and swallowed.
+ *
+ * The exception is `automationAction`, which backs an explicitly configured
+ * automation action. It returns the queue result instead of swallowing it so
+ * the automation engine can surface a genuinely misconfigured action (Slack not
+ * connected or no channel selected) as a failed run.
  *
  * The message itself is built by `slack-notifications.ts` and carries only the
  * title, status and deep link. Descriptions, comments, attachments and form
@@ -26,6 +34,8 @@ export interface SlackEventNotifier {
   taskAssigned(input: TaskAssignedSlackInput): Promise<void>;
   taskDueSoon(input: TaskDueSoonSlackInput): Promise<void>;
   taskOverdue(input: TaskOverdueSlackInput): Promise<void>;
+  formSubmitted(input: FormSubmittedSlackInput): Promise<void>;
+  automationAction(input: AutomationActionSlackInput): Promise<EnqueueSlackNotificationResult>;
 }
 
 export interface SlackEventNotifierDependencies {
@@ -76,6 +86,14 @@ export function createSlackEventNotifier(
         { workspaceId: input.workspaceId, taskId: input.taskId },
         () => service.enqueueTaskOverdue(input),
       );
+    },
+    async formSubmitted(input) {
+      await enqueue('form.submitted', { workspaceId: input.workspaceId, formId: input.formId }, () =>
+        service.enqueueFormSubmitted(input),
+      );
+    },
+    async automationAction(input) {
+      return service.enqueueAutomationAction(input);
     },
   };
 }
