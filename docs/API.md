@@ -456,6 +456,11 @@ accepted for frontend compatibility but does not make them workspace-shared.
 | GET | `/integrations/google-calendar/callback` | Public OAuth callback | Consume state, exchange the Google code, persist encrypted credentials, and redirect with status. |
 | GET | `/integrations/slack/authorize` | Workspace manager | Return a Slack OAuth URL for the selected workspace. |
 | GET | `/integrations/slack/callback` | Public OAuth callback | Consume state, exchange the Slack code, persist encrypted credentials, and redirect with status. |
+| GET | `/integrations/{integrationId}/slack/channels` | Workspace manager | List public Slack channels the connected bot can post to. |
+| GET | `/workspaces/{workspaceId}/integrations/google-calendar/calendars` | Workspace manager | List Google calendars the connected Google Calendar account can read. Expired tokens are refreshed; unusable tokens return a reconnect-required error. |
+| GET | `/workspaces/{workspaceId}/integrations/slack/channels` | Workspace manager | List public Slack channels the connected Slack bot can post to, with private flag and membership. Expired tokens are refreshed; unusable tokens return a reconnect-required error. |
+
+A saved `googleCalendarId` or `slackChannelId` must be one the matching picker endpoint currently returns for that connection; the config update path validates this before persisting.
 
 OAuth state is signed and single use, with a ten-minute lifetime. Integration
 tokens are encrypted at rest using `INTEGRATION_ENCRYPTION_KEY`. Gmail requests
@@ -472,39 +477,26 @@ integration stage. Live OAuth and revocation still require provider
 credentials and callback configuration, so external provider verification is
 environment-dependent.
 
-## SCIM provisioning
+### Slack notifications
 
-SCIM 2.0 Users and Groups provisioning is mounted at `/scim/v2` and is
-authenticated exclusively with per-workspace bearer tokens (not Nexus sessions).
-A SCIM token is bound to exactly one workspace, is hashed at rest, is shown
-once at creation, is revocable, and is rate limited per token. Every SCIM
-operation is implicitly scoped to that workspace.
+Slack is a workspace-level integration. A message is only queued when the
+workspace has an ACTIVE, enabled Slack connection, a `slackChannelId` in
+`Integration.config`, and notifications are not disabled. Queued messages are
+stored as durable `OUTBOUND_EVENT` jobs, deduplicated by a stable event key, and
+retried with bounded exponential backoff; Slack `Retry-After` is honoured.
 
-Endpoints:
+Events: task assigned, task due soon, task overdue, form submitted, and the
+`SEND_SLACK_MESSAGE` automation action. `POST_MESSAGE` remains an internal chat
+action. Messages contain only the item title, status and deep link (forms: form
+name and link). Descriptions, comments, attachments, form answers, actor and
+assignee names, and automation error text are never sent. The form deep link is
+`{FRONTEND_URL}/app/forms/{encodedFormId}`; it resolves only when the
+recipient's active workspace matches the form's workspace.
 
-| Method | Path | Purpose |
-| ------ | ---- | ------- |
-| GET | `/scim/v2/ServiceProviderConfig` | SCIM service provider metadata |
-| GET | `/scim/v2/ResourceTypes` | SCIM resource types (User, Group) |
-| GET | `/scim/v2/Schemas` | SCIM resource schemas |
-| GET | `/scim/v2/Users` | List SCIM users (paginated) |
-| POST | `/scim/v2/Users` | Create (provision) a SCIM user |
-| GET | `/scim/v2/Users/{id}` | Get a SCIM user |
-| PATCH | `/scim/v2/Users/{id}` | Update a SCIM user |
-| DELETE | `/scim/v2/Users/{id}` | Deactivate a SCIM user |
-| GET | `/scim/v2/Groups` | List SCIM groups (paginated) |
-| POST | `/scim/v2/Groups` | Create a SCIM group |
-| GET | `/scim/v2/Groups/{id}` | Get a SCIM group |
-| PATCH | `/scim/v2/Groups/{id}` | Update a SCIM group |
-| DELETE | `/scim/v2/Groups/{id}` | Delete a SCIM group |
-
-SCIM users map to Nexus users within the workspace (`User` + `WorkspaceMembership`);
-SCIM groups map to Nexus teams. Creating a SCIM user provisions a Nexus account and
-workspace membership. Deactivating a SCIM user sets the account to `DEACTIVATED`,
-suspends the workspace membership, and revokes all of the user's sessions, SCIM
-tokens, and workspace integration tokens. Data is never deleted on deactivate unless
-`hardDelete` is explicitly requested. Token creation, revocation, user
-provisioning/deactivation, and group changes are recorded as security audit events.
+When Slack rejects the stored token, the integration is marked
+`needsReconnect`, pending outbound jobs fail without retry, and every ACTIVE
+workspace member receives one in-app `INTEGRATION_RECONNECT_REQUIRED`
+notification. Reconnecting clears the state.
 
 ## Outbound webhooks
 

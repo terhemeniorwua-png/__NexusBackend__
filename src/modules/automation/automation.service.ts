@@ -26,6 +26,7 @@ const automationActions = [
   'SET_FIELD',
   'ASSIGN',
   'POST_MESSAGE',
+  'SEND_SLACK_MESSAGE',
 ] as const;
 
 export const createAutomationSchema = z

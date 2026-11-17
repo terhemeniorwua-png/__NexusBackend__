@@ -37,6 +37,7 @@ import {
 } from './task.schemas';
 import { createTaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import { createMentionEmailNotifier } from '../../services/mention-email-notifier';
+import { createSlackEventNotifier } from '../integrations/slack.events';
 import { createTaskService } from './task.service';
 import { createTaskAdvancedService } from './task-advanced.service';
 import {
@@ -68,6 +69,7 @@ export function createTaskRouter({
   service = createTaskService(undefined, {
     assignmentNotifier: createTaskAssignmentNotifier(config),
     mentionNotifier: createMentionEmailNotifier(config),
+    slackNotifier: createSlackEventNotifier(),
   }),
   advancedService = createTaskAdvancedService(),
 }: TaskRouterOptions): Router {

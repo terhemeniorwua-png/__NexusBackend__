@@ -188,6 +188,7 @@ enum NotificationType {
   TASK_BLOCKER_RESOLVED
   TASK_DUE_SOON
   TASK_OVERDUE
+  INTEGRATION_RECONNECT_REQUIRED
 }
 
 enum AuthTokenPurpose {
@@ -2109,6 +2110,7 @@ enum AutomationActionType {
   SET_FIELD
   ASSIGN
   POST_MESSAGE
+  SEND_SLACK_MESSAGE
 }
 
 enum AutomationRunStatus {
