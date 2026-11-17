@@ -208,6 +208,8 @@ export function createIntegrationRouter({
         return;
       }
       sendSuccess(res, await service.setEnabled({ userId: userId(req), integrationId, enabled: body.enabled! }));
+    },
+  );
 
   router.get(
     '/:integrationId/slack/channels',
