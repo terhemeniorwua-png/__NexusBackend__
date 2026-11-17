@@ -17,6 +17,10 @@ import {
   type SlackNotificationService,
 } from './slack-notifications';
 import { decryptIntegrationToken, encryptIntegrationToken } from './token-crypto';
+import {
+  createIntegrationPickerService,
+  type IntegrationPickerService,
+} from './integration-picker.service';
 
 // Access and refresh tokens are encrypted with AES-256-GCM (token-crypto.ts) before
 // storage. INTEGRATION_ENCRYPTION_KEY must be set or connect() fails with 503.
@@ -106,6 +110,11 @@ export function createIntegrationService(
   prisma: PrismaClient = getPrismaClient(),
   lifecycle: ProviderLifecycle = createProviderLifecycle(),
   slackNotifications: SlackNotificationService = createSlackNotificationService({ prisma }),
+  picker: IntegrationPickerService = createIntegrationPickerService({
+    prisma,
+    lifecycle,
+    slackNotifications,
+  }),
 ) {
   const encryptToken = encryptIntegrationToken;
   const isWorkspaceLevel = (provider: IntegrationProvider, workspaceId: string | null): boolean =>
@@ -534,6 +543,50 @@ export function createIntegrationService(
 
     async updateConfig(input: Input & { integrationId: string; config: Record<string, unknown> }) {
       const integration = await findForCaller(input.userId, input.integrationId);
+
+      // A picker id must be one the provider currently returns for *this*
+      // connection. Validation happens before anything is persisted so a stale
+      // or hand-crafted id can never be saved and silently break delivery.
+      if (input.config.googleCalendarId !== undefined) {
+        if (integration.provider !== 'GOOGLE_CALENDAR') {
+          throw new AppError(
+            400,
+            'INTEGRATION_CONFIG_MISMATCH',
+            'googleCalendarId is only valid for a Google Calendar connection',
+          );
+        }
+        const calendarId =
+          typeof input.config.googleCalendarId === 'string'
+            ? input.config.googleCalendarId.trim()
+            : '';
+        if (!calendarId) {
+          throw new AppError(
+            400,
+            'GOOGLE_CALENDAR_ID_REQUIRED',
+            'Choose a Google calendar before saving',
+          );
+        }
+        await picker.assertCalendarSelectable({ integration, calendarId });
+      }
+
+      if (input.config.slackChannelId !== undefined) {
+        if (integration.provider !== 'SLACK') {
+          throw new AppError(
+            400,
+            'INTEGRATION_CONFIG_MISMATCH',
+            'slackChannelId is only valid for a Slack connection',
+          );
+        }
+        const channelId =
+          typeof input.config.slackChannelId === 'string'
+            ? input.config.slackChannelId.trim()
+            : '';
+        if (!channelId) {
+          throw new AppError(400, 'SLACK_CHANNEL_REQUIRED', 'Choose a Slack channel before saving');
+        }
+        await picker.assertChannelSelectable({ integration, channelId });
+      }
+
       const current = (integration.config ?? {}) as Record<string, unknown>;
       const next = { ...current, ...input.config };
       const updated = await prisma.integration.update({
@@ -917,6 +970,14 @@ export function createIntegrationService(
           'SLACK_CHANNEL_REQUIRED',
           'Choose a Slack channel before enabling notifications',
         );
+      }
+
+      // Validate a newly chosen channel against the provider before saving it.
+      if (input.slackChannelId !== undefined) {
+        const channelId = input.slackChannelId.trim();
+        if (channelId) {
+          await picker.assertChannelSelectable({ integration, channelId });
+        }
       }
 
       const updated = await prisma.integration.update({
