@@ -29,7 +29,13 @@ Two-way sync with Nexus events is executed as idempotent background jobs with re
 
 ## Slack (per-workspace, workspace admins only)
 
-Posts task/automation notifications to a chosen channel. Configure the channel via integration config (`slackChannelId`).
+Posts notifications and automation messages to a chosen channel. Workspace
+update permission (`OWNER` or `PROJECT_MANAGER`) is required to connect, change
+settings, list channels, or disconnect.
+
+Notification settings live in the integration config: `slackChannelId`,
+`slackChannelName`, and `notificationsEnabled` (default `true`). Set them through
+`PATCH /api/v1/integrations/:integrationId` with a `config` object.
 
 | Env var | Required | Description |
 |---|---:|---|
@@ -43,6 +49,10 @@ Posts task/automation notifications to a chosen channel. Configure the channel v
 - **Scopes (minimal):** `chat:write,channels:read,channels:join`
 - **Authorize:** `GET /api/v1/integrations/slack/authorize?workspaceId=<uuid>` (authenticated, workspace admin/manager)
 - **Callback:** `GET /api/v1/integrations/slack/callback`
+- **List channels:** `GET /api/v1/integrations/:integrationId/slack/channels` (workspace admin/manager). Returns public channels only (`id`, `name`, `private`, `member`). With the scopes above, private channels are not listed.
+- **Delivery events:** task assigned, task due soon, task overdue, form submitted, and the explicit automation action `SEND_SLACK_MESSAGE` (`POST_MESSAGE` remains an internal chat action). Messages are persisted as durable `OUTBOUND_EVENT` sync jobs before Slack is contacted, deduplicated per event, and retried with bounded exponential backoff. Slack `Retry-After` is honoured.
+- **Reconnect notice:** if Slack rejects the stored token (`invalid_auth`, `token_revoked`, etc.), the integration is marked `needsReconnect`, pending Slack jobs are failed without retry, and every ACTIVE workspace member receives an in-app `INTEGRATION_RECONNECT_REQUIRED` notification once. Reconnecting Slack clears the state.
+- **Privacy:** Slack messages contain only the item title, status and a deep link (forms: form name and link). Task descriptions, comments, attachments, form answers, actor/assignee names and automation error text are never sent.
 
 ## GitHub (per-workspace, workspace admins only)
 

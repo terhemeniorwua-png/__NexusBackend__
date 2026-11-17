@@ -15,6 +15,7 @@ import { createGithubWebhookRouter } from './modules/dev-integrations/github-web
 import { createGitlabWebhookRouter } from './modules/dev-integrations/gitlab-webhook.routes';
 import { createApiRouter } from './routes';
 import type { RateLimitRedisClient } from './services/cache/rate-limit-store';
+import type { IntegrationPickerService } from './modules/integrations/integration-picker.service';
 import { createReadinessProbe, type ReadinessProbe } from './services/health';
 import type { QueueStatusProbe } from './services/workers/queue-status';
 import {
@@ -34,6 +35,8 @@ export interface CreateAppOptions {
   workerHealth?: WorkerHealthRegistry;
   /** Durable queue depth. Production wires the Prisma probe in `server.ts`. */
   queueStatusProbe?: QueueStatusProbe;
+  /** Injectable for tests; production builds the Prisma-backed picker. */
+  integrationPickerService?: IntegrationPickerService;
 }
 
 export function createApp(options: CreateAppOptions = {}): Express {
@@ -114,6 +117,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
       readinessProbe,
       workerHealth,
       ...(options.queueStatusProbe ? { queueStatusProbe: options.queueStatusProbe } : {}),
+      ...(options.integrationPickerService
+        ? { integrationPickerService: options.integrationPickerService }
+        : {}),
     }),
   );
 
