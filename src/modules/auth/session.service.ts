@@ -14,6 +14,8 @@ import { generateSecureToken, hashSecret } from '../../utils/crypto';
  * whole session family can be revoked.
  */
 
+export type SessionAuthMethod = 'password' | 'social' | 'sso' | 'break_glass';
+
 export interface IssuedSession {
   session: Session;
   refreshToken: string;
@@ -24,6 +26,8 @@ export async function createSession(
   input: {
     userId: string;
     ttlSeconds: number;
+    authMethod: SessionAuthMethod;
+    authMethodExpiresAt?: Date | undefined;
     userAgent?: string | undefined;
     ip?: string | undefined;
   },
@@ -35,6 +39,8 @@ export async function createSession(
     data: {
       userId: input.userId,
       refreshTokenHash: hashSecret(refreshToken),
+      authMethod: input.authMethod.toUpperCase() as any,
+      ...(input.authMethodExpiresAt ? { authMethodExpiresAt: input.authMethodExpiresAt } : {}),
       expiresAt,
       lastUsedAt: new Date(),
       ...(input.userAgent ? { userAgent: input.userAgent.slice(0, 512) } : {}),

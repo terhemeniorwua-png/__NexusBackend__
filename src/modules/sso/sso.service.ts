@@ -551,6 +551,46 @@ export async function revokeSsoSessionsForMember(
   return result.count;
 }
 
+/**
+ * Returns true if the user is an active member of any workspace that requires SSO
+ * (enabled, requireSso, and at least one verified domain).
+ */
+export async function userHasRequiredSsoWorkspace(
+  db: PrismaClient,
+  userId: string,
+): Promise<{ required: boolean; workspaceId?: string }> {
+  // Find active memberships and check if any of those workspaces require SSO.
+  const memberships = await db.workspaceMembership.findMany({
+    where: { userId, status: 'ACTIVE' },
+    select: { workspaceId: true },
+  });
+  if (memberships.length === 0) return { required: false };
+
+  for (const m of memberships) {
+    const req = await checkRequireSso(db, m.workspaceId);
+    if (req.required) return { required: true, workspaceId: m.workspaceId };
+  }
+  return { required: false };
+}
+
+/**
+ * Password login/reset/session creation paths must be refused when the workspace requires SSO.
+ * This checks if the user belongs to any workspace with SSO required.
+ */
+export async function assertUserPasswordLoginAllowed(
+  db: PrismaClient,
+  userId: string,
+): Promise<void> {
+  const { required, workspaceId } = await userHasRequiredSsoWorkspace(db, userId);
+  if (required) {
+    throw new AppError(
+      403,
+      'SSO_REQUIRED',
+      'This account must sign in using single sign-on (SSO).',
+      workspaceId ? { details: { workspaceId } } : undefined,
+    );
+  }
+}
 
 export async function disableSsoConfig(
   db: PrismaClient,

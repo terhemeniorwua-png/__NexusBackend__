@@ -7,6 +7,10 @@ import { AppError } from '../../utils/errors';
 import { CSRF_COOKIE_NAME, REFRESH_COOKIE_NAME } from '../auth/csrf';
 import { createAuthService } from '../auth/auth.service';
 import { createRateLimiter } from '../../middleware/rate-limit';
+import { verifyPassword } from '../../services/password';
+import { createSession } from '../auth/session.service';
+import { signAccessToken } from '../auth/access-token.service';
+import { signValue, deriveKey } from '../../utils/crypto';
 import {
   listSsoConfigs,
   getSsoConfig,
@@ -19,6 +23,7 @@ import {
   checkRequireSso,
   disableSsoConfig,
   deleteSsoConfig,
+  consumeBreakGlassCodeForLogin,
 } from './sso.service';
 import {
   SSO_BROWSER_BINDING_COOKIE,
@@ -171,6 +176,85 @@ router.post('/workspaces/:workspaceId/configs/:configId/break-glass-codes', asyn
   } catch (e) { next(e); }
 });
 
+
+// Break-glass login: email + password + one-time recovery code, owners only, limited session.
+// Separate endpoint, rate limited, audited, notifies other owners.
+router.post('/workspaces/:workspaceId/break-glass/login', ssoBreakGlassRateLimit, async (req: Request, res: Response, next) => {
+  try {
+    const config = getConfig();
+    const prisma = getPrismaClient();
+    const workspaceId = req.params.workspaceId as string;
+    const { email, password, code } = (req.body || {}) as { email?: string; password?: string; code?: string };
+    if (!email || !password || !code) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'email, password, and code are required');
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (!user || user.deletedAt) {
+      throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid credentials');
+    }
+    if (user.status === 'SUSPENDED' || user.status === 'DEACTIVATED' || user.status === 'PENDING_DELETION') {
+      throw new AppError(403, 'ACCOUNT_NOT_ACTIVE', 'Account is not active');
+    }
+
+    const ok = await verifyPassword(String(password), user.passwordHash);
+    if (!ok) {
+      throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid credentials');
+    }
+
+    // Owners only for this workspace
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: user.id } },
+      include: { workspace: true },
+    });
+    const isOwner = membership?.status === 'ACTIVE' && (
+      membership.role === 'OWNER' ||
+      membership.organizationRole === 'COMPANY_OWNER' ||
+      membership.organizationRole === 'INSTITUTION_OWNER' ||
+      membership.workspace?.ownerId === user.id
+    );
+    if (!isOwner) {
+      throw new AppError(403, 'SSO_BREAK_GLASS_OWNER_REQUIRED', 'Break-glass access is restricted to workspace owners');
+    }
+
+    const consumed = await consumeBreakGlassCodeForLogin(prisma, workspaceId, String(code), user.id, {
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    // Limited break-glass session (time-limited)
+    const breakGlassTtlSeconds = Math.min(30 * 60, config.refreshTokenTtlSeconds); // max 30 min
+    const authMethodExpiresAt = new Date(Date.now() + breakGlassTtlSeconds * 1000);
+    const { session, refreshToken } = await createSession(prisma, {
+      userId: user.id,
+      ttlSeconds: breakGlassTtlSeconds,
+      authMethod: 'break_glass',
+      authMethodExpiresAt,
+      userAgent: req.header('user-agent'),
+      ip: req.ip,
+    });
+
+    const { token: accessToken, expiresIn } = signAccessToken(config, {
+      userId: user.id,
+      sessionId: session.id,
+      authMethod: 'break_glass',
+    });
+    const csrfKey = deriveKey(config.jwtAccessSecret, 'csrf');
+    const csrfToken = signValue(csrfKey, session.id);
+
+    setSessionCookies(res, config, refreshToken, csrfToken);
+
+    res.json({
+      status: 'authenticated',
+      accessToken,
+      tokenType: 'Bearer',
+      expiresIn,
+      session: { id: session.id, authMethod: 'break_glass', expiresAt: session.expiresAt, authMethodExpiresAt },
+      breakGlass: { remainingCodes: consumed.remainingCodes },
+    });
+  } catch (e) { next(e); }
+});
 
 
 router.post('/workspaces/:workspaceId/break-glass/consume', ssoBreakGlassRateLimit, async (req: Request, res: Response, next) => {

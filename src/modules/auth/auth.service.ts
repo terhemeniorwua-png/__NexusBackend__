@@ -27,6 +27,7 @@ import { recordSecurityEvent, SecurityAction } from './security-events';
 import { scheduledAccountDeletionAt } from './account-deletion.service';
 import { ensurePersonalWorkspace } from '../workspaces/personal-workspace.service';
 import { enqueueWorkspaceSeatReduction } from '../billing/membership-billing';
+import { assertUserPasswordLoginAllowed, assertEmailNotInRequireSsoWorkspace } from '../sso/sso.service';
 import { consumeOneTimeCode, issueOneTimeCode } from './one-time-code.service';
 import type {
   AuthenticationResult,
@@ -230,13 +231,15 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
   }
 
   async function authenticateSession(
-    session: { id: string; userId: string; expiresAt: Date },
+    session: { id: string; userId: string; expiresAt: Date; authMethod?: any },
     user: User,
     refreshToken: string,
   ): Promise<AuthenticationResult> {
+    const authMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase() as any;
     const { token: accessToken, expiresIn } = signAccessToken(config, {
       userId: session.userId,
       sessionId: session.id,
+      authMethod,
     });
 
     return {
@@ -257,9 +260,11 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
     user: User,
     ctx: RequestContext,
   ): Promise<AuthenticationResult> {
+    await assertEmailNotInRequireSsoWorkspace(client, user.email);
     const { session, refreshToken } = await createSession(client, {
       userId: user.id,
       ttlSeconds: config.refreshTokenTtlSeconds,
+      authMethod: 'password',
       userAgent: ctx.userAgent,
       ip: ctx.ip,
     });
@@ -386,11 +391,13 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           'Google identity is no longer available',
         );
       assertUsableAccount(user);
+      await assertEmailNotInRequireSsoWorkspace(client, user.email);
       if (user.twoFactorEnabled) return twoFactor.issueChallenge(user);
 
       const { session, refreshToken } = await createSession(client, {
         userId: user.id,
         ttlSeconds: config.refreshTokenTtlSeconds,
+        authMethod: 'social',
         userAgent: ctx.userAgent,
         ip: ctx.ip,
       });
@@ -406,7 +413,6 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       });
       return authenticateSession(session, user, refreshToken);
     },
-
     async loginSsoAccount(userId, ctx, metadata) {
       const user = await client.user.findUnique({ where: { id: userId } });
       if (!user) {
@@ -417,11 +423,13 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         );
       }
       assertUsableAccount(user);
+      await assertEmailNotInRequireSsoWorkspace(client, user.email);
       if (user.twoFactorEnabled) return twoFactor.issueChallenge(user);
 
       const { session, refreshToken } = await createSession(client, {
         userId: user.id,
         ttlSeconds: config.refreshTokenTtlSeconds,
+        authMethod: 'sso',
         userAgent: ctx.userAgent,
         ip: ctx.ip,
       });
@@ -442,7 +450,6 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       });
       return authenticateSession(session, user, refreshToken);
     },
-
     async register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
       const existing = await findUserByEmail(input.email);
 
@@ -628,6 +635,9 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
 
       if (user.status === 'PENDING_VERIFICATION') await sendVerificationCode(user, false);
 
+      await assertUserPasswordLoginAllowed(client, user.id);
+      await assertEmailNotInRequireSsoWorkspace(client, user.email);
+
       if (user.twoFactorEnabled) {
         return twoFactor.issueChallenge(user);
       }
@@ -635,6 +645,7 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       const { session, refreshToken } = await createSession(client, {
         userId: user.id,
         ttlSeconds: config.refreshTokenTtlSeconds,
+        authMethod: 'password',
         userAgent: ctx.userAgent,
         ip: ctx.ip,
       });
@@ -780,6 +791,9 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
         return;
       }
 
+      await assertUserPasswordLoginAllowed(client, user.id);
+      await assertEmailNotInRequireSsoWorkspace(client, user.email);
+
       await sendPasswordResetCode(user);
 
       await recordSecurityEvent(client, {
@@ -816,6 +830,9 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       if (account.status === 'DEACTIVATED') {
         throw new AppError(403, 'ACCOUNT_DEACTIVATED', 'This account has been deactivated');
       }
+
+      await assertUserPasswordLoginAllowed(client, account.id);
+      await assertEmailNotInRequireSsoWorkspace(client, account.email);
 
       assertPasswordLength(input.newPassword);
 
@@ -861,6 +878,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       }
 
       await requirePassword(user, input.currentPassword);
+
+      await assertUserPasswordLoginAllowed(client, user.id);
 
       if (await verifyPassword(input.newPassword, user.passwordHash)) {
         throw new AppError(
@@ -1167,6 +1186,8 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
           'The email address or password is incorrect',
         );
       }
+
+      await assertUserPasswordLoginAllowed(client, user.id);
 
       if (user.status === 'SUSPENDED') {
         await recordReactivationFailure(user.id, 'ACCOUNT_SUSPENDED');

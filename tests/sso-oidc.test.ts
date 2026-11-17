@@ -301,3 +301,82 @@ describe('SSO OIDC - policy checks (pure)', () => {
     assert.equal(canLinkSsoIdentity({ idpEmailVerified: false, domainVerified: true, existingAccountEmailVerified: true }), false);
   });
 });
+
+describe('SSO enforcement - require SSO blocks password login paths', () => {
+  test('userHasRequiredSsoWorkspace returns required when active membership is in SSO-required workspace', async () => {
+    const { userHasRequiredSsoWorkspace } = await import('../src/modules/sso/sso.service');
+    const db = {
+      workspaceMembership: {
+        findMany: async () => [{ workspaceId: 'ws1' }],
+      },
+      workspaceSsoConfig: {
+        findFirst: async () => ({ id: 'cfg1', isEnabled: true, requireSso: true, breakGlassEnabled: true }),
+      },
+      workspaceSsoDomain: {
+        count: async () => 1,
+      },
+    } as never;
+    const result = await userHasRequiredSsoWorkspace(db, 'user1');
+    assert.equal(result.required, true);
+    assert.equal(result.workspaceId, 'ws1');
+  });
+
+  test('assertUserPasswordLoginAllowed throws SSO_REQUIRED when workspace requires SSO', async () => {
+    const { assertUserPasswordLoginAllowed } = await import('../src/modules/sso/sso.service');
+    const db = {
+      workspaceMembership: {
+        findMany: async () => [{ workspaceId: 'ws1' }],
+      },
+      workspaceSsoConfig: {
+        findFirst: async () => ({ id: 'cfg1', isEnabled: true, requireSso: true, breakGlassEnabled: false }),
+      },
+      workspaceSsoDomain: {
+        count: async () => 1,
+      },
+    } as never;
+    await assert.rejects(
+      () => assertUserPasswordLoginAllowed(db, 'user1'),
+      (err: unknown) => (err as { code?: string })?.code === 'SSO_REQUIRED',
+    );
+  });
+
+  test('assertUserPasswordLoginAllowed allows when no workspace requires SSO', async () => {
+    const { assertUserPasswordLoginAllowed } = await import('../src/modules/sso/sso.service');
+    const db = {
+      workspaceMembership: {
+        findMany: async () => [{ workspaceId: 'ws1' }],
+      },
+      workspaceSsoConfig: {
+        findFirst: async () => null,
+      },
+    } as never;
+    await assert.doesNotReject(() => assertUserPasswordLoginAllowed(db, 'user1'));
+  });
+});
+
+describe('SSO enforcement - config removal revokes sessions', () => {
+  test('disableSsoConfig revokes active sessions when require-SSO was enabled', async () => {
+    const { disableSsoConfig } = await import('../src/modules/sso/sso.service');
+    let revokedCalls = 0;
+    const db = {
+      workspace: { findFirst: async () => ({ id: 'ws1', status: 'ACTIVE', type: 'COMPANY', deletedAt: null }) },
+      workspaceMembership: {
+        findUnique: async () => ({ id: 'm1', workspaceId: 'ws1', userId: 'admin1', role: 'OWNER', organizationRole: null, status: 'ACTIVE' }),
+        findFirst: async () => ({ role: 'OWNER', organizationRole: null, status: 'ACTIVE' }),
+        findMany: async () => [{ userId: 'u1' }, { userId: 'u2' }],
+      },
+      workspaceSsoConfig: {
+        findFirst: async () => ({ id: 'cfg1', workspaceId: 'ws1', isEnabled: true, requireSso: true }),
+        update: async () => ({ id: 'cfg1', isEnabled: false, requireSso: false, status: 'DISABLED' }),
+      },
+      session: {
+        updateMany: async () => { revokedCalls++; return { count: 1 }; },
+      },
+      auditLog: { create: async () => ({}) },
+    } as never;
+    const result = await disableSsoConfig(db, 'admin1', 'ws1', 'cfg1');
+    assert.equal(result.disabled, true);
+    assert.equal(result.revokedSessions, 2);
+    assert.equal(revokedCalls, 2);
+  });
+});

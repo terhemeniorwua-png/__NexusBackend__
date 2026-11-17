@@ -428,21 +428,32 @@ model TwoFactorRecoveryCode {
   @@index([userId, usedAt])
 }
 
+
+enum SessionAuthMethod {
+  PASSWORD
+  SOCIAL
+  SSO
+  BREAK_GLASS
+}
+
 model Session {
-  id                       String    @id @default(uuid())
+  id                       String            @id @default(uuid())
   userId                   String
-  refreshTokenHash         String    @unique
+  refreshTokenHash         String            @unique
   /// Hash of the previous refresh token, kept for one rotation so that a
   /// replayed (already rotated) token can be detected.
-  previousRefreshTokenHash String?   @unique
+  previousRefreshTokenHash String?           @unique
+  authMethod               SessionAuthMethod @default(PASSWORD)
+  /// For break-glass sessions, enforce a shorter/limited lifetime.
+  authMethodExpiresAt      DateTime?
   userAgent                String?
   ip                       String?
   lastUsedAt               DateTime?
   expiresAt                DateTime
   revokedAt                DateTime?
   revokedReason            String?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

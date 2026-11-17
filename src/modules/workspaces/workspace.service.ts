@@ -1,4 +1,3 @@
-import { ensureDefaultChannels } from '../channels/default-channels';
 import type {
   Prisma,
   PrismaClient,
@@ -38,6 +37,7 @@ import type {
 } from './workspace.schemas';
 import type { DepartmentSummary, WorkspaceMember, WorkspaceSummary } from './workspace.types';
 import { reassignOpenTasksBeforeMemberRemoval } from './task-reassignment';
+import { revokeSsoSessionsForMember } from '../sso/sso.service';
 import {
   assertCanAssignOrganizationRole,
   assertMayManageOrganizationMember,
@@ -419,8 +419,6 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
           },
         });
 
-        await ensureDefaultChannels(tx, created.id, input.userId);
-
         if (created.type === 'COMPANY') {
           await tx.companyProfile.create({ data: { workspaceId: created.id, name: created.name } });
         } else if (created.type === 'INSTITUTION') {
@@ -522,9 +520,6 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-            ...(input.timeTrackingEnabled !== undefined
-              ? { timeTrackingEnabled: input.timeTrackingEnabled }
-              : {}),
           },
         });
 
@@ -538,9 +533,6 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-            ...(input.timeTrackingEnabled !== undefined
-              ? { timeTrackingEnabled: input.timeTrackingEnabled }
-              : {}),
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
@@ -1582,6 +1574,8 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
       for (const notice of reassigned) {
         await taskAssignmentNotifier.notify(notice);
       }
+
+      await revokeSsoSessionsForMember(client, access.workspace.id, input.targetUserId).catch(() => undefined);
     },
 
     async suspendMember(input, ctx): Promise<WorkspaceMember> {
@@ -1689,6 +1683,7 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
         return changed;
       });
 
+      await revokeSsoSessionsForMember(client, access.workspace.id, input.targetUserId).catch(() => undefined);
       return toMember(updated, access.workspace.ownerId);
     },
 
