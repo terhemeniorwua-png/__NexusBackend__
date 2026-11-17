@@ -1786,6 +1786,9 @@ model Integration {
   lastRefreshedAt        DateTime?
   lastSyncedAt           DateTime?
   revokedAt              DateTime?
+  /// Set when the provider rejected the stored token (for example Slack
+  /// invalid_auth). The integration must be reconnected before it is usable.
+  needsReconnect         Boolean             @default(false)
   createdAt              DateTime            @default(now())
   updatedAt              DateTime            @updatedAt
 

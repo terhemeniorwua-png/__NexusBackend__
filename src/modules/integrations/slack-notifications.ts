@@ -1,0 +1,530 @@
+import type { Integration, IntegrationSyncJob, Prisma, PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../../db/prisma';
+import { logger as defaultLogger, type Logger } from '../../utils/logger';
+import { decryptIntegrationToken } from './token-crypto';
+
+/**
+ * Slack outbound notifications.
+ *
+ * Slack is a workspace-level integration. Its non-secret channel setting lives
+ * in `Integration.config.slackChannelId`. Messages are persisted as
+ * `IntegrationSyncJob` rows with type `OUTBOUND_EVENT` before Slack is
+ * contacted, so a Slack outage never loses a notification and the durable
+ * worker can retry it with backoff.
+ *
+ * Idempotency: every domain event supplies a stable `dedupeKey`
+ * (for example `task.assigned:<taskId>:<assigneeId>:<assignedAt>`). The
+ * `(integrationId, dedupeKey)` unique index makes a replayed event a no-op, so
+ * a retried producer cannot create duplicate Slack posts for the same event.
+ *
+ * Revoked tokens: Slack reports `invalid_auth` / `token_revoked` / etc. We
+ * mark the integration `needsReconnect`, fail the job without scheduling a
+ * retry, and fail any other pending outbound jobs for that integration. New
+ * jobs are not enqueued while the integration is not ACTIVE.
+ */
+
+export const SLACK_MAX_RETRIES = 5;
+export const SLACK_MIN_BACKOFF_MS = 30_000;
+export const SLACK_MAX_BACKOFF_MS = 60 * 60_000;
+export const SLACK_REQUEST_TIMEOUT_MS = 10_000;
+export const DEFAULT_SLACK_API_URL = 'https://slack.com/api';
+
+const SLACK_REVOKED_ERRORS = new Set([
+  'invalid_auth',
+  'account_inactive',
+  'token_revoked',
+  'not_authed',
+  'invalid_token',
+  'revoked',
+]);
+
+export type SlackNotificationKind = 'TASK_ASSIGNED' | 'TASK_DUE_SOON' | 'AUTOMATION';
+
+export interface SlackNotificationPayload {
+  kind: SlackNotificationKind;
+  text: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface EnqueueSlackNotificationInput {
+  workspaceId: string;
+  kind: SlackNotificationKind;
+  dedupeKey: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface EnqueueSlackNotificationResult {
+  queued: boolean;
+  reason?: 'not_configured' | 'disabled' | 'duplicate';
+  jobId?: string;
+}
+
+export type SlackJobOutcome = 'succeeded' | 'retried' | 'failed' | 'revoked';
+
+export type SlackNotificationJob = IntegrationSyncJob & { integration: Integration };
+
+export interface SlackPostSuccess {
+  ok: true;
+  ts?: string;
+  channel?: string;
+}
+
+export interface SlackPostFailure {
+  ok: false;
+  retryable: boolean;
+  revoked: boolean;
+  error: string;
+  retryAfterMs?: number;
+}
+
+export type SlackPostResult = SlackPostSuccess | SlackPostFailure;
+
+export interface PostSlackMessageInput {
+  accessToken: string;
+  channel: string;
+  text: string;
+  fetchImpl?: typeof fetch;
+  slackApiUrl?: string;
+}
+
+export interface TaskAssignedSlackInput {
+  workspaceId: string;
+  projectId: string;
+  taskId: string;
+  taskKey: string;
+  taskTitle: string;
+  assigneeId: string;
+  assigneeName?: string | null;
+  actorName?: string | null;
+  dueDate?: string | null;
+  /** ISO timestamp of the assignment; part of the idempotency key. */
+  assignedAt: string;
+}
+
+export interface TaskDueSoonSlackInput {
+  workspaceId: string;
+  projectId: string;
+  taskId: string;
+  taskKey: string;
+  taskTitle: string;
+  dueDate?: string | null;
+  /** ISO timestamp recorded when the due-soon claim was made. */
+  dueSoonNotifiedAt: string;
+}
+
+export interface AutomationRunSlackInput {
+  workspaceId: string;
+  automationId: string;
+  automationName: string;
+  runId: string;
+  trigger: string;
+  action: string;
+  status: 'SUCCEEDED' | 'FAILED';
+  error?: string | null;
+}
+
+export interface SlackNotificationServiceDependencies {
+  prisma?: PrismaClient;
+  logger?: Logger;
+  fetchImpl?: typeof fetch;
+  slackApiUrl?: string;
+  maxRetries?: number;
+  backoffFor?: (attempts: number) => number;
+}
+
+export interface SlackNotificationService {
+  enqueue(input: EnqueueSlackNotificationInput): Promise<EnqueueSlackNotificationResult>;
+  enqueueTaskAssigned(input: TaskAssignedSlackInput): Promise<EnqueueSlackNotificationResult>;
+  enqueueTaskDueSoon(input: TaskDueSoonSlackInput): Promise<EnqueueSlackNotificationResult>;
+  enqueueAutomationRun(input: AutomationRunSlackInput): Promise<EnqueueSlackNotificationResult>;
+  processJob(job: SlackNotificationJob, now: Date): Promise<SlackJobOutcome>;
+}
+
+export function slackBackoffFor(attempts: number): number {
+  const delay = SLACK_MIN_BACKOFF_MS * 2 ** Math.max(0, attempts - 1);
+  return Math.min(delay, SLACK_MAX_BACKOFF_MS);
+}
+
+export function isSlackRevokedError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return SLACK_REVOKED_ERRORS.has(error);
+}
+
+/** Slack channel id is stored as non-secret integration config. */
+export function slackChannelFromConfig(
+  config: Prisma.JsonValue | null | undefined,
+): string | null {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
+  const value = (config as Record<string, unknown>).slackChannelId;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+export function buildSlackTaskUrl(projectId: string, taskId: string): string {
+  const base = (process.env.FRONTEND_URL ?? '').replace(/\/+$/, '');
+  const path = (
+    process.env.TASK_ASSIGNMENT_LINK_PATH ?? '/projects/:projectId/tasks/:taskId'
+  )
+    .replace(':projectId', encodeURIComponent(projectId))
+    .replace(':taskId', encodeURIComponent(taskId));
+  return `${base}${path}`;
+}
+
+function formatDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function slackLink(url: string, text: string): string {
+  return `<${url}|${text}>`;
+}
+
+/**
+ * Post one message to Slack. Slack returns HTTP 200 with `ok:false` for API
+ * errors, so both the HTTP status and the body are inspected. Auth failures
+ * are reported as `revoked` so the caller can stop retrying and require a
+ * reconnect.
+ */
+export async function postSlackMessage(
+  input: PostSlackMessageInput,
+): Promise<SlackPostResult> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const base = (input.slackApiUrl ?? DEFAULT_SLACK_API_URL).replace(/\/+$/, '');
+  let response: Response;
+  try {
+    response = await fetchImpl(`${base}/chat.postMessage`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: input.channel,
+        text: input.text,
+        unfurl_links: false,
+      }),
+      signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      retryable: true,
+      revoked: false,
+      error: error instanceof Error ? error.message.slice(0, 300) : 'The Slack request failed',
+    };
+  }
+
+  if (response.status === 429) {
+    const retryAfterSeconds = Number(response.headers.get('retry-after'));
+    return {
+      ok: false,
+      retryable: true,
+      revoked: false,
+      error: 'Slack rate limit exceeded',
+      retryAfterMs: Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? retryAfterSeconds * 1000
+        : SLACK_MIN_BACKOFF_MS,
+    };
+  }
+
+  const body = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+    ts?: string;
+    channel?: string;
+  } | null;
+
+  if (response.ok && body?.ok) {
+    return {
+      ok: true,
+      ...(body.ts ? { ts: body.ts } : {}),
+      ...(body.channel ? { channel: body.channel } : {}),
+    };
+  }
+
+  const slackError = body?.error ?? (response.ok ? 'unknown_error' : `http_${response.status}`);
+  const revoked = response.status === 401 || isSlackRevokedError(slackError);
+  const retryable =
+    !revoked &&
+    (response.status === 408 ||
+      response.status === 422 ||
+      response.status >= 500 ||
+      slackError === 'ratelimited');
+  return { ok: false, retryable, revoked, error: slackError };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  if (code === 'P2002') return true;
+  return /unique constraint/i.test((error as Error).message ?? '');
+}
+
+export function createSlackNotificationService(
+  deps: SlackNotificationServiceDependencies = {},
+): SlackNotificationService {
+  const prisma = deps.prisma ?? getPrismaClient();
+  const log = deps.logger ?? defaultLogger;
+  const maxRetries = Math.max(1, deps.maxRetries ?? SLACK_MAX_RETRIES);
+  const backoffFor = deps.backoffFor ?? slackBackoffFor;
+
+  async function enqueue(input: EnqueueSlackNotificationInput): Promise<EnqueueSlackNotificationResult> {
+    const integration = await prisma.integration.findFirst({
+      where: {
+        workspaceId: input.workspaceId,
+        provider: 'SLACK',
+        status: 'ACTIVE',
+        enabled: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, config: true },
+    });
+
+    if (!integration) return { queued: false, reason: 'not_configured' };
+
+    const config = (integration.config ?? {}) as Record<string, unknown>;
+    if (config.notificationsEnabled === false) {
+      return { queued: false, reason: 'disabled' };
+    }
+    if (!slackChannelFromConfig(integration.config)) {
+      return { queued: false, reason: 'not_configured' };
+    }
+
+    try {
+      const job = await prisma.integrationSyncJob.create({
+        data: {
+          integrationId: integration.id,
+          type: 'OUTBOUND_EVENT',
+          dedupeKey: input.dedupeKey,
+          payload: {
+            kind: input.kind,
+            text: input.text,
+            metadata: input.metadata ?? {},
+          } as Prisma.InputJsonValue,
+          maxRetries,
+        },
+        select: { id: true },
+      });
+      return { queued: true, jobId: job.id };
+    } catch (error) {
+      if (isUniqueViolation(error)) return { queued: false, reason: 'duplicate' };
+      throw error;
+    }
+  }
+
+  async function failJob(
+    job: SlackNotificationJob,
+    now: Date,
+    error: string,
+  ): Promise<void> {
+    await prisma.integrationSyncJob.updateMany({
+      where: { id: job.id, status: { in: ['RUNNING', 'PENDING'] } },
+      data: {
+        status: 'FAILED',
+        completedAt: now,
+        attempts: job.attempts + 1,
+        lastError: error.slice(0, 500),
+      },
+    });
+  }
+
+  async function processJob(
+    job: SlackNotificationJob,
+    now: Date,
+  ): Promise<SlackJobOutcome> {
+    const integration = job.integration;
+    if (!integration || integration.status === 'DISCONNECTED' || !integration.enabled) {
+      await failJob(job, now, 'The Slack integration is disabled or disconnected');
+      return 'failed';
+    }
+    if (integration.needsReconnect) {
+      await failJob(job, now, 'SLACK_RECONNECT_REQUIRED: the stored token was revoked');
+      return 'failed';
+    }
+
+    const channel = slackChannelFromConfig(integration.config);
+    if (!channel) {
+      await failJob(job, now, 'SLACK_CHANNEL_NOT_CONFIGURED: set slackChannelId for the workspace');
+      return 'failed';
+    }
+
+    const payload = (job.payload ?? {}) as Partial<SlackNotificationPayload>;
+    const text = typeof payload.text === 'string' ? payload.text : '';
+    if (!text.trim()) {
+      await failJob(job, now, 'SLACK_NOTIFICATION_EMPTY: the queued message had no text');
+      return 'failed';
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = decryptIntegrationToken(integration.accessTokenCiphertext);
+    } catch (error) {
+      await failJob(
+        job,
+        now,
+        `SLACK_TOKEN_UNREADABLE: ${error instanceof Error ? error.message : 'token decryption failed'}`,
+      );
+      return 'failed';
+    }
+
+    const posted = await postSlackMessage({
+      accessToken,
+      channel,
+      text,
+      ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+      ...(deps.slackApiUrl ? { slackApiUrl: deps.slackApiUrl } : {}),
+    });
+
+    if (posted.ok) {
+      await prisma.integrationSyncJob.updateMany({
+        where: { id: job.id, status: { in: ['RUNNING', 'PENDING'] } },
+        data: {
+          status: 'SUCCEEDED',
+          completedAt: now,
+          attempts: job.attempts + 1,
+          lastError: null,
+          result: {
+            ok: true,
+            ...(posted.ts ? { ts: posted.ts } : {}),
+            ...(posted.channel ? { channel: posted.channel } : {}),
+          } as Prisma.InputJsonValue,
+        },
+      });
+      return 'succeeded';
+    }
+
+    if (posted.revoked) {
+      const message = `SLACK_TOKEN_REVOKED: ${posted.error}`;
+      await prisma.integration.update({
+        where: { id: integration.id },
+        data: {
+          status: 'ERROR',
+          needsReconnect: true,
+          lastError: message.slice(0, 500),
+        },
+      });
+      await failJob(job, now, message);
+      // Stop retrying every other queued message for this integration.
+      await prisma.integrationSyncJob.updateMany({
+        where: { integrationId: integration.id, status: 'PENDING' },
+        data: {
+          status: 'FAILED',
+          completedAt: now,
+          lastError: 'SLACK_RECONNECT_REQUIRED: the stored token was revoked',
+        },
+      });
+      log.warn('slack_token_revoked', {
+        integrationId: integration.id,
+        workspaceId: integration.workspaceId,
+        jobId: job.id,
+        error: posted.error,
+      });
+      return 'revoked';
+    }
+
+    const attempts = job.attempts + 1;
+    const message = `SLACK_POST_FAILED: ${posted.error}`;
+    if (posted.retryable && attempts < Math.max(1, job.maxRetries)) {
+      const delay = posted.retryAfterMs ?? backoffFor(attempts);
+      await prisma.integrationSyncJob.updateMany({
+        where: { id: job.id, status: { in: ['RUNNING', 'PENDING'] } },
+        data: {
+          status: 'PENDING',
+          attempts,
+          lastError: message.slice(0, 500),
+          nextAttemptAt: new Date(now.getTime() + delay),
+        },
+      });
+      log.warn('slack_notification_retry_scheduled', {
+        integrationId: integration.id,
+        jobId: job.id,
+        attempts,
+        delayMs: delay,
+        error: posted.error,
+      });
+      return 'retried';
+    }
+
+    await failJob(job, now, message);
+    await prisma.integration.update({
+      where: { id: integration.id },
+      data: { lastError: message.slice(0, 500) },
+    });
+    log.error('slack_notification_failed', {
+      integrationId: integration.id,
+      jobId: job.id,
+      attempts,
+      error: posted.error,
+    });
+    return 'failed';
+  }
+
+  return {
+    enqueue,
+    async enqueueTaskAssigned(input) {
+      const due = formatDate(input.dueDate);
+      const link = buildSlackTaskUrl(input.projectId, input.taskId);
+      const assignee = input.assigneeName?.trim() || 'A teammate';
+      const actor = input.actorName?.trim() || 'Someone';
+      const lines = [
+        ':bell: *Task assigned*',
+        `${slackLink(link, `${input.taskKey} ${input.taskTitle}`)} was assigned to ${assignee} by ${actor}.`,
+      ];
+      if (due) lines.push(`Due: ${due}`);
+      return enqueue({
+        workspaceId: input.workspaceId,
+        kind: 'TASK_ASSIGNED',
+        dedupeKey: `task.assigned:${input.taskId}:${input.assigneeId}:${input.assignedAt}`,
+        text: lines.join('\n'),
+        metadata: {
+          projectId: input.projectId,
+          taskId: input.taskId,
+          assigneeId: input.assigneeId,
+          assignedAt: input.assignedAt,
+        },
+      });
+    },
+    async enqueueTaskDueSoon(input) {
+      const due = formatDate(input.dueDate);
+      const link = buildSlackTaskUrl(input.projectId, input.taskId);
+      const lines = [
+        ':alarm_clock: *Task due soon*',
+        `${slackLink(link, `${input.taskKey} ${input.taskTitle}`)} is due within 24 hours.`,
+      ];
+      if (due) lines.push(`Due: ${due}`);
+      return enqueue({
+        workspaceId: input.workspaceId,
+        kind: 'TASK_DUE_SOON',
+        dedupeKey: `task.due-soon:${input.taskId}:${input.dueSoonNotifiedAt}`,
+        text: lines.join('\n'),
+        metadata: {
+          projectId: input.projectId,
+          taskId: input.taskId,
+          dueSoonNotifiedAt: input.dueSoonNotifiedAt,
+        },
+      });
+    },
+    async enqueueAutomationRun(input) {
+      const statusLabel = input.status === 'SUCCEEDED' ? 'succeeded' : 'failed';
+      const lines = [
+        `:gear: *Automation ${input.automationName}* ${statusLabel}`,
+        `Trigger: ${input.trigger}`,
+        `Action: ${input.action}`,
+      ];
+      if (input.error) lines.push(`Error: ${input.error}`);
+      return enqueue({
+        workspaceId: input.workspaceId,
+        kind: 'AUTOMATION',
+        dedupeKey: `automation-run:${input.runId}`,
+        text: lines.join('\n'),
+        metadata: {
+          automationId: input.automationId,
+          runId: input.runId,
+          status: input.status,
+        },
+      });
+    },
+    processJob,
+  };
+}
