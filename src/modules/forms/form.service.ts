@@ -4,10 +4,19 @@ import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { enqueueAutomationRunsSafely } from '../automation/automation.events';
+import type { SlackEventNotifier } from '../integrations/slack.events';
 
 type Input = { userId: string; workspaceId: string };
 
-export function createFormService(prisma: PrismaClient = getPrismaClient()) {
+export interface FormServiceDependencies {
+  /** Best-effort Slack delivery for form submission events. */
+  slackNotifier?: SlackEventNotifier;
+}
+
+export function createFormService(
+  prisma: PrismaClient = getPrismaClient(),
+  deps: FormServiceDependencies = {},
+) {
   return {
     async create(input: Input & { title: string; description?: string | null; isPublic?: boolean }) {
       await requireWorkspaceAccess(prisma, { userId: input.userId, workspaceId: input.workspaceId, capability: WorkspaceCapability.ViewWorkspace });
@@ -116,6 +125,13 @@ export function createFormService(prisma: PrismaClient = getPrismaClient()) {
         },
         prisma,
       );
+
+      await deps.slackNotifier?.formSubmitted({
+        workspaceId: form.workspaceId,
+        formId: form.id,
+        formTitle: form.title,
+        responseId: response.id,
+      });
 
       return response;
     },

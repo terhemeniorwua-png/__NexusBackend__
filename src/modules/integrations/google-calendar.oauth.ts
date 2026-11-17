@@ -2,8 +2,14 @@ import { z } from 'zod';
 import { AppError } from '../../utils/errors';
 import { createOAuthState, verifyOAuthState } from './oauth-state';
 
-// Minimal scopes for two-way event sync on calendars the user can access.
-const CALENDAR_API_SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
+// Minimal scopes for two-way event sync on calendars the user can access, plus
+// read-only access to the calendar list so the workspace can pick which
+// calendar Nexus syncs with. Existing connections created before this scope was
+// added are asked to reconnect when Google rejects the calendar-list call.
+const CALENDAR_API_SCOPES = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+];
 
 export const calendarAuthorizeQuerySchema = z.object({ workspaceId: z.string().uuid() });
 export const calendarCallbackQuerySchema = z.object({

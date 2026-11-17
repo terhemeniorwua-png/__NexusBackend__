@@ -1,5 +1,6 @@
 import type { TaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import type { MentionEmailNotifier } from '../../services/mention-email-notifier';
+import type { SlackEventNotifier } from '../integrations/slack.events';
 import { Prisma, type PrismaClient, type TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
@@ -310,6 +311,8 @@ export async function assertDependencyPairDateConsistency(
 export interface TaskServiceDependencies {
   assignmentNotifier?: TaskAssignmentNotifier;
   mentionNotifier?: MentionEmailNotifier;
+  /** Best-effort Slack delivery for task assignment events. */
+  slackNotifier?: SlackEventNotifier;
 }
 
 export function createTaskService(
@@ -563,6 +566,16 @@ export function createTaskService(
             taskId: created.id,
             assigneeId,
             actorId: input.userId,
+          });
+          await deps.slackNotifier?.taskAssigned({
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            taskId: created.id,
+            taskKey: created.key,
+            taskTitle: created.title,
+            status: created.status,
+            assigneeId,
+            assignedAt: created.createdAt.toISOString(),
           });
         }
         await enqueueAutomationRunsSafely({
@@ -1171,6 +1184,16 @@ export function createTaskService(
           taskId: task.id,
           assigneeId: input.targetUserId,
           actorId: input.userId,
+        });
+        await deps.slackNotifier?.taskAssigned({
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: task.id,
+          taskKey: task.key,
+          taskTitle: task.title,
+          status: task.status,
+          assigneeId: input.targetUserId,
+          assignedAt: result.assignedAt.toISOString(),
         });
       }
       await enqueueAutomationRunsSafely({

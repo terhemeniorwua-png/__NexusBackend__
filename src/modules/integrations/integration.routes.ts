@@ -209,6 +209,17 @@ export function createIntegrationRouter({
         return;
       }
       sendSuccess(res, await service.setEnabled({ userId: userId(req), integrationId, enabled: body.enabled! }));
+
+  router.get(
+    '/:integrationId/slack/channels',
+    requireAuth,
+    requireActive,
+    validate({ params: disconnectParamsSchema }),
+    async (req, res) => {
+      const { integrationId } = req.validated!.params as { integrationId: string };
+      sendSuccess(res, {
+        channels: await service.slackChannels({ userId: userId(req), integrationId }),
+      });
     },
   );
 

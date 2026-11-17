@@ -1,6 +1,4 @@
 import { Router, type Request } from 'express';
-
-type AuthenticatedRequest = Request & { user: { id: string } };
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
@@ -14,6 +12,8 @@ import {
   type ImportUploadInput,
 } from './import.schemas';
 import { createImportService } from './import.service';
+
+type AuthenticatedRequest = Request & { user: { id: string } };
 
 export function createImportRouter(config: AppConfig): Router {
   const router = Router();
