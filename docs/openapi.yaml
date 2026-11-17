@@ -909,9 +909,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/google-drive/authorize:
     get:
       tags:
@@ -966,9 +964,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/dropbox/authorize:
     get:
       tags:
@@ -1023,9 +1019,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/slack/authorize:
     get:
       tags:
@@ -1080,9 +1074,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/slack/default-callback:
     get:
       tags:
@@ -1160,9 +1152,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/WebhookSubscriptionWithSecretResponse'
         '400':
-          description: Invalid URL
-          events: null
-          or request body.: null
+          description: "Invalid URL, events, or request body."
         '401':
           description: Authentication is required.
         '403':
@@ -1198,9 +1188,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/WebhookSubscriptionWithSecretResponse'
         '400':
-          description: Invalid URL
-          events: null
-          or request body.: null
+          description: "Invalid URL, events, or request body."
         '401':
           description: Authentication is required.
         '403':
@@ -2476,9 +2464,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthenticationResponse'
         '401':
-          description: Invalid
-          expired: null
-          reused challenge or verification code.: null
+          description: "Invalid, expired, reused challenge or verification code."
         '429':
           description: IP/account MFA lockout or request rate limit.
   /auth/2fa/setup:
@@ -3157,9 +3143,7 @@ paths:
         '401':
           description: Authentication is required.
         '413':
-          description: Upload exceeds the byte
-          dimension: null
-          or pixel limit.: null
+          description: "Upload exceeds the byte, dimension, or pixel limit."
         '415':
           description: Unsupported or corrupt image.
         '429':
@@ -6398,12 +6382,9 @@ paths:
       - bearerAuth: []
       responses:
         '200':
-          description: Active channel for authorized members
-          or archived channel for a workspace manager (private channels still require explicit membership).: null
+          description: "Active channel for authorized members, or archived channel for a workspace manager (private channels still require explicit membership)."
         '404':
-          description: Channel is missing
-          archived and caller is not a workspace manager: null
-          or otherwise inaccessible.: null
+          description: "Channel is missing, archived and caller is not a workspace manager, or otherwise inaccessible."
     patch:
       tags:
       - Channels
@@ -6431,9 +6412,7 @@ paths:
         '200':
           description: Updated active channel summary. Archived channels cannot be updated.
         '404':
-          description: Channel is missing
-          archived: null
-          or inaccessible.: null
+          description: "Channel is missing, archived, or inaccessible."
         '409':
           description: Case-insensitive channel name conflict.
     delete:
@@ -6466,9 +6445,7 @@ paths:
         '200':
           description: Channel archived; workspace managers may repeat this operation on an archived channel.
         '404':
-          description: Channel is missing
-          inaccessible: null
-          or archived for a non-manager.: null
+          description: "Channel is missing, inaccessible, or archived for a non-manager."
   /workspaces/{workspaceId}/channels/{channelId}/members:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6503,10 +6480,7 @@ paths:
         '400':
           description: Membership is available only for private channels.
         '404':
-          description: Channel is missing
-          archived: null
-          inaccessible: null
-          or target is not an active workspace member.: null
+          description: "Channel is missing, archived, inaccessible, or target is not an active workspace member."
   /workspaces/{workspaceId}/channels/{channelId}/members/{userId}:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6532,10 +6506,7 @@ paths:
         '200':
           description: Membership removed.
         '404':
-          description: Channel is missing
-          archived: null
-          inaccessible: null
-          or membership does not exist.: null
+          description: "Channel is missing, archived, inaccessible, or membership does not exist."
   /workspaces/{workspaceId}/projects:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6628,9 +6599,7 @@ paths:
               $ref: '#/components/schemas/ProjectCreateRequest'
       responses:
         '201':
-          description: Project created
-          with initial owner membership: null
-          audit record and response summary.: null
+          description: "Project created, with initial owner membership, audit record and response summary."
           content:
             application/json:
               schema:
@@ -6660,9 +6629,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProjectResponse'
         '404':
-          description: Project is missing
-          outside the workspace: null
-          or not visible to the caller.: null
+          description: "Project is missing, outside the workspace, or not visible to the caller."
     patch:
       tags:
       - Projects
@@ -6686,10 +6653,7 @@ paths:
         '403':
           description: Project mutation is not permitted.
         '404':
-          description: Project is missing
-          archived: null
-          outside the workspace: null
-          or inaccessible.: null
+          description: "Project is missing, archived, outside the workspace, or inaccessible."
         '409':
           description: Duplicate project key or inconsistent team/department scope.
     delete:
@@ -6756,16 +6720,11 @@ paths:
         '403':
           description: The caller can view the project but is neither its owner nor a workspace administrator.
         '404':
-          description: The project is invisible
-          outside the workspace: null
-          or soft-deleted.: null
+          description: "The project is invisible, outside the workspace, or soft-deleted."
         '409':
           description: Concurrent ownership change or the manager/owner invariant would be violated.
         '422':
-          description: The recipient is inactive
-          outside the workspace: null
-          role-ineligible: null
-          or outside the project team/department scope.: null
+          description: "The recipient is inactive, outside the workspace, role-ineligible, or outside the project team/department scope."
   /workspaces/{workspaceId}/projects/{projectId}/restore:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6778,8 +6737,7 @@ paths:
       - bearerAuth: []
       responses:
         '200':
-          description: Project is restored to its prior status
-          or PLANNING if no previous archive record exists.: null
+          description: "Project is restored to its prior status, or PLANNING if no previous archive record exists."
         '403':
           description: Project restore permission is required.
         '404':
@@ -6969,9 +6927,7 @@ paths:
         '403':
           description: Project update permission is required.
         '404':
-          description: Project is missing
-          archived: null
-          or inaccessible.: null
+          description: "Project is missing, archived, or inaccessible."
   /workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -7020,9 +6976,7 @@ paths:
         '200':
           description: Updated milestone.
         '404':
-          description: Project or milestone is missing
-          archived: null
-          or inaccessible.: null
+          description: "Project or milestone is missing, archived, or inaccessible."
     delete:
       tags:
       - Projects
@@ -7033,9 +6987,7 @@ paths:
         '200':
           description: Milestone deleted.
         '404':
-          description: Project or milestone is missing
-          archived: null
-          or inaccessible.: null
+          description: "Project or milestone is missing, archived, or inaccessible."
   /workspaces/{workspaceId}/automations:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -7553,8 +7505,7 @@ paths:
         '403':
           description: The caller lacks permission for the proposed action.
         '404':
-          description: A referenced project
-          task or resource does not exist or is not accessible.: null
+          description: "A referenced project, task or resource does not exist or is not accessible."
     get:
       tags:
       - AI
