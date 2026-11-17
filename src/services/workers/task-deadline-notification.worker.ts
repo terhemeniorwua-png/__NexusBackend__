@@ -3,6 +3,7 @@ import type { WorkerHealthRecorder } from './worker-health';
 import type { Logger } from '../../utils/logger';
 import { logger as defaultLogger } from '../../utils/logger';
 import { createNotification } from '../notifications';
+import type { SlackEventNotifier } from '../../modules/integrations/slack.events';
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 300_000;
@@ -20,6 +21,8 @@ export interface TaskDeadlineNotificationWorkerDeps {
   pollIntervalMs?: number;
   now?: () => Date;
   health?: WorkerHealthRecorder;
+  /** Best-effort Slack delivery for due-soon/overdue task events. */
+  slackNotifier?: SlackEventNotifier;
 }
 
 function taskLink(projectId: string, taskId: string): string {
@@ -57,7 +60,7 @@ export function createTaskDeadlineNotificationWorker(
     });
 
     for (const candidate of candidates) {
-      const didNotify = await deps.prisma.$transaction(async (tx) => {
+      const notifiedTask = await deps.prisma.$transaction(async (tx) => {
         const claimed = await tx.task.updateMany({
           where: {
             id: candidate.id,
@@ -70,7 +73,7 @@ export function createTaskDeadlineNotificationWorker(
           },
           data: { dueSoonNotifiedAt: now },
         });
-        if (claimed.count !== 1) return false;
+        if (claimed.count !== 1) return null;
 
         const task = await tx.task.findUnique({
           where: { id: candidate.id },
@@ -78,13 +81,14 @@ export function createTaskDeadlineNotificationWorker(
             id: true,
             title: true,
             key: true,
+            status: true,
             projectId: true,
             dueDate: true,
             project: { select: { workspaceId: true } },
             assignees: { select: { userId: true } },
           },
         });
-        if (!task || task.assignees.length === 0) return false;
+        if (!task || task.assignees.length === 0) return null;
 
         const title = `Task due soon: ${task.title}`;
         const body = task.dueDate
@@ -105,9 +109,27 @@ export function createTaskDeadlineNotificationWorker(
             },
           });
         }
-        return true;
+        return {
+          workspaceId: task.project.workspaceId,
+          projectId: task.projectId,
+          taskId: task.id,
+          taskKey: task.key,
+          taskTitle: task.title,
+          status: task.status,
+          dueDate: task.dueDate?.toISOString() ?? null,
+        };
       });
-      if (didNotify) notified += 1;
+      if (!notifiedTask) continue;
+      notified += 1;
+      await deps.slackNotifier?.taskDueSoon({
+        workspaceId: notifiedTask.workspaceId,
+        projectId: notifiedTask.projectId,
+        taskId: notifiedTask.taskId,
+        taskKey: notifiedTask.taskKey,
+        taskTitle: notifiedTask.taskTitle,
+        status: notifiedTask.status,
+        dueSoonNotifiedAt: now.toISOString(),
+      });
     }
 
     return notified;
@@ -132,7 +154,7 @@ export function createTaskDeadlineNotificationWorker(
     });
 
     for (const candidate of candidates) {
-      const didNotify = await deps.prisma.$transaction(async (tx) => {
+      const notifiedTask = await deps.prisma.$transaction(async (tx) => {
         const claimed = await tx.task.updateMany({
           where: {
             id: candidate.id,
@@ -145,7 +167,7 @@ export function createTaskDeadlineNotificationWorker(
           },
           data: { overdueNotifiedAt: now },
         });
-        if (claimed.count !== 1) return false;
+        if (claimed.count !== 1) return null;
 
         const task = await tx.task.findUnique({
           where: { id: candidate.id },
@@ -153,13 +175,14 @@ export function createTaskDeadlineNotificationWorker(
             id: true,
             title: true,
             key: true,
+            status: true,
             projectId: true,
             dueDate: true,
             project: { select: { workspaceId: true } },
             assignees: { select: { userId: true } },
           },
         });
-        if (!task || task.assignees.length === 0) return false;
+        if (!task || task.assignees.length === 0) return null;
 
         const title = `Task overdue: ${task.title}`;
         const body = task.dueDate
@@ -180,9 +203,27 @@ export function createTaskDeadlineNotificationWorker(
             },
           });
         }
-        return true;
+        return {
+          workspaceId: task.project.workspaceId,
+          projectId: task.projectId,
+          taskId: task.id,
+          taskKey: task.key,
+          taskTitle: task.title,
+          status: task.status,
+          dueDate: task.dueDate?.toISOString() ?? now.toISOString(),
+        };
       });
-      if (didNotify) notified += 1;
+      if (!notifiedTask) continue;
+      notified += 1;
+      await deps.slackNotifier?.taskOverdue({
+        workspaceId: notifiedTask.workspaceId,
+        projectId: notifiedTask.projectId,
+        taskId: notifiedTask.taskId,
+        taskKey: notifiedTask.taskKey,
+        taskTitle: notifiedTask.taskTitle,
+        status: notifiedTask.status,
+        dueDate: notifiedTask.dueDate,
+      });
     }
 
     return notified;

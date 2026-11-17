@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import test, { after, before, describe } from 'node:test';
@@ -74,7 +75,8 @@ test('GitHub webhook replay is detected when delivery already exists', async () 
     prisma: {
       gitHubWebhookDelivery: {
         create: async () => {
-          const err = Object.assign(new Error('dup'), { code: 'P2002' });
+          const err: any = new Error('dup');
+          err.code = 'P2002';
           throw err;
         },
       },

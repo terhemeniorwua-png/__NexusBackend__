@@ -725,6 +725,51 @@ paths:
           content:
             application/json:
               schema: { type: object, additionalProperties: true }
+  /integrations/{integrationId}/slack/channels:
+    get:
+      tags: [integrations]
+      operationId: listSlackChannels
+      summary: List public Slack channels the bot can post to
+      description: Workspace connections require workspace update permission. The stored token is decrypted for this call only and never returned. With the current scopes (channels:read) only public channels are listed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Public channels available to the bot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [channels]
+                    properties:
+                      channels:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, name, private, member]
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            private: { type: boolean }
+                            member: { type: boolean }
+        '401':
+          description: Authentication is required.
+        '409':
+          description: Slack is disconnected, disabled, needs reconnection, or the stored token is unreadable.
+        '429':
+          description: Slack is rate limiting channel listing.
+        '502':
+          description: Slack did not return a channel list.
   /imports/dry-run:
     post:
       tags: [imports]
@@ -11854,6 +11899,122 @@ paths:
         required: true
         schema:
           type: string
+  /workspaces/{workspaceId}/integrations/google-calendar/calendars:
+    get:
+      tags:
+      - Integrations
+      operationId: get_workspaces_workspaceId_integrations_google-calendar_calendars
+      summary: List Google calendars the workspace connection can read
+      description: |
+        Lists the calendars visible to the stored Google Calendar access token so a
+        workspace manager can choose which calendar Nexus syncs with. Admin-only
+        (workspace:update). The stored token is decrypted for this call only and is
+        never returned. If the token is expired it is refreshed through the stored
+        refresh token; if it can no longer be used the endpoint returns 409 with a
+        reconnect-required error.
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Calendars available to the connection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [calendars]
+                    properties:
+                      calendars:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, name, primary, writable]
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            primary: { type: boolean }
+                            writable: { type: boolean }
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+        '409':
+          description: Google Calendar is disconnected, disabled, needs reconnection, or the stored token is unreadable.
+        '429':
+          description: Google is rate limiting calendar listing.
+        '502':
+          description: Google Calendar did not return a calendar list.
+  /workspaces/{workspaceId}/integrations/slack/channels:
+    get:
+      tags:
+      - Integrations
+      operationId: get_workspaces_workspaceId_integrations_slack_channels
+      summary: List public Slack channels the workspace connection can post to
+      description: |
+        Lists the public Slack channels visible to the stored Slack access token so a
+        workspace manager can choose which channel receives Slack notifications. Admin-only
+        (workspace:update). The stored token is decrypted for this call only and is
+        never returned. If the token is expired it is refreshed through the stored
+        refresh token; if it can no longer be used the endpoint returns 409 with a
+        reconnect-required error.
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Public channels available to the bot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [channels]
+                    properties:
+                      channels:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, name, isPrivate, isMember]
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            isPrivate: { type: boolean }
+                            isMember: { type: boolean }
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+        '409':
+          description: Slack is disconnected, disabled, needs reconnection, or the stored token is unreadable.
+        '429':
+          description: Slack is rate limiting channel listing.
+        '502':
+          description: Slack did not return a channel list.
   /workspaces/{workspaceId}/meetings:
     get:
       tags:
@@ -19327,6 +19488,11 @@ paths:
       - MEETING_RESCHEDULED
       - MEETING_CANCELLED
       - PROJECT_UPDATE
+      - TASK_BLOCKER_REPORTED
+      - TASK_BLOCKER_RESOLVED
+      - TASK_DUE_SOON
+      - TASK_OVERDUE
+      - INTEGRATION_RECONNECT_REQUIRED
     InstitutionGroup:
       type: object
       required:
@@ -20375,6 +20541,7 @@ paths:
       - SET_FIELD
       - ASSIGN
       - POST_MESSAGE
+      - SEND_SLACK_MESSAGE
     AutomationRunStatus:
       type: string
       enum:
@@ -20531,6 +20698,8 @@ paths:
             ASSIGN: userIds (comma-separated), userId, or assigneeId.
 
             POST_MESSAGE: channelId and body (or message).
+
+            SEND_SLACK_MESSAGE: no required fields; posts the automation name and trigger to the workspace Slack channel.
 
             '
         enabled:

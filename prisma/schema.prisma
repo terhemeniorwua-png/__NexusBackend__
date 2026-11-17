@@ -188,6 +188,7 @@ enum NotificationType {
   TASK_BLOCKER_RESOLVED
   TASK_DUE_SOON
   TASK_OVERDUE
+  INTEGRATION_RECONNECT_REQUIRED
 }
 
 enum AuthTokenPurpose {
@@ -1786,6 +1787,9 @@ model Integration {
   lastRefreshedAt        DateTime?
   lastSyncedAt           DateTime?
   revokedAt              DateTime?
+  /// Set when the provider rejected the stored token (for example Slack
+  /// invalid_auth). The integration must be reconnected before it is usable.
+  needsReconnect         Boolean             @default(false)
   createdAt              DateTime            @default(now())
   updatedAt              DateTime            @updatedAt
 
@@ -2087,6 +2091,7 @@ enum AutomationActionType {
   SET_FIELD
   ASSIGN
   POST_MESSAGE
+  SEND_SLACK_MESSAGE
 }
 
 enum AutomationRunStatus {

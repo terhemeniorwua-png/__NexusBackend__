@@ -33,6 +33,9 @@ export const connectIntegrationSchema = z
 
 export const disconnectParamsSchema = z.object({ integrationId: uuid });
 
+/** Workspace-scoped integration routes are mounted under `/workspaces/:workspaceId/integrations`. */
+export const workspaceIntegrationParamsSchema = z.object({ workspaceId: uuid });
+
 export const updateIntegrationSchema = z
   .object({
     enabled: z.boolean().optional(),
