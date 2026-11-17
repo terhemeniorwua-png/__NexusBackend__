@@ -1,3 +1,4 @@
+import ssoRouter from '../modules/sso/sso.routes';
 import { Router } from 'express';
 import type { AppConfig } from '../config/env';
 import { createAuthRouter } from '../modules/auth/auth.routes';
@@ -181,5 +182,6 @@ export function createApiRouter({
   // Analytics are user-scoped and permission-filtered by workspace access.
   router.use('/analytics', createAnalyticsRouter({ config }));
 
+  router.use('/sso', ssoRouter);
   return router;
 }

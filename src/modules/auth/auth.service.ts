@@ -93,6 +93,13 @@ export interface AuthService {
   ): Promise<
     AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
   >;
+  loginSsoAccount(
+    userId: string,
+    ctx: RequestContext,
+    metadata?: { provider?: string; workspaceId?: string },
+  ): Promise<
+    AuthenticationResult | { twoFactorRequired: true; challengeToken: string; expiresIn: number }
+  >;
   twoFactor: TwoFactorService;
   refresh(input: { refreshToken: string }, ctx: RequestContext): Promise<AuthenticationResult>;
   logout(input: { sessionId: string }, ctx: RequestContext): Promise<void>;
@@ -399,6 +406,43 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
       });
       return authenticateSession(session, user, refreshToken);
     },
+
+    async loginSsoAccount(userId, ctx, metadata) {
+      const user = await client.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        throw new AppError(
+          401,
+          'SSO_IDENTITY_INVALID',
+          'SSO identity is no longer available',
+        );
+      }
+      assertUsableAccount(user);
+      if (user.twoFactorEnabled) return twoFactor.issueChallenge(user);
+
+      const { session, refreshToken } = await createSession(client, {
+        userId: user.id,
+        ttlSeconds: config.refreshTokenTtlSeconds,
+        userAgent: ctx.userAgent,
+        ip: ctx.ip,
+      });
+      await client.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+      await recordSecurityEvent(client, {
+        action: SecurityAction.LoginSucceeded,
+        targetType: 'Session',
+        targetId: session.id,
+        actorId: user.id,
+        metadata: {
+          userId: user.id,
+          status: user.status,
+          provider: metadata?.provider ?? 'sso',
+          ...(metadata?.workspaceId ? { workspaceId: metadata.workspaceId } : {}),
+        },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      return authenticateSession(session, user, refreshToken);
+    },
+
     async register(input: RegisterInput, ctx: RequestContext): Promise<{ user: PublicUser }> {
       const existing = await findUserByEmail(input.email);
 
