@@ -23,8 +23,10 @@ import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/autho
 import {
   buildSlackAuthorizeUrl,
   exchangeSlackCode,
+  isSlackDefaultConnectEnabled,
   slackAuthorizeQuerySchema,
   slackCallbackQuerySchema,
+  slackDefaultConnection,
   slackResultUrl,
   verifySlackState,
 } from './slack.oauth';
@@ -324,6 +326,28 @@ export function createIntegrationRouter({
     }
   });
 
+  // Slack "default connect" (opt-in via SLACK_DEFAULT_CONNECT=true and SLACK_BOT_TOKEN): no Slack page.
+  // The signed, single-use state proves an OWNER / PROJECT_MANAGER started it; connect() re-checks the role.
+  router.get('/slack/default-callback', async (req, res) => {
+    const done = (status: 'connected' | 'denied' | 'error') =>
+      res.redirect(302, slackResultUrl(status));
+    const parsed = slackCallbackQuerySchema.safeParse(req.query);
+    if (!parsed.success) return done('error');
+    try {
+      if (!isSlackDefaultConnectEnabled()) return done('error');
+      const claims = await verifySlackState(parsed.data.state);
+      await service.connect({
+        userId: claims.userId,
+        provider: 'SLACK',
+        workspaceId: claims.workspaceId,
+        ...(await slackDefaultConnection()),
+      });
+      return done('connected');
+    } catch {
+      logger.warn('slack_default_connect_failed');
+      return done('error');
+    }
+  });
 
   router.get(
     '/google-drive/authorize',
