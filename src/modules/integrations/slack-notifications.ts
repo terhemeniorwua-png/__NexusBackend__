@@ -38,7 +38,11 @@ const SLACK_REVOKED_ERRORS = new Set([
   'revoked',
 ]);
 
-export type SlackNotificationKind = 'TASK_ASSIGNED' | 'TASK_DUE_SOON' | 'AUTOMATION';
+export type SlackNotificationKind =
+  | 'TASK_ASSIGNED'
+  | 'TASK_DUE_SOON'
+  | 'TASK_OVERDUE'
+  | 'AUTOMATION';
 
 export interface SlackNotificationPayload {
   kind: SlackNotificationKind;
@@ -95,9 +99,8 @@ export interface TaskAssignedSlackInput {
   taskKey: string;
   taskTitle: string;
   assigneeId: string;
-  assigneeName?: string | null;
-  actorName?: string | null;
-  dueDate?: string | null;
+  /** Current task status. Rendered as the `Status:` line. */
+  status?: string | null;
   /** ISO timestamp of the assignment; part of the idempotency key. */
   assignedAt: string;
 }
@@ -108,9 +111,20 @@ export interface TaskDueSoonSlackInput {
   taskId: string;
   taskKey: string;
   taskTitle: string;
-  dueDate?: string | null;
+  status?: string | null;
   /** ISO timestamp recorded when the due-soon claim was made. */
   dueSoonNotifiedAt: string;
+}
+
+export interface TaskOverdueSlackInput {
+  workspaceId: string;
+  projectId: string;
+  taskId: string;
+  taskKey: string;
+  taskTitle: string;
+  status?: string | null;
+  /** ISO timestamp of the task due date; part of the idempotency key. */
+  dueDate: string;
 }
 
 export interface AutomationRunSlackInput {
@@ -137,6 +151,7 @@ export interface SlackNotificationService {
   enqueue(input: EnqueueSlackNotificationInput): Promise<EnqueueSlackNotificationResult>;
   enqueueTaskAssigned(input: TaskAssignedSlackInput): Promise<EnqueueSlackNotificationResult>;
   enqueueTaskDueSoon(input: TaskDueSoonSlackInput): Promise<EnqueueSlackNotificationResult>;
+  enqueueTaskOverdue(input: TaskOverdueSlackInput): Promise<EnqueueSlackNotificationResult>;
   enqueueAutomationRun(input: AutomationRunSlackInput): Promise<EnqueueSlackNotificationResult>;
   processJob(job: SlackNotificationJob, now: Date): Promise<SlackJobOutcome>;
 }
@@ -170,14 +185,50 @@ export function buildSlackTaskUrl(projectId: string, taskId: string): string {
   return `${base}${path}`;
 }
 
-function formatDate(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
 function slackLink(url: string, text: string): string {
   return `<${url}|${text}>`;
+}
+
+const SLACK_TEXT_LIMIT = 300;
+
+/**
+ * Escape user-provided text for Slack `mrkdwn`.
+ *
+ * Workspace content reaches Slack as plain text only: `<`, `>` and `&` are
+ * escaped so a task title cannot inject a Slack mention or link, and control
+ * characters are collapsed so a title cannot forge extra lines. Truncation
+ * keeps a hostile title from dominating the message.
+ */
+export function escapeSlackText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, SLACK_TEXT_LIMIT);
+}
+
+/**
+ * The only task message shape that may be posted to Slack.
+ *
+ * Product rule: a Slack notification carries the task title, its current
+ * status and a deep link. Descriptions, comments, attachments and form
+ * answers are never sent.
+ */
+export function slackTaskMessage(input: {
+  taskKey: string;
+  taskTitle: string;
+  status: string;
+  url: string;
+}): string {
+  const title = escapeSlackText(`${input.taskKey} ${input.taskTitle}`.trim());
+  return [
+    `*${title}*`,
+    `Status: ${escapeSlackText(input.status)}`,
+    slackLink(input.url, 'Open task'),
+  ].join('\n');
 }
 
 /**
@@ -463,20 +514,16 @@ export function createSlackNotificationService(
   return {
     enqueue,
     async enqueueTaskAssigned(input) {
-      const due = formatDate(input.dueDate);
-      const link = buildSlackTaskUrl(input.projectId, input.taskId);
-      const assignee = input.assigneeName?.trim() || 'A teammate';
-      const actor = input.actorName?.trim() || 'Someone';
-      const lines = [
-        ':bell: *Task assigned*',
-        `${slackLink(link, `${input.taskKey} ${input.taskTitle}`)} was assigned to ${assignee} by ${actor}.`,
-      ];
-      if (due) lines.push(`Due: ${due}`);
       return enqueue({
         workspaceId: input.workspaceId,
         kind: 'TASK_ASSIGNED',
         dedupeKey: `task.assigned:${input.taskId}:${input.assigneeId}:${input.assignedAt}`,
-        text: lines.join('\n'),
+        text: slackTaskMessage({
+          taskKey: input.taskKey,
+          taskTitle: input.taskTitle,
+          status: input.status ?? 'ASSIGNED',
+          url: buildSlackTaskUrl(input.projectId, input.taskId),
+        }),
         metadata: {
           projectId: input.projectId,
           taskId: input.taskId,
@@ -486,18 +533,16 @@ export function createSlackNotificationService(
       });
     },
     async enqueueTaskDueSoon(input) {
-      const due = formatDate(input.dueDate);
-      const link = buildSlackTaskUrl(input.projectId, input.taskId);
-      const lines = [
-        ':alarm_clock: *Task due soon*',
-        `${slackLink(link, `${input.taskKey} ${input.taskTitle}`)} is due within 24 hours.`,
-      ];
-      if (due) lines.push(`Due: ${due}`);
       return enqueue({
         workspaceId: input.workspaceId,
         kind: 'TASK_DUE_SOON',
         dedupeKey: `task.due-soon:${input.taskId}:${input.dueSoonNotifiedAt}`,
-        text: lines.join('\n'),
+        text: slackTaskMessage({
+          taskKey: input.taskKey,
+          taskTitle: input.taskTitle,
+          status: input.status ? `${input.status} (due within 24 hours)` : 'Due within 24 hours',
+          url: buildSlackTaskUrl(input.projectId, input.taskId),
+        }),
         metadata: {
           projectId: input.projectId,
           taskId: input.taskId,
@@ -505,14 +550,33 @@ export function createSlackNotificationService(
         },
       });
     },
+    async enqueueTaskOverdue(input) {
+      return enqueue({
+        workspaceId: input.workspaceId,
+        kind: 'TASK_OVERDUE',
+        dedupeKey: `task.overdue:${input.taskId}:${input.dueDate}`,
+        text: slackTaskMessage({
+          taskKey: input.taskKey,
+          taskTitle: input.taskTitle,
+          status: input.status ? `${input.status} (overdue)` : 'Overdue',
+          url: buildSlackTaskUrl(input.projectId, input.taskId),
+        }),
+        metadata: {
+          projectId: input.projectId,
+          taskId: input.taskId,
+          dueDate: input.dueDate,
+        },
+      });
+    },
     async enqueueAutomationRun(input) {
-      const statusLabel = input.status === 'SUCCEEDED' ? 'succeeded' : 'failed';
+      // Automation messages never include the run error text: it can contain
+      // workspace content (task titles, comment bodies, form answers).
       const lines = [
-        `:gear: *Automation ${input.automationName}* ${statusLabel}`,
-        `Trigger: ${input.trigger}`,
-        `Action: ${input.action}`,
+        `*${escapeSlackText(input.automationName)}*`,
+        `Status: ${input.status === 'SUCCEEDED' ? 'Succeeded' : 'Failed'}`,
+        `Trigger: ${escapeSlackText(input.trigger)}`,
+        `Action: ${escapeSlackText(input.action)}`,
       ];
-      if (input.error) lines.push(`Error: ${input.error}`);
       return enqueue({
         workspaceId: input.workspaceId,
         kind: 'AUTOMATION',

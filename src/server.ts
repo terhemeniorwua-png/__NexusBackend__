@@ -14,6 +14,7 @@ import { createBillingService } from './modules/billing/billing.service';
 import { createBillingSeatSyncWorker } from './modules/billing/seat-sync.worker';
 import { createAutomationWorker } from './modules/automation/automation.worker';
 import { createIntegrationSyncWorker } from './modules/integrations/integration-sync.worker';
+import { createSlackEventNotifier } from './modules/integrations/slack.events';
 import { createImportWorker } from './modules/imports/import.worker';
 import { createWebhookWorker } from './modules/webhooks/webhook.worker';
 import { createS3CompatibleObjectStorage } from './services/storage/private-object-storage';
@@ -184,6 +185,7 @@ export async function startServer(): Promise<RunningServer> {
     logger,
     pollIntervalMs: config.taskDeadlineNotificationPollIntervalMs,
     health: workerRecorders.taskDeadlineNotification,
+    slackNotifier: createSlackEventNotifier({ prisma: getPrismaClient() }),
   });
   taskDeadlineNotificationWorker.start();
 
