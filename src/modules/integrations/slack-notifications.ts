@@ -1,5 +1,6 @@
 import type { Integration, IntegrationSyncJob, Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
+import { createNotification } from '../../services/notifications';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 import { decryptIntegrationToken } from './token-crypto';
 
@@ -29,6 +30,14 @@ export const SLACK_MAX_BACKOFF_MS = 60 * 60_000;
 export const SLACK_REQUEST_TIMEOUT_MS = 10_000;
 export const DEFAULT_SLACK_API_URL = 'https://slack.com/api';
 
+/**
+ * Channel discovery is bounded: a workspace with thousands of channels must not
+ * turn one HTTP request into unbounded work. `conversations.list` is paginated
+ * with a cursor, and only the first pages are read.
+ */
+const SLACK_CHANNELS_PAGE_LIMIT = 200;
+const SLACK_CHANNELS_MAX_PAGES = 10;
+
 const SLACK_REVOKED_ERRORS = new Set([
   'invalid_auth',
   'account_inactive',
@@ -38,7 +47,12 @@ const SLACK_REVOKED_ERRORS = new Set([
   'revoked',
 ]);
 
-export type SlackNotificationKind = 'TASK_ASSIGNED' | 'TASK_DUE_SOON' | 'AUTOMATION';
+export type SlackNotificationKind =
+  | 'TASK_ASSIGNED'
+  | 'TASK_DUE_SOON'
+  | 'TASK_OVERDUE'
+  | 'FORM_SUBMITTED'
+  | 'AUTOMATION';
 
 export interface SlackNotificationPayload {
   kind: SlackNotificationKind;
@@ -95,9 +109,8 @@ export interface TaskAssignedSlackInput {
   taskKey: string;
   taskTitle: string;
   assigneeId: string;
-  assigneeName?: string | null;
-  actorName?: string | null;
-  dueDate?: string | null;
+  /** Current task status. Rendered as the `Status:` line. */
+  status?: string | null;
   /** ISO timestamp of the assignment; part of the idempotency key. */
   assignedAt: string;
 }
@@ -108,9 +121,20 @@ export interface TaskDueSoonSlackInput {
   taskId: string;
   taskKey: string;
   taskTitle: string;
-  dueDate?: string | null;
+  status?: string | null;
   /** ISO timestamp recorded when the due-soon claim was made. */
   dueSoonNotifiedAt: string;
+}
+
+export interface TaskOverdueSlackInput {
+  workspaceId: string;
+  projectId: string;
+  taskId: string;
+  taskKey: string;
+  taskTitle: string;
+  status?: string | null;
+  /** ISO timestamp of the task due date; part of the idempotency key. */
+  dueDate: string;
 }
 
 export interface AutomationRunSlackInput {
@@ -122,6 +146,22 @@ export interface AutomationRunSlackInput {
   action: string;
   status: 'SUCCEEDED' | 'FAILED';
   error?: string | null;
+}
+
+export interface FormSubmittedSlackInput {
+  workspaceId: string;
+  formId: string;
+  formTitle: string;
+  /** One response per submit; part of the idempotency key. */
+  responseId: string;
+}
+
+export interface AutomationActionSlackInput {
+  workspaceId: string;
+  automationId: string;
+  automationName: string;
+  runId: string;
+  trigger: string;
 }
 
 export interface SlackNotificationServiceDependencies {
@@ -137,9 +177,24 @@ export interface SlackNotificationService {
   enqueue(input: EnqueueSlackNotificationInput): Promise<EnqueueSlackNotificationResult>;
   enqueueTaskAssigned(input: TaskAssignedSlackInput): Promise<EnqueueSlackNotificationResult>;
   enqueueTaskDueSoon(input: TaskDueSoonSlackInput): Promise<EnqueueSlackNotificationResult>;
+  enqueueTaskOverdue(input: TaskOverdueSlackInput): Promise<EnqueueSlackNotificationResult>;
+  enqueueFormSubmitted(input: FormSubmittedSlackInput): Promise<EnqueueSlackNotificationResult>;
   enqueueAutomationRun(input: AutomationRunSlackInput): Promise<EnqueueSlackNotificationResult>;
+  enqueueAutomationAction(input: AutomationActionSlackInput): Promise<EnqueueSlackNotificationResult>;
+  listChannels(input: { accessToken: string }): Promise<ListSlackChannelsResult>;
   processJob(job: SlackNotificationJob, now: Date): Promise<SlackJobOutcome>;
 }
+
+export interface SlackChannel {
+  id: string;
+  name: string;
+  private: boolean;
+  member: boolean;
+}
+
+export type ListSlackChannelsResult =
+  | { ok: true; channels: SlackChannel[] }
+  | { ok: false; revoked: boolean; error: string; retryAfterMs?: number };
 
 export function slackBackoffFor(attempts: number): number {
   const delay = SLACK_MIN_BACKOFF_MS * 2 ** Math.max(0, attempts - 1);
@@ -160,8 +215,12 @@ export function slackChannelFromConfig(
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function frontendBaseUrl(): string {
+  return (process.env.FRONTEND_URL ?? '').replace(/\/+$/, '');
+}
+
 export function buildSlackTaskUrl(projectId: string, taskId: string): string {
-  const base = (process.env.FRONTEND_URL ?? '').replace(/\/+$/, '');
+  const base = frontendBaseUrl();
   const path = (
     process.env.TASK_ASSIGNMENT_LINK_PATH ?? '/projects/:projectId/tasks/:taskId'
   )
@@ -170,14 +229,75 @@ export function buildSlackTaskUrl(projectId: string, taskId: string): string {
   return `${base}${path}`;
 }
 
-function formatDate(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+/**
+ * Deep link for a form.
+ *
+ * The frontend route is `/app/forms/[formId]` and resolves the workspace from
+ * the client-side active workspace, so no workspace id is added to the path or
+ * query string. The link only resolves when the recipient's active workspace
+ * matches the form's workspace.
+ */
+export function buildSlackFormUrl(formId: string): string {
+  return `${frontendBaseUrl()}/app/forms/${encodeURIComponent(formId)}`;
 }
 
 function slackLink(url: string, text: string): string {
   return `<${url}|${text}>`;
+}
+
+const SLACK_TEXT_LIMIT = 300;
+
+/**
+ * Escape user-provided text for Slack `mrkdwn`.
+ *
+ * Workspace content reaches Slack as plain text only: `<`, `>` and `&` are
+ * escaped so a task title cannot inject a Slack mention or link, and control
+ * characters are collapsed so a title cannot forge extra lines. Truncation
+ * keeps a hostile title from dominating the message.
+ */
+export function escapeSlackText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, SLACK_TEXT_LIMIT);
+}
+
+/**
+ * The only task message shape that may be posted to Slack.
+ *
+ * Product rule: a Slack notification carries the task title, its current
+ * status and a deep link. Descriptions, comments, attachments and form
+ * answers are never sent.
+ */
+export function slackTaskMessage(input: {
+  taskKey: string;
+  taskTitle: string;
+  status: string;
+  url: string;
+}): string {
+  const title = escapeSlackText(`${input.taskKey} ${input.taskTitle}`.trim());
+  return [
+    `*${title}*`,
+    `Status: ${escapeSlackText(input.status)}`,
+    slackLink(input.url, 'Open task'),
+  ].join('\n');
+}
+
+/**
+ * The only form message shape that may be posted to Slack.
+ *
+ * Product rule: a form notification carries the form name and a deep link.
+ * Submitted answers are never sent.
+ */
+export function slackFormMessage(input: { formTitle: string; url: string }): string {
+  return [
+    `*${escapeSlackText(input.formTitle)}*`,
+    slackLink(input.url, 'Open form'),
+  ].join('\n');
 }
 
 /**
@@ -252,6 +372,98 @@ export async function postSlackMessage(
       response.status >= 500 ||
       slackError === 'ratelimited');
   return { ok: false, retryable, revoked, error: slackError };
+}
+
+/**
+ * List the public channels the bot can post to.
+ *
+ * `channels:read` only exposes public channels and the `is_member` flag. Private
+ * channels are excluded from the Slack response entirely, so Nexus never
+ * invents a channel the bot cannot address. Pagination is bounded (see
+ * `SLACK_CHANNELS_MAX_PAGES`) to keep one request cheap.
+ */
+export async function listSlackChannels(input: {
+  accessToken: string;
+  fetchImpl?: typeof fetch;
+  slackApiUrl?: string;
+}): Promise<ListSlackChannelsResult> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const base = (input.slackApiUrl ?? DEFAULT_SLACK_API_URL).replace(/\/+$/, '');
+  const channels: SlackChannel[] = [];
+  let cursor: string | undefined;
+
+  for (let page = 0; page < SLACK_CHANNELS_MAX_PAGES; page += 1) {
+    if (cursor === '') break;
+    const params = new URLSearchParams({
+      types: 'public_channel',
+      exclude_archived: 'true',
+      limit: String(SLACK_CHANNELS_PAGE_LIMIT),
+    });
+    if (cursor) params.set('cursor', cursor);
+
+    let response: Response;
+    try {
+      response = await fetchImpl(`${base}/conversations.list?${params.toString()}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${input.accessToken}` },
+        signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        revoked: false,
+        error: error instanceof Error ? error.message.slice(0, 300) : 'The Slack request failed',
+      };
+    }
+
+    if (response.status === 429) {
+      const retryAfterSeconds = Number(response.headers.get('retry-after'));
+      return {
+        ok: false,
+        revoked: false,
+        error: 'Slack rate limit exceeded',
+        retryAfterMs:
+          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? retryAfterSeconds * 1000
+            : SLACK_MIN_BACKOFF_MS,
+      };
+    }
+
+    const body = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      channels?: Array<{
+        id?: string;
+        name?: string;
+        is_private?: boolean;
+        is_member?: boolean;
+      }>;
+      response_metadata?: { next_cursor?: string };
+    } | null;
+
+    if (!response.ok || !body?.ok) {
+      const slackError = body?.error ?? (response.ok ? 'unknown_error' : `http_${response.status}`);
+      return {
+        ok: false,
+        revoked: response.status === 401 || isSlackRevokedError(slackError),
+        error: slackError,
+      };
+    }
+
+    for (const channel of body.channels ?? []) {
+      if (!channel || typeof channel.id !== 'string' || channel.id.length === 0) continue;
+      channels.push({
+        id: channel.id,
+        name: typeof channel.name === 'string' ? channel.name : channel.id,
+        private: channel.is_private === true,
+        member: channel.is_member === true,
+      });
+    }
+
+    cursor = body.response_metadata?.next_cursor ?? '';
+  }
+
+  return { ok: true, channels };
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -329,6 +541,65 @@ export function createSlackNotificationService(
     });
   }
 
+  /**
+   * Record the revoked-token state and tell the workspace once.
+   *
+   * `updateMany ... needsReconnect: false` is a compare-and-set: only the first
+   * job that observes the revocation notifies members, so a burst of failed
+   * jobs cannot spam the workspace. Slack is workspace-level, so every ACTIVE
+   * member is a legitimate recipient of the reconnect notice.
+   */
+  async function markReconnectRequired(
+    integration: Integration,
+    message: string,
+  ): Promise<void> {
+    const claimed = await prisma.integration.updateMany({
+      where: { id: integration.id, needsReconnect: false },
+      data: {
+        status: 'ERROR',
+        needsReconnect: true,
+        lastError: message.slice(0, 500),
+      },
+    });
+    if (claimed.count === 0) {
+      await prisma.integration.updateMany({
+        where: { id: integration.id },
+        data: { status: 'ERROR', lastError: message.slice(0, 500) },
+      });
+      return;
+    }
+
+    if (!integration.workspaceId) return;
+    try {
+      const members = await prisma.workspaceMembership.findMany({
+        where: { workspaceId: integration.workspaceId, status: 'ACTIVE' },
+        select: { userId: true },
+      });
+      for (const member of members) {
+        await createNotification(prisma, {
+          userId: member.userId,
+          type: 'INTEGRATION_RECONNECT_REQUIRED',
+          title: 'Reconnect Slack',
+          body: 'Slack stopped accepting Nexus notifications because the connection was revoked. Reconnect Slack to resume delivery.',
+          link: '/settings/integrations',
+          data: {
+            workspaceId: integration.workspaceId,
+            integrationId: integration.id,
+            provider: 'SLACK',
+          },
+        });
+      }
+    } catch (error) {
+      // The revocation state is already persisted; a notification failure must
+      // not turn into a job failure that is retried forever.
+      log.warn('slack_reconnect_notification_failed', {
+        integrationId: integration.id,
+        workspaceId: integration.workspaceId,
+        error,
+      });
+    }
+  }
+
   async function processJob(
     job: SlackNotificationJob,
     now: Date,
@@ -396,14 +667,7 @@ export function createSlackNotificationService(
 
     if (posted.revoked) {
       const message = `SLACK_TOKEN_REVOKED: ${posted.error}`;
-      await prisma.integration.update({
-        where: { id: integration.id },
-        data: {
-          status: 'ERROR',
-          needsReconnect: true,
-          lastError: message.slice(0, 500),
-        },
-      });
+      await markReconnectRequired(integration, message);
       await failJob(job, now, message);
       // Stop retrying every other queued message for this integration.
       await prisma.integrationSyncJob.updateMany({
@@ -463,20 +727,16 @@ export function createSlackNotificationService(
   return {
     enqueue,
     async enqueueTaskAssigned(input) {
-      const due = formatDate(input.dueDate);
-      const link = buildSlackTaskUrl(input.projectId, input.taskId);
-      const assignee = input.assigneeName?.trim() || 'A teammate';
-      const actor = input.actorName?.trim() || 'Someone';
-      const lines = [
-        ':bell: *Task assigned*',
-        `${slackLink(link, `${input.taskKey} ${input.taskTitle}`)} was assigned to ${assignee} by ${actor}.`,
-      ];
-      if (due) lines.push(`Due: ${due}`);
       return enqueue({
         workspaceId: input.workspaceId,
         kind: 'TASK_ASSIGNED',
         dedupeKey: `task.assigned:${input.taskId}:${input.assigneeId}:${input.assignedAt}`,
-        text: lines.join('\n'),
+        text: slackTaskMessage({
+          taskKey: input.taskKey,
+          taskTitle: input.taskTitle,
+          status: input.status ?? 'ASSIGNED',
+          url: buildSlackTaskUrl(input.projectId, input.taskId),
+        }),
         metadata: {
           projectId: input.projectId,
           taskId: input.taskId,
@@ -486,18 +746,16 @@ export function createSlackNotificationService(
       });
     },
     async enqueueTaskDueSoon(input) {
-      const due = formatDate(input.dueDate);
-      const link = buildSlackTaskUrl(input.projectId, input.taskId);
-      const lines = [
-        ':alarm_clock: *Task due soon*',
-        `${slackLink(link, `${input.taskKey} ${input.taskTitle}`)} is due within 24 hours.`,
-      ];
-      if (due) lines.push(`Due: ${due}`);
       return enqueue({
         workspaceId: input.workspaceId,
         kind: 'TASK_DUE_SOON',
         dedupeKey: `task.due-soon:${input.taskId}:${input.dueSoonNotifiedAt}`,
-        text: lines.join('\n'),
+        text: slackTaskMessage({
+          taskKey: input.taskKey,
+          taskTitle: input.taskTitle,
+          status: input.status ? `${input.status} (due within 24 hours)` : 'Due within 24 hours',
+          url: buildSlackTaskUrl(input.projectId, input.taskId),
+        }),
         metadata: {
           projectId: input.projectId,
           taskId: input.taskId,
@@ -505,14 +763,48 @@ export function createSlackNotificationService(
         },
       });
     },
+    async enqueueTaskOverdue(input) {
+      return enqueue({
+        workspaceId: input.workspaceId,
+        kind: 'TASK_OVERDUE',
+        dedupeKey: `task.overdue:${input.taskId}:${input.dueDate}`,
+        text: slackTaskMessage({
+          taskKey: input.taskKey,
+          taskTitle: input.taskTitle,
+          status: input.status ? `${input.status} (overdue)` : 'Overdue',
+          url: buildSlackTaskUrl(input.projectId, input.taskId),
+        }),
+        metadata: {
+          projectId: input.projectId,
+          taskId: input.taskId,
+          dueDate: input.dueDate,
+        },
+      });
+    },
+    async enqueueFormSubmitted(input) {
+      return enqueue({
+        workspaceId: input.workspaceId,
+        kind: 'FORM_SUBMITTED',
+        dedupeKey: `form.submitted:${input.formId}:${input.responseId}`,
+        text: slackFormMessage({
+          formTitle: input.formTitle,
+          url: buildSlackFormUrl(input.formId),
+        }),
+        metadata: {
+          formId: input.formId,
+          responseId: input.responseId,
+        },
+      });
+    },
     async enqueueAutomationRun(input) {
-      const statusLabel = input.status === 'SUCCEEDED' ? 'succeeded' : 'failed';
+      // Automation messages never include the run error text: it can contain
+      // workspace content (task titles, comment bodies, form answers).
       const lines = [
-        `:gear: *Automation ${input.automationName}* ${statusLabel}`,
-        `Trigger: ${input.trigger}`,
-        `Action: ${input.action}`,
+        `*${escapeSlackText(input.automationName)}*`,
+        `Status: ${input.status === 'SUCCEEDED' ? 'Succeeded' : 'Failed'}`,
+        `Trigger: ${escapeSlackText(input.trigger)}`,
+        `Action: ${escapeSlackText(input.action)}`,
       ];
-      if (input.error) lines.push(`Error: ${input.error}`);
       return enqueue({
         workspaceId: input.workspaceId,
         kind: 'AUTOMATION',
@@ -523,6 +815,33 @@ export function createSlackNotificationService(
           runId: input.runId,
           status: input.status,
         },
+      });
+    },
+    async enqueueAutomationAction(input) {
+      // Explicit automation action: announce that the automation fired. The
+      // message is generated from the automation name and trigger only; run
+      // payloads and error text are never forwarded to Slack.
+      const lines = [
+        `*${escapeSlackText(input.automationName)}*`,
+        'Status: Triggered',
+        `Trigger: ${escapeSlackText(input.trigger)}`,
+      ];
+      return enqueue({
+        workspaceId: input.workspaceId,
+        kind: 'AUTOMATION',
+        dedupeKey: `automation-action:${input.runId}`,
+        text: lines.join('\n'),
+        metadata: {
+          automationId: input.automationId,
+          runId: input.runId,
+        },
+      });
+    },
+    async listChannels(input) {
+      return listSlackChannels({
+        accessToken: input.accessToken,
+        ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+        ...(deps.slackApiUrl ? { slackApiUrl: deps.slackApiUrl } : {}),
       });
     },
     processJob,

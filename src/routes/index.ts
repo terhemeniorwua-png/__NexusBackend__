@@ -52,6 +52,8 @@ import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 import { createFormRouter } from '../modules/forms/form.routes';
 import { createSearchRouter } from '../modules/search/search.routes';
 import { createIntegrationRouter } from '../modules/integrations/integration.routes';
+import { createWorkspaceIntegrationRouter } from '../modules/integrations/integration-picker.routes';
+import type { IntegrationPickerService } from '../modules/integrations/integration-picker.service';
 import {
   createDevIntegrationCallbackRouter,
   createProjectRepositoryRouter,
@@ -76,6 +78,8 @@ interface ApiRouterOptions {
   joinRequestService?: JoinRequestService;
   teamService?: TeamService;
   billingService?: BillingService;
+  /** Injectable for tests; production uses the Prisma-backed picker. */
+  integrationPickerService?: IntegrationPickerService;
 }
 
 export function createApiRouter({
@@ -90,6 +94,7 @@ export function createApiRouter({
   joinRequestService = createJoinRequestService(config),
   teamService = createTeamService(),
   billingService = createBillingService(config),
+  integrationPickerService,
 }: ApiRouterOptions): Router {
   const router = Router();
 
@@ -146,6 +151,14 @@ export function createApiRouter({
   router.use('/search', createSearchRouter({ config }));
   // Integrations framework (Phase 19)
   router.use('/integrations', createIntegrationRouter({ config }));
+  // Workspace-scoped provider resource pickers (calendars, Slack channels)
+  router.use(
+    '/workspaces/:workspaceId/integrations',
+    createWorkspaceIntegrationRouter({
+      config,
+      ...(integrationPickerService ? { service: integrationPickerService } : {}),
+    }),
+  );
   // Data importers (ClickUp, Trello, CSV)
   router.use('/imports', createImportRouter(config));
   // Dev/source-control integrations (Phase 5, GitHub App workspace connections)

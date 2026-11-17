@@ -50,6 +50,7 @@ jobs:
       RUN_PHASE9_DB_TESTS: "true"
       RUN_PHASE10_DB_TESTS: "true"
       RUN_BILLING_DB_TESTS: "true"
+      RUN_PHASE19_DB_TESTS: "true"
 
     steps:
       - uses: actions/checkout@v4

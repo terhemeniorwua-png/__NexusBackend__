@@ -17,6 +17,10 @@ import {
   type SlackNotificationService,
 } from './slack-notifications';
 import { decryptIntegrationToken, encryptIntegrationToken } from './token-crypto';
+import {
+  createIntegrationPickerService,
+  type IntegrationPickerService,
+} from './integration-picker.service';
 
 // Access and refresh tokens are encrypted with AES-256-GCM (token-crypto.ts) before
 // storage. INTEGRATION_ENCRYPTION_KEY must be set or connect() fails with 503.
@@ -106,6 +110,11 @@ export function createIntegrationService(
   prisma: PrismaClient = getPrismaClient(),
   lifecycle: ProviderLifecycle = createProviderLifecycle(),
   slackNotifications: SlackNotificationService = createSlackNotificationService({ prisma }),
+  picker: IntegrationPickerService = createIntegrationPickerService({
+    prisma,
+    lifecycle,
+    slackNotifications,
+  }),
 ) {
   const encryptToken = encryptIntegrationToken;
   const isWorkspaceLevel = (provider: IntegrationProvider, workspaceId: string | null): boolean =>
@@ -534,6 +543,50 @@ export function createIntegrationService(
 
     async updateConfig(input: Input & { integrationId: string; config: Record<string, unknown> }) {
       const integration = await findForCaller(input.userId, input.integrationId);
+
+      // A picker id must be one the provider currently returns for *this*
+      // connection. Validation happens before anything is persisted so a stale
+      // or hand-crafted id can never be saved and silently break delivery.
+      if (input.config.googleCalendarId !== undefined) {
+        if (integration.provider !== 'GOOGLE_CALENDAR') {
+          throw new AppError(
+            400,
+            'INTEGRATION_CONFIG_MISMATCH',
+            'googleCalendarId is only valid for a Google Calendar connection',
+          );
+        }
+        const calendarId =
+          typeof input.config.googleCalendarId === 'string'
+            ? input.config.googleCalendarId.trim()
+            : '';
+        if (!calendarId) {
+          throw new AppError(
+            400,
+            'GOOGLE_CALENDAR_ID_REQUIRED',
+            'Choose a Google calendar before saving',
+          );
+        }
+        await picker.assertCalendarSelectable({ integration, calendarId });
+      }
+
+      if (input.config.slackChannelId !== undefined) {
+        if (integration.provider !== 'SLACK') {
+          throw new AppError(
+            400,
+            'INTEGRATION_CONFIG_MISMATCH',
+            'slackChannelId is only valid for a Slack connection',
+          );
+        }
+        const channelId =
+          typeof input.config.slackChannelId === 'string'
+            ? input.config.slackChannelId.trim()
+            : '';
+        if (!channelId) {
+          throw new AppError(400, 'SLACK_CHANNEL_REQUIRED', 'Choose a Slack channel before saving');
+        }
+        await picker.assertChannelSelectable({ integration, channelId });
+      }
+
       const current = (integration.config ?? {}) as Record<string, unknown>;
       const next = { ...current, ...input.config };
       const updated = await prisma.integration.update({
@@ -563,6 +616,91 @@ export function createIntegrationService(
         lastError: integration.lastError,
         latestJob: latestJob ? jobSummary(latestJob) : null,
       };
+    },
+
+    /**
+     * List the public Slack channels the connected bot can post to.
+     *
+     * Workspace-level connection: requires workspace update permission (via
+     * `findForCaller`). The stored token is decrypted only for this call and
+     * never returned. A revoked token immediately marks the integration as
+     * needing reconnection so the UI can prompt instead of retrying.
+     */
+    async slackChannels(input: Input & { integrationId: string }) {
+      const integration = await findForCaller(input.userId, input.integrationId);
+      if (integration.provider !== 'SLACK') {
+        throw new AppError(
+          400,
+          'INTEGRATION_NOT_SLACK',
+          'Channel listing is only available for Slack integrations',
+        );
+      }
+      if (integration.status === 'DISCONNECTED') {
+        throw new AppError(
+          409,
+          'INTEGRATION_DISCONNECTED',
+          'Reconnect Slack before listing channels',
+        );
+      }
+      if (!integration.enabled) {
+        throw new AppError(
+          409,
+          'INTEGRATION_DISABLED',
+          'Enable the Slack integration before listing channels',
+        );
+      }
+      if (integration.needsReconnect) {
+        throw new AppError(
+          409,
+          'SLACK_RECONNECT_REQUIRED',
+          'Reconnect Slack before listing channels',
+        );
+      }
+
+      let accessToken: string;
+      try {
+        accessToken = decryptIntegrationToken(integration.accessTokenCiphertext);
+      } catch {
+        throw new AppError(
+          409,
+          'SLACK_TOKEN_UNREADABLE',
+          'The stored Slack token cannot be read. Reconnect Slack.',
+        );
+      }
+
+      const result = await slackNotifications.listChannels({ accessToken });
+      if (!result.ok) {
+        if (result.revoked) {
+          const message = `SLACK_TOKEN_REVOKED: ${result.error}`;
+          await prisma.integration.updateMany({
+            where: { id: integration.id, needsReconnect: false },
+            data: {
+              status: 'ERROR',
+              needsReconnect: true,
+              lastError: message.slice(0, 500),
+            },
+          });
+          throw new AppError(
+            409,
+            'SLACK_RECONNECT_REQUIRED',
+            'Reconnect Slack before listing channels',
+          );
+        }
+        if (result.retryAfterMs !== undefined) {
+          throw new AppError(
+            429,
+            'SLACK_RATE_LIMITED',
+            'Slack is rate limiting channel listing. Try again shortly.',
+          );
+        }
+        throw new AppError(
+          502,
+          'SLACK_CHANNELS_UNAVAILABLE',
+          'Slack did not return a channel list. Try again later.',
+        );
+      }
+
+      return result.channels;
     },
 
     async enqueueSync(input: Input & { integrationId: string }) {
@@ -832,6 +970,14 @@ export function createIntegrationService(
           'SLACK_CHANNEL_REQUIRED',
           'Choose a Slack channel before enabling notifications',
         );
+      }
+
+      // Validate a newly chosen channel against the provider before saving it.
+      if (input.slackChannelId !== undefined) {
+        const channelId = input.slackChannelId.trim();
+        if (channelId) {
+          await picker.assertChannelSelectable({ integration, channelId });
+        }
       }
 
       const updated = await prisma.integration.update({

@@ -197,7 +197,6 @@ describe('files module (routes contract)', () => {
     app.use(express.json());
     const router = createFileRouter({ config: { jwtAccessSecret: 'x', jwtAccessExpiresIn: '15m', refreshCookieName: 'r', objectStorageEndpoint: '' } as any, service });
     app.use('/workspaces/:workspaceId/files', router);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     app.use((err: any, _req: any, res: any, _next: any) => {
       res.status(err.statusCode || 500).json({ success: false, error: { code: err.code || 'ERR', message: err.message } });
     });

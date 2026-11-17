@@ -725,6 +725,51 @@ paths:
           content:
             application/json:
               schema: { type: object, additionalProperties: true }
+  /integrations/{integrationId}/slack/channels:
+    get:
+      tags: [integrations]
+      operationId: listSlackChannels
+      summary: List public Slack channels the bot can post to
+      description: Workspace connections require workspace update permission. The stored token is decrypted for this call only and never returned. With the current scopes (channels:read) only public channels are listed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: integrationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Public channels available to the bot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [channels]
+                    properties:
+                      channels:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, name, private, member]
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            private: { type: boolean }
+                            member: { type: boolean }
+        '401':
+          description: Authentication is required.
+        '409':
+          description: Slack is disconnected, disabled, needs reconnection, or the stored token is unreadable.
+        '429':
+          description: Slack is rate limiting channel listing.
+        '502':
+          description: Slack did not return a channel list.
   /imports/dry-run:
     post:
       tags: [imports]
@@ -864,9 +909,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/google-drive/authorize:
     get:
       tags:
@@ -921,9 +964,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/dropbox/authorize:
     get:
       tags:
@@ -978,9 +1019,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/slack/authorize:
     get:
       tags:
@@ -1035,9 +1074,7 @@ paths:
           maxLength: 200
       responses:
         '302':
-          description: Redirect to the configured frontend with connected
-          denied: null
-          or error status.: null
+          description: "Redirect to the configured frontend with connected, denied, or error status."
   /integrations/slack/default-callback:
     get:
       tags:
@@ -1115,9 +1152,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/WebhookSubscriptionWithSecretResponse'
         '400':
-          description: Invalid URL
-          events: null
-          or request body.: null
+          description: "Invalid URL, events, or request body."
         '401':
           description: Authentication is required.
         '403':
@@ -1153,9 +1188,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/WebhookSubscriptionWithSecretResponse'
         '400':
-          description: Invalid URL
-          events: null
-          or request body.: null
+          description: "Invalid URL, events, or request body."
         '401':
           description: Authentication is required.
         '403':
@@ -2431,9 +2464,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthenticationResponse'
         '401':
-          description: Invalid
-          expired: null
-          reused challenge or verification code.: null
+          description: "Invalid, expired, reused challenge or verification code."
         '429':
           description: IP/account MFA lockout or request rate limit.
   /auth/2fa/setup:
@@ -3112,9 +3143,7 @@ paths:
         '401':
           description: Authentication is required.
         '413':
-          description: Upload exceeds the byte
-          dimension: null
-          or pixel limit.: null
+          description: "Upload exceeds the byte, dimension, or pixel limit."
         '415':
           description: Unsupported or corrupt image.
         '429':
@@ -3908,8 +3937,7 @@ paths:
                         targetId:
                           type: string
                         actor:
-                          type: object
-                          nullable: true
+                          type: [object, 'null']
                           properties:
                             id:
                               type: string
@@ -3922,9 +3950,8 @@ paths:
                           type: string
                           format: date-time
                   nextCursor:
-                    type: string
+                    type: [string, 'null']
                     format: uuid
-                    nullable: true
         '401':
           description: Authentication is required.
         '403':
@@ -6317,8 +6344,7 @@ paths:
                   minLength: 1
                   maxLength: 100
                 description:
-                  type: string
-                  nullable: true
+                  type: [string, 'null']
                   maxLength: 500
                 teamId:
                   type: string
@@ -6353,12 +6379,9 @@ paths:
       - bearerAuth: []
       responses:
         '200':
-          description: Active channel for authorized members
-          or archived channel for a workspace manager (private channels still require explicit membership).: null
+          description: "Active channel for authorized members, or archived channel for a workspace manager (private channels still require explicit membership)."
         '404':
-          description: Channel is missing
-          archived and caller is not a workspace manager: null
-          or otherwise inaccessible.: null
+          description: "Channel is missing, archived and caller is not a workspace manager, or otherwise inaccessible."
     patch:
       tags:
       - Channels
@@ -6379,16 +6402,13 @@ paths:
                   minLength: 1
                   maxLength: 100
                 description:
-                  type: string
-                  nullable: true
+                  type: [string, 'null']
                   maxLength: 500
       responses:
         '200':
           description: Updated active channel summary. Archived channels cannot be updated.
         '404':
-          description: Channel is missing
-          archived: null
-          or inaccessible.: null
+          description: "Channel is missing, archived, or inaccessible."
         '409':
           description: Case-insensitive channel name conflict.
     delete:
@@ -6421,9 +6441,7 @@ paths:
         '200':
           description: Channel archived; workspace managers may repeat this operation on an archived channel.
         '404':
-          description: Channel is missing
-          inaccessible: null
-          or archived for a non-manager.: null
+          description: "Channel is missing, inaccessible, or archived for a non-manager."
   /workspaces/{workspaceId}/channels/{channelId}/members:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6458,10 +6476,7 @@ paths:
         '400':
           description: Membership is available only for private channels.
         '404':
-          description: Channel is missing
-          archived: null
-          inaccessible: null
-          or target is not an active workspace member.: null
+          description: "Channel is missing, archived, inaccessible, or target is not an active workspace member."
   /workspaces/{workspaceId}/channels/{channelId}/members/{userId}:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6487,10 +6502,7 @@ paths:
         '200':
           description: Membership removed.
         '404':
-          description: Channel is missing
-          archived: null
-          inaccessible: null
-          or membership does not exist.: null
+          description: "Channel is missing, archived, inaccessible, or membership does not exist."
   /workspaces/{workspaceId}/projects:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6583,9 +6595,7 @@ paths:
               $ref: '#/components/schemas/ProjectCreateRequest'
       responses:
         '201':
-          description: Project created
-          with initial owner membership: null
-          audit record and response summary.: null
+          description: "Project created, with initial owner membership, audit record and response summary."
           content:
             application/json:
               schema:
@@ -6615,9 +6625,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProjectResponse'
         '404':
-          description: Project is missing
-          outside the workspace: null
-          or not visible to the caller.: null
+          description: "Project is missing, outside the workspace, or not visible to the caller."
     patch:
       tags:
       - Projects
@@ -6641,10 +6649,7 @@ paths:
         '403':
           description: Project mutation is not permitted.
         '404':
-          description: Project is missing
-          archived: null
-          outside the workspace: null
-          or inaccessible.: null
+          description: "Project is missing, archived, outside the workspace, or inaccessible."
         '409':
           description: Duplicate project key or inconsistent team/department scope.
     delete:
@@ -6711,16 +6716,11 @@ paths:
         '403':
           description: The caller can view the project but is neither its owner nor a workspace administrator.
         '404':
-          description: The project is invisible
-          outside the workspace: null
-          or soft-deleted.: null
+          description: "The project is invisible, outside the workspace, or soft-deleted."
         '409':
           description: Concurrent ownership change or the manager/owner invariant would be violated.
         '422':
-          description: The recipient is inactive
-          outside the workspace: null
-          role-ineligible: null
-          or outside the project team/department scope.: null
+          description: "The recipient is inactive, outside the workspace, role-ineligible, or outside the project team/department scope."
   /workspaces/{workspaceId}/projects/{projectId}/restore:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6733,8 +6733,7 @@ paths:
       - bearerAuth: []
       responses:
         '200':
-          description: Project is restored to its prior status
-          or PLANNING if no previous archive record exists.: null
+          description: "Project is restored to its prior status, or PLANNING if no previous archive record exists."
         '403':
           description: Project restore permission is required.
         '404':
@@ -6924,9 +6923,7 @@ paths:
         '403':
           description: Project update permission is required.
         '404':
-          description: Project is missing
-          archived: null
-          or inaccessible.: null
+          description: "Project is missing, archived, or inaccessible."
   /workspaces/{workspaceId}/projects/{projectId}/milestones/{milestoneId}:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -6975,9 +6972,7 @@ paths:
         '200':
           description: Updated milestone.
         '404':
-          description: Project or milestone is missing
-          archived: null
-          or inaccessible.: null
+          description: "Project or milestone is missing, archived, or inaccessible."
     delete:
       tags:
       - Projects
@@ -6988,9 +6983,7 @@ paths:
         '200':
           description: Milestone deleted.
         '404':
-          description: Project or milestone is missing
-          archived: null
-          or inaccessible.: null
+          description: "Project or milestone is missing, archived, or inaccessible."
   /workspaces/{workspaceId}/automations:
     parameters:
     - $ref: '#/components/parameters/WorkspaceId'
@@ -7508,8 +7501,7 @@ paths:
         '403':
           description: The caller lacks permission for the proposed action.
         '404':
-          description: A referenced project
-          task or resource does not exist or is not accessible.: null
+          description: "A referenced project, task or resource does not exist or is not accessible."
     get:
       tags:
       - AI
@@ -11854,6 +11846,122 @@ paths:
         required: true
         schema:
           type: string
+  /workspaces/{workspaceId}/integrations/google-calendar/calendars:
+    get:
+      tags:
+      - Integrations
+      operationId: get_workspaces_workspaceId_integrations_google-calendar_calendars
+      summary: List Google calendars the workspace connection can read
+      description: |
+        Lists the calendars visible to the stored Google Calendar access token so a
+        workspace manager can choose which calendar Nexus syncs with. Admin-only
+        (workspace:update). The stored token is decrypted for this call only and is
+        never returned. If the token is expired it is refreshed through the stored
+        refresh token; if it can no longer be used the endpoint returns 409 with a
+        reconnect-required error.
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Calendars available to the connection.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [calendars]
+                    properties:
+                      calendars:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, name, primary, writable]
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            primary: { type: boolean }
+                            writable: { type: boolean }
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+        '409':
+          description: Google Calendar is disconnected, disabled, needs reconnection, or the stored token is unreadable.
+        '429':
+          description: Google is rate limiting calendar listing.
+        '502':
+          description: Google Calendar did not return a calendar list.
+  /workspaces/{workspaceId}/integrations/slack/channels:
+    get:
+      tags:
+      - Integrations
+      operationId: get_workspaces_workspaceId_integrations_slack_channels
+      summary: List public Slack channels the workspace connection can post to
+      description: |
+        Lists the public Slack channels visible to the stored Slack access token so a
+        workspace manager can choose which channel receives Slack notifications. Admin-only
+        (workspace:update). The stored token is decrypted for this call only and is
+        never returned. If the token is expired it is refreshed through the stored
+        refresh token; if it can no longer be used the endpoint returns 409 with a
+        reconnect-required error.
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Public channels available to the bot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [channels]
+                    properties:
+                      channels:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, name, isPrivate, isMember]
+                          properties:
+                            id: { type: string }
+                            name: { type: string }
+                            isPrivate: { type: boolean }
+                            isMember: { type: boolean }
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+        '409':
+          description: Slack is disconnected, disabled, needs reconnection, or the stored token is unreadable.
+        '429':
+          description: Slack is rate limiting channel listing.
+        '502':
+          description: Slack did not return a channel list.
   /workspaces/{workspaceId}/meetings:
     get:
       tags:
@@ -15446,14 +15554,14 @@ paths:
         - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
       responses:
         '200': { description: Custom fields, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '401': { description: Authentication required (AUTHENTICATION_REQUIRED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '403': { description: Permission denied (INSUFFICIENT_ROLE/PERMISSION_DENIED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (PROJECT_NOT_FOUND/WORKSPACE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '401': { description: "Authentication required (AUTHENTICATION_REQUIRED)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: "Permission denied (INSUFFICIENT_ROLE/PERMISSION_DENIED)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (PROJECT_NOT_FOUND/WORKSPACE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     post:
       tags: [Tasks]
       operationId: createProjectCustomField
-      summary: Create a custom field for a project (types: TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX)
+      summary: "Create a custom field for a project (types: TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX)"
       parameters:
         - { in: path, name: workspaceId, required: true, schema: { type: string, format: uuid } }
         - { in: path, name: projectId, required: true, schema: { type: string, format: uuid } }
@@ -15468,10 +15576,9 @@ paths:
                 name: { type: string }
                 key: { type: string }
                 type: { type: string, enum: [TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX] }
-                description: { type: string, nullable: true }
+                description: { type: [string, 'null'] }
                 options:
-                  type: array
-                  nullable: true
+                  type: [array, 'null']
                   items:
                     type: object
                     additionalProperties: false
@@ -15485,7 +15592,7 @@ paths:
               required: [name, type]
       responses:
         '201': { description: Created custom field, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
@@ -15504,13 +15611,13 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: string, nullable: true }, options: { type: array, nullable: true, items: { type: object, additionalProperties: false, properties: { value: { type: string }, label: { type: string }, color: { type: string } }, required: [value, label] } }, required: { type: boolean }, position: { type: integer } } }
+            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: [string, 'null'] }, options: { type: [array, 'null'], items: { type: object, additionalProperties: false, properties: { value: { type: string }, label: { type: string }, color: { type: string } }, required: [value, label] } }, required: { type: boolean }, position: { type: integer } } }
       responses:
         '200': { description: Updated custom field, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (CUSTOM_FIELD_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (CUSTOM_FIELD_NOT_FOUND/PROJECT_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteProjectCustomField
@@ -15523,7 +15630,7 @@ paths:
         '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (CUSTOM_FIELD_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (CUSTOM_FIELD_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/custom-fields:
     get:
@@ -15538,7 +15645,7 @@ paths:
         '200': { description: Task custom field values, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (TASK_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (TASK_NOT_FOUND/PROJECT_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     put:
       tags: [Tasks]
       operationId: setTaskCustomFieldValues
@@ -15567,10 +15674,10 @@ paths:
               required: [values]
       responses:
         '200': { description: Updated values, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation/field errors (VALIDATION_ERROR, CUSTOM_FIELD_INVALID, CUSTOM_FIELD_VALUE_INVALID, CUSTOM_FIELD_REQUIRED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation/field errors (VALIDATION_ERROR, CUSTOM_FIELD_INVALID, CUSTOM_FIELD_VALUE_INVALID, CUSTOM_FIELD_REQUIRED)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (TASK_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (TASK_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-views:
     get:
@@ -15614,7 +15721,7 @@ paths:
               required: [name]
       responses:
         '201': { description: Created saved view, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, config size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR, unknown keys rejected, config size limit)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
@@ -15649,10 +15756,10 @@ paths:
                   required: [version]
       responses:
         '200': { description: Updated saved view, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, config size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR, unknown keys rejected, config size limit)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '403': { description: Permission denied (PERMISSION_DENIED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (SAVED_VIEW_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: "Permission denied (PERMISSION_DENIED)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (SAVED_VIEW_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteTaskSavedView
@@ -15664,8 +15771,8 @@ paths:
       responses:
         '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '403': { description: Permission denied (PERMISSION_DENIED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (SAVED_VIEW_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '403': { description: "Permission denied (PERMISSION_DENIED)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (SAVED_VIEW_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/recurrence:
     get:
@@ -15680,7 +15787,7 @@ paths:
         '200': { description: Recurrence rule, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (RECURRENCE_NOT_FOUND/TASK_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (RECURRENCE_NOT_FOUND/TASK_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     put:
       tags: [Tasks]
       operationId: upsertTaskRecurrence
@@ -15700,18 +15807,18 @@ paths:
                 frequency: { type: string, enum: [DAILY, WEEKLY, MONTHLY] }
                 interval: { type: integer, minimum: 1 }
                 daysOfWeek: { type: array, items: { type: integer } }
-                dayOfMonth: { type: integer, nullable: true }
+                dayOfMonth: { type: [integer, 'null'] }
                 endsAt: { type: string, format: date-time, nullable: true }
-                maxOccurrences: { type: integer, nullable: true }
+                maxOccurrences: { type: [integer, 'null'] }
                 nextRunAt: { type: string, format: date-time, nullable: true }
                 active: { type: boolean }
               required: [frequency]
       responses:
         '200': { description: Upserted recurrence rule, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (TASK_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (TASK_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteTaskRecurrence
@@ -15724,7 +15831,7 @@ paths:
         '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (RECURRENCE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (RECURRENCE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/recurrence/generate:
     post:
@@ -15737,11 +15844,11 @@ paths:
         - { in: path, name: taskId, required: true, schema: { type: string, format: uuid } }
       responses:
         '201': { description: Generated task, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Invalid state (RECURRENCE_INACTIVE, RECURRENCE_COMPLETE, RECURRENCE_ENDED, RECURRENCE_NOT_GENERATED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Invalid state (RECURRENCE_INACTIVE, RECURRENCE_COMPLETE, RECURRENCE_ENDED, RECURRENCE_NOT_GENERATED)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (TASK_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '409': { description: Conflict (RECURRENCE_NOT_DUE, RECURRENCE_ALREADY_GENERATED), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (TASK_NOT_FOUND/PROJECT_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '409': { description: "Conflict (RECURRENCE_NOT_DUE, RECURRENCE_ALREADY_GENERATED)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-templates:
     get:
@@ -15772,17 +15879,17 @@ paths:
               additionalProperties: false
               properties:
                 name: { type: string }
-                description: { type: string, nullable: true }
+                description: { type: [string, 'null'] }
                 data:
                   type: object
                   additionalProperties: false
                   properties:
                     version: { type: integer, enum: [1] }
                     title: { type: string }
-                    description: { type: string, nullable: true }
+                    description: { type: [string, 'null'] }
                     status: { type: string }
                     priority: { type: string }
-                    category: { type: string, nullable: true }
+                    category: { type: [string, 'null'] }
                     labels: { type: array, items: { type: string } }
                     startDate: { type: string, format: date-time, nullable: true }
                     dueDate: { type: string, format: date-time, nullable: true }
@@ -15792,7 +15899,7 @@ paths:
               required: [name]
       responses:
         '201': { description: Created task template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, blueprint size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR, unknown keys rejected, blueprint size limit)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '404': { description: Project/workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
@@ -15810,13 +15917,13 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: string, nullable: true }, data: { type: object, additionalProperties: false, properties: { version: { type: integer, enum: [1] }, title: { type: string }, description: { type: string, nullable: true }, status: { type: string }, priority: { type: string }, category: { type: string, nullable: true }, labels: { type: array, items: { type: string } }, startDate: { type: string, format: date-time, nullable: true }, dueDate: { type: string, format: date-time, nullable: true }, customFieldValues: { type: array, items: { type: object, additionalProperties: false, properties: { fieldId: { type: string, format: uuid }, value: {} }, required: [fieldId] } }, subtasks: { type: array, items: { type: object, additionalProperties: true } } }, required: [version] } } }
+            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: [string, 'null'] }, data: { type: object, additionalProperties: false, properties: { version: { type: integer, enum: [1] }, title: { type: string }, description: { type: [string, 'null'] }, status: { type: string }, priority: { type: string }, category: { type: [string, 'null'] }, labels: { type: array, items: { type: string } }, startDate: { type: string, format: date-time, nullable: true }, dueDate: { type: string, format: date-time, nullable: true }, customFieldValues: { type: array, items: { type: object, additionalProperties: false, properties: { fieldId: { type: string, format: uuid }, value: {} }, required: [fieldId] } }, subtasks: { type: array, items: { type: object, additionalProperties: true } } }, required: [version] } } }
       responses:
         '200': { description: Updated task template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (TASK_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (TASK_TEMPLATE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Tasks]
       operationId: deleteTaskTemplate
@@ -15829,7 +15936,7 @@ paths:
         '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (TASK_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (TASK_TEMPLATE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/projects/{projectId}/task-templates/{templateId}/create-task:
     post:
@@ -15847,10 +15954,10 @@ paths:
             schema: { type: object, additionalProperties: false, properties: { title: { type: string }, assigneeIds: { type: array, items: { type: string, format: uuid } }, startDate: { type: string, format: date-time, nullable: true }, dueDate: { type: string, format: date-time, nullable: true } } }
       responses:
         '201': { description: Created task, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (TASK_TEMPLATE_NOT_FOUND/PROJECT_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (TASK_TEMPLATE_NOT_FOUND/PROJECT_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/project-templates:
     get:
@@ -15879,23 +15986,23 @@ paths:
               additionalProperties: false
               properties:
                 name: { type: string }
-                description: { type: string, nullable: true }
+                description: { type: [string, 'null'] }
                 data:
                   type: object
                   additionalProperties: false
                   properties:
                     version: { type: integer, enum: [1] }
-                    description: { type: string, nullable: true }
+                    description: { type: [string, 'null'] }
                     status: { type: string }
                     visibility: { type: string }
-                    customFields: { type: array, items: { type: object, additionalProperties: false, properties: { name: { type: string }, key: { type: string }, type: { type: string, enum: [TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX] }, description: { type: string, nullable: true }, options: { type: array, nullable: true, items: { type: object, additionalProperties: false, properties: { value: { type: string }, label: { type: string }, color: { type: string } }, required: [value, label] } }, required: { type: boolean }, position: { type: integer } }, required: [name, type] } }
+                    customFields: { type: array, items: { type: object, additionalProperties: false, properties: { name: { type: string }, key: { type: string }, type: { type: string, enum: [TEXT, NUMBER, DATE, SELECT, MULTI_SELECT, USER, CHECKBOX] }, description: { type: [string, 'null'] }, options: { type: [array, 'null'], items: { type: object, additionalProperties: false, properties: { value: { type: string }, label: { type: string }, color: { type: string } }, required: [value, label] } }, required: { type: boolean }, position: { type: integer } }, required: [name, type] } }
                     taskTemplates: { type: array, items: { type: object, additionalProperties: true } }
-                    tasks: { type: array, items: { type: object, additionalProperties: false, properties: { title: { type: string }, description: { type: string, nullable: true }, status: { type: string }, priority: { type: string }, labels: { type: array, items: { type: string } } }, required: [title] } }
+                    tasks: { type: array, items: { type: object, additionalProperties: false, properties: { title: { type: string }, description: { type: [string, 'null'] }, status: { type: string }, priority: { type: string }, labels: { type: array, items: { type: string } } }, required: [title] } }
                   required: [version]
               required: [name]
       responses:
         '201': { description: Created project template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR, unknown keys rejected, blueprint size limit), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR, unknown keys rejected, blueprint size limit)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '404': { description: Workspace not found, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
@@ -15912,13 +16019,13 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: string, nullable: true }, data: { type: object, additionalProperties: false, properties: { version: { type: integer, enum: [1] }, description: { type: string, nullable: true }, status: { type: string }, visibility: { type: string }, customFields: { type: array, items: { type: object, additionalProperties: true } }, taskTemplates: { type: array, items: { type: object, additionalProperties: true } }, tasks: { type: array, items: { type: object, additionalProperties: true } } }, required: [version] } } }
+            schema: { type: object, additionalProperties: false, properties: { name: { type: string }, description: { type: [string, 'null'] }, data: { type: object, additionalProperties: false, properties: { version: { type: integer, enum: [1] }, description: { type: [string, 'null'] }, status: { type: string }, visibility: { type: string }, customFields: { type: array, items: { type: object, additionalProperties: true } }, taskTemplates: { type: array, items: { type: object, additionalProperties: true } }, tasks: { type: array, items: { type: object, additionalProperties: true } } }, required: [version] } } }
       responses:
         '200': { description: Updated project template, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (PROJECT_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (PROJECT_TEMPLATE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
     delete:
       tags: [Projects]
       operationId: deleteProjectTemplate
@@ -15930,7 +16037,7 @@ paths:
         '200': { description: Deleted, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (PROJECT_TEMPLATE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (PROJECT_TEMPLATE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
   /workspaces/{workspaceId}/project-templates/{templateId}/create-project:
     post:
@@ -15950,17 +16057,18 @@ paths:
               properties:
                 name: { type: string }
                 key: { type: string }
-                description: { type: string, nullable: true }
+                description: { type: [string, 'null'] }
               required: [name, key]
       responses:
         '201': { description: Created project, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '400': { description: Validation error (VALIDATION_ERROR), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '400': { description: "Validation error (VALIDATION_ERROR)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '401': { description: Authentication required, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
         '403': { description: Permission denied, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '404': { description: Not found (PROJECT_TEMPLATE_NOT_FOUND/WORKSPACE_NOT_FOUND), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
-        '409': { description: Conflict (PROJECT_KEY_TAKEN), content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { description: "Not found (PROJECT_TEMPLATE_NOT_FOUND/WORKSPACE_NOT_FOUND)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '409': { description: "Conflict (PROJECT_KEY_TAKEN)", content: { application/json: { schema: { type: object, additionalProperties: true } } } }
 
 
+components:
   securitySchemes:
     bearerAuth:
       type: http
@@ -16220,20 +16328,16 @@ paths:
           type: integer
           minimum: 0
         lastPassStartedAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         lastSuccessAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         lastFailureAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         lastErrorCode:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: A stable error code. Raw messages are never returned.
     QueueStatus:
       type: object
@@ -19127,8 +19231,7 @@ paths:
             totalSizeBytes:
               type: integer
         subscription:
-          type: object
-          nullable: true
+          type: [object, 'null']
           properties:
             plan:
               type:
@@ -19327,6 +19430,11 @@ paths:
       - MEETING_RESCHEDULED
       - MEETING_CANCELLED
       - PROJECT_UPDATE
+      - TASK_BLOCKER_REPORTED
+      - TASK_BLOCKER_RESOLVED
+      - TASK_DUE_SOON
+      - TASK_OVERDUE
+      - INTEGRATION_RECONNECT_REQUIRED
     InstitutionGroup:
       type: object
       required:
@@ -20375,6 +20483,7 @@ paths:
       - SET_FIELD
       - ASSIGN
       - POST_MESSAGE
+      - SEND_SLACK_MESSAGE
     AutomationRunStatus:
       type: string
       enum:
@@ -20531,6 +20640,8 @@ paths:
             ASSIGN: userIds (comma-separated), userId, or assigneeId.
 
             POST_MESSAGE: channelId and body (or message).
+
+            SEND_SLACK_MESSAGE: no required fields; posts the automation name and trigger to the workspace Slack channel.
 
             '
         enabled:
