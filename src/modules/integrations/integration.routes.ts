@@ -284,16 +284,6 @@ export function createIntegrationRouter({
         workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
       });
-      if (isSlackDefaultConnectEnabled()) {
-        const integration = await service.connect({
-          userId: userId(req),
-          provider: 'SLACK',
-          workspaceId,
-          ...(await slackDefaultConnection()),
-        });
-        sendSuccess(res, { integration, connected: true });
-        return;
-      }
       sendSuccess(res, { url: await buildSlackAuthorizeUrl({ userId: userId(req), workspaceId }) });
     },
   );
