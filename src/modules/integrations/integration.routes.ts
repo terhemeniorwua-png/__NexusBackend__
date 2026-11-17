@@ -23,7 +23,6 @@ import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/autho
 import {
   buildSlackAuthorizeUrl,
   exchangeSlackCode,
-  isSlackDefaultConnectEnabled,
   slackAuthorizeQuerySchema,
   slackCallbackQuerySchema,
   slackResultUrl,

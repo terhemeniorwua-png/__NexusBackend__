@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import test, { after, before, describe } from 'node:test';
