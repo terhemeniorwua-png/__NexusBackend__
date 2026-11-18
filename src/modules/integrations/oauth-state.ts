@@ -24,7 +24,10 @@ function cleanupConsumed(now = Date.now()): void {
 }
 
 function sign(body: string): string {
-  const secret = process.env.JWT_ACCESS_SECRET || 'test-secret';
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    throw new AppError(503, 'INTEGRATIONS_NOT_CONFIGURED', 'OAuth state signing is not configured');
+  }
   return createHmac('sha256', createHash('sha256').update(secret).digest()).update(body).digest('base64url');
 }
 
