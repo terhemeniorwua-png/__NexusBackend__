@@ -1,6 +1,9 @@
 import type { Server as HttpServer } from 'node:http';
 import type { AppConfig } from '../config/env';
 import { AppError } from '../utils/errors';
+import { setIo } from './io-registry';
+import { getPrismaClient } from '../db/prisma';
+import { ChannelCapability, requireChannelAccess } from '../modules/authorization/channel.policy';
 import { resolveSessionAuth } from '../modules/auth/session-auth';
 
 /**
@@ -17,6 +20,32 @@ import { resolveSessionAuth } from '../modules/auth/session-auth';
 
 export interface SocketServer {
   close: () => Promise<void>;
+}
+
+type SocketHandshake = {
+  handshake: { auth?: Record<string, unknown> };
+  data: Record<string, unknown>;
+};
+
+export function createSocketAuthMiddleware(config: AppConfig) {
+  return async (socket: SocketHandshake, next: (err?: Error) => void): Promise<void> => {
+    try {
+      const token = socket.handshake.auth?.token;
+      if (typeof token !== 'string' || !token) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Authentication token is required');
+      }
+      const { verifyAccessToken } = await import('../modules/auth/access-token.service');
+      const payload = verifyAccessToken(config, token);
+      socket.data.userId = payload.sub;
+      const workspaceId = socket.handshake.auth?.workspaceId;
+      if (typeof workspaceId === 'string' && workspaceId) {
+        socket.data.workspaceId = workspaceId;
+      }
+      next();
+    } catch (_error) {
+      next(new Error('Authentication failed'));
+    }
+  };
 }
 
 export async function createSocketServer(
@@ -50,7 +79,12 @@ export async function createSocketServer(
     }
   }
 
-  // Authentication middleware
+  setIo(io);
+
+  // Authentication middleware (token-based handshake auth)
+  io.use(createSocketAuthMiddleware(config) as never);
+
+  // Session, user-status and require-SSO enforcement (database-backed)
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token as string | undefined;
@@ -61,7 +95,6 @@ export async function createSocketServer(
       // Verify the access token and enforce session revocation/state (authoritative).
       const { verifyAccessToken } = await import('../modules/auth/access-token.service');
       const { findActiveSession } = await import('../modules/auth/session.service');
-      const { getPrismaClient } = await import('../db/prisma');
       const { checkRequireSso } = await import('../modules/sso/sso.service');
       const payload = verifyAccessToken(config, token);
       const prisma = getPrismaClient();
@@ -117,11 +150,25 @@ export async function createSocketServer(
 
   io.on('connection', (socket) => {
     const userId = socket.data.userId as string;
+    // Private room so a single user can be reached (incoming calls/notifications).
+    void socket.join(`user:${userId}`);
 
-    // Join workspace room
-    socket.on('workspace:join', (workspaceId: string) => {
-      socket.join(`workspace:${workspaceId}`);
-      socket.data.workspaceId = workspaceId;
+    // Join workspace room — the client must prove active workspace membership
+    socket.on('workspace:join', async (workspaceId: string, ack?: (result: { ok: boolean }) => void) => {
+      try {
+        if (typeof workspaceId !== 'string' || !workspaceId) throw new Error('invalid workspace id');
+        const prisma = getPrismaClient();
+        const membership = await prisma.workspaceMembership.findUnique({
+          where: { workspaceId_userId: { workspaceId, userId } },
+          select: { status: true },
+        });
+        if (!membership || membership.status !== 'ACTIVE') throw new Error('access denied');
+        await socket.join(`workspace:${workspaceId}`);
+        socket.data.workspaceId = workspaceId;
+        ack?.({ ok: true });
+      } catch {
+        ack?.({ ok: false });
+      }
     });
 
     // Leave workspace room
@@ -130,12 +177,26 @@ export async function createSocketServer(
     });
 
     // Join channel room — the client must prove membership
-    socket.on('channel:join', (channelId: string) => {
-      // Membership is verified via the REST API; the socket room is
-      // only a delivery channel. The server does not re-verify on join
-      // because the REST endpoint that sent the message already checked
-      // channel access before emitting the event.
-      socket.join(`channel:${channelId}`);
+    socket.on('channel:join', async (channelId: string, ack?: (result: { ok: boolean }) => void) => {
+      try {
+        if (typeof channelId !== 'string') throw new Error('invalid channel id');
+        const prisma = getPrismaClient();
+        const channel = await prisma.channel.findFirst({
+          where: { id: channelId, deletedAt: null },
+          select: { workspaceId: true },
+        });
+        if (!channel) throw new Error('not found');
+        await requireChannelAccess(prisma, {
+          userId,
+          workspaceId: channel.workspaceId,
+          channelId,
+          capability: ChannelCapability.View,
+        });
+        await socket.join(`channel:${channelId}`);
+        ack?.({ ok: true });
+      } catch {
+        ack?.({ ok: false });
+      }
     });
 
     // Leave channel room
