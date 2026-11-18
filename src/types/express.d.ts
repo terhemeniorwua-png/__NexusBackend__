@@ -14,7 +14,9 @@ declare global {
         sessionId: string;
         email: string;
         name: string;
-        status: 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+        status: 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED' | 'PENDING_DELETION';
+        authMethod: 'password' | 'social' | 'sso' | 'break_glass';
+        authMethodExpiresAt?: Date | null;
       };
     }
   }
