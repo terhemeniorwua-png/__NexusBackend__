@@ -258,7 +258,7 @@ export function createDevIntegrationCallbackRouter({
       await service.handleGithubCallback({ query: req.query as Record<string, unknown> });
       return res.redirect(302, resultRedirectUrl(config, 'connected', 'github'));
     } catch (error) {
-      logger.warn('github_app_callback_failed', { error });
+      logger.warn('github_app_callback_failed', { message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
       return res.redirect(302, resultRedirectUrl(config, 'error', 'github'));
     }
   });
