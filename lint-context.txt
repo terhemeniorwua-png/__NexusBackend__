@@ -1,0 +1,692 @@
+
+=== src/middleware/authenticate.ts ===
+
+[@typescript-eslint/no-explicit-any] 88:44
+   86        }
+   87  
+>> 88        const rawMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase();
+   89        const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any)
+   90          ? (rawMethod as AuthContext['authMethod'])
+
+[@typescript-eslint/no-explicit-any] 89:101
+   87  
+   88        const rawMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase();
+>> 89        const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any)
+   90          ? (rawMethod as AuthContext['authMethod'])
+   91          : 'password';
+
+[@typescript-eslint/no-explicit-any] 94:55
+   92  
+   93        // Break-glass sessions are time-limited by authMethodExpiresAt in addition to normal session expiry.
+>> 94        if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
+   95          const amExp = new Date((session as any).authMethodExpiresAt).getTime();
+   96          if (amExp <= Date.now()) {
+
+[@typescript-eslint/no-explicit-any] 95:44
+   93        // Break-glass sessions are time-limited by authMethodExpiresAt in addition to normal session expiry.
+   94        if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
+>> 95          const amExp = new Date((session as any).authMethodExpiresAt).getTime();
+   96          if (amExp <= Date.now()) {
+   97            throw new AppError(401, 'SESSION_EXPIRED', 'Your break-glass session has expired. Please sign in again.');
+
+[@typescript-eslint/no-explicit-any] 108:42
+   106          status: user.status,
+   107          authMethod,
+>> 108          authMethodExpiresAt: (session as any).authMethodExpiresAt ?? null,
+   109        };
+   110  
+
+=== src/modules/auth/access-token.service.ts ===
+
+[@typescript-eslint/no-explicit-any] 86:26
+   84    }
+   85  
+>> 86    const amr = (claims as any).amr;
+   87    return {
+   88      sub: claims.sub,
+
+=== src/modules/auth/auth.service.ts ===
+
+[@typescript-eslint/no-explicit-any] 234:74
+   232  
+   233    async function authenticateSession(
+>> 234      session: { id: string; userId: string; expiresAt: Date; authMethod?: any },
+   235      user: User,
+   236      refreshToken: string,
+
+[@typescript-eslint/no-explicit-any] 238:43
+   236      refreshToken: string,
+   237    ): Promise<AuthenticationResult> {
+>> 238      const authMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase() as any;
+   239      const { token: accessToken, expiresIn } = signAccessToken(config, {
+   240        userId: session.userId,
+
+[@typescript-eslint/no-explicit-any] 238:91
+   236      refreshToken: string,
+   237    ): Promise<AuthenticationResult> {
+>> 238      const authMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase() as any;
+   239      const { token: accessToken, expiresIn } = signAccessToken(config, {
+   240        userId: session.userId,
+
+=== src/modules/auth/session.service.ts ===
+
+[@typescript-eslint/no-explicit-any] 42:53
+   40        userId: input.userId,
+   41        refreshTokenHash: hashSecret(refreshToken),
+>> 42        authMethod: input.authMethod.toUpperCase() as any,
+   43        ...(input.authMethodExpiresAt ? { authMethodExpiresAt: input.authMethodExpiresAt } : {}),
+   44        expiresAt,
+
+=== src/modules/authorization/workspace.policy.ts ===
+
+[@typescript-eslint/no-explicit-any] 192:22
+   190        if (verifiedDomainCount > 0) {
+   191          let authMethod = input.auth?.authMethod?.toLowerCase();
+>> 192          let session: any = null;
+   193          if (input.auth?.sessionId) {
+   194            session = await client.session.findUnique({ where: { id: input.auth.sessionId } });
+
+=== src/modules/sso/oidc.service.ts ===
+
+[@typescript-eslint/no-unused-vars] 2:29
+   1  import crypto from 'node:crypto';
+>> 2  import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
+   3  import { getPrismaClient } from '../../db/prisma';
+   4  import { AppError } from '../../utils/errors';
+
+[@typescript-eslint/no-unused-vars] 6:15
+   4  import { AppError } from '../../utils/errors';
+   5  import { encryptIntegrationToken, decryptIntegrationToken } from '../integrations/token-crypto';
+>> 6  import type { AppConfig } from '../../config/env';
+   7  import type { AuthService } from '../auth/auth.service';
+   8  
+
+[@typescript-eslint/no-unused-vars] 7:15
+   5  import { encryptIntegrationToken, decryptIntegrationToken } from '../integrations/token-crypto';
+   6  import type { AppConfig } from '../../config/env';
+>> 7  import type { AuthService } from '../auth/auth.service';
+   8  
+   9  export const SSO_BROWSER_BINDING_COOKIE = 'nexus_sso_oidc_binding';
+
+=== src/modules/sso/saml.service.ts ===
+
+[@typescript-eslint/no-unused-vars] 7:3
+   5  import { AppError } from '../../utils/errors';
+   6  import {
+>> 7    assertVerifiedIdpEmail,
+   8    isEmailDomainAllowed,
+   9    getVerifiedDomainsForWorkspace,
+
+[@typescript-eslint/no-explicit-any] 130:37
+   128  }): Promise<{ redirectUrl: string; requestId: string }> {
+   129    const saml = createSamlValidator(input.config);
+>> 130    const requestXml = await (saml as any).generateAuthorizeRequestAsync(false);
+   131    const m = String(requestXml).match(/\bID=(["'])([^"']+)\1/);
+   132    if (!m?.[2]) {
+
+[@typescript-eslint/no-explicit-any] 173:159
+   171  
+   172  export function extractSamlEmailAndName(profile: Record<string, unknown>): { email?: string; emailVerified?: boolean; name?: string; nameId?: string } {
+>> 173    const nameId = typeof profile.nameID === 'string' ? profile.nameID : (typeof profile.nameID === 'object' && profile.nameID && 'value' in (profile.nameID as any) ? String((profile.nameID as any).value) : undefined);
+   174    // Common attribute names
+   175    const email =
+
+[@typescript-eslint/no-explicit-any] 173:192
+   171  
+   172  export function extractSamlEmailAndName(profile: Record<string, unknown>): { email?: string; emailVerified?: boolean; name?: string; nameId?: string } {
+>> 173    const nameId = typeof profile.nameID === 'string' ? profile.nameID : (typeof profile.nameID === 'object' && profile.nameID && 'value' in (profile.nameID as any) ? String((profile.nameID as any).value) : undefined);
+   174    // Common attribute names
+   175    const email =
+
+=== src/modules/sso/sso.routes.ts ===
+
+[@typescript-eslint/no-unused-vars] 84:10
+   82  }
+   83  
+>> 84  function assertSsoEnabled() {
+   85    const enabled = (process.env.SSO_ENABLED ?? 'false').toLowerCase() === 'true';
+   86    if (!enabled) {
+
+[@typescript-eslint/no-explicit-any] 130:28
+   128    try {
+   129      const prisma = getPrismaClient();
+>> 130      const userId = (req as any).auth?.userId as string;
+   131      const configs = await listSsoConfigs(prisma, userId, req.params.workspaceId as string);
+   132      res.json({ configs });
+
+[@typescript-eslint/no-explicit-any] 139:28
+   137    try {
+   138      const prisma = getPrismaClient();
+>> 139      const userId = (req as any).auth?.userId as string;
+   140      const item = await getSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string);
+   141      res.json(item);
+
+[@typescript-eslint/no-explicit-any] 148:28
+   146    try {
+   147      const prisma = getPrismaClient();
+>> 148      const userId = (req as any).auth?.userId as string;
+   149      const item = await createSsoConfig(prisma, userId, req.params.workspaceId as string, req.body);
+   150      res.status(201).json(item);
+
+[@typescript-eslint/no-explicit-any] 157:28
+   155    try {
+   156      const prisma = getPrismaClient();
+>> 157      const userId = (req as any).auth?.userId as string;
+   158      const item = await updateSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string, req.body);
+   159      res.json(item);
+
+[@typescript-eslint/no-explicit-any] 166:28
+   164    try {
+   165      const prisma = getPrismaClient();
+>> 166      const userId = (req as any).auth?.userId as string;
+   167      const record = await requestDomainVerification(prisma, userId, req.params.workspaceId as string, req.params.configId as string, req.body.domain);
+   168      res.status(201).json(record);
+
+[@typescript-eslint/no-explicit-any] 175:28
+   173    try {
+   174      const prisma = getPrismaClient();
+>> 175      const userId = (req as any).auth?.userId as string;
+   176      const record = await verifyDomainDnsTxt(prisma, userId, req.params.workspaceId as string, req.params.domainId as string);
+   177      res.json(record);
+
+[@typescript-eslint/no-explicit-any] 184:28
+   182    try {
+   183      const prisma = getPrismaClient();
+>> 184      const userId = (req as any).auth?.userId as string;
+   185      const result = await generateBreakGlassCodes(prisma, userId, req.params.workspaceId as string, req.params.configId as string, req.body.count);
+   186      res.status(201).json(result);
+
+[@typescript-eslint/no-explicit-any] 274:28
+   272    try {
+   273      const prisma = getPrismaClient();
+>> 274      const userId = (req as any).auth?.userId as string;
+   275      const result = await consumeBreakGlassCode(prisma, req.params.workspaceId as string, req.body.code, userId, {
+   276        ip: req.ip,
+
+[@typescript-eslint/no-explicit-any] 294:28
+   292    try {
+   293      const prisma = getPrismaClient();
+>> 294      const userId = (req as any).auth?.userId as string;
+   295      const result = await disableSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string);
+   296      res.json(result);
+
+[@typescript-eslint/no-explicit-any] 303:28
+   301    try {
+   302      const prisma = getPrismaClient();
+>> 303      const userId = (req as any).auth?.userId as string;
+   304      const result = await deleteSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string);
+   305      res.json(result);
+
+[@typescript-eslint/no-explicit-any] 508:39
+   506      const authService = createAuthService(config);
+   507  
+>> 508      const samlResponse = (req.body as any)?.SAMLResponse || (req.body as any)?.samlResponse;
+   509      if (!samlResponse || typeof samlResponse !== 'string') {
+   510        throw new AppError(400, 'SSO_SAML_INVALID_RESPONSE', 'Missing SAMLResponse');
+
+[@typescript-eslint/no-explicit-any] 508:74
+   506      const authService = createAuthService(config);
+   507  
+>> 508      const samlResponse = (req.body as any)?.SAMLResponse || (req.body as any)?.samlResponse;
+   509      if (!samlResponse || typeof samlResponse !== 'string') {
+   510        throw new AppError(400, 'SSO_SAML_INVALID_RESPONSE', 'Missing SAMLResponse');
+
+=== src/modules/sso/sso.service.ts ===
+
+[@typescript-eslint/no-unused-vars] 1:8
+>> 1  import crypto from 'node:crypto';
+   2  import dns from 'node:dns/promises';
+   3  import { Prisma, type PrismaClient, type WorkspaceRole, type WorkspaceSsoConfig } from '@prisma/client';
+
+[@typescript-eslint/no-unused-vars] 3:10
+   1  import crypto from 'node:crypto';
+   2  import dns from 'node:dns/promises';
+>> 3  import { Prisma, type PrismaClient, type WorkspaceRole, type WorkspaceSsoConfig } from '@prisma/client';
+   4  import { AppError } from '../../utils/errors';
+   5  import { verifyOAuthState, type OAuthStateClaims } from '../integrations/oauth-state';
+
+[@typescript-eslint/no-unused-vars] 3:42
+   1  import crypto from 'node:crypto';
+   2  import dns from 'node:dns/promises';
+>> 3  import { Prisma, type PrismaClient, type WorkspaceRole, type WorkspaceSsoConfig } from '@prisma/client';
+   4  import { AppError } from '../../utils/errors';
+   5  import { verifyOAuthState, type OAuthStateClaims } from '../integrations/oauth-state';
+
+[@typescript-eslint/no-unused-vars] 7:10
+   5  import { verifyOAuthState, type OAuthStateClaims } from '../integrations/oauth-state';
+   6  import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+>> 7  import { getPrismaClient } from '../../db/prisma';
+   8  import { encryptIntegrationToken } from '../integrations/token-crypto';
+   9  import { createNotification } from '../../services/notifications';
+
+[@typescript-eslint/no-explicit-any] 97:66
+   95  }
+   96  
+>> 97  function toPublicConfig(config: WorkspaceSsoConfig & { domains?: any[] }) {
+   98    const { clientSecretCiphertext, breakGlassCodeHashes, ...rest } = config as any;
+   99    return {
+
+[@typescript-eslint/no-explicit-any] 98:79
+   96  
+   97  function toPublicConfig(config: WorkspaceSsoConfig & { domains?: any[] }) {
+>> 98    const { clientSecretCiphertext, breakGlassCodeHashes, ...rest } = config as any;
+   99    return {
+   100      ...rest,
+
+[@typescript-eslint/no-explicit-any] 161:46
+   159        userInfoUrl: input.userInfoUrl ?? null,
+   160        redirectUri: input.redirectUri ?? null,
+>> 161        config: (input.config ?? undefined) as any,
+   162        status: input.isEnabled ? 'ACTIVE' : 'DRAFT',
+   163        isEnabled: Boolean(input.isEnabled),
+
+[@typescript-eslint/no-explicit-any] 179:8
+   177      targetId: created.id,
+   178      metadata: { providerType: created.providerType, providerName: created.providerName },
+>> 179    } as any);
+   180  
+   181    return toPublicConfig(created);
+
+[@typescript-eslint/no-explicit-any] 216:61
+   214        userInfoUrl: input.userInfoUrl !== undefined ? input.userInfoUrl : existing.userInfoUrl,
+   215        redirectUri: input.redirectUri !== undefined ? input.redirectUri : existing.redirectUri,
+>> 216        config: input.config !== undefined ? (input.config as any) : (existing.config as any),
+   217        isEnabled: input.isEnabled ?? existing.isEnabled,
+   218        requireSso: input.requireSso ?? existing.requireSso,
+
+[@typescript-eslint/no-explicit-any] 216:88
+   214        userInfoUrl: input.userInfoUrl !== undefined ? input.userInfoUrl : existing.userInfoUrl,
+   215        redirectUri: input.redirectUri !== undefined ? input.redirectUri : existing.redirectUri,
+>> 216        config: input.config !== undefined ? (input.config as any) : (existing.config as any),
+   217        isEnabled: input.isEnabled ?? existing.isEnabled,
+   218        requireSso: input.requireSso ?? existing.requireSso,
+
+[@typescript-eslint/no-explicit-any] 220:41
+   218        requireSso: input.requireSso ?? existing.requireSso,
+   219        breakGlassEnabled: input.breakGlassEnabled ?? existing.breakGlassEnabled,
+>> 220        jitProvisioningEnabled: (input as any).jitProvisioningEnabled ?? (existing as any).jitProvisioningEnabled,
+   221        status: (input.isEnabled ?? existing.isEnabled) ? 'ACTIVE' : 'DRAFT',
+   222      },
+
+[@typescript-eslint/no-explicit-any] 220:85
+   218        requireSso: input.requireSso ?? existing.requireSso,
+   219        breakGlassEnabled: input.breakGlassEnabled ?? existing.breakGlassEnabled,
+>> 220        jitProvisioningEnabled: (input as any).jitProvisioningEnabled ?? (existing as any).jitProvisioningEnabled,
+   221        status: (input.isEnabled ?? existing.isEnabled) ? 'ACTIVE' : 'DRAFT',
+   222      },
+
+[@typescript-eslint/no-explicit-any] 237:8
+   235        requireSso: updated.requireSso,
+   236      },
+>> 237    } as any);
+   238  
+   239    return toPublicConfig(updated);
+
+[@typescript-eslint/no-explicit-any] 284:8
+   282      targetId: record.id,
+   283      metadata: { domain },
+>> 284    } as any);
+   285  
+   286    return record;
+
+[@typescript-eslint/no-explicit-any] 324:8
+   322      targetId: updated.id,
+   323      metadata: { domain: updated.domain },
+>> 324    } as any);
+   325  
+   326    return updated;
+
+[@typescript-eslint/no-explicit-any] 344:45
+   342    await db.workspaceSsoConfig.update({
+   343      where: { id: configId },
+>> 344      data: { breakGlassCodeHashes: hashes as any, breakGlassEnabled: true },
+   345    });
+   346  
+
+[@typescript-eslint/no-explicit-any] 354:8
+   352      targetId: configId,
+   353      metadata: { count: codes.length },
+>> 354    } as any);
+   355  
+   356    // Returned once to admin; never stored in plaintext
+
+[@typescript-eslint/no-explicit-any] 387:10
+   385        ip: context.ip,
+   386        userAgent: context.userAgent,
+>> 387      } as any);
+   388      throw new AppError(403, 'SSO_BREAK_GLASS_INVALID', 'Invalid break-glass code');
+   389    }
+
+[@typescript-eslint/no-explicit-any] 395:45
+   393    await db.workspaceSsoConfig.update({
+   394      where: { id: config.id },
+>> 395      data: { breakGlassCodeHashes: hashes as any },
+   396    });
+   397  
+
+[@typescript-eslint/no-explicit-any] 407:8
+   405      ip: context.ip,
+   406      userAgent: context.userAgent,
+>> 407    } as any);
+   408  
+   409    // Notify other owners
+
+[@typescript-eslint/no-explicit-any] 429:35
+   427        await createNotification(db, {
+   428          userId: ownerId,
+>> 429          type: 'SECURITY_ALERT' as any,
+   430          title: 'SSO break-glass access used',
+   431          body: `A break-glass recovery code was used to access workspace${workspace?.name ? ` "${workspace.name}"` : ''}.`,
+
+[@typescript-eslint/no-explicit-any] 501:10
+   499        targetId: user.id,
+   500        metadata: { reason: 'email_not_verified', emailDomain: normalized.split('@')[1] ?? null },
+>> 501      } as any);
+   502      return { mapped: false, userId: user.id, reason: 'email_not_verified' };
+   503    }
+
+[@typescript-eslint/no-explicit-any] 631:8
+   629      targetId: configId,
+   630      metadata: { revokedSessions, wasRequiringSso },
+>> 631    } as any);
+   632  
+   633    return { disabled: true, revokedSessions };
+
+[@typescript-eslint/no-explicit-any] 669:8
+   667      targetId: configId,
+   668      metadata: { revokedSessions, wasRequiringSso, deleted: true },
+>> 669    } as any);
+   670  
+   671    return { deleted: true, revokedSessions };
+
+[@typescript-eslint/no-explicit-any] 741:10
+   739        ip: context.ip,
+   740        userAgent: context.userAgent,
+>> 741      } as any);
+   742      throw new AppError(403, 'SSO_BREAK_GLASS_INVALID', 'Invalid break-glass code');
+   743    }
+
+[@typescript-eslint/no-explicit-any] 749:45
+   747    await db.workspaceSsoConfig.update({
+   748      where: { id: config.id },
+>> 749      data: { breakGlassCodeHashes: hashes as any },
+   750    });
+   751  
+
+[@typescript-eslint/no-explicit-any] 761:8
+   759      ip: context.ip,
+   760      userAgent: context.userAgent,
+>> 761    } as any);
+   762  
+   763    // Notify other owners
+
+[@typescript-eslint/no-explicit-any] 783:35
+   781        await createNotification(db, {
+   782          userId: ownerId,
+>> 783          type: 'SECURITY_ALERT' as any,
+   784          title: 'SSO break-glass access used',
+   785          body: `A break-glass recovery code was used to access workspace${workspace?.name ? ` "${workspace.name}"` : ''}.`,
+
+=== src/realtime/socket-server.ts ===
+
+[@typescript-eslint/no-explicit-any] 79:44
+   77        }
+   78  
+>> 79        const rawMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase();
+   80        const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any) ? rawMethod : 'password';
+   81        if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
+
+[@typescript-eslint/no-explicit-any] 80:101
+   78  
+   79        const rawMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase();
+>> 80        const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any) ? rawMethod : 'password';
+   81        if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
+   82          const amExp = new Date((session as any).authMethodExpiresAt).getTime();
+
+[@typescript-eslint/no-explicit-any] 81:55
+   79        const rawMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase();
+   80        const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any) ? rawMethod : 'password';
+>> 81        if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
+   82          const amExp = new Date((session as any).authMethodExpiresAt).getTime();
+   83          if (amExp <= Date.now()) {
+
+[@typescript-eslint/no-explicit-any] 82:44
+   80        const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any) ? rawMethod : 'password';
+   81        if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
+>> 82          const amExp = new Date((session as any).authMethodExpiresAt).getTime();
+   83          if (amExp <= Date.now()) {
+   84            throw new AppError(401, 'SESSION_EXPIRED', 'Your break-glass session has expired');
+
+=== tests/sso-enforcement-db.test.ts ===
+
+[@typescript-eslint/no-explicit-any] 26:15
+   24    let prisma: ReturnType<typeof getPrismaClient> | null = null;
+   25    let server: RunningServer | null = null;
+>> 26    let config: any;
+   27    const cleanup = { userIds: [] as string[], workspaceIds: [] as string[] };
+   28  
+
+[@typescript-eslint/no-explicit-any] 49:111
+   47      if (prisma) {
+   48        for (const wid of cleanup.workspaceIds) {
+>> 49          await prisma.session.deleteMany({ where: { user: { memberships: { some: { workspaceId: wid } } } } as any }).catch(() => {});
+   50          await prisma.workspace.deleteMany({ where: { id: wid } }).catch(() => {});
+   51        }
+
+[@typescript-eslint/no-explicit-any] 144:59
+   142      await db.workspaceSsoConfig.update({
+   143        where: { id: seeded.ssoConfig.id },
+>> 144        data: { breakGlassCodeHashes: [hashSecret(code)] as any, breakGlassEnabled: true },
+   145      });
+   146  
+
+[@typescript-eslint/no-explicit-any] 162:93
+   160  
+   161      const audit = await db.auditLog.findFirst({
+>> 162        where: { action: 'workspace.sso_break_glass_used', targetId: seeded.ssoConfig.id } as any,
+   163        orderBy: { createdAt: 'desc' },
+   164      });
+
+[@typescript-eslint/no-explicit-any] 168:43
+   166  
+   167      const notif = await db.notification.findFirst({
+>> 168        where: { userId: otherOwner.id } as any,
+   169        orderBy: { createdAt: 'desc' },
+   170      });
+
+[@typescript-eslint/no-unused-vars] 178:11
+   176      const seeded = await seedRequireSsoWorkspace();
+   177      // create an active SSO session for member
+>> 178      const auth = createAuthService(config, db);
+   179      // simulate SSO session creation
+   180      const { createSession } = await import('../src/modules/auth/session.service');
+
+[@typescript-eslint/no-explicit-any] 187:10
+   185        userAgent: 'test',
+   186        ip: '127.0.0.1',
+>> 187      } as any);
+   188      assert.ok(!issued.session.revokedAt);
+   189  
+
+[@typescript-eslint/no-explicit-any] 194:104
+   192      const wsService = createWorkspaceService(config, db);
+   193      await wsService.removeMember(
+>> 194        { userId: seeded.owner.id, workspaceId: seeded.workspace.id, targetUserId: seeded.member.id } as any,
+   195        { ip: '127.0.0.1', userAgent: 'test' } as any,
+   196      );
+
+[@typescript-eslint/no-explicit-any] 195:49
+   193      await wsService.removeMember(
+   194        { userId: seeded.owner.id, workspaceId: seeded.workspace.id, targetUserId: seeded.member.id } as any,
+>> 195        { ip: '127.0.0.1', userAgent: 'test' } as any,
+   196      );
+   197  
+
+[@typescript-eslint/no-explicit-any] 208:12
+   206          capability: WorkspaceCapability.ViewWorkspace,
+   207          auth: { authMethod: 'sso', sessionId: issued.session.id },
+>> 208        } as any),
+   209        (err: any) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
+   210      );
+
+[@typescript-eslint/no-explicit-any] 209:13
+   207          auth: { authMethod: 'sso', sessionId: issued.session.id },
+   208        } as any),
+>> 209        (err: any) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
+   210      );
+   211    });
+
+=== tests/sso-feat.test.ts ===
+
+[@typescript-eslint/no-explicit-any] 68:13
+   66            { issuer: 'https://trusted.example', audience: 'client-id', now },
+   67          ),
+>> 68        (err: any) => err?.code === 'SSO_INVALID_ISSUER',
+   69      );
+   70    });
+
+[@typescript-eslint/no-explicit-any] 85:13
+   83            { issuer: 'https://trusted.example', audience: 'client-id', now },
+   84          ),
+>> 85        (err: any) => err?.code === 'SSO_INVALID_AUDIENCE',
+   86      );
+   87    });
+
+[@typescript-eslint/no-explicit-any] 102:13
+   100            { issuer: 'https://trusted.example', audience: 'client-id', now },
+   101          ),
+>> 102        (err: any) => err?.code === 'SSO_TOKEN_EXPIRED',
+   103      );
+   104    });
+
+[@typescript-eslint/no-explicit-any] 120:13
+   118            { issuer: 'https://trusted.example', audience: 'client-id', nonce: 'good', now },
+   119          ),
+>> 120        (err: any) => err?.code === 'SSO_INVALID_NONCE',
+   121      );
+   122    });
+
+=== tests/sso-membership-access.test.ts ===
+
+[@typescript-eslint/no-explicit-any] 23:10
+   21          findUnique: async () => null, // membership removed
+   22        },
+>> 23      } as any;
+   24  
+   25      await assert.rejects(
+
+[@typescript-eslint/no-explicit-any] 32:14
+   30            capability: WorkspaceCapability.ViewWorkspace,
+   31            auth: { authMethod: 'sso', sessionId: 'sess-valid' },
+>> 32          } as any),
+   33        (err: any) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
+   34      );
+
+[@typescript-eslint/no-explicit-any] 33:13
+   31            auth: { authMethod: 'sso', sessionId: 'sess-valid' },
+   32          } as any),
+>> 33        (err: any) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
+   34      );
+   35    });
+
+[@typescript-eslint/no-explicit-any] 58:10
+   56          }),
+   57        },
+>> 58      } as any;
+   59  
+   60      await assert.rejects(
+
+[@typescript-eslint/no-explicit-any] 67:14
+   65            capability: WorkspaceCapability.ViewWorkspace,
+   66            auth: { authMethod: 'sso', sessionId: 'sess-valid' },
+>> 67          } as any),
+   68        (err: any) => err?.code === 'MEMBERSHIP_SUSPENDED',
+   69      );
+
+[@typescript-eslint/no-explicit-any] 68:13
+   66            auth: { authMethod: 'sso', sessionId: 'sess-valid' },
+   67          } as any),
+>> 68        (err: any) => err?.code === 'MEMBERSHIP_SUSPENDED',
+   69      );
+   70    });
+
+=== tests/sso-oidc.test.ts ===
+
+[@typescript-eslint/no-explicit-any] 24:62
+   22    header: Record<string, unknown> = { alg: 'RS256', kid: 'test-kid' },
+   23  ) {
+>> 24    let jwt = new SignJWT(claims).setProtectedHeader(header as any);
+   25    if (typeof claims.exp === 'number') jwt = jwt.setExpirationTime(claims.exp);
+   26    if (typeof claims.iat === 'number') jwt = jwt.setIssuedAt(claims.iat);
+
+[@typescript-eslint/no-explicit-any] 210:39
+   208            consumedAt: consumed ? new Date() : null,
+   209          }),
+>> 210          updateMany: async ({ where }: any) => {
+   211            if (consumed || where.consumedAt !== null) return { count: 0 };
+   212            consumed = true;
+
+[@typescript-eslint/no-explicit-any] 216:10
+   214          },
+   215        },
+>> 216      } as any;
+   217  
+   218      const first = await consumeSsoOidcState({ state, browserBindingValue: browser }, db);
+
+[@typescript-eslint/no-explicit-any] 222:13
+   220      await assert.rejects(
+   221        () => consumeSsoOidcState({ state, browserBindingValue: browser }, db),
+>> 222        (err: any) => err?.code === 'SSO_STATE_REPLAYED' || err?.message?.includes('already been used'),
+   223      );
+   224    });
+
+[@typescript-eslint/no-explicit-any] 234:10
+   232          updateMany: async () => { throw new Error('db down'); },
+   233        },
+>> 234      } as any;
+   235  
+   236      await assert.rejects(
+
+[@typescript-eslint/no-explicit-any] 238:13
+   236      await assert.rejects(
+   237        () => createSsoOidcState({ workspaceId: 'ws1', browserBindingValue: 'b' }, brokenDb),
+>> 238        (err: any) => err?.code === 'SSO_STATE_STORE_UNAVAILABLE',
+   239      );
+   240      await assert.rejects(
+
+[@typescript-eslint/no-explicit-any] 242:13
+   240      await assert.rejects(
+   241        () => consumeSsoOidcState({ state: 's', browserBindingValue: 'b' }, brokenDb),
+>> 242        (err: any) => err?.code === 'SSO_STATE_STORE_UNAVAILABLE',
+   243      );
+   244    });
+
+[@typescript-eslint/no-explicit-any] 268:10
+   266          updateMany: async () => ({ count: 1 }),
+   267        },
+>> 268      } as any;
+   269  
+   270      await assert.rejects(
+
+[@typescript-eslint/no-explicit-any] 272:13
+   270      await assert.rejects(
+   271        () => consumeSsoOidcState({ state, browserBindingValue: browser, workspaceId: 'ws2' }, db),
+>> 272        (err: any) => err?.code === 'SSO_STATE_INVALID',
+   273      );
+   274    });
+
+[@typescript-eslint/no-explicit-any] 285:81
+   283    test('rejects missing email_verified claim', async () => {
+   284      const { assertVerifiedIdpEmail } = await import('../src/modules/sso/oidc.service');
+>> 285      assert.throws(() => assertVerifiedIdpEmail({ email: 'user@example.com' } as any));
+   286    });
+   287  
+
+=== tests/sso-saml.test.ts ===
+
+[@typescript-eslint/no-explicit-any] 141:77
+   139      const { consumeSamlRequestState } = await import('../src/modules/sso/saml.service');
+   140      // missing/unknown request id in state store => rejected (fail closed / replay protection)
+>> 141      const db = { ssoSamlRequestState: { findUnique: async () => null } } as any;
+   142      await assert.rejects(
+   143        () => consumeSamlRequestState({ requestId: '_other', browserBindingValue: 'b' }, db),
