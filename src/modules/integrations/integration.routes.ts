@@ -320,8 +320,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch {
-      logger.warn('slack_oauth_failed');
+    } catch (err) {
+      logger.warn(`slack_oauth_failed: ${err instanceof Error ? err.message : String(err)}`);
       return done('error');
     }
   });
@@ -383,8 +383,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch {
-      logger.warn('google_drive_oauth_failed');
+    } catch (err) {
+      logger.warn(`google_drive_oauth_failed: ${err instanceof Error ? err.message : String(err)}`);
       return done('error');
     }
   });
@@ -425,8 +425,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch {
-      logger.warn('dropbox_oauth_failed');
+    } catch (err) {
+      logger.warn(`dropbox_oauth_failed: ${err instanceof Error ? err.message : String(err)}`);
       return done('error');
     }
   });
@@ -460,8 +460,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch {
-      logger.warn('gmail_oauth_failed');
+    } catch (err) {
+      logger.warn(`gmail_oauth_failed: ${err instanceof Error ? err.message : String(err)}`);
       return done('error');
     }
   });
@@ -501,8 +501,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch {
-      logger.warn('github_oauth_failed');
+    } catch (err) {
+      logger.warn(`github_oauth_failed: ${err instanceof Error ? err.message : String(err)}`);
       return done('error');
     }
   });
@@ -544,8 +544,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch {
-      logger.warn('google_calendar_oauth_failed');
+    } catch (err) {
+      logger.warn(`google_calendar_oauth_failed: ${err instanceof Error ? err.message : String(err)}`);
       return done('error');
     }
   });
@@ -579,8 +579,8 @@ export function createIntegrationRouter({
         ...token,
       });
       return done('connected');
-    } catch {
-      logger.warn('outlook_calendar_oauth_failed');
+    } catch (err) {
+      logger.warn(`outlook_calendar_oauth_failed: ${err instanceof Error ? err.message : String(err)}`);
       return done('error');
     }
   });
