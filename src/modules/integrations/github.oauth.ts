@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AppError } from '../../utils/errors';
 import { createOAuthState, verifyOAuthState } from './oauth-state';
+import { integrationResultUrl } from './frontend-url';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 void STATE_TTL_MS;
@@ -162,6 +163,5 @@ export async function refreshGithubToken(refreshToken: string): Promise<{
 }
 
 export function githubResultUrl(status: 'connected' | 'denied' | 'error'): string {
-  const frontend = (process.env.FRONTEND_URL ?? '').replace(/\/$/, '');
-  return `${frontend}/settings/integrations?github=${encodeURIComponent(status)}`;
+  return integrationResultUrl('github', status);
 }
