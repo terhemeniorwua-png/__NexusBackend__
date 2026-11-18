@@ -4,6 +4,7 @@ import { AppError } from '../utils/errors';
 import { setIo } from './io-registry';
 import { getPrismaClient } from '../db/prisma';
 import { ChannelCapability, requireChannelAccess } from '../modules/authorization/channel.policy';
+import { resolveSessionAuth } from '../modules/auth/session-auth';
 
 /**
  * Socket.IO server factory.
@@ -13,11 +14,6 @@ import { ChannelCapability, requireChannelAccess } from '../modules/authorizatio
  * workspace-scoped (`workspace:{id}`) and channel-scoped
  * (`channel:{id}`). Only authenticated members of the relevant workspace
  * or channel can join.
- *
- * Handshake auth is token-based (not cookie-based): clients must pass a
- * short-lived access token in `socket.handshake.auth.token`. This allows
- * browser clients connecting directly cross-site (where session cookies are
- * not sent) to authenticate the Socket.IO handshake.
  *
  * Redis adapter is optional and used only when `REDIS_URL` is configured.
  */
@@ -38,8 +34,6 @@ export function createSocketAuthMiddleware(config: AppConfig) {
       if (typeof token !== 'string' || !token) {
         throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Authentication token is required');
       }
-
-      // Verify the access token using the existing service
       const { verifyAccessToken } = await import('../modules/auth/access-token.service');
       const payload = verifyAccessToken(config, token);
       socket.data.userId = payload.sub;
@@ -89,6 +83,70 @@ export async function createSocketServer(
 
   // Authentication middleware (token-based handshake auth)
   io.use(createSocketAuthMiddleware(config) as never);
+
+  // Session, user-status and require-SSO enforcement (database-backed)
+  io.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token as string | undefined;
+      if (!token) {
+        throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Authentication token is required');
+      }
+
+      // Verify the access token and enforce session revocation/state (authoritative).
+      const { verifyAccessToken } = await import('../modules/auth/access-token.service');
+      const { findActiveSession } = await import('../modules/auth/session.service');
+      const { checkRequireSso } = await import('../modules/sso/sso.service');
+      const payload = verifyAccessToken(config, token);
+      const prisma = getPrismaClient();
+      const session = await findActiveSession(prisma, payload.sid);
+      if (!session || session.userId !== payload.sub) {
+        throw new AppError(401, 'SESSION_REVOKED', 'Your session is no longer valid');
+      }
+      const user = await prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: { id: true, status: true, deletedAt: true },
+      });
+      if (!user || user.deletedAt || user.status === 'SUSPENDED' || user.status === 'DEACTIVATED' || user.status === 'PENDING_DELETION') {
+        throw new AppError(401, 'SESSION_REVOKED', 'Your session is no longer valid');
+      }
+
+      const { authMethod } = resolveSessionAuth(session);
+
+      const workspaceId = socket.handshake.auth?.workspaceId as string | undefined;
+      if (workspaceId) {
+        const reqSso = await checkRequireSso(prisma, workspaceId);
+        if (reqSso.required) {
+          if (authMethod === 'sso') {
+            // ok
+          } else if (authMethod === 'break_glass') {
+            // valid, time-limited break-glass session for owners only
+            const membership = await prisma.workspaceMembership.findUnique({
+              where: { workspaceId_userId: { workspaceId, userId: payload.sub } },
+              select: { role: true, organizationRole: true, status: true },
+            });
+            const isOwner = membership?.status === 'ACTIVE' && (
+              membership.role === 'OWNER' ||
+              membership.organizationRole === 'COMPANY_OWNER' ||
+              membership.organizationRole === 'INSTITUTION_OWNER'
+            );
+            if (!isOwner) {
+              throw new AppError(403, 'SSO_REQUIRED', 'This workspace requires SSO sign-in');
+            }
+          } else {
+            throw new AppError(403, 'SSO_REQUIRED', 'This workspace requires SSO sign-in');
+          }
+        }
+      }
+
+      socket.data.userId = payload.sub;
+      socket.data.sessionId = payload.sid;
+      socket.data.authMethod = authMethod;
+      socket.data.workspaceId = workspaceId;
+      next();
+    } catch (_error) {
+      next(new Error('Authentication failed'));
+    }
+  });
 
   io.on('connection', (socket) => {
     const userId = socket.data.userId as string;

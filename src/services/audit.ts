@@ -192,3 +192,20 @@ export async function recordAuditEvent(client: AuditClient, event: AuditEventInp
     },
   });
 }
+
+
+export const SsoAuditAction = {
+  ConfigCreated: 'workspace.sso_config_created',
+  ConfigUpdated: 'workspace.sso_config_updated',
+  ConfigEnabled: 'workspace.sso_config_enabled',
+  ConfigDisabled: 'workspace.sso_config_disabled',
+  RequireSsoEnabled: 'workspace.require_sso_enabled',
+  RequireSsoDisabled: 'workspace.require_sso_disabled',
+  DomainVerificationRequested: 'workspace.sso_domain_verification_requested',
+  DomainVerified: 'workspace.sso_domain_verified',
+  BreakGlassUsed: 'workspace.sso_break_glass_used',
+  BreakGlassFailed: 'workspace.sso_break_glass_failed',
+  JitProvisionBlocked: 'workspace.sso_jit_provision_blocked',
+  SsoLoginSucceeded: 'workspace.sso_login_succeeded',
+  SsoLoginFailed: 'workspace.sso_login_failed',
+} as const;
