@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from 'node:http';
 import type { AppConfig } from '../config/env';
 import { AppError } from '../utils/errors';
+import { resolveSessionAuth } from '../modules/auth/session-auth';
 
 /**
  * Socket.IO server factory.
@@ -76,14 +77,7 @@ export async function createSocketServer(
         throw new AppError(401, 'SESSION_REVOKED', 'Your session is no longer valid');
       }
 
-      const rawMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase();
-      const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any) ? rawMethod : 'password';
-      if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
-        const amExp = new Date((session as any).authMethodExpiresAt).getTime();
-        if (amExp <= Date.now()) {
-          throw new AppError(401, 'SESSION_EXPIRED', 'Your break-glass session has expired');
-        }
-      }
+      const { authMethod } = resolveSessionAuth(session);
 
       const workspaceId = socket.handshake.auth?.workspaceId as string | undefined;
       if (workspaceId) {

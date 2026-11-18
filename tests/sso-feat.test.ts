@@ -65,7 +65,7 @@ describe('SSO / OIDC Unit Tests', () => {
           },
           { issuer: 'https://trusted.example', audience: 'client-id', now },
         ),
-      (err: any) => err?.code === 'SSO_INVALID_ISSUER',
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_INVALID_ISSUER',
     );
   });
 
@@ -82,7 +82,7 @@ describe('SSO / OIDC Unit Tests', () => {
           },
           { issuer: 'https://trusted.example', audience: 'client-id', now },
         ),
-      (err: any) => err?.code === 'SSO_INVALID_AUDIENCE',
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_INVALID_AUDIENCE',
     );
   });
 
@@ -99,7 +99,7 @@ describe('SSO / OIDC Unit Tests', () => {
           },
           { issuer: 'https://trusted.example', audience: 'client-id', now },
         ),
-      (err: any) => err?.code === 'SSO_TOKEN_EXPIRED',
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_TOKEN_EXPIRED',
     );
   });
 
@@ -117,7 +117,7 @@ describe('SSO / OIDC Unit Tests', () => {
           },
           { issuer: 'https://trusted.example', audience: 'client-id', nonce: 'good', now },
         ),
-      (err: any) => err?.code === 'SSO_INVALID_NONCE',
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_INVALID_NONCE',
     );
   });
 });

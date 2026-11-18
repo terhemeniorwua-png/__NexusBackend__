@@ -1,3 +1,4 @@
+import { TO_DB } from './session-auth';
 import type { PrismaClient, Session } from '@prisma/client';
 import { AppError } from '../../utils/errors';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
@@ -39,7 +40,7 @@ export async function createSession(
     data: {
       userId: input.userId,
       refreshTokenHash: hashSecret(refreshToken),
-      authMethod: input.authMethod.toUpperCase() as any,
+      authMethod: TO_DB[input.authMethod],
       ...(input.authMethodExpiresAt ? { authMethodExpiresAt: input.authMethodExpiresAt } : {}),
       expiresAt,
       lastUsedAt: new Date(),

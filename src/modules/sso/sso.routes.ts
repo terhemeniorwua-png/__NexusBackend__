@@ -81,12 +81,6 @@ function getConfig() {
   return parseEnv(process.env);
 }
 
-function assertSsoEnabled() {
-  const enabled = (process.env.SSO_ENABLED ?? 'false').toLowerCase() === 'true';
-  if (!enabled) {
-    throw new AppError(404, 'SSO_DISABLED', 'SSO is not enabled');
-  }
-}
 
 function cookieOptions(config: ReturnType<typeof parseEnv>) {
   return {
@@ -127,7 +121,7 @@ router.use((_req, _res, next) => {
 router.get('/workspaces/:workspaceId/configs', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const configs = await listSsoConfigs(prisma, userId, req.params.workspaceId as string);
     res.json({ configs });
   } catch (e) { next(e); }
@@ -136,7 +130,7 @@ router.get('/workspaces/:workspaceId/configs', async (req: Request, res: Respons
 router.get('/workspaces/:workspaceId/configs/:configId', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const item = await getSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string);
     res.json(item);
   } catch (e) { next(e); }
@@ -145,7 +139,7 @@ router.get('/workspaces/:workspaceId/configs/:configId', async (req: Request, re
 router.post('/workspaces/:workspaceId/configs', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const item = await createSsoConfig(prisma, userId, req.params.workspaceId as string, req.body);
     res.status(201).json(item);
   } catch (e) { next(e); }
@@ -154,7 +148,7 @@ router.post('/workspaces/:workspaceId/configs', async (req: Request, res: Respon
 router.patch('/workspaces/:workspaceId/configs/:configId', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const item = await updateSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string, req.body);
     res.json(item);
   } catch (e) { next(e); }
@@ -163,7 +157,7 @@ router.patch('/workspaces/:workspaceId/configs/:configId', async (req: Request, 
 router.post('/workspaces/:workspaceId/configs/:configId/domains', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const record = await requestDomainVerification(prisma, userId, req.params.workspaceId as string, req.params.configId as string, req.body.domain);
     res.status(201).json(record);
   } catch (e) { next(e); }
@@ -172,7 +166,7 @@ router.post('/workspaces/:workspaceId/configs/:configId/domains', async (req: Re
 router.post('/workspaces/:workspaceId/domains/:domainId/verify', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const record = await verifyDomainDnsTxt(prisma, userId, req.params.workspaceId as string, req.params.domainId as string);
     res.json(record);
   } catch (e) { next(e); }
@@ -181,7 +175,7 @@ router.post('/workspaces/:workspaceId/domains/:domainId/verify', async (req: Req
 router.post('/workspaces/:workspaceId/configs/:configId/break-glass-codes', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const result = await generateBreakGlassCodes(prisma, userId, req.params.workspaceId as string, req.params.configId as string, req.body.count);
     res.status(201).json(result);
   } catch (e) { next(e); }
@@ -271,7 +265,7 @@ router.post('/workspaces/:workspaceId/break-glass/login', ssoBreakGlassRateLimit
 router.post('/workspaces/:workspaceId/break-glass/consume', ssoBreakGlassRateLimit, async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const result = await consumeBreakGlassCode(prisma, req.params.workspaceId as string, req.body.code, userId, {
       ip: req.ip,
       userAgent: req.get('user-agent'),
@@ -291,7 +285,7 @@ router.get('/workspaces/:workspaceId/requirement', async (req: Request, res: Res
 router.post('/workspaces/:workspaceId/configs/:configId/disable', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const result = await disableSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string);
     res.json(result);
   } catch (e) { next(e); }
@@ -300,7 +294,7 @@ router.post('/workspaces/:workspaceId/configs/:configId/disable', async (req: Re
 router.delete('/workspaces/:workspaceId/configs/:configId', async (req: Request, res: Response, next) => {
   try {
     const prisma = getPrismaClient();
-    const userId = (req as any).auth?.userId as string;
+    const userId = req.auth?.userId as string;
     const result = await deleteSsoConfig(prisma, userId, req.params.workspaceId as string, req.params.configId as string);
     res.json(result);
   } catch (e) { next(e); }
@@ -505,7 +499,8 @@ router.post('/saml/acs', ssoCallbackRateLimit, async (req: Request, res: Respons
     const prisma = getPrismaClient();
     const authService = createAuthService(config);
 
-    const samlResponse = (req.body as any)?.SAMLResponse || (req.body as any)?.samlResponse;
+    const samlBody = (req.body ?? {}) as Record<string, unknown>;
+    const samlResponse = samlBody.SAMLResponse || samlBody.samlResponse;
     if (!samlResponse || typeof samlResponse !== 'string') {
       throw new AppError(400, 'SSO_SAML_INVALID_RESPONSE', 'Missing SAMLResponse');
     }
@@ -555,13 +550,12 @@ router.post('/saml/acs', ssoCallbackRateLimit, async (req: Request, res: Respons
       throw new AppError(400, 'SSO_INVALID_EMAIL', 'SAML assertion does not include an email address');
     }
 
-    const email = extracted.email.toLowerCase();
     // Same account-linking/domain/JIT rules as OIDC: require verified email from IdP claim/attribute when provided,
     // and require verified workspace domain.
     if (extracted.emailVerified !== true) {
       throw new AppError(403, 'SSO_EMAIL_NOT_VERIFIED', 'Identity provider email is not verified');
     }
-    assertVerifiedIdpEmail({ email, email_verified: extracted.emailVerified });
+    const email = assertVerifiedIdpEmail({ email: extracted.email, email_verified: extracted.emailVerified });
 
     const verifiedDomains = await getVerifiedDomainsForWorkspace(consumed.workspaceId, prisma);
     const domainVerified = isEmailDomainAllowed(email, verifiedDomains);

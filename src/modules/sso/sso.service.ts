@@ -1,14 +1,13 @@
-import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
-import { Prisma, type PrismaClient, type WorkspaceRole, type WorkspaceSsoConfig } from '@prisma/client';
+import { type PrismaClient, type WorkspaceSsoConfig } from '@prisma/client';
 import { AppError } from '../../utils/errors';
 import { verifyOAuthState, type OAuthStateClaims } from '../integrations/oauth-state';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
-import { getPrismaClient } from '../../db/prisma';
 import { encryptIntegrationToken } from '../integrations/token-crypto';
 import { createNotification } from '../../services/notifications';
 import { recordAuditEvent } from '../../services/audit';
 import { generateSecureToken, hashSecret, safeCompare } from '../../utils/crypto';
+import type { Prisma, WorkspaceSsoDomain } from '@prisma/client';
 
 export const SsoAuditAction = {
   ConfigCreated: 'workspace.sso_config_created',
@@ -94,8 +93,8 @@ async function requireOwnerAdmin(
   }
 }
 
-function toPublicConfig(config: WorkspaceSsoConfig & { domains?: any[] }) {
-  const { clientSecretCiphertext, breakGlassCodeHashes, ...rest } = config as any;
+function toPublicConfig(config: WorkspaceSsoConfig & { domains?: WorkspaceSsoDomain[] }) {
+  const { clientSecretCiphertext, breakGlassCodeHashes, ...rest } = config;
   return {
     ...rest,
     hasClientSecret: Boolean(clientSecretCiphertext),
@@ -158,7 +157,7 @@ export async function createSsoConfig(
       tokenUrl: input.tokenUrl ?? null,
       userInfoUrl: input.userInfoUrl ?? null,
       redirectUri: input.redirectUri ?? null,
-      config: (input.config ?? undefined) as any,
+      config: (input.config ?? undefined) as Prisma.InputJsonValue | undefined,
       status: input.isEnabled ? 'ACTIVE' : 'DRAFT',
       isEnabled: Boolean(input.isEnabled),
       requireSso: false,
@@ -176,7 +175,7 @@ export async function createSsoConfig(
     targetType: 'WorkspaceSsoConfig',
     targetId: created.id,
     metadata: { providerType: created.providerType, providerName: created.providerName },
-  } as any);
+  });
 
   return toPublicConfig(created);
 }
@@ -213,11 +212,11 @@ export async function updateSsoConfig(
       tokenUrl: input.tokenUrl !== undefined ? input.tokenUrl : existing.tokenUrl,
       userInfoUrl: input.userInfoUrl !== undefined ? input.userInfoUrl : existing.userInfoUrl,
       redirectUri: input.redirectUri !== undefined ? input.redirectUri : existing.redirectUri,
-      config: input.config !== undefined ? (input.config as any) : (existing.config as any),
+      config: input.config !== undefined ? (input.config as Prisma.InputJsonValue) : undefined,
       isEnabled: input.isEnabled ?? existing.isEnabled,
       requireSso: input.requireSso ?? existing.requireSso,
       breakGlassEnabled: input.breakGlassEnabled ?? existing.breakGlassEnabled,
-      jitProvisioningEnabled: (input as any).jitProvisioningEnabled ?? (existing as any).jitProvisioningEnabled,
+      jitProvisioningEnabled: input.jitProvisioningEnabled ?? existing.jitProvisioningEnabled,
       status: (input.isEnabled ?? existing.isEnabled) ? 'ACTIVE' : 'DRAFT',
     },
     include: { domains: true },
@@ -234,7 +233,7 @@ export async function updateSsoConfig(
       isEnabled: updated.isEnabled,
       requireSso: updated.requireSso,
     },
-  } as any);
+  });
 
   return toPublicConfig(updated);
 }
@@ -281,7 +280,7 @@ export async function requestDomainVerification(
     targetType: 'WorkspaceSsoDomain',
     targetId: record.id,
     metadata: { domain },
-  } as any);
+  });
 
   return record;
 }
@@ -321,7 +320,7 @@ export async function verifyDomainDnsTxt(
     targetType: 'WorkspaceSsoDomain',
     targetId: updated.id,
     metadata: { domain: updated.domain },
-  } as any);
+  });
 
   return updated;
 }
@@ -341,7 +340,7 @@ export async function generateBreakGlassCodes(
   const hashes = codes.map((c) => hashSecret(c));
   await db.workspaceSsoConfig.update({
     where: { id: configId },
-    data: { breakGlassCodeHashes: hashes as any, breakGlassEnabled: true },
+    data: { breakGlassCodeHashes: hashes, breakGlassEnabled: true },
   });
 
   await recordAuditEvent(db, {
@@ -351,7 +350,7 @@ export async function generateBreakGlassCodes(
     targetType: 'WorkspaceSsoConfig',
     targetId: configId,
     metadata: { count: codes.length },
-  } as any);
+  });
 
   // Returned once to admin; never stored in plaintext
   return { codes };
@@ -384,7 +383,7 @@ export async function consumeBreakGlassCode(
       metadata: { reason: 'invalid_code' },
       ip: context.ip,
       userAgent: context.userAgent,
-    } as any);
+    });
     throw new AppError(403, 'SSO_BREAK_GLASS_INVALID', 'Invalid break-glass code');
   }
 
@@ -392,7 +391,7 @@ export async function consumeBreakGlassCode(
   hashes.splice(idx, 1);
   await db.workspaceSsoConfig.update({
     where: { id: config.id },
-    data: { breakGlassCodeHashes: hashes as any },
+    data: { breakGlassCodeHashes: hashes },
   });
 
   await recordAuditEvent(db, {
@@ -404,7 +403,7 @@ export async function consumeBreakGlassCode(
     metadata: { remainingCodes: hashes.length },
     ip: context.ip,
     userAgent: context.userAgent,
-  } as any);
+  });
 
   // Notify other owners
   try {
@@ -426,7 +425,7 @@ export async function consumeBreakGlassCode(
     for (const ownerId of ownerIds) {
       await createNotification(db, {
         userId: ownerId,
-        type: 'SECURITY_ALERT' as any,
+        type: 'SECURITY_ALERT',
         title: 'SSO break-glass access used',
         body: `A break-glass recovery code was used to access workspace${workspace?.name ? ` "${workspace.name}"` : ''}.`,
         data: { workspaceId, actorUserId, configId: config.id },
@@ -498,7 +497,7 @@ export async function jitProvisionByVerifiedEmail(
       targetType: 'User',
       targetId: user.id,
       metadata: { reason: 'email_not_verified', emailDomain: normalized.split('@')[1] ?? null },
-    } as any);
+    });
     return { mapped: false, userId: user.id, reason: 'email_not_verified' };
   }
 
@@ -628,7 +627,7 @@ export async function disableSsoConfig(
     targetType: 'WorkspaceSsoConfig',
     targetId: configId,
     metadata: { revokedSessions, wasRequiringSso },
-  } as any);
+  });
 
   return { disabled: true, revokedSessions };
 }
@@ -666,7 +665,7 @@ export async function deleteSsoConfig(
     targetType: 'WorkspaceSsoConfig',
     targetId: configId,
     metadata: { revokedSessions, wasRequiringSso, deleted: true },
-  } as any);
+  });
 
   return { deleted: true, revokedSessions };
 }
@@ -738,7 +737,7 @@ export async function consumeBreakGlassCodeForLogin(
       metadata: { reason: 'invalid_code' },
       ip: context.ip,
       userAgent: context.userAgent,
-    } as any);
+    });
     throw new AppError(403, 'SSO_BREAK_GLASS_INVALID', 'Invalid break-glass code');
   }
 
@@ -746,7 +745,7 @@ export async function consumeBreakGlassCodeForLogin(
   hashes.splice(idx, 1);
   await db.workspaceSsoConfig.update({
     where: { id: config.id },
-    data: { breakGlassCodeHashes: hashes as any },
+    data: { breakGlassCodeHashes: hashes },
   });
 
   await recordAuditEvent(db, {
@@ -758,7 +757,7 @@ export async function consumeBreakGlassCodeForLogin(
     metadata: { remainingCodes: hashes.length, login: true },
     ip: context.ip,
     userAgent: context.userAgent,
-  } as any);
+  });
 
   // Notify other owners
   try {
@@ -780,7 +779,7 @@ export async function consumeBreakGlassCodeForLogin(
     for (const ownerId of ownerIds) {
       await createNotification(db, {
         userId: ownerId,
-        type: 'SECURITY_ALERT' as any,
+        type: 'SECURITY_ALERT',
         title: 'SSO break-glass access used',
         body: `A break-glass recovery code was used to access workspace${workspace?.name ? ` "${workspace.name}"` : ''}.`,
         data: { workspaceId, actorUserId, configId: config.id },

@@ -1,3 +1,4 @@
+import type { PrismaClient } from '@prisma/client';
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import crypto from 'node:crypto';
@@ -138,7 +139,7 @@ describe('SAML SSO validation (@node-saml/node-saml)', () => {
   test('rejects invalid InResponseTo (replay/unknown request) via state consumption', async () => {
     const { consumeSamlRequestState } = await import('../src/modules/sso/saml.service');
     // missing/unknown request id in state store => rejected (fail closed / replay protection)
-    const db = { ssoSamlRequestState: { findUnique: async () => null } } as any;
+    const db = { ssoSamlRequestState: { findUnique: async () => null } } as unknown as PrismaClient;
     await assert.rejects(
       () => consumeSamlRequestState({ requestId: '_other', browserBindingValue: 'b' }, db),
       (err: unknown) => (err as { code?: string } | null)?.code === 'SSO_SAML_INRESPONSETO_INVALID',

@@ -1,10 +1,8 @@
 import crypto from 'node:crypto';
-import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
+import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
 import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
 import { encryptIntegrationToken, decryptIntegrationToken } from '../integrations/token-crypto';
-import type { AppConfig } from '../../config/env';
-import type { AuthService } from '../auth/auth.service';
 
 export const SSO_BROWSER_BINDING_COOKIE = 'nexus_sso_oidc_binding';
 const DEFAULT_CLOCK_SKEW_SEC = 60;

@@ -1,3 +1,4 @@
+import type { PrismaClient } from '@prisma/client';
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../src/modules/authorization/workspace.policy';
@@ -20,7 +21,7 @@ describe('membership checked on every request (workspace access)', () => {
       workspaceMembership: {
         findUnique: async () => null, // membership removed
       },
-    } as any;
+    } as unknown as PrismaClient;
 
     await assert.rejects(
       () =>
@@ -29,8 +30,8 @@ describe('membership checked on every request (workspace access)', () => {
           workspaceId: 'ws1',
           capability: WorkspaceCapability.ViewWorkspace,
           auth: { authMethod: 'sso', sessionId: 'sess-valid' },
-        } as any),
-      (err: any) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
+        }),
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
     );
   });
 
@@ -55,7 +56,7 @@ describe('membership checked on every request (workspace access)', () => {
           status: 'SUSPENDED',
         }),
       },
-    } as any;
+    } as unknown as PrismaClient;
 
     await assert.rejects(
       () =>
@@ -64,8 +65,8 @@ describe('membership checked on every request (workspace access)', () => {
           workspaceId: 'ws1',
           capability: WorkspaceCapability.ViewWorkspace,
           auth: { authMethod: 'sso', sessionId: 'sess-valid' },
-        } as any),
-      (err: any) => err?.code === 'MEMBERSHIP_SUSPENDED',
+        }),
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'MEMBERSHIP_SUSPENDED',
     );
   });
 });

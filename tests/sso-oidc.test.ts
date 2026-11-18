@@ -1,3 +1,5 @@
+import type { JWTHeaderParameters } from 'jose';
+import type { PrismaClient } from '@prisma/client';
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import crypto from 'node:crypto';
@@ -21,7 +23,7 @@ async function signIdToken(
   claims: Record<string, unknown>,
   header: Record<string, unknown> = { alg: 'RS256', kid: 'test-kid' },
 ) {
-  let jwt = new SignJWT(claims).setProtectedHeader(header as any);
+  let jwt = new SignJWT(claims).setProtectedHeader(header as unknown as JWTHeaderParameters);
   if (typeof claims.exp === 'number') jwt = jwt.setExpirationTime(claims.exp);
   if (typeof claims.iat === 'number') jwt = jwt.setIssuedAt(claims.iat);
   if (typeof claims.nbf === 'number') jwt = jwt.setNotBefore(claims.nbf);
@@ -207,19 +209,19 @@ describe('SSO OIDC - DB-backed state/nonce (fail closed, single-use)', () => {
           expiresAt: new Date(Date.now() + 60000),
           consumedAt: consumed ? new Date() : null,
         }),
-        updateMany: async ({ where }: any) => {
+        updateMany: async ({ where }: { where: { consumedAt: Date | null } }) => {
           if (consumed || where.consumedAt !== null) return { count: 0 };
           consumed = true;
           return { count: 1 };
         },
       },
-    } as any;
+    } as unknown as PrismaClient;
 
     const first = await consumeSsoOidcState({ state, browserBindingValue: browser }, db);
     assert.equal(first.workspaceId, 'ws1');
     await assert.rejects(
       () => consumeSsoOidcState({ state, browserBindingValue: browser }, db),
-      (err: any) => err?.code === 'SSO_STATE_REPLAYED' || err?.message?.includes('already been used'),
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_STATE_REPLAYED' || err?.message?.includes('already been used'),
     );
   });
 
@@ -231,15 +233,15 @@ describe('SSO OIDC - DB-backed state/nonce (fail closed, single-use)', () => {
         findUnique: async () => { throw new Error('db down'); },
         updateMany: async () => { throw new Error('db down'); },
       },
-    } as any;
+    } as unknown as PrismaClient;
 
     await assert.rejects(
       () => createSsoOidcState({ workspaceId: 'ws1', browserBindingValue: 'b' }, brokenDb),
-      (err: any) => err?.code === 'SSO_STATE_STORE_UNAVAILABLE',
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_STATE_STORE_UNAVAILABLE',
     );
     await assert.rejects(
       () => consumeSsoOidcState({ state: 's', browserBindingValue: 'b' }, brokenDb),
-      (err: any) => err?.code === 'SSO_STATE_STORE_UNAVAILABLE',
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_STATE_STORE_UNAVAILABLE',
     );
   });
 
@@ -265,11 +267,11 @@ describe('SSO OIDC - DB-backed state/nonce (fail closed, single-use)', () => {
         }),
         updateMany: async () => ({ count: 1 }),
       },
-    } as any;
+    } as unknown as PrismaClient;
 
     await assert.rejects(
       () => consumeSsoOidcState({ state, browserBindingValue: browser, workspaceId: 'ws2' }, db),
-      (err: any) => err?.code === 'SSO_STATE_INVALID',
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'SSO_STATE_INVALID',
     );
   });
 });
@@ -282,7 +284,7 @@ describe('SSO OIDC - policy checks (pure)', () => {
 
   test('rejects missing email_verified claim', async () => {
     const { assertVerifiedIdpEmail } = await import('../src/modules/sso/oidc.service');
-    assert.throws(() => assertVerifiedIdpEmail({ email: 'user@example.com' } as any));
+    assert.throws(() => assertVerifiedIdpEmail({ email: 'user@example.com' }));
   });
 
   test('rejects domain not verified for workspace', async () => {

@@ -44,6 +44,7 @@ import type {
   PasswordResetInput,
   RegisterInput,
 } from './auth.schemas';
+import { fromDbAuthMethod, type DbAuthMethod } from './session-auth';
 
 /**
  * The Nexus account lifecycle.
@@ -231,11 +232,11 @@ export function createAuthService(config: AppConfig, prisma?: PrismaClient): Aut
   }
 
   async function authenticateSession(
-    session: { id: string; userId: string; expiresAt: Date; authMethod?: any },
+    session: { id: string; userId: string; expiresAt: Date; authMethod?: DbAuthMethod | null },
     user: User,
     refreshToken: string,
   ): Promise<AuthenticationResult> {
-    const authMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase() as any;
+    const authMethod = fromDbAuthMethod(session.authMethod);
     const { token: accessToken, expiresIn } = signAccessToken(config, {
       userId: session.userId,
       sessionId: session.id,

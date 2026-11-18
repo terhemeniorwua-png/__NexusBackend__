@@ -3,12 +3,7 @@ import zlib from 'node:zlib';
 import { SAML, ValidateInResponseTo, type SamlConfig } from '@node-saml/node-saml';
 import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
-import {
-  assertVerifiedIdpEmail,
-  isEmailDomainAllowed,
-  getVerifiedDomainsForWorkspace,
-  resolveSsoUser,
-} from './oidc.service';
+import { isEmailDomainAllowed, getVerifiedDomainsForWorkspace, resolveSsoUser } from './oidc.service';
 
 export const SSO_SAML_BINDING_COOKIE = 'nexus_sso_saml_binding';
 
@@ -127,7 +122,7 @@ export async function generateSamlAuthorizeRedirect(input: {
   relayState?: string | null;
 }): Promise<{ redirectUrl: string; requestId: string }> {
   const saml = createSamlValidator(input.config);
-  const requestXml = await (saml as any).generateAuthorizeRequestAsync(false);
+  const requestXml = await (saml as unknown as { generateAuthorizeRequestAsync(isPassive: boolean): Promise<string> }).generateAuthorizeRequestAsync(false);
   const m = String(requestXml).match(/\bID=(["'])([^"']+)\1/);
   if (!m?.[2]) {
     throw new AppError(500, 'SSO_SAML_REQUEST_INVALID', 'Failed to generate SAML AuthnRequest');
@@ -170,7 +165,13 @@ export async function validateSamlResponse(input: {
 }
 
 export function extractSamlEmailAndName(profile: Record<string, unknown>): { email?: string; emailVerified?: boolean; name?: string; nameId?: string } {
-  const nameId = typeof profile.nameID === 'string' ? profile.nameID : (typeof profile.nameID === 'object' && profile.nameID && 'value' in (profile.nameID as any) ? String((profile.nameID as any).value) : undefined);
+  const rawNameId = profile.nameID;
+  const nameId =
+    typeof rawNameId === 'string'
+      ? rawNameId
+      : typeof rawNameId === 'object' && rawNameId !== null && 'value' in rawNameId
+        ? String((rawNameId as { value: unknown }).value)
+        : undefined;
   // Common attribute names
   const email =
     (typeof profile.email === 'string' && profile.email) ||
