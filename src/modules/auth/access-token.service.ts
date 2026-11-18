@@ -12,23 +12,28 @@ import { AppError } from '../../utils/errors';
  * immediately.
  */
 
+export type SessionAuthMethodClaim = 'password' | 'social' | 'sso' | 'break_glass';
+
 export interface AccessTokenClaims {
   /** User id. */
   sub: string;
   /** Session id, used to enforce revocation. */
   sid: string;
+  /** Authentication method for this session. */
+  amr?: SessionAuthMethodClaim;
   /** Token type guard, so a refresh token can never be used as an access token. */
   typ: 'access';
 }
 
 export function signAccessToken(
   config: AppConfig,
-  payload: { userId: string; sessionId: string },
+  payload: { userId: string; sessionId: string; authMethod?: SessionAuthMethodClaim },
 ): { token: string; expiresIn: number } {
   const token = jwt.sign(
     {
       sub: payload.userId,
       sid: payload.sessionId,
+      ...(payload.authMethod ? { amr: payload.authMethod } : {}),
       typ: 'access' as const,
     },
     config.jwtAccessSecret,
@@ -78,9 +83,11 @@ export function verifyAccessToken(config: AppConfig, token: string): AccessToken
     throw new AppError(401, 'ACCESS_TOKEN_INVALID', 'The access token is invalid');
   }
 
+  const amr = (claims as { amr?: unknown }).amr;
   return {
     sub: claims.sub,
     sid: claims.sid,
+    ...(amr === 'password' || amr === 'social' || amr === 'sso' || amr === 'break_glass' ? { amr } : {}),
     typ: 'access',
   };
 }

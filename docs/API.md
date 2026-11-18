@@ -477,6 +477,39 @@ integration stage. Live OAuth and revocation still require provider
 credentials and callback configuration, so external provider verification is
 environment-dependent.
 
+## SCIM provisioning
+
+SCIM 2.0 Users and Groups provisioning is mounted at `/scim/v2` and is
+authenticated exclusively with per-workspace bearer tokens (not Nexus sessions).
+A SCIM token is bound to exactly one workspace, is hashed at rest, is shown
+once at creation, is revocable, and is rate limited per token. Every SCIM
+operation is implicitly scoped to that workspace.
+
+Endpoints:
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| GET | `/scim/v2/ServiceProviderConfig` | SCIM service provider metadata |
+| GET | `/scim/v2/ResourceTypes` | SCIM resource types (User, Group) |
+| GET | `/scim/v2/Schemas` | SCIM resource schemas |
+| GET | `/scim/v2/Users` | List SCIM users (paginated) |
+| POST | `/scim/v2/Users` | Create (provision) a SCIM user |
+| GET | `/scim/v2/Users/{id}` | Get a SCIM user |
+| PATCH | `/scim/v2/Users/{id}` | Update a SCIM user |
+| DELETE | `/scim/v2/Users/{id}` | Deactivate a SCIM user |
+| GET | `/scim/v2/Groups` | List SCIM groups (paginated) |
+| POST | `/scim/v2/Groups` | Create a SCIM group |
+| GET | `/scim/v2/Groups/{id}` | Get a SCIM group |
+| PATCH | `/scim/v2/Groups/{id}` | Update a SCIM group |
+| DELETE | `/scim/v2/Groups/{id}` | Delete a SCIM group |
+
+SCIM users map to Nexus users within the workspace (`User` + `WorkspaceMembership`);
+SCIM groups map to Nexus teams. Creating a SCIM user provisions a Nexus account and
+workspace membership. Deactivating a SCIM user sets the account to `DEACTIVATED`,
+suspends the workspace membership, and revokes all of the user's sessions, SCIM
+tokens, and workspace integration tokens. Data is never deleted on deactivate unless
+`hardDelete` is explicitly requested. Token creation, revocation, user
+provisioning/deactivation, and group changes are recorded as security audit events.
 ### Slack notifications
 
 Slack is a workspace-level integration. A message is only queued when the

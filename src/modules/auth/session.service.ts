@@ -1,3 +1,4 @@
+import { TO_DB } from './session-auth';
 import type { PrismaClient, Session } from '@prisma/client';
 import { AppError } from '../../utils/errors';
 import { generateSecureToken, hashSecret } from '../../utils/crypto';
@@ -14,6 +15,8 @@ import { generateSecureToken, hashSecret } from '../../utils/crypto';
  * whole session family can be revoked.
  */
 
+export type SessionAuthMethod = 'password' | 'social' | 'sso' | 'break_glass';
+
 export interface IssuedSession {
   session: Session;
   refreshToken: string;
@@ -24,6 +27,8 @@ export async function createSession(
   input: {
     userId: string;
     ttlSeconds: number;
+    authMethod: SessionAuthMethod;
+    authMethodExpiresAt?: Date | undefined;
     userAgent?: string | undefined;
     ip?: string | undefined;
   },
@@ -35,6 +40,8 @@ export async function createSession(
     data: {
       userId: input.userId,
       refreshTokenHash: hashSecret(refreshToken),
+      authMethod: TO_DB[input.authMethod],
+      ...(input.authMethodExpiresAt ? { authMethodExpiresAt: input.authMethodExpiresAt } : {}),
       expiresAt,
       lastUsedAt: new Date(),
       ...(input.userAgent ? { userAgent: input.userAgent.slice(0, 512) } : {}),
