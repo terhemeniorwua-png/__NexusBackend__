@@ -1,3 +1,5 @@
+import ssoRouter from '../modules/sso/sso.routes';
+import { createScimRouter } from '../modules/scim/scim.routes';
 import { Router } from 'express';
 import type { AppConfig } from '../config/env';
 import { createAuthRouter } from '../modules/auth/auth.routes';
@@ -51,6 +53,8 @@ import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 import { createFormRouter } from '../modules/forms/form.routes';
 import { createSearchRouter } from '../modules/search/search.routes';
 import { createIntegrationRouter } from '../modules/integrations/integration.routes';
+import { createWorkspaceIntegrationRouter } from '../modules/integrations/integration-picker.routes';
+import type { IntegrationPickerService } from '../modules/integrations/integration-picker.service';
 import {
   createDevIntegrationCallbackRouter,
   createProjectRepositoryRouter,
@@ -75,6 +79,8 @@ interface ApiRouterOptions {
   joinRequestService?: JoinRequestService;
   teamService?: TeamService;
   billingService?: BillingService;
+  /** Injectable for tests; production uses the Prisma-backed picker. */
+  integrationPickerService?: IntegrationPickerService;
 }
 
 export function createApiRouter({
@@ -89,6 +95,7 @@ export function createApiRouter({
   joinRequestService = createJoinRequestService(config),
   teamService = createTeamService(),
   billingService = createBillingService(config),
+  integrationPickerService,
 }: ApiRouterOptions): Router {
   const router = Router();
 
@@ -145,6 +152,14 @@ export function createApiRouter({
   router.use('/search', createSearchRouter({ config }));
   // Integrations framework (Phase 19)
   router.use('/integrations', createIntegrationRouter({ config }));
+  // Workspace-scoped provider resource pickers (calendars, Slack channels)
+  router.use(
+    '/workspaces/:workspaceId/integrations',
+    createWorkspaceIntegrationRouter({
+      config,
+      ...(integrationPickerService ? { service: integrationPickerService } : {}),
+    }),
+  );
   // Data importers (ClickUp, Trello, CSV)
   router.use('/imports', createImportRouter(config));
   // Dev/source-control integrations (Phase 5, GitHub App workspace connections)
@@ -181,5 +196,7 @@ export function createApiRouter({
   // Analytics are user-scoped and permission-filtered by workspace access.
   router.use('/analytics', createAnalyticsRouter({ config }));
 
+  router.use('/sso', ssoRouter);
+  router.use('/scim/v2', createScimRouter({ config }));
   return router;
 }

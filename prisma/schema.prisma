@@ -188,6 +188,8 @@ enum NotificationType {
   TASK_BLOCKER_RESOLVED
   TASK_DUE_SOON
   TASK_OVERDUE
+  INTEGRATION_RECONNECT_REQUIRED
+  SECURITY_ALERT
 }
 
 enum AuthTokenPurpose {
@@ -354,6 +356,8 @@ model User {
   createdTaskTemplates          TaskTemplate[]               @relation("TaskTemplateCreator")
   createdProjectTemplates       ProjectTemplate[]            @relation("ProjectTemplateCreator")
   importJobsCreated             ImportJob[]                  @relation("ImportJobsCreatedBy")
+  createdSsoConfigs             WorkspaceSsoConfig[]         @relation("WorkspaceSsoConfigCreator")
+  scimTokens                    ScimToken[]                  @relation("ScimTokenUser")
 
   @@index([status])
   @@index([createdAt])
@@ -427,21 +431,32 @@ model TwoFactorRecoveryCode {
   @@index([userId, usedAt])
 }
 
+
+enum SessionAuthMethod {
+  PASSWORD
+  SOCIAL
+  SSO
+  BREAK_GLASS
+}
+
 model Session {
-  id                       String    @id @default(uuid())
+  id                       String            @id @default(uuid())
   userId                   String
-  refreshTokenHash         String    @unique
+  refreshTokenHash         String            @unique
   /// Hash of the previous refresh token, kept for one rotation so that a
   /// replayed (already rotated) token can be detected.
-  previousRefreshTokenHash String?   @unique
+  previousRefreshTokenHash String?           @unique
+  authMethod               SessionAuthMethod @default(PASSWORD)
+  /// For break-glass sessions, enforce a shorter/limited lifetime.
+  authMethodExpiresAt      DateTime?
   userAgent                String?
   ip                       String?
   lastUsedAt               DateTime?
   expiresAt                DateTime
   revokedAt                DateTime?
   revokedReason            String?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -544,6 +559,12 @@ model Workspace {
   importJobs             ImportJob[]                  @relation("WorkspaceImportJobs")
   importExternalIds      ImportExternalId[]           @relation("WorkspaceImportExternalIds")
 
+  ssoConfigs             WorkspaceSsoConfig[]
+  ssoDomains             WorkspaceSsoDomain[]
+  ssoOidcStates          SsoOidcState[]
+  ssoSamlStates          SsoSamlRequestState[]
+  scimTokens             ScimToken[]        @relation("ScimTokenWorkspace")
+  scimGroups             ScimGroup[]        @relation("ScimGroupWorkspace")
   @@index([ownerId])
   @@index([status])
   @@index([type])
@@ -881,6 +902,7 @@ model Team {
   channels     Channel[]
   joinRequests JoinRequest[]
 
+  scimGroups   ScimGroup[]      @relation("ScimGroupTeam")
   @@index([workspaceId])
   @@index([departmentId])
   @@index([leadId])
@@ -1786,6 +1808,9 @@ model Integration {
   lastRefreshedAt        DateTime?
   lastSyncedAt           DateTime?
   revokedAt              DateTime?
+  /// Set when the provider rejected the stored token (for example Slack
+  /// invalid_auth). The integration must be reconnected before it is usable.
+  needsReconnect         Boolean             @default(false)
   createdAt              DateTime            @default(now())
   updatedAt              DateTime            @updatedAt
 
@@ -2087,6 +2112,7 @@ enum AutomationActionType {
   SET_FIELD
   ASSIGN
   POST_MESSAGE
+  SEND_SLACK_MESSAGE
 }
 
 enum AutomationRunStatus {
@@ -2658,6 +2684,191 @@ model ProjectTemplate {
 
   @@index([workspaceId])
 }
+
+
+// ---------------------------------------------------------------------------
+// Workspace SSO (OIDC)
+// ---------------------------------------------------------------------------
+
+enum SsoProviderType {
+  OIDC
+  SAML
+}
+
+enum SsoConfigStatus {
+  DRAFT
+  ACTIVE
+  DISABLED
+}
+
+model WorkspaceSsoConfig {
+  id                     String          @id @default(uuid())
+  workspaceId            String
+  providerType           SsoProviderType
+  providerName           String
+  /// OIDC issuer / SAML entity ID as configured
+  issuer                 String?
+  clientId               String?
+  /// AES-256-GCM encrypted client secret (integrations token crypto). Never returned by API or logged.
+  clientSecretCiphertext String?
+  /// SAML metadata URL or certificate material
+  metadataUrl            String?
+  certificate            String?
+  authorizationUrl       String?
+  tokenUrl               String?
+  userInfoUrl            String?
+  redirectUri            String?
+  /// JSON-encoded scope/claims/configuration blob for provider-specific settings
+  config                 Json?
+  status                 SsoConfigStatus @default(DRAFT)
+  isEnabled              Boolean         @default(false)
+  requireSso             Boolean         @default(false)
+  /// When enabled, SSO may create a new account only after verified email + verified domain checks pass.
+  jitProvisioningEnabled Boolean         @default(false)
+  /// When requireSso is true, verified owner break-glass is allowed
+  breakGlassEnabled      Boolean         @default(false)
+  /// Hashed one-time break-glass codes (JSON array) - implementation detail
+  breakGlassCodeHashes   Json?
+  createdById            String
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  workspace  Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy  User                 @relation("WorkspaceSsoConfigCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  domains    WorkspaceSsoDomain[]
+  oidcStates SsoOidcState[]
+  samlStates SsoSamlRequestState[]
+
+  @@index([workspaceId, isEnabled])
+  @@index([workspaceId, requireSso])
+  @@index([providerType])
+}
+
+model WorkspaceSsoDomain {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  configId          String?
+  domain            String
+  /// Token the admin must publish as a DNS TXT record for verification
+  verificationToken String
+  txtRecordName     String    @default("_nexus-sso-verification")
+  verifiedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  config    WorkspaceSsoConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, domain])
+  @@index([domain])
+  @@index([workspaceId, verifiedAt])
+}
+
+/// DB-backed OIDC authorization state/nonce (single-use, short-lived).
+/// Bound to workspace and browser (cookie) to prevent CSRF/login fixation/replay.
+model SsoOidcState {
+  id                 String    @id @default(uuid())
+  workspaceId        String
+  configId           String?
+  /// SHA-256 hash of the opaque state value sent to the IdP and stored in browser cookie.
+  stateHash          String    @unique
+  /// Nonce expected in the ID token.
+  nonce              String
+  /// PKCE code verifier (kept server-side only).
+  codeVerifier       String
+  /// SHA-256 hash of the browser-bound secret cookie value.
+  browserBindingHash String
+  redirectUri        String?
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  createdAt          DateTime  @default(now())
+
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  config    WorkspaceSsoConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, expiresAt])
+  @@index([expiresAt])
+}
+
+
+
+
+/// DB-backed SAML AuthnRequest state for InResponseTo validation and replay protection.
+/// Bound to workspace and browser (cookie), single-use, short-lived.
+model SsoSamlRequestState {
+  id                 String    @id @default(uuid())
+  workspaceId        String
+  configId           String?
+  /// SAML AuthnRequest ID (InResponseTo). Stored hashed for lookup/uniqueness.
+  requestIdHash      String    @unique
+  /// Original request ID needed for validation by SAML library.
+  requestId          String
+  browserBindingHash String
+  relayState         String?
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  createdAt          DateTime  @default(now())
+
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  config    WorkspaceSsoConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, expiresAt])
+  @@index([expiresAt])
+}
+
+
+// ---------------------------------------------------------------------------
+// SCIM (System for Cross-domain Identity Management)
+// Provisioning is authenticated with per-workspace bearer tokens stored in
+// ScimToken. SCIM users map to Nexus users within a workspace; SCIM groups
+// map to Nexus teams.
+// ---------------------------------------------------------------------------
+
+enum ScimTokenStatus {
+  ACTIVE
+  REVOKED
+}
+
+model ScimToken {
+  id          String          @id @default(uuid())
+  workspaceId String
+  userId      String
+  name        String
+  tokenHash   String          @unique
+  scopes      String[]        @default([])
+  status      ScimTokenStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  workspace Workspace @relation("ScimTokenWorkspace", fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation("ScimTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([tokenHash])
+  @@index([workspaceId, status])
+}
+
+model ScimGroup {
+  id          String   @id @default(uuid())
+  workspaceId String
+  teamId      String
+  displayName String
+  externalId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace @relation("ScimGroupWorkspace", fields: [workspaceId], references: [id], onDelete: Cascade)
+  team      Team      @relation("ScimGroupTeam", fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, displayName])
+  @@index([workspaceId])
+  @@index([teamId])
+}
+
 
 // ---------------------------------------------------------------------------
 // Planned models — intentionally NOT created yet.

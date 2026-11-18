@@ -4,6 +4,7 @@ import { getPrismaClient } from '../db/prisma';
 import { AppError } from '../utils/errors';
 import { verifyAccessToken } from '../modules/auth/access-token.service';
 import { findActiveSession } from '../modules/auth/session.service';
+import { resolveSessionAuth } from '../modules/auth/session-auth';
 
 /**
  * Request guards for authenticated routes.
@@ -20,6 +21,8 @@ export interface AuthContext {
   email: string;
   name: string;
   status: 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED' | 'PENDING_DELETION';
+  authMethod: 'password' | 'social' | 'sso' | 'break_glass';
+  authMethodExpiresAt?: Date | null;
 }
 
 function extractBearerToken(header: string | undefined): string | null {
@@ -83,12 +86,16 @@ export function createRequireAuth(config: AppConfig): RequestHandler {
         );
       }
 
+      const { authMethod, authMethodExpiresAt } = resolveSessionAuth(session);
+
       req.auth = {
         userId: user.id,
         sessionId: session.id,
         email: user.email,
         name: user.name,
         status: user.status,
+        authMethod,
+        authMethodExpiresAt: authMethodExpiresAt,
       };
 
       next();

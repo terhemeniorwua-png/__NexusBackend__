@@ -9,7 +9,18 @@ import {
   toIntegrationError,
   type ProviderLifecycle,
 } from './provider-lifecycle';
+import {
+  createSlackNotificationService,
+  slackChannelFromConfig,
+  type EnqueueSlackNotificationResult,
+  type SlackNotificationKind,
+  type SlackNotificationService,
+} from './slack-notifications';
 import { decryptIntegrationToken, encryptIntegrationToken } from './token-crypto';
+import {
+  createIntegrationPickerService,
+  type IntegrationPickerService,
+} from './integration-picker.service';
 
 // Access and refresh tokens are encrypted with AES-256-GCM (token-crypto.ts) before
 // storage. INTEGRATION_ENCRYPTION_KEY must be set or connect() fails with 503.
@@ -98,13 +109,22 @@ function jobSummary(job: {
 export function createIntegrationService(
   prisma: PrismaClient = getPrismaClient(),
   lifecycle: ProviderLifecycle = createProviderLifecycle(),
+  slackNotifications: SlackNotificationService = createSlackNotificationService({ prisma }),
+  picker: IntegrationPickerService = createIntegrationPickerService({
+    prisma,
+    lifecycle,
+    slackNotifications,
+  }),
 ) {
   const encryptToken = encryptIntegrationToken;
   const isWorkspaceLevel = (provider: IntegrationProvider, workspaceId: string | null): boolean =>
     WORKSPACE_LEVEL_PROVIDERS.has(provider) && workspaceId !== null;
 
   async function requireManage(userId: string, integration: Integration): Promise<void> {
-    if (isWorkspaceLevel(integration.provider, integration.workspaceId) && integration.workspaceId) {
+    if (
+      isWorkspaceLevel(integration.provider, integration.workspaceId) &&
+      integration.workspaceId
+    ) {
       await requireWorkspaceAccess(prisma, {
         userId,
         workspaceId: integration.workspaceId,
@@ -184,6 +204,7 @@ export function createIntegrationService(
         status: 'ACTIVE',
         lastError: null,
         lastRefreshedAt: new Date(),
+        needsReconnect: false,
       },
     });
   }
@@ -206,7 +227,11 @@ export function createIntegrationService(
       const workspaceLevel = WORKSPACE_LEVEL_PROVIDERS.has(input.provider);
 
       if (workspaceLevel && !workspaceId) {
-        throw new AppError(400, 'WORKSPACE_REQUIRED', 'This integration must be connected to a workspace');
+        throw new AppError(
+          400,
+          'WORKSPACE_REQUIRED',
+          'This integration must be connected to a workspace',
+        );
       }
 
       if (workspaceId) {
@@ -235,6 +260,7 @@ export function createIntegrationService(
         ...(input.config ? { config: input.config as Prisma.InputJsonValue } : {}),
         lastError: null,
         revokedAt: null,
+        needsReconnect: false,
       };
 
       const connectWorkspaceLevel = async (
@@ -255,11 +281,21 @@ export function createIntegrationService(
               data: { ...tokenData, userId: input.userId, workspaceId: wsId },
             })
           : await tx.integration.create({
-              data: { userId: input.userId, workspaceId: wsId, provider: input.provider, ...tokenData },
+              data: {
+                userId: input.userId,
+                workspaceId: wsId,
+                provider: input.provider,
+                ...tokenData,
+              },
             });
         // One active connection per workspace for workspace-level providers.
         await tx.integration.updateMany({
-          where: { provider: input.provider, workspaceId: wsId, id: { not: row.id }, status: 'ACTIVE' },
+          where: {
+            provider: input.provider,
+            workspaceId: wsId,
+            id: { not: row.id },
+            status: 'ACTIVE',
+          },
           data: { status: 'DISCONNECTED' },
         });
         return row;
@@ -370,6 +406,7 @@ export function createIntegrationService(
               enabled: false,
               lastError: revocation.revoked ? null : (revocation.detail?.slice(0, 500) ?? null),
               ...(revokedAt ? { revokedAt } : {}),
+              needsReconnect: false,
             },
           });
         } else {
@@ -380,6 +417,7 @@ export function createIntegrationService(
               enabled: false,
               lastError: revocation.revoked ? null : (revocation.detail?.slice(0, 500) ?? null),
               ...(revokedAt ? { revokedAt } : {}),
+              needsReconnect: false,
             },
           });
         }
@@ -416,7 +454,10 @@ export function createIntegrationService(
             ? {
                 OR: [
                   { workspaceId: input.workspaceId, userId: input.userId },
-                  { workspaceId: input.workspaceId, provider: { in: Array.from(WORKSPACE_LEVEL_PROVIDERS) } },
+                  {
+                    workspaceId: input.workspaceId,
+                    provider: { in: Array.from(WORKSPACE_LEVEL_PROVIDERS) },
+                  },
                   { workspaceId: null, userId: input.userId },
                 ],
               }
@@ -478,6 +519,13 @@ export function createIntegrationService(
           'Reconnect the integration before enabling it',
         );
       }
+      if (input.enabled && integration.needsReconnect) {
+        throw new AppError(
+          409,
+          'INTEGRATION_RECONNECT_REQUIRED',
+          'Reconnect the integration before enabling it',
+        );
+      }
       const updated = await prisma.integration.update({
         where: { id: integration.id },
         data: { enabled: input.enabled },
@@ -495,6 +543,50 @@ export function createIntegrationService(
 
     async updateConfig(input: Input & { integrationId: string; config: Record<string, unknown> }) {
       const integration = await findForCaller(input.userId, input.integrationId);
+
+      // A picker id must be one the provider currently returns for *this*
+      // connection. Validation happens before anything is persisted so a stale
+      // or hand-crafted id can never be saved and silently break delivery.
+      if (input.config.googleCalendarId !== undefined) {
+        if (integration.provider !== 'GOOGLE_CALENDAR') {
+          throw new AppError(
+            400,
+            'INTEGRATION_CONFIG_MISMATCH',
+            'googleCalendarId is only valid for a Google Calendar connection',
+          );
+        }
+        const calendarId =
+          typeof input.config.googleCalendarId === 'string'
+            ? input.config.googleCalendarId.trim()
+            : '';
+        if (!calendarId) {
+          throw new AppError(
+            400,
+            'GOOGLE_CALENDAR_ID_REQUIRED',
+            'Choose a Google calendar before saving',
+          );
+        }
+        await picker.assertCalendarSelectable({ integration, calendarId });
+      }
+
+      if (input.config.slackChannelId !== undefined) {
+        if (integration.provider !== 'SLACK') {
+          throw new AppError(
+            400,
+            'INTEGRATION_CONFIG_MISMATCH',
+            'slackChannelId is only valid for a Slack connection',
+          );
+        }
+        const channelId =
+          typeof input.config.slackChannelId === 'string'
+            ? input.config.slackChannelId.trim()
+            : '';
+        if (!channelId) {
+          throw new AppError(400, 'SLACK_CHANNEL_REQUIRED', 'Choose a Slack channel before saving');
+        }
+        await picker.assertChannelSelectable({ integration, channelId });
+      }
+
       const current = (integration.config ?? {}) as Record<string, unknown>;
       const next = { ...current, ...input.config };
       const updated = await prisma.integration.update({
@@ -524,6 +616,91 @@ export function createIntegrationService(
         lastError: integration.lastError,
         latestJob: latestJob ? jobSummary(latestJob) : null,
       };
+    },
+
+    /**
+     * List the public Slack channels the connected bot can post to.
+     *
+     * Workspace-level connection: requires workspace update permission (via
+     * `findForCaller`). The stored token is decrypted only for this call and
+     * never returned. A revoked token immediately marks the integration as
+     * needing reconnection so the UI can prompt instead of retrying.
+     */
+    async slackChannels(input: Input & { integrationId: string }) {
+      const integration = await findForCaller(input.userId, input.integrationId);
+      if (integration.provider !== 'SLACK') {
+        throw new AppError(
+          400,
+          'INTEGRATION_NOT_SLACK',
+          'Channel listing is only available for Slack integrations',
+        );
+      }
+      if (integration.status === 'DISCONNECTED') {
+        throw new AppError(
+          409,
+          'INTEGRATION_DISCONNECTED',
+          'Reconnect Slack before listing channels',
+        );
+      }
+      if (!integration.enabled) {
+        throw new AppError(
+          409,
+          'INTEGRATION_DISABLED',
+          'Enable the Slack integration before listing channels',
+        );
+      }
+      if (integration.needsReconnect) {
+        throw new AppError(
+          409,
+          'SLACK_RECONNECT_REQUIRED',
+          'Reconnect Slack before listing channels',
+        );
+      }
+
+      let accessToken: string;
+      try {
+        accessToken = decryptIntegrationToken(integration.accessTokenCiphertext);
+      } catch {
+        throw new AppError(
+          409,
+          'SLACK_TOKEN_UNREADABLE',
+          'The stored Slack token cannot be read. Reconnect Slack.',
+        );
+      }
+
+      const result = await slackNotifications.listChannels({ accessToken });
+      if (!result.ok) {
+        if (result.revoked) {
+          const message = `SLACK_TOKEN_REVOKED: ${result.error}`;
+          await prisma.integration.updateMany({
+            where: { id: integration.id, needsReconnect: false },
+            data: {
+              status: 'ERROR',
+              needsReconnect: true,
+              lastError: message.slice(0, 500),
+            },
+          });
+          throw new AppError(
+            409,
+            'SLACK_RECONNECT_REQUIRED',
+            'Reconnect Slack before listing channels',
+          );
+        }
+        if (result.retryAfterMs !== undefined) {
+          throw new AppError(
+            429,
+            'SLACK_RATE_LIMITED',
+            'Slack is rate limiting channel listing. Try again shortly.',
+          );
+        }
+        throw new AppError(
+          502,
+          'SLACK_CHANNELS_UNAVAILABLE',
+          'Slack did not return a channel list. Try again later.',
+        );
+      }
+
+      return result.channels;
     },
 
     async enqueueSync(input: Input & { integrationId: string }) {
@@ -646,6 +823,32 @@ export function createIntegrationService(
       };
 
       for (const job of claimed) {
+        if (job.type === 'OUTBOUND_EVENT') {
+          try {
+            const outcome = await slackNotifications.processJob(job, now);
+            if (outcome === 'succeeded') result.succeeded += 1;
+            else if (outcome === 'retried') result.retried += 1;
+            else result.failed += 1;
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message.slice(0, 500)
+                : 'The outbound notification failed';
+            await prisma.integrationSyncJob.updateMany({
+              where: { id: job.id, status: 'RUNNING' },
+              data: {
+                status: 'FAILED',
+                completedAt: now,
+                attempts: job.attempts + 1,
+                lastError: message,
+              },
+            });
+            result.failed += 1;
+            logger.warn('integration_outbound_job_failed', { jobId: job.id, error: message });
+          }
+          continue;
+        }
+
         const integration = job.integration;
         if (integration.status === 'DISCONNECTED' || !integration.enabled) {
           await prisma.integrationSyncJob.updateMany({
@@ -718,6 +921,100 @@ export function createIntegrationService(
       }
 
       return result;
+    },
+
+    /** Per-workspace Slack notification settings (channel, on/off). Needs workspace update permission. */
+    async updateSlackSettings(
+      input: Input & {
+        workspaceId: string;
+        slackChannelId?: string;
+        slackChannelName?: string | null;
+        notificationsEnabled?: boolean;
+      },
+    ) {
+      await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.UpdateWorkspace,
+      });
+
+      const integration = await prisma.integration.findFirst({
+        where: {
+          workspaceId: input.workspaceId,
+          provider: 'SLACK',
+          status: 'ACTIVE',
+          enabled: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!integration) {
+        throw new AppError(
+          404,
+          'SLACK_NOT_CONNECTED',
+          'Connect Slack to this workspace before configuring notifications',
+        );
+      }
+
+      const current = (integration.config ?? {}) as Record<string, unknown>;
+      const next: Record<string, unknown> = { ...current };
+      if (input.slackChannelId !== undefined) next.slackChannelId = input.slackChannelId.trim();
+      if (input.slackChannelName !== undefined) next.slackChannelName = input.slackChannelName;
+      if (input.notificationsEnabled !== undefined)
+        next.notificationsEnabled = input.notificationsEnabled;
+      if (
+        next.notificationsEnabled !== false &&
+        !slackChannelFromConfig(next as Prisma.JsonValue)
+      ) {
+        throw new AppError(
+          400,
+          'SLACK_CHANNEL_REQUIRED',
+          'Choose a Slack channel before enabling notifications',
+        );
+      }
+
+      // Validate a newly chosen channel against the provider before saving it.
+      if (input.slackChannelId !== undefined) {
+        const channelId = input.slackChannelId.trim();
+        if (channelId) {
+          await picker.assertChannelSelectable({ integration, channelId });
+        }
+      }
+
+      const updated = await prisma.integration.update({
+        where: { id: integration.id },
+        data: { config: next as Prisma.InputJsonValue },
+      });
+      await recordAuditEvent(prisma, {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        action: 'integration.slack_settings_updated',
+        targetType: 'Integration',
+        targetId: updated.id,
+        metadata: {
+          provider: 'SLACK',
+          notificationsEnabled: next.notificationsEnabled ?? true,
+          channelConfigured: Boolean(slackChannelFromConfig(next as Prisma.JsonValue)),
+        },
+      });
+      return summary(updated);
+    },
+
+    /** Enqueue a Slack notification for a workspace event. Needs workspace update permission. */
+    async enqueueSlackNotification(
+      input: Input & {
+        workspaceId: string;
+        kind: SlackNotificationKind;
+        dedupeKey: string;
+        text: string;
+        metadata?: Record<string, unknown>;
+      },
+    ): Promise<EnqueueSlackNotificationResult> {
+      await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.UpdateWorkspace,
+      });
+      return slackNotifications.enqueue(input);
     },
   };
 }

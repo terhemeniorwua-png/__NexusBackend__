@@ -207,28 +207,48 @@ export function createEmailDeliveryService(deps: EmailDeliveryDependencies) {
    * workers never pick up the same row.
    */
   async function claimDue(limit: number, excludeIds: readonly string[] = []): Promise<ClaimedDelivery[]> {
-    const excludeClause = excludeIds.length > 0 ? Prisma.sql`AND "id" NOT IN (${Prisma.join(excludeIds)})` : Prisma.empty;
-    const rows = await client.$queryRaw<ClaimedDelivery[]>`
-      UPDATE "EmailDelivery" AS d
-      SET "status" = 'SENDING', "attempts" = d."attempts" + 1, "updatedAt" = NOW()
-      WHERE d."id" IN (
-        SELECT "id"
-        FROM "EmailDelivery"
-        WHERE "status" = 'QUEUED'
-          AND "nextAttemptAt" <= NOW()
-          AND "attempts" < "maxAttempts"
-          ${excludeClause}
-        ORDER BY "nextAttemptAt" ASC
-        LIMIT ${limit}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING d."id", d."toAddress", d."fromAddress", d."template", d."subject",
-                d."textBody", d."htmlBody", d."headers", d."metadata", d."status",
-                d."provider", d."providerMessageId", d."idempotencyKey", d."attempts",
-                d."maxAttempts", d."lastError", d."lastErrorCode", d."nextAttemptAt",
-                d."acceptedAt", d."deliveredAt", d."bouncedAt", d."complainedAt",
-                d."failedAt", d."createdAt", d."updatedAt"
-    `;
+    const rows = excludeIds.length === 0
+      ? await client.$queryRaw<ClaimedDelivery[]>`
+          UPDATE "EmailDelivery" AS d
+          SET "status" = 'SENDING', "attempts" = d."attempts" + 1, "updatedAt" = NOW()
+          WHERE d."id" IN (
+            SELECT "id"
+            FROM "EmailDelivery"
+            WHERE "status" = 'QUEUED'
+              AND "nextAttemptAt" <= NOW()
+              AND "attempts" < "maxAttempts"
+            ORDER BY "nextAttemptAt" ASC
+            LIMIT ${limit}
+            FOR UPDATE SKIP LOCKED
+          )
+          RETURNING d."id", d."toAddress", d."fromAddress", d."template", d."subject",
+                    d."textBody", d."htmlBody", d."headers", d."metadata", d."status",
+                    d."provider", d."providerMessageId", d."idempotencyKey", d."attempts",
+                    d."maxAttempts", d."lastError", d."lastErrorCode", d."nextAttemptAt",
+                    d."acceptedAt", d."deliveredAt", d."bouncedAt", d."complainedAt",
+                    d."failedAt", d."createdAt", d."updatedAt"
+        `
+      : await client.$queryRaw<ClaimedDelivery[]>`
+          UPDATE "EmailDelivery" AS d
+          SET "status" = 'SENDING', "attempts" = d."attempts" + 1, "updatedAt" = NOW()
+          WHERE d."id" IN (
+            SELECT "id"
+            FROM "EmailDelivery"
+            WHERE "status" = 'QUEUED'
+              AND "nextAttemptAt" <= NOW()
+              AND "attempts" < "maxAttempts"
+              AND "id" <> ALL(${[...excludeIds]}::text[])
+            ORDER BY "nextAttemptAt" ASC
+            LIMIT ${limit}
+            FOR UPDATE SKIP LOCKED
+          )
+          RETURNING d."id", d."toAddress", d."fromAddress", d."template", d."subject",
+                    d."textBody", d."htmlBody", d."headers", d."metadata", d."status",
+                    d."provider", d."providerMessageId", d."idempotencyKey", d."attempts",
+                    d."maxAttempts", d."lastError", d."lastErrorCode", d."nextAttemptAt",
+                    d."acceptedAt", d."deliveredAt", d."bouncedAt", d."complainedAt",
+                    d."failedAt", d."createdAt", d."updatedAt"
+        `;
 
     return rows;
   }
