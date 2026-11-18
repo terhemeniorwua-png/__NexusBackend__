@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AppError } from '../../utils/errors';
 import { createOAuthState, verifyOAuthState } from './oauth-state';
+import { integrationResultUrl } from './frontend-url';
 
 // Minimal scopes for two-way event sync on calendars the user can access, plus
 // read-only access to the calendar list so the workspace can pick which
@@ -172,6 +173,5 @@ export async function refreshCalendarToken(refreshToken: string): Promise<{
 }
 
 export function calendarResultUrl(status: 'connected' | 'denied' | 'error'): string {
-  const frontend = (process.env.FRONTEND_URL ?? '').replace(/\/$/, '');
-  return `${frontend}/settings/integrations?calendar=${encodeURIComponent(status)}`;
+  return integrationResultUrl('google_calendar', status);
 }

@@ -651,7 +651,7 @@ describe('Slack reconnect notice', () => {
       assert.equal(state.notifications.length, 2);
       for (const notification of state.notifications) {
         assert.equal(notification.type, 'INTEGRATION_RECONNECT_REQUIRED');
-        assert.equal(notification.link, '/settings/integrations');
+        assert.equal(notification.link, '/app/integrations');
         assert.equal((notification.data as Record<string, unknown>).integrationId, 'integration-1');
       }
 

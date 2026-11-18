@@ -78,7 +78,7 @@ test('tampered state is rejected', async () => {
 test('result URL points at the frontend integrations page', () => {
   assert.equal(
     calendarResultUrl('connected'),
-    'https://app.example.com/settings/integrations?calendar=connected',
+    'https://app.example.com/app/integrations?integration=google_calendar&status=connected',
   );
 });
 

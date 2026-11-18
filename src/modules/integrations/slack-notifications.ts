@@ -581,7 +581,7 @@ export function createSlackNotificationService(
           type: 'INTEGRATION_RECONNECT_REQUIRED',
           title: 'Reconnect Slack',
           body: 'Slack stopped accepting Nexus notifications because the connection was revoked. Reconnect Slack to resume delivery.',
-          link: '/settings/integrations',
+          link: '/app/integrations',
           data: {
             workspaceId: integration.workspaceId,
             integrationId: integration.id,
