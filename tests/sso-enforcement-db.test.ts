@@ -1,3 +1,4 @@
+import type { AppConfig } from '../src/config/env';
 import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { getPrismaClient } from '../src/db/prisma';
@@ -7,7 +8,6 @@ import { createApp } from '../src/app';
 import { startServer, jsonRequest, type RunningServer } from './helpers/test-server';
 import { hashPassword } from '../src/services/password';
 import { hashSecret } from '../src/utils/crypto';
-import { createAuthService } from '../src/modules/auth/auth.service';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../src/modules/authorization/workspace.policy';
 
 let databaseUrl: string | null = null;
@@ -23,7 +23,7 @@ try {
 describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
   let prisma: ReturnType<typeof getPrismaClient> | null = null;
   let server: RunningServer | null = null;
-  let config: any;
+  let config: AppConfig;
   const cleanup = { userIds: [] as string[], workspaceIds: [] as string[] };
 
   before(async () => {
@@ -46,7 +46,7 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
     if (server) await server.close();
     if (prisma) {
       for (const wid of cleanup.workspaceIds) {
-        await prisma.session.deleteMany({ where: { user: { memberships: { some: { workspaceId: wid } } } } as any }).catch(() => {});
+        await prisma.session.deleteMany({ where: { user: { memberships: { some: { workspaceId: wid } } } } }).catch(() => {});
         await prisma.workspace.deleteMany({ where: { id: wid } }).catch(() => {});
       }
       if (cleanup.userIds.length) {
@@ -141,7 +141,7 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
     const code = 'recovery-code-once-123456';
     await db.workspaceSsoConfig.update({
       where: { id: seeded.ssoConfig.id },
-      data: { breakGlassCodeHashes: [hashSecret(code)] as any, breakGlassEnabled: true },
+      data: { breakGlassCodeHashes: [hashSecret(code)], breakGlassEnabled: true },
     });
 
     const res = await jsonRequest(`${server!.baseUrl}/api/sso/workspaces/${seeded.workspace.id}/break-glass/login`, {
@@ -159,13 +159,13 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
     assert.ok(session?.authMethodExpiresAt);
 
     const audit = await db.auditLog.findFirst({
-      where: { action: 'workspace.sso_break_glass_used', targetId: seeded.ssoConfig.id } as any,
+      where: { action: 'workspace.sso_break_glass_used', targetId: seeded.ssoConfig.id },
       orderBy: { createdAt: 'desc' },
     });
     assert.ok(audit, 'expected break-glass use to be audited');
 
     const notif = await db.notification.findFirst({
-      where: { userId: otherOwner.id } as any,
+      where: { userId: otherOwner.id },
       orderBy: { createdAt: 'desc' },
     });
     assert.ok(notif, 'expected other owner to be notified');
@@ -174,8 +174,6 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
   test('member removal revokes sessions and removed member loses access immediately with unexpired access token context', async () => {
     const db = prisma!;
     const seeded = await seedRequireSsoWorkspace();
-    // create an active SSO session for member
-    const auth = createAuthService(config, db);
     // simulate SSO session creation
     const { createSession } = await import('../src/modules/auth/session.service');
     const issued = await createSession(db, {
@@ -184,15 +182,15 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
       authMethod: 'sso',
       userAgent: 'test',
       ip: '127.0.0.1',
-    } as any);
+    });
     assert.ok(!issued.session.revokedAt);
 
     // remove membership (service path that wires revocation)
     const { createWorkspaceService } = await import('../src/modules/workspaces/workspace.service');
     const wsService = createWorkspaceService(config, db);
     await wsService.removeMember(
-      { userId: seeded.owner.id, workspaceId: seeded.workspace.id, targetUserId: seeded.member.id } as any,
-      { ip: '127.0.0.1', userAgent: 'test' } as any,
+      { userId: seeded.owner.id, workspaceId: seeded.workspace.id, targetUserId: seeded.member.id },
+      { ip: '127.0.0.1', userAgent: 'test' },
     );
 
     const revoked = await db.session.findUnique({ where: { id: issued.session.id } });
@@ -205,8 +203,8 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
         workspaceId: seeded.workspace.id,
         capability: WorkspaceCapability.ViewWorkspace,
         auth: { authMethod: 'sso', sessionId: issued.session.id },
-      } as any),
-      (err: any) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
+      }),
+      (err: { code?: string; statusCode?: number; message?: string }) => err?.code === 'WORKSPACE_ACCESS_DENIED' || err?.statusCode === 403,
     );
   });
 });

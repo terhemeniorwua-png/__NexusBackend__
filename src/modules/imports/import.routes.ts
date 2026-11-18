@@ -1,5 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
@@ -14,6 +13,8 @@ import {
 } from './import.schemas';
 import { createImportService } from './import.service';
 
+type AuthenticatedRequest = Request & { user: { id: string } };
+
 export function createImportRouter(config: AppConfig): Router {
   const router = Router();
   const requireAuth = createRequireAuth(config);
@@ -27,7 +28,7 @@ export function createImportRouter(config: AppConfig): Router {
     validate({ body: importUploadSchema }),
     async (req, res) => {
       const body = req.validated!.body as ImportUploadInput;
-      sendSuccess(res, await service.createPreview({ userId: (req as any).user.id, ...body }));
+      sendSuccess(res, await service.createPreview({ userId: (req as AuthenticatedRequest).user.id, ...body }));
     },
   );
 
@@ -41,7 +42,7 @@ export function createImportRouter(config: AppConfig): Router {
       const body = req.validated!.body as ImportConfirmInput;
       sendSuccess(
         res,
-        await service.confirm({ userId: (req as any).user.id, importId, idempotencyKey: body.idempotencyKey }),
+        await service.confirm({ userId: (req as AuthenticatedRequest).user.id, importId, idempotencyKey: body.idempotencyKey }),
         202,
       );
     },
@@ -54,7 +55,7 @@ export function createImportRouter(config: AppConfig): Router {
     validate({ query: listImportsQuerySchema }),
     async (req, res) => {
       const { workspaceId, limit } = req.validated!.query as { workspaceId: string; limit?: number };
-      sendSuccess(res, await service.list({ userId: (req as any).user.id, workspaceId, limit }));
+      sendSuccess(res, await service.list({ userId: (req as AuthenticatedRequest).user.id, workspaceId, limit }));
     },
   );
 
@@ -65,7 +66,7 @@ export function createImportRouter(config: AppConfig): Router {
     validate({ params: importJobParamsSchema }),
     async (req, res) => {
       const { importId } = req.validated!.params as { importId: string };
-      sendSuccess(res, await service.get({ userId: (req as any).user.id, importId }));
+      sendSuccess(res, await service.get({ userId: (req as AuthenticatedRequest).user.id, importId }));
     },
   );
 

@@ -4,6 +4,7 @@ import { getPrismaClient } from '../db/prisma';
 import { AppError } from '../utils/errors';
 import { verifyAccessToken } from '../modules/auth/access-token.service';
 import { findActiveSession } from '../modules/auth/session.service';
+import { resolveSessionAuth } from '../modules/auth/session-auth';
 
 /**
  * Request guards for authenticated routes.
@@ -85,18 +86,7 @@ export function createRequireAuth(config: AppConfig): RequestHandler {
         );
       }
 
-      const rawMethod = String((session as any).authMethod ?? 'PASSWORD').toLowerCase();
-      const authMethod = (['password','social','sso','break_glass'] as const).includes(rawMethod as any)
-        ? (rawMethod as AuthContext['authMethod'])
-        : 'password';
-
-      // Break-glass sessions are time-limited by authMethodExpiresAt in addition to normal session expiry.
-      if (authMethod === 'break_glass' && (session as any).authMethodExpiresAt) {
-        const amExp = new Date((session as any).authMethodExpiresAt).getTime();
-        if (amExp <= Date.now()) {
-          throw new AppError(401, 'SESSION_EXPIRED', 'Your break-glass session has expired. Please sign in again.');
-        }
-      }
+      const { authMethod, authMethodExpiresAt } = resolveSessionAuth(session);
 
       req.auth = {
         userId: user.id,
@@ -105,7 +95,7 @@ export function createRequireAuth(config: AppConfig): RequestHandler {
         name: user.name,
         status: user.status,
         authMethod,
-        authMethodExpiresAt: (session as any).authMethodExpiresAt ?? null,
+        authMethodExpiresAt: authMethodExpiresAt,
       };
 
       next();

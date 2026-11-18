@@ -37,7 +37,7 @@ jobs:
     env:
       NODE_ENV: test
       JWT_ACCESS_SECRET: ci-test-secret-ci-test-secret-ci-test-secret
-      INTEGRATION_ENCRYPTION_KEY: 0mzo0WNtW985zxiM0G0MfjFH5qKkR0hZHg5PtxZ6m6U
+      INTEGRATION_ENCRYPTION_KEY: 'hJqEqhQDlPeMmIOUcOoi4L08f8cUCPvM1jG-lEAsjbU'
       DATABASE_URL: postgresql://nexus:nexus_test_pw@localhost:5432/nexus_test?connection_limit=10&pool_timeout=30
       TEST_DATABASE_URL: postgresql://nexus:nexus_test_pw@localhost:5432/nexus_test?connection_limit=10&pool_timeout=30
       REDIS_URL: redis://localhost:6379
@@ -50,6 +50,7 @@ jobs:
       RUN_PHASE9_DB_TESTS: "true"
       RUN_PHASE10_DB_TESTS: "true"
       RUN_BILLING_DB_TESTS: "true"
+      RUN_PHASE19_DB_TESTS: "true"
 
     steps:
       - uses: actions/checkout@v4

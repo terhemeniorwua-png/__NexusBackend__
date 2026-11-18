@@ -1,6 +1,7 @@
 import type { PrismaClient, Workspace, WorkspaceMembership, WorkspaceRole } from '@prisma/client';
 import { effectiveWorkspaceRole, isOrganizationRoleForWorkspace } from './organization-role';
 import { AppError } from '../../utils/errors';
+import type { Session as PrismaSession } from '@prisma/client';
 
 /**
  * Workspace-level authorization policy.
@@ -189,7 +190,7 @@ export async function requireWorkspaceAccess(
       });
       if (verifiedDomainCount > 0) {
         let authMethod = input.auth?.authMethod?.toLowerCase();
-        let session: any = null;
+        let session: PrismaSession | null = null;
         if (input.auth?.sessionId) {
           session = await client.session.findUnique({ where: { id: input.auth.sessionId } });
           if (session) authMethod = String(session.authMethod ?? 'PASSWORD').toLowerCase();

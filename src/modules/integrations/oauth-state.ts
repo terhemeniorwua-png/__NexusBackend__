@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { AppError } from '../../utils/errors';
 
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -97,15 +98,15 @@ export async function verifyOAuthState(
     throw new Error('The OAuth state is not valid');
   }
   if (claims.exp <= Date.now()) {
-    throw new Error('The OAuth state has expired');
+    throw new AppError(400, 'OAUTH_STATE_EXPIRED', 'The OAuth state has expired');
   }
   if (claims.iat > Date.now() + 30_000) {
-    throw new Error('The OAuth state has invalid issued-at');
+    throw new AppError(400, 'OAUTH_STATE_INVALID', 'The OAuth state has invalid issued-at');
   }
 
   const replayKey = `${provider}:${claims.nonce}:${sha256Base64Url(state)}`;
   if (consumedStates.has(replayKey)) {
-    throw new Error('The OAuth state has already been used');
+    throw new AppError(400, 'OAUTH_STATE_INVALID', 'The OAuth state has already been used');
   }
   consumedStates.set(replayKey, claims.exp);
 

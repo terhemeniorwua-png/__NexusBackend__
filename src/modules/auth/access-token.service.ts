@@ -83,7 +83,7 @@ export function verifyAccessToken(config: AppConfig, token: string): AccessToken
     throw new AppError(401, 'ACCESS_TOKEN_INVALID', 'The access token is invalid');
   }
 
-  const amr = (claims as any).amr;
+  const amr = (claims as { amr?: unknown }).amr;
   return {
     sub: claims.sub,
     sid: claims.sid,
