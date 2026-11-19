@@ -507,6 +507,53 @@ export const githubAppProvider: DevIntegrationProviderAdapter = {
     return rows.map(toCommitSummary);
   },
 
+  async getCommit(input) {
+    const c = (await githubRepoGet<{
+      sha: string;
+      html_url?: string;
+      commit: { message: string; author?: { name?: string; date?: string } | null };
+      author?: { login?: string } | null;
+      parents?: Array<{ sha: string }>;
+      stats?: { additions: number; deletions: number; total: number };
+      files?: Array<{
+        filename: string;
+        previous_filename?: string;
+        status: string;
+        additions: number;
+        deletions: number;
+        changes: number;
+        patch?: string;
+      }>;
+    }>({
+      config: input.config,
+      encryptedCredentials: input.encryptedCredentials,
+      repositoryFullName: input.repositoryFullName,
+      path: `/commits/${input.sha}`,
+    }))!;
+    return {
+      sha: c.sha,
+      message: c.commit.message,
+      authorName: c.commit.author?.name ?? null,
+      authorLogin: c.author?.login ?? null,
+      date: c.commit.author?.date ?? null,
+      url: c.html_url ?? null,
+      additions: c.stats?.additions ?? 0,
+      deletions: c.stats?.deletions ?? 0,
+      total: c.stats?.total ?? 0,
+      parents: (c.parents ?? []).map((x) => x.sha),
+      files: (c.files ?? []).map((f) => ({
+        filename: f.filename,
+        previousFilename: f.previous_filename ?? null,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch ? f.patch.slice(0, MAX_PATCH_CHARS) : null,
+        patchTruncated: Boolean(f.patch && f.patch.length > MAX_PATCH_CHARS),
+      })),
+    };
+  },
+
   async listBranchCommits(input) {
     const params = pageParams(input.page, input.perPage);
     if (input.branch) params.sha = input.branch;
