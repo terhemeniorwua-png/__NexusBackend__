@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { z } from 'zod';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
@@ -692,6 +693,29 @@ export function createTaskRouter({
     async (req, res) => {
       const { workspaceId, projectId, taskId } = req.validated!.params as { workspaceId: string; projectId: string; taskId: string };
       sendSuccess(res, await advancedService.generateNextRecurrence({ userId: userId(req), workspaceId, projectId, taskId }, context(req)), 201);
+    },
+  );
+
+  return router;
+}
+export function createMyTasksRouter({ config }: { config: AppConfig }): Router {
+  const router = Router({ mergeParams: true });
+  const requireAuth = createRequireAuth(config);
+  const requireActiveAccount = createRequireActiveAccount();
+  const service = createTaskService();
+
+  router.get(
+    '/mine',
+    requireAuth,
+    requireActiveAccount,
+    validate({
+      params: z.object({ workspaceId: z.string().uuid() }),
+      query: listTasksQuerySchema,
+    }),
+    async (req, res) => {
+      const { workspaceId } = req.validated!.params as { workspaceId: string };
+      const query = req.validated!.query as ListTasksQuery;
+      sendSuccess(res, await service.listMine({ userId: userId(req), workspaceId, ...query }));
     },
   );
 

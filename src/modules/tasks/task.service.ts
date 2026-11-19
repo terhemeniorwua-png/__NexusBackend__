@@ -422,6 +422,62 @@ export function createTaskService(
     // Create
     // -------------------------------------------------------------------------
 
+    async listMine(input: Input & ListTasksQuery) {
+      const workspace = await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      const projects = await prisma.project.findMany({
+        where: { workspaceId: input.workspaceId },
+        select: { id: true },
+      });
+      const checks = await Promise.all(
+        projects.map(async (project) => {
+          try {
+            await authorizeProject(prisma, {
+              actor: {
+                userId: input.userId,
+                workspaceId: input.workspaceId,
+                workspaceRole: workspace.effectiveRole,
+              },
+              projectId: project.id,
+              permission: ProjectPermission.TaskView,
+            });
+            return project.id;
+          } catch (error) {
+            if (!(error instanceof AppError)) throw error;
+            return null;
+          }
+        }),
+      );
+      const projectIds = checks.filter((id): id is string => id !== null);
+
+      const rows = await prisma.task.findMany({
+        where: {
+          projectId: { in: projectIds },
+          deletedAt: null,
+          assignees: { some: { userId: input.userId } },
+          ...(input.status ? { status: input.status } : {}),
+          ...(input.priority ? { priority: input.priority } : {}),
+          ...(!input.includeArchived ? { archivedAt: null } : {}),
+        },
+        orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        take: input.limit + 1,
+        include: { ...taskInclude, project: { select: { name: true, key: true } } },
+      });
+
+      const hasMore = rows.length > input.limit;
+      const page = rows.slice(0, input.limit);
+      const items = page.map((row) => ({
+        ...toSummary(row),
+        projectName: row.project.name,
+        projectKeyLabel: row.project.key,
+      }));
+      return { items, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null };
+    },
+
     async create(
       input: Input & { projectId: string } & CreateTaskInput,
       context: RequestContext,
