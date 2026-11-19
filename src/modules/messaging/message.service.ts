@@ -1,3 +1,4 @@
+import { createNotification } from '../../services/notifications';
 import type { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
@@ -89,7 +90,7 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
 
   return {
     async send(
-      input: Input & { channelId: string; body: string; parentId?: string | null; clientTempId?: string },
+      input: Input & { channelId: string; body: string; parentId?: string | null; clientTempId?: string; mentionedUserIds?: string[] },
     ): Promise<MessageSummary> {
       const access = await requireChannelAccess(prisma, {
         userId: input.userId,
@@ -104,6 +105,23 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
       }
 
       assertCanPost(access);
+
+      const mentionedUserIds = [...new Set(input.mentionedUserIds ?? [])].filter((id) => id !== input.userId);
+      for (const mentionedUserId of mentionedUserIds) {
+        try {
+          await requireChannelAccess(prisma, {
+            userId: mentionedUserId,
+            workspaceId: input.workspaceId,
+            channelId: input.channelId,
+            capability: ChannelCapability.View,
+          });
+        } catch (error) {
+          if (error instanceof AppError && error.statusCode < 500) {
+            throw new AppError(400, 'INVALID_MENTION_RECIPIENT', 'One or more mentioned users cannot access this channel');
+          }
+          throw error;
+        }
+      }
 
       // Validate parent message if provided
       if (input.parentId) {
@@ -133,6 +151,19 @@ export function createMessageService(prisma: PrismaClient = getPrismaClient()) {
         },
         include: messageInclude,
       });
+      if (mentionedUserIds.length) {
+        await prisma.messageMention.createMany({
+          data: mentionedUserIds.map((userId) => ({ messageId: message.id, userId })),
+        });
+        for (const mentionedUserId of mentionedUserIds) {
+          await createNotification(prisma, {
+            userId: mentionedUserId,
+            type: 'MENTION',
+            title: `${message.author.name} mentioned you in a message`,
+            data: { workspaceId: input.workspaceId, channelId: input.channelId, messageId: message.id },
+          });
+        }
+      }
 
       await recordAuditEvent(prisma, {
         workspaceId: input.workspaceId,

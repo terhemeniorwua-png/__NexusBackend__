@@ -313,6 +313,7 @@ model User {
   assignedTasks                 TaskAssignee[]
   authoredComments              Comment[]
   commentMentions               CommentMention[]
+  messageMentions MessageMention[]
   notifications                 Notification[]
   uploadedFiles                 FileAttachment[]
   auditLogs                     AuditLog[]
@@ -1320,6 +1321,7 @@ model Message {
   @@index([authorId])
   @@index([parentId])
   @@index([pinnedAt])
+  mentions      MessageMention[]
 }
 
 model MessageReaction {
@@ -2909,4 +2911,17 @@ model MessageAudio {
   messageId String  @id
   data      Bytes
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+model MessageMention {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId, createdAt])
 }

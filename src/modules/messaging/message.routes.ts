@@ -114,6 +114,7 @@ export function createMessageRouter({
         body: body.body,
         parentId: body.parentId,
         clientTempId: body.clientTempId,
+        mentionedUserIds: body.mentionedUserIds,
       });
       sendSuccess(res, { ...message, clientTempId: body.clientTempId }, 201);
     },
