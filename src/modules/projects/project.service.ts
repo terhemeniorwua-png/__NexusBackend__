@@ -39,6 +39,7 @@ type ProjectSummary = Pick<
   | 'labels'
   | 'status'
   | 'visibility'
+  | 'commentPolicy'
   | 'startDate'
   | 'dueDate'
   | 'ownerId'
@@ -624,6 +625,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
               ...(input.category !== undefined ? { category: input.category } : {}),
               ...(input.labels !== undefined ? { labels: input.labels } : {}),
               ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+              ...(input.commentPolicy !== undefined ? { commentPolicy: input.commentPolicy } : {}),
               ...(input.status !== undefined ? { status: input.status } : {}),
               ...(input.teamId !== undefined ? { teamId } : {}),
               ...(input.departmentId !== undefined || input.teamId !== undefined

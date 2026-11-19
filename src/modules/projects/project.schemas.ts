@@ -70,6 +70,7 @@ export const updateProjectSchema = z
     category: z.string().trim().min(1).max(80).nullable().optional(),
     labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
     visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).optional(),
+    commentPolicy: z.enum(['ASSIGNEES_ONLY', 'TEAM_MEMBERS', 'ALL_VIEWERS']).optional(),
     status: z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED']).optional(),
     teamId: uuid.nullable().optional(),
     departmentId: uuid.nullable().optional(),

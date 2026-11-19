@@ -93,6 +93,7 @@ export type ProjectAuthorizationClient = Pick<
 const BASE_READ_PERMISSIONS: readonly ProjectPermissionValue[] = [
   'project.view',
   'task.view',
+  'task.comment',
 ];
 
 /**
@@ -273,7 +274,10 @@ export async function resolveProjectAuthorization(
       membership: null,
       projectRole: null,
       accessSource: teamMember ? 'team_member' : 'department_member',
-      permissions: BASE_READ_PERMISSIONS,
+      permissions:
+        project.commentPolicy === 'TEAM_MEMBERS' || project.commentPolicy === 'ALL_VIEWERS'
+          ? [...BASE_READ_PERMISSIONS, 'task.comment']
+          : BASE_READ_PERMISSIONS,
     };
   }
 
@@ -285,7 +289,10 @@ export async function resolveProjectAuthorization(
       membership: null,
       projectRole: null,
       accessSource: 'workspace_member',
-      permissions: BASE_READ_PERMISSIONS,
+      permissions:
+        project.commentPolicy === 'ALL_VIEWERS'
+          ? [...BASE_READ_PERMISSIONS, 'task.comment']
+          : BASE_READ_PERMISSIONS,
     };
   }
 

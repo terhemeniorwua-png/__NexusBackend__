@@ -128,6 +128,12 @@ enum ProjectVisibility {
   WORKSPACE
 }
 
+enum ProjectCommentPolicy {
+  ASSIGNEES_ONLY
+  TEAM_MEMBERS
+  ALL_VIEWERS
+}
+
 enum ProjectRole {
   PROJECT_MANAGER
   MEMBER
@@ -431,7 +437,6 @@ model TwoFactorRecoveryCode {
   @@index([userId, usedAt])
 }
 
-
 enum SessionAuthMethod {
   PASSWORD
   SOCIAL
@@ -559,12 +564,13 @@ model Workspace {
   importJobs             ImportJob[]                  @relation("WorkspaceImportJobs")
   importExternalIds      ImportExternalId[]           @relation("WorkspaceImportExternalIds")
 
-  ssoConfigs             WorkspaceSsoConfig[]
-  ssoDomains             WorkspaceSsoDomain[]
-  ssoOidcStates          SsoOidcState[]
-  ssoSamlStates          SsoSamlRequestState[]
-  scimTokens             ScimToken[]        @relation("ScimTokenWorkspace")
-  scimGroups             ScimGroup[]        @relation("ScimGroupWorkspace")
+  ssoConfigs    WorkspaceSsoConfig[]
+  ssoDomains    WorkspaceSsoDomain[]
+  ssoOidcStates SsoOidcState[]
+  ssoSamlStates SsoSamlRequestState[]
+  scimTokens    ScimToken[]           @relation("ScimTokenWorkspace")
+  scimGroups    ScimGroup[]           @relation("ScimGroupWorkspace")
+
   @@index([ownerId])
   @@index([status])
   @@index([type])
@@ -902,7 +908,8 @@ model Team {
   channels     Channel[]
   joinRequests JoinRequest[]
 
-  scimGroups   ScimGroup[]      @relation("ScimGroupTeam")
+  scimGroups ScimGroup[] @relation("ScimGroupTeam")
+
   @@index([workspaceId])
   @@index([departmentId])
   @@index([leadId])
@@ -929,23 +936,24 @@ model TeamMembership {
 // ---------------------------------------------------------------------------
 
 model Project {
-  id           String            @id @default(uuid())
-  workspaceId  String
-  teamId       String?
-  departmentId String?
-  name         String
-  key          String
-  description  String?
-  category     String?
-  labels       String[]          @default([])
-  status       ProjectStatus     @default(PLANNING)
-  visibility   ProjectVisibility @default(WORKSPACE)
-  startDate    DateTime?
-  dueDate      DateTime?
-  ownerId      String
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @default(now())
-  deletedAt    DateTime?
+  id            String               @id @default(uuid())
+  workspaceId   String
+  teamId        String?
+  departmentId  String?
+  name          String
+  key           String
+  description   String?
+  category      String?
+  labels        String[]             @default([])
+  status        ProjectStatus        @default(PLANNING)
+  visibility    ProjectVisibility    @default(WORKSPACE)
+  commentPolicy ProjectCommentPolicy @default(ASSIGNEES_ONLY)
+  startDate     DateTime?
+  dueDate       DateTime?
+  ownerId       String
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @default(now())
+  deletedAt     DateTime?
 
   workspace      Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   team           Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -1814,10 +1822,10 @@ model Integration {
   createdAt              DateTime            @default(now())
   updatedAt              DateTime            @updatedAt
 
-  user        User                     @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
-  workspace   Workspace?               @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
-  syncJobs    IntegrationSyncJob[]
-  eventLinks  IntegrationEventLink[]
+  user       User                   @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  workspace  Workspace?             @relation("WorkspaceIntegrations", fields: [workspaceId], references: [id], onDelete: Cascade)
+  syncJobs   IntegrationSyncJob[]
+  eventLinks IntegrationEventLink[]
 
   @@unique([userId, provider, workspaceId])
   @@index([userId, status])
@@ -1865,18 +1873,18 @@ model IntegrationSyncJob {
 
 /// Maps external provider entities to Nexus entities for idempotent sync/import.
 model IntegrationEventLink {
-  id             String              @id @default(uuid())
-  integrationId  String
-  provider       IntegrationProvider
-  workspaceId    String?
-  externalType   String
-  externalId     String
-  localType      String
-  localId        String
+  id            String              @id @default(uuid())
+  integrationId String
+  provider      IntegrationProvider
+  workspaceId   String?
+  externalType  String
+  externalId    String
+  localType     String
+  localId       String
   /// Extra non-secret sync metadata (e.g. etag/updated stamp) for echo-loop avoidance.
-  metadata       Json                @default("{}")
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
+  metadata      Json                @default("{}")
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   workspace   Workspace?  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1906,28 +1914,28 @@ enum ImportJobMode {
 }
 
 model ImportJob {
-  id            String          @id @default(uuid())
-  workspaceId   String
-  createdById   String
-  source        ImportSource
-  mode          ImportJobMode
-  status        ImportJobStatus @default(QUEUED)
+  id             String          @id @default(uuid())
+  workspaceId    String
+  createdById    String
+  source         ImportSource
+  mode           ImportJobMode
+  status         ImportJobStatus @default(QUEUED)
   /// Original upload/request payload (non-secret). CSV content may be stored inline or referenced.
-  payload       Json            @default("{}")
+  payload        Json            @default("{}")
   /// Dry-run preview or execution report (counts, warnings, created ids, errors).
-  report        Json            @default("{}")
+  report         Json            @default("{}")
   /// Client-supplied idempotency key for execute requests.
   idempotencyKey String?
-  attempts      Int             @default(0)
-  maxRetries    Int             @default(3)
-  lastError     String?
-  startedAt     DateTime?
-  completedAt   DateTime?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  attempts       Int             @default(0)
+  maxRetries     Int             @default(3)
+  lastError      String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
-  workspace Workspace @relation("WorkspaceImportJobs", fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy User      @relation("ImportJobsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  workspace Workspace          @relation("WorkspaceImportJobs", fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User               @relation("ImportJobsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   items     ImportExternalId[]
 
   @@unique([workspaceId, idempotencyKey])
@@ -2685,7 +2693,6 @@ model ProjectTemplate {
   @@index([workspaceId])
 }
 
-
 // ---------------------------------------------------------------------------
 // Workspace SSO (OIDC)
 // ---------------------------------------------------------------------------
@@ -2733,8 +2740,8 @@ model WorkspaceSsoConfig {
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
-  workspace  Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy  User                 @relation("WorkspaceSsoConfigCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  workspace  Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy  User                  @relation("WorkspaceSsoConfigCreator", fields: [createdById], references: [id], onDelete: Restrict)
   domains    WorkspaceSsoDomain[]
   oidcStates SsoOidcState[]
   samlStates SsoSamlRequestState[]
@@ -2790,9 +2797,6 @@ model SsoOidcState {
   @@index([expiresAt])
 }
 
-
-
-
 /// DB-backed SAML AuthnRequest state for InResponseTo validation and replay protection.
 /// Bound to workspace and browser (cookie), single-use, short-lived.
 model SsoSamlRequestState {
@@ -2815,7 +2819,6 @@ model SsoSamlRequestState {
   @@index([workspaceId, expiresAt])
   @@index([expiresAt])
 }
-
 
 // ---------------------------------------------------------------------------
 // SCIM (System for Cross-domain Identity Management)
@@ -2852,13 +2855,13 @@ model ScimToken {
 }
 
 model ScimGroup {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   teamId      String
   displayName String
   externalId  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
   workspace Workspace @relation("ScimGroupWorkspace", fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -2868,7 +2871,6 @@ model ScimGroup {
   @@index([workspaceId])
   @@index([teamId])
 }
-
 
 // ---------------------------------------------------------------------------
 // Planned models — intentionally NOT created yet.
