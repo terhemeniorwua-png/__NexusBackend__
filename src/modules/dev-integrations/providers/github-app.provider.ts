@@ -1,3 +1,4 @@
+import type { DevChangedFile, DevCommitSummary, DevPullRequestDetail } from '../dev-integration.types';
 import { createHmac, createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AppConfig } from '../../../config/env';
 import { getRedisClient } from '../../../db/redis';
@@ -123,6 +124,63 @@ function parseCredentials(encryptedCredentials: string): GithubCredentialsPayloa
     throw new AppError(500, 'DEV_INTEGRATION_CREDENTIALS_INVALID', 'Stored integration credentials are invalid');
   }
   return parsed;
+}
+
+const REPO_NAME_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const MAX_PATCH_CHARS = 20_000;
+
+async function githubRepoGet<T>(input: {
+  config: AppConfig;
+  encryptedCredentials: string;
+  repositoryFullName: string;
+  path: string;
+  params?: Record<string, string>;
+  soft?: boolean;
+}): Promise<T | null> {
+  if (!REPO_NAME_RE.test(input.repositoryFullName)) {
+    throw new AppError(400, 'INVALID_REPOSITORY_NAME', 'Invalid repository name');
+  }
+  const creds = parseCredentials(input.encryptedCredentials);
+  const token = await getInstallationAccessToken(input.config, creds.installationId);
+  const url = new URL(`${GITHUB_API}/repos/${input.repositoryFullName}${input.path}`);
+  for (const [k, v] of Object.entries(input.params ?? {})) url.searchParams.set(k, v);
+  const res = await githubFetch(url.toString(), {
+    headers: { ...GITHUB_HEADERS, Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    if (input.soft) return null;
+    throw new AppError(
+      502,
+      'GITHUB_RESOURCE_UNAVAILABLE',
+      res.status === 404 ? 'That item was not found in the repository' : `GitHub request failed (${res.status})`,
+    );
+  }
+  return (await res.json()) as T;
+}
+
+function pageParams(page?: number, perPage?: number): Record<string, string> {
+  return {
+    per_page: String(Math.min(Math.max(perPage ?? 30, 1), 100)),
+    page: String(Math.min(Math.max(page ?? 1, 1), 10)),
+  };
+}
+
+type GithubCommitRow = {
+  sha: string;
+  html_url?: string;
+  commit?: { message?: string; author?: { name?: string; date?: string } | null };
+  author?: { login?: string } | null;
+};
+
+function toCommitSummary(c: GithubCommitRow) {
+  return {
+    sha: c.sha,
+    message: (c.commit?.message ?? '').slice(0, 2000),
+    authorName: c.commit?.author?.name ?? null,
+    authorLogin: c.author?.login ?? null,
+    date: c.commit?.author?.date ?? null,
+    url: c.html_url ?? null,
+  };
 }
 
 export const githubAppProvider: DevIntegrationProviderAdapter = {
@@ -336,6 +394,130 @@ export const githubAppProvider: DevIntegrationProviderAdapter = {
       prs = prs.filter((p) => p.title.toLowerCase().includes(q) || String(p.number).includes(q) || (p.headRef ?? '').toLowerCase().includes(q));
     }
     return prs;
+  },
+
+  async getPullRequest(input) {
+    const base = {
+      config: input.config,
+      encryptedCredentials: input.encryptedCredentials,
+      repositoryFullName: input.repositoryFullName,
+    };
+    const pr = (await githubRepoGet<{
+      number: number;
+      title: string;
+      body?: string | null;
+      state: string;
+      html_url?: string;
+      head?: { ref?: string; sha?: string };
+      base?: { ref?: string };
+      user?: { login?: string } | null;
+      created_at?: string;
+      updated_at?: string;
+      merged_at?: string | null;
+      merged?: boolean;
+      draft?: boolean;
+      mergeable?: boolean | null;
+      additions?: number;
+      deletions?: number;
+      changed_files?: number;
+      commits?: number;
+      comments?: number;
+      review_comments?: number;
+    }>({ ...base, path: `/pulls/${input.number}` }))!;
+    const sha = pr.head?.sha ?? null;
+    let checks: { total: number; passed: number; failed: number; pending: number } | null = null;
+    if (sha) {
+      const cr = await githubRepoGet<{ check_runs?: Array<{ status: string; conclusion: string | null }> }>({
+        ...base,
+        path: `/commits/${sha}/check-runs`,
+        params: { per_page: '100' },
+        soft: true,
+      });
+      if (cr?.check_runs) {
+        const runs = cr.check_runs;
+        const pending = runs.filter((r) => r.status !== 'completed').length;
+        const passed = runs.filter(
+          (r) => r.status === 'completed' && ['success', 'neutral', 'skipped'].includes(r.conclusion ?? ''),
+        ).length;
+        checks = { total: runs.length, passed, failed: runs.length - pending - passed, pending };
+      }
+    }
+    return {
+      number: pr.number,
+      title: pr.title,
+      body: pr.body ?? null,
+      state: pr.merged_at ? 'merged' : pr.draft ? 'draft' : pr.state,
+      url: pr.html_url ?? null,
+      headRef: pr.head?.ref ?? null,
+      baseRef: pr.base?.ref ?? null,
+      headSha: sha,
+      authorLogin: pr.user?.login ?? null,
+      createdAt: pr.created_at ?? null,
+      updatedAt: pr.updated_at ?? null,
+      mergedAt: pr.merged_at ?? null,
+      merged: Boolean(pr.merged),
+      draft: Boolean(pr.draft),
+      mergeable: pr.mergeable ?? null,
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changedFiles: pr.changed_files ?? 0,
+      commits: pr.commits ?? 0,
+      comments: pr.comments ?? 0,
+      reviewComments: pr.review_comments ?? 0,
+      checks,
+    };
+  },
+
+  async listPullRequestFiles(input) {
+    const rows = (await githubRepoGet<Array<{
+      filename: string;
+      previous_filename?: string;
+      status: string;
+      additions: number;
+      deletions: number;
+      changes: number;
+      patch?: string;
+    }>>({
+      config: input.config,
+      encryptedCredentials: input.encryptedCredentials,
+      repositoryFullName: input.repositoryFullName,
+      path: `/pulls/${input.number}/files`,
+      params: pageParams(input.page, input.perPage),
+    }))!;
+    return rows.map((f) => ({
+      filename: f.filename,
+      previousFilename: f.previous_filename ?? null,
+      status: f.status,
+      additions: f.additions,
+      deletions: f.deletions,
+      changes: f.changes,
+      patch: f.patch ? f.patch.slice(0, MAX_PATCH_CHARS) : null,
+      patchTruncated: Boolean(f.patch && f.patch.length > MAX_PATCH_CHARS),
+    }));
+  },
+
+  async listPullRequestCommits(input) {
+    const rows = (await githubRepoGet<GithubCommitRow[]>({
+      config: input.config,
+      encryptedCredentials: input.encryptedCredentials,
+      repositoryFullName: input.repositoryFullName,
+      path: `/pulls/${input.number}/commits`,
+      params: pageParams(input.page, input.perPage),
+    }))!;
+    return rows.map(toCommitSummary);
+  },
+
+  async listBranchCommits(input) {
+    const params = pageParams(input.page, input.perPage);
+    if (input.branch) params.sha = input.branch;
+    const rows = (await githubRepoGet<GithubCommitRow[]>({
+      config: input.config,
+      encryptedCredentials: input.encryptedCredentials,
+      repositoryFullName: input.repositoryFullName,
+      path: '/commits',
+      params,
+    }))!;
+    return rows.map(toCommitSummary);
   },
 
   async disconnect(input): Promise<{ revoked: boolean; detail?: string }> {

@@ -1,3 +1,4 @@
+import type { DevChangedFile, DevCommitSummary, DevPullRequestDetail } from './dev-integration.types';
 /* eslint-disable @typescript-eslint/no-explicit-any */ // TODO(types): replace any with real types
 import type { DevIntegrationProvider, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
@@ -536,6 +537,54 @@ export function createDevIntegrationService(
         logger.warn('dev_integration_list_prs_failed', { error, repositoryId: repo.id });
         throw error;
       }
+    },
+
+    async getRepositoryPullRequest(input: {
+      userId: string; workspaceId: string; projectId: string; repositoryId: string; number: number;
+    }): Promise<DevPullRequestDetail> {
+      const repo = await getActiveLinkedRepository(input);
+      const provider = providerFor(repo.provider);
+      if (!provider.getPullRequest) throw new AppError(501, 'NOT_SUPPORTED', 'This provider does not support pull request details yet');
+      return provider.getPullRequest({
+        config, encryptedCredentials: repo.connection.encryptedCredentials,
+        repositoryFullName: repo.fullName, number: input.number,
+      });
+    },
+
+    async listRepositoryPullRequestFiles(input: {
+      userId: string; workspaceId: string; projectId: string; repositoryId: string; number: number; page?: number; perPage?: number;
+    }): Promise<DevChangedFile[]> {
+      const repo = await getActiveLinkedRepository(input);
+      const provider = providerFor(repo.provider);
+      if (!provider.listPullRequestFiles) throw new AppError(501, 'NOT_SUPPORTED', 'This provider does not support changed files yet');
+      return provider.listPullRequestFiles({
+        config, encryptedCredentials: repo.connection.encryptedCredentials,
+        repositoryFullName: repo.fullName, number: input.number, page: input.page, perPage: input.perPage,
+      });
+    },
+
+    async listRepositoryPullRequestCommits(input: {
+      userId: string; workspaceId: string; projectId: string; repositoryId: string; number: number; page?: number; perPage?: number;
+    }): Promise<DevCommitSummary[]> {
+      const repo = await getActiveLinkedRepository(input);
+      const provider = providerFor(repo.provider);
+      if (!provider.listPullRequestCommits) throw new AppError(501, 'NOT_SUPPORTED', 'This provider does not support commit lists yet');
+      return provider.listPullRequestCommits({
+        config, encryptedCredentials: repo.connection.encryptedCredentials,
+        repositoryFullName: repo.fullName, number: input.number, page: input.page, perPage: input.perPage,
+      });
+    },
+
+    async listRepositoryCommits(input: {
+      userId: string; workspaceId: string; projectId: string; repositoryId: string; branch?: string; page?: number; perPage?: number;
+    }): Promise<DevCommitSummary[]> {
+      const repo = await getActiveLinkedRepository(input);
+      const provider = providerFor(repo.provider);
+      if (!provider.listBranchCommits) throw new AppError(501, 'NOT_SUPPORTED', 'This provider does not support commit lists yet');
+      return provider.listBranchCommits({
+        config, encryptedCredentials: repo.connection.encryptedCredentials,
+        repositoryFullName: repo.fullName, branch: input.branch, page: input.page, perPage: input.perPage,
+      });
     },
 
     async listTaskDevLinks(input: {

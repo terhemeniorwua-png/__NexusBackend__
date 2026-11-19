@@ -1,3 +1,4 @@
+import { z } from 'zod';
 /* eslint-disable @typescript-eslint/no-explicit-any */ // TODO(types): replace any with real types
 import { Router, type Request } from 'express';
 import type { AppConfig } from '../../config/env';
@@ -176,6 +177,57 @@ export function createProjectRepositoryRouter({
       const query = (req.validated!.query ?? {}) as { search?: string; page?: number; perPage?: number; state?: 'open' | 'closed' | 'all' };
       const items = await service.listRepositoryPullRequests({ userId: userId(req), workspaceId, projectId, repositoryId, ...query });
       sendSuccess(res, { items });
+    },
+  );
+
+  const prParamsSchema = projectRepoResourceParamsSchema.extend({ number: z.coerce.number().int().min(1) });
+  const commitsQuerySchema = z.object({
+    branch: z.string().trim().min(1).max(250).optional(),
+    page: z.coerce.number().int().min(1).max(10).optional(),
+    perPage: z.coerce.number().int().min(1).max(100).optional(),
+  });
+  type PrParams = { workspaceId: string; projectId: string; repositoryId: string; number: number };
+
+  router.get(
+    '/:repositoryId/pull-requests/:number',
+    requireAuth, requireActive,
+    validate({ params: prParamsSchema }),
+    async (req, res) => {
+      const p = req.validated!.params as PrParams;
+      sendSuccess(res, await service.getRepositoryPullRequest({ userId: userId(req), ...p }));
+    },
+  );
+
+  router.get(
+    '/:repositoryId/pull-requests/:number/files',
+    requireAuth, requireActive,
+    validate({ params: prParamsSchema, query: commitsQuerySchema }),
+    async (req, res) => {
+      const p = req.validated!.params as PrParams;
+      const q = (req.validated!.query ?? {}) as { page?: number; perPage?: number };
+      sendSuccess(res, { items: await service.listRepositoryPullRequestFiles({ userId: userId(req), ...p, ...q }) });
+    },
+  );
+
+  router.get(
+    '/:repositoryId/pull-requests/:number/commits',
+    requireAuth, requireActive,
+    validate({ params: prParamsSchema, query: commitsQuerySchema }),
+    async (req, res) => {
+      const p = req.validated!.params as PrParams;
+      const q = (req.validated!.query ?? {}) as { page?: number; perPage?: number };
+      sendSuccess(res, { items: await service.listRepositoryPullRequestCommits({ userId: userId(req), ...p, ...q }) });
+    },
+  );
+
+  router.get(
+    '/:repositoryId/commits',
+    requireAuth, requireActive,
+    validate({ params: projectRepoResourceParamsSchema, query: commitsQuerySchema }),
+    async (req, res) => {
+      const p = req.validated!.params as { workspaceId: string; projectId: string; repositoryId: string };
+      const q = (req.validated!.query ?? {}) as { branch?: string; page?: number; perPage?: number };
+      sendSuccess(res, { items: await service.listRepositoryCommits({ userId: userId(req), ...p, ...q }) });
     },
   );
 

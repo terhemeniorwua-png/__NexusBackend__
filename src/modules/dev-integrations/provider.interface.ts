@@ -1,3 +1,4 @@
+import type { DevChangedFile, DevCommitSummary, DevPullRequestDetail } from './dev-integration.types';
 import type { DevIntegrationProvider } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import type {
@@ -66,6 +67,40 @@ export interface DevIntegrationProviderAdapter {
     perPage?: number;
     onCredentialsRefreshed?: (encryptedCredentials: string) => Promise<void> | void;
   }): Promise<DevPullRequestSummary[]>;
+
+  getPullRequest?(input: {
+    config: AppConfig;
+    encryptedCredentials: string;
+    repositoryFullName: string;
+    number: number;
+  }): Promise<DevPullRequestDetail>;
+
+  listPullRequestFiles?(input: {
+    config: AppConfig;
+    encryptedCredentials: string;
+    repositoryFullName: string;
+    number: number;
+    page?: number;
+    perPage?: number;
+  }): Promise<DevChangedFile[]>;
+
+  listPullRequestCommits?(input: {
+    config: AppConfig;
+    encryptedCredentials: string;
+    repositoryFullName: string;
+    number: number;
+    page?: number;
+    perPage?: number;
+  }): Promise<DevCommitSummary[]>;
+
+  listBranchCommits?(input: {
+    config: AppConfig;
+    encryptedCredentials: string;
+    repositoryFullName: string;
+    branch?: string;
+    page?: number;
+    perPage?: number;
+  }): Promise<DevCommitSummary[]>;
 
   /** Best-effort revocation/cleanup on disconnect. Must not throw for non-fatal provider errors. */
   disconnect(input: {
