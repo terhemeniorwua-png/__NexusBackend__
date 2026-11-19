@@ -51,6 +51,10 @@ import { createDocumentRouter } from '../modules/documents/document.routes';
 import { createCalendarRouter } from '../modules/calendar/calendar.routes';
 import { createMeetingRouter } from '../modules/meetings/meeting.routes';
 import { createFormRouter } from '../modules/forms/form.routes';
+import {
+  createProjectResourcesRouter,
+  createWorkspaceResourcesRouter,
+} from '../modules/resources/resource.routes';
 import { createSearchRouter } from '../modules/search/search.routes';
 import { createIntegrationRouter } from '../modules/integrations/integration.routes';
 import { createWorkspaceIntegrationRouter } from '../modules/integrations/integration-picker.routes';
@@ -180,6 +184,12 @@ export function createApiRouter({
   router.use('/workspaces/:workspaceId/files', createFileRouter({ config }));
   // Documents are workspace-scoped
   router.use('/workspaces/:workspaceId/documents', createDocumentRouter({ config }));
+  // Resource library (folders, uploaded files, bookmarks) and project dashboard
+  router.use('/workspaces/:workspaceId/resources', createWorkspaceResourcesRouter({ config }));
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/resources',
+    createProjectResourcesRouter({ config }),
+  );
   // Calendar events are workspace-scoped
   router.use('/workspaces/:workspaceId/events', createCalendarRouter({ config }));
   // Meetings are workspace-scoped

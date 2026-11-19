@@ -365,6 +365,11 @@ model User {
   importJobsCreated             ImportJob[]                  @relation("ImportJobsCreatedBy")
   createdSsoConfigs             WorkspaceSsoConfig[]         @relation("WorkspaceSsoConfigCreator")
   scimTokens                    ScimToken[]                  @relation("ScimTokenUser")
+  resourceFoldersCreated        ResourceFolder[]             @relation("ResourceFoldersCreatedBy")
+  resourceFilesUploaded         ResourceFile[]               @relation("ResourceFilesUploadedBy")
+  resourceBookmarksCreated      ResourceBookmark[]           @relation("ResourceBookmarksCreatedBy")
+  resourceRecentItems           ResourceRecentItem[]         @relation("ResourceRecentItems")
+  resourceDashboardPreferences  ResourceDashboardPreference[] @relation("ResourceDashboardPreferences")
 
   @@index([status])
   @@index([createdAt])
@@ -564,6 +569,9 @@ model Workspace {
   projectTemplates       ProjectTemplate[]
   importJobs             ImportJob[]                  @relation("WorkspaceImportJobs")
   importExternalIds      ImportExternalId[]           @relation("WorkspaceImportExternalIds")
+  resourceFolders        ResourceFolder[]             @relation("WorkspaceResourceFolders")
+  resourceFiles          ResourceFile[]               @relation("WorkspaceResourceFiles")
+  resourceBookmarks      ResourceBookmark[]           @relation("WorkspaceResourceBookmarks")
 
   ssoConfigs    WorkspaceSsoConfig[]
   ssoDomains    WorkspaceSsoDomain[]
@@ -973,6 +981,11 @@ model Project {
   customFields   ProjectCustomField[]
   savedViews     TaskSavedView[]
   taskTemplates  TaskTemplate[]
+  resourceFolders              ResourceFolder[]             @relation("ProjectResourceFolders")
+  resourceFiles                ResourceFile[]               @relation("ProjectResourceFiles")
+  resourceBookmarks            ResourceBookmark[]           @relation("ProjectResourceBookmarks")
+  resourceRecentItems          ResourceRecentItem[]         @relation("ProjectResourceRecentItems")
+  resourceDashboardPreferences ResourceDashboardPreference[] @relation("ProjectResourceDashboardPreferences")
 
   @@unique([workspaceId, key])
   @@index([workspaceId])
@@ -2924,4 +2937,111 @@ model MessageMention {
 
   @@unique([messageId, userId])
   @@index([userId, createdAt])
+}
+
+enum RecentItemType {
+  TASK
+  DOCUMENT
+  FILE
+  BOOKMARK
+}
+
+model ResourceFolder {
+  id          String   @id @default(uuid())
+  workspaceId String
+  projectId   String?
+  parentId    String?
+  name        String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace        @relation("WorkspaceResourceFolders", fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?         @relation("ProjectResourceFolders", fields: [projectId], references: [id], onDelete: Cascade)
+  parent    ResourceFolder?  @relation("ResourceFolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  ResourceFolder[] @relation("ResourceFolderHierarchy")
+  createdBy User             @relation("ResourceFoldersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  files     ResourceFile[]
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([parentId])
+  @@index([createdById])
+  @@index([workspaceId, projectId, parentId])
+}
+
+model ResourceFile {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  projectId    String?
+  folderId     String?
+  name         String
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String    @unique
+  uploadedById String
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  workspace  Workspace       @relation("WorkspaceResourceFiles", fields: [workspaceId], references: [id], onDelete: Cascade)
+  project    Project?        @relation("ProjectResourceFiles", fields: [projectId], references: [id], onDelete: Cascade)
+  folder     ResourceFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  uploadedBy User            @relation("ResourceFilesUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([folderId])
+  @@index([uploadedById])
+  @@index([workspaceId, projectId, createdAt])
+  @@index([deletedAt])
+}
+
+model ResourceBookmark {
+  id          String   @id @default(uuid())
+  workspaceId String
+  projectId   String?
+  title       String
+  url         String
+  createdById String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation("WorkspaceResourceBookmarks", fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?  @relation("ProjectResourceBookmarks", fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("ResourceBookmarksCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([createdById])
+  @@index([workspaceId, projectId, createdAt])
+}
+
+model ResourceRecentItem {
+  id        String         @id @default(uuid())
+  userId    String
+  projectId String
+  itemType  RecentItemType
+  itemId    String
+  openedAt  DateTime       @default(now())
+
+  user    User    @relation("ResourceRecentItems", fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation("ProjectResourceRecentItems", fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId, itemType, itemId])
+  @@index([userId, projectId, openedAt])
+  @@index([projectId])
+}
+
+model ResourceDashboardPreference {
+  id        String   @id @default(uuid())
+  userId    String
+  projectId String
+  cards     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation("ResourceDashboardPreferences", fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation("ProjectResourceDashboardPreferences", fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+  @@index([projectId])
 }
