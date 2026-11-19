@@ -40,6 +40,8 @@ export const SecurityAction = {
   TwoFactorChallengeIssued: 'auth.two_factor_challenge_issued',
   ProfileAvatarUploaded: 'auth.profile_avatar_uploaded',
   ProfileAvatarDeleted: 'auth.profile_avatar_deleted',
+  AiAccessEnabled: 'auth.ai_access_enabled',
+  AiAccessDisabled: 'auth.ai_access_disabled',
 } as const;
 
 export type SecurityActionValue = (typeof SecurityAction)[keyof typeof SecurityAction];
