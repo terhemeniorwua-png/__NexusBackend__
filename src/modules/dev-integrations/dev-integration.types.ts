@@ -96,3 +96,47 @@ export interface GithubAppCallbackParams {
   setup_action?: string;
   state: string;
 }
+export interface DevPullRequestDetail {
+  number: number;
+  title: string;
+  body: string | null;
+  state: string;
+  url: string | null;
+  headRef: string | null;
+  baseRef: string | null;
+  headSha: string | null;
+  authorLogin: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  mergedAt: string | null;
+  merged: boolean;
+  draft: boolean;
+  mergeable: boolean | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commits: number;
+  comments: number;
+  reviewComments: number;
+  checks: { total: number; passed: number; failed: number; pending: number } | null;
+}
+
+export interface DevChangedFile {
+  filename: string;
+  previousFilename: string | null;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch: string | null;
+  patchTruncated: boolean;
+}
+
+export interface DevCommitSummary {
+  sha: string;
+  message: string;
+  authorName: string | null;
+  authorLogin: string | null;
+  date: string | null;
+  url: string | null;
+}
