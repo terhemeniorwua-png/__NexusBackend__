@@ -378,7 +378,7 @@ export function createTaskService(
           ...(input.status ? { status: input.status } : {}),
           ...(input.priority ? { priority: input.priority } : {}),
           ...(input.assigneeId
-            ? { assignees: { some: { userId: input.assigneeId } } }
+            ? { AND: [{ assignees: { some: { userId: input.assigneeId } } }] }
             : {}),
           ...(input.labels && input.labels.length
             ? { labels: { hasSome: input.labels } }
