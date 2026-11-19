@@ -7,21 +7,25 @@ import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
   addTeamMemberSchema,
+  bulkAddTeamMembersSchema,
   changeTeamLeadSchema,
   createTeamInvitationSchema,
   createTeamSchema,
-  listTeamsQuerySchema,
   listTeamInvitationsQuerySchema,
-  teamMemberParamsSchema,
+  listTeamsQuerySchema,
+  teamActivityQuerySchema,
   teamInvitationParamsSchema,
+  teamMemberParamsSchema,
   teamParamsSchema,
   updateTeamMemberRoleSchema,
   updateTeamSchema,
   workspaceIdParamsSchema,
   type AddTeamMemberInput,
+  type BulkAddTeamMembersInput,
   type ChangeTeamLeadInput,
   type CreateTeamInput,
   type ListTeamsQuery,
+  type TeamActivityQuery,
   type UpdateTeamInput,
   type UpdateTeamMemberRoleInput,
 } from './team.schemas';
@@ -38,17 +42,21 @@ import type { TeamRole } from '@prisma/client';
  *
  * Route layout
  * ------------
- *   GET    /workspaces/:workspaceId/teams                        list
- *   POST   /workspaces/:workspaceId/teams                        create
- *   GET    /workspaces/:workspaceId/teams/:teamId                get
- *   PATCH  /workspaces/:workspaceId/teams/:teamId                update
- *   POST   /workspaces/:workspaceId/teams/:teamId/archive        archive
- *   DELETE /workspaces/:workspaceId/teams/:teamId                delete
- *   GET    /workspaces/:workspaceId/teams/:teamId/members        list members
- *   POST   /workspaces/:workspaceId/teams/:teamId/members        add member
- *   PATCH  /workspaces/:workspaceId/teams/:teamId/members/:userId update member role
- *   DELETE /workspaces/:workspaceId/teams/:teamId/members/:userId remove member
- *   PATCH  /workspaces/:workspaceId/teams/:teamId/lead           change lead
+ *   GET    /workspaces/:workspaceId/teams                           list
+ *   POST   /workspaces/:workspaceId/teams                           create
+ *   GET    /workspaces/:workspaceId/teams/:teamId                   get
+ *   GET    /workspaces/:workspaceId/teams/:teamId/overview          overview
+ *   GET    /workspaces/:workspaceId/teams/:teamId/activity          activity feed
+ *   GET    /workspaces/:workspaceId/teams/:teamId/projects          projects
+ *   PATCH  /workspaces/:workspaceId/teams/:teamId                   update
+ *   POST   /workspaces/:workspaceId/teams/:teamId/archive           archive
+ *   DELETE /workspaces/:workspaceId/teams/:teamId                   delete
+ *   GET    /workspaces/:workspaceId/teams/:teamId/members           list members
+ *   POST   /workspaces/:workspaceId/teams/:teamId/members           add member
+ *   POST   /workspaces/:workspaceId/teams/:teamId/members/bulk      add members (bulk)
+ *   PATCH  /workspaces/:workspaceId/teams/:teamId/members/:userId   update member role
+ *   DELETE /workspaces/:workspaceId/teams/:teamId/members/:userId   remove member
+ *   PATCH  /workspaces/:workspaceId/teams/:teamId/lead              change lead
  */
 
 export interface TeamRouterOptions {
@@ -176,6 +184,63 @@ export function createTeamRouter({
   );
 
   router.get(
+    '/:teamId/overview',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: teamParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, teamId } = req.validated?.params as {
+        workspaceId: string;
+        teamId: string;
+      };
+      sendSuccess(
+        res,
+        await service.overview({ userId: requireUser(req), workspaceId, teamId }),
+      );
+    },
+  );
+
+  router.get(
+    '/:teamId/activity',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: teamParamsSchema, query: teamActivityQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, teamId } = req.validated?.params as {
+        workspaceId: string;
+        teamId: string;
+      };
+      const query = req.validated?.query as TeamActivityQuery;
+      sendSuccess(
+        res,
+        await service.activity({
+          userId: requireUser(req),
+          workspaceId,
+          teamId,
+          ...query,
+        }),
+      );
+    },
+  );
+
+  router.get(
+    '/:teamId/projects',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: teamParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, teamId } = req.validated?.params as {
+        workspaceId: string;
+        teamId: string;
+      };
+      sendSuccess(
+        res,
+        await service.listProjects({ userId: requireUser(req), workspaceId, teamId }),
+      );
+    },
+  );
+
+  router.get(
     '/:teamId',
     requireAuth,
     requireActiveAccount,
@@ -290,6 +355,26 @@ export function createTeamRouter({
       );
 
       sendSuccess(res, member, 201);
+    },
+  );
+
+  router.post(
+    '/:teamId/members/bulk',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: teamParamsSchema, body: bulkAddTeamMembersSchema }),
+    async (req, res) => {
+      const { workspaceId, teamId } = req.validated?.params as {
+        workspaceId: string;
+        teamId: string;
+      };
+      const input = req.validated?.body as BulkAddTeamMembersInput;
+      const result = await service.bulkAddMembers(
+        { userId: requireUser(req), workspaceId, teamId, ...input },
+        context(req),
+      );
+
+      sendSuccess(res, result, 201);
     },
   );
 

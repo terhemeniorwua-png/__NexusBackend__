@@ -22,11 +22,15 @@ function projectAuthClient(overrides: Record<string, unknown> = {}): PrismaClien
     project: {
       findFirst: async () => null,
     },
+    projectTeam: {
+      findMany: async () => [],
+      count: async () => 0,
+    },
     workspaceMembership: {
       findUnique: async () => null,
     },
     team: { findFirst: async () => null },
-    teamMembership: { findUnique: async () => null },
+    teamMembership: { findUnique: async () => null, findFirst: async () => null },
     department: { findFirst: async () => null },
     departmentMembership: { findUnique: async () => null },
     projectMembership: {

@@ -15,7 +15,7 @@ import {
   getProjectAuthorization,
   requireWorkspaceAccess,
 } from '../authorization';
-import { extractTextFromUpload } from '../files/text-extraction';
+import { assertProjectWritable } from '../projects/project-archive';
 import {
   ALLOWED_MIME_TYPES,
   MAX_FILE_SIZE_BYTES,
@@ -129,11 +129,12 @@ export function createResourceService(
       capability: WorkspaceCapability.ViewWorkspace,
     });
     if (input.projectId) {
-      await authorizeProject(prisma, {
+      const access = await authorizeProject(prisma, {
         actor: { userId: input.userId, workspaceId: input.workspaceId, workspaceRole: workspace.effectiveRole },
         projectId: input.projectId,
         permission: ProjectPermission.FileUpload,
       });
+      assertProjectWritable(access.project);
       return workspace;
     }
     // Workspace-wide: allow contributors (not pure viewers). OWNER/PROJECT_MANAGER/MEMBER are editors in practice.
@@ -191,12 +192,14 @@ export function createResourceService(
   }
 
   function translateFolderUniqueError(error: unknown): never {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (error && typeof error === 'object' && 'code' in error && (error as any).code === 'P2002') {
       throw new AppError(409, 'RESOURCE_FOLDER_NAME_CONFLICT', 'A folder with this name already exists in this location');
     }
     throw error;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function mapFolder(row: any) {
     return {
       id: row.id,
@@ -210,6 +213,7 @@ export function createResourceService(
     };
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function mapFile(row: any) {
     return {
       id: row.id,
@@ -224,6 +228,7 @@ export function createResourceService(
     };
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function mapBookmark(row: any) {
     return {
       id: row.id,
@@ -248,6 +253,7 @@ export function createResourceService(
         workspaceId: input.workspaceId,
         workspaceRole: workspace.effectiveRole,
       }, input.projectId);
+      assertProjectWritable(auth.project);
       const isUploader = input.ownerId === input.userId;
       const canAny = auth.permissions.includes(ProjectPermission.FileDeleteAny);
       const canOwn = auth.permissions.includes(ProjectPermission.FileDeleteOwn);
@@ -588,6 +594,7 @@ export function createResourceService(
       function sanitizeRelativePath(raw: string): string[] {
         if (raw.includes('\\')) throw new AppError(400, 'INVALID_PATH', 'Backslashes are not allowed in paths');
         if (raw.includes('\0')) throw new AppError(400, 'INVALID_PATH', 'Paths contain invalid characters');
+    // eslint-disable-next-line no-control-regex
         if (/[\x00-\x1f\x7f]/.test(raw)) throw new AppError(400, 'INVALID_PATH', 'Paths contain control characters');
         if (raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) throw new AppError(400, 'INVALID_PATH', 'Absolute paths are not allowed');
         const segments = raw.split('/').filter((s) => s.length > 0);
@@ -634,6 +641,7 @@ export function createResourceService(
           });
           folderCache.set(cacheKey, created.id);
           return created.id;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (error: any) {
           if (error?.code === 'P2002') {
             const again = await prisma.resourceFolder.findFirst({
@@ -650,6 +658,7 @@ export function createResourceService(
       }
 
       const store = requireStorage();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const createdFiles: any[] = [];
       const createdFolderIds = new Set<string>();
 
@@ -753,7 +762,7 @@ export function createResourceService(
 
     // Recent items (project-scoped)
     async recordRecent(input: Input & { projectId: string; itemType: RecentItemType; itemId: string }) {
-      await authorizeScopeView({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
+      await authorizeScopeEdit({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
       const now = new Date();
       await prisma.resourceRecentItem.upsert({
         where: {
@@ -902,16 +911,20 @@ export function createResourceService(
       const pref = await prisma.resourceDashboardPreference.findUnique({
         where: { userId_projectId: { userId: input.userId, projectId: input.projectId } },
       });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return { cards: (pref?.cards as any[]) ?? [] };
     },
 
     async setDashboardPreference(input: Input & { projectId: string; cards: Array<{ id: string; visible: boolean; order: number }> }) {
-      await authorizeScopeView({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
+      await authorizeScopeEdit({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
       const pref = await prisma.resourceDashboardPreference.upsert({
         where: { userId_projectId: { userId: input.userId, projectId: input.projectId } },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         update: { cards: input.cards as any },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         create: { userId: input.userId, projectId: input.projectId, cards: input.cards as any },
       });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return { cards: pref.cards as any[] };
     },
   };

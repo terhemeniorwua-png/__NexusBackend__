@@ -9,6 +9,16 @@ const projectKey = z
   .regex(/^[A-Za-z0-9_-]+$/);
 const dateInput = z.string().datetime({ offset: true }).optional().nullable();
 
+const objectiveSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(2000).nullable().optional(),
+    completed: z.boolean().optional().default(false),
+  })
+  .strict();
+
+const objectivesSchema = z.array(objectiveSchema).max(50).optional().nullable();
+
 export const projectParamsSchema = z.object({ workspaceId: uuid, projectId: uuid });
 export const projectWorkspaceParamsSchema = z.object({ workspaceId: uuid });
 export const projectMemberParamsSchema = z.object({
@@ -36,10 +46,12 @@ export const createProjectSchema = z
     name: z.string().trim().min(2).max(100),
     key: projectKey,
     description: z.string().trim().max(5000).nullable().optional(),
+    objectives: objectivesSchema,
     category: z.string().trim().min(1).max(80).nullable().optional(),
     labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
     visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).default('WORKSPACE'),
     teamId: uuid.optional().nullable(),
+    teamIds: z.array(uuid).max(50).optional(),
     departmentId: uuid.optional().nullable(),
     startDate: dateInput,
     dueDate: dateInput,
@@ -54,8 +66,11 @@ export const createProjectSchema = z
     },
   )
   .refine(
-    (value) =>
-      value.visibility !== 'DEPARTMENT_TEAM' || Boolean(value.teamId || value.departmentId),
+    (value) => {
+      const hasTeams =
+        (value.teamIds && value.teamIds.length > 0) || Boolean(value.teamId);
+      return value.visibility !== 'DEPARTMENT_TEAM' || hasTeams || Boolean(value.departmentId);
+    },
     {
       message: 'Department/team-only projects must be assigned to a team or department',
       path: ['visibility'],
@@ -67,18 +82,26 @@ export const updateProjectSchema = z
     name: z.string().trim().min(2).max(100).optional(),
     key: projectKey.optional(),
     description: z.string().trim().max(5000).nullable().optional(),
+    objectives: objectivesSchema,
     category: z.string().trim().min(1).max(80).nullable().optional(),
     labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
     visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).optional(),
     commentPolicy: z.enum(['ASSIGNEES_ONLY', 'TEAM_MEMBERS', 'ALL_VIEWERS']).optional(),
     status: z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED']).optional(),
     teamId: uuid.nullable().optional(),
+    teamIds: z.array(uuid).max(50).optional(),
     departmentId: uuid.nullable().optional(),
     startDate: dateInput,
     dueDate: dateInput,
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update');
+
+export const completeProjectSchema = z
+  .object({
+    force: z.boolean().optional().default(false),
+  })
+  .strict();
 
 export const projectMemberSchema = z
   .object({
@@ -90,6 +113,19 @@ export const projectMemberSchema = z
 export const updateProjectMemberSchema = z
   .object({
     role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'COLLABORATOR', 'VIEWER']),
+  })
+  .strict();
+
+export const bulkAddProjectMembersByTeamSchema = z
+  .object({
+    teamId: uuid,
+    role: z.enum(['PROJECT_MANAGER', 'MEMBER', 'COLLABORATOR', 'VIEWER']).default('MEMBER'),
+  })
+  .strict();
+
+export const assignProjectManagersSchema = z
+  .object({
+    userIds: z.array(uuid).min(1).max(100),
   })
   .strict();
 
@@ -125,12 +161,14 @@ export const projectMilestoneParamsSchema = z.object({
   projectId: uuid,
   milestoneId: uuid,
 });
+
 export const transferProjectOwnershipSchema = z
   .object({
     newOwnerId: uuid,
     previousOwnerRole: z.enum(['MANAGER', 'MEMBER', 'REMOVE']).default('MANAGER'),
   })
   .strict();
+
 export const createProjectMilestoneSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
@@ -139,6 +177,7 @@ export const createProjectMilestoneSchema = z
     position: z.number().int().min(0).optional(),
   })
   .strict();
+
 export const updateProjectMilestoneSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
@@ -150,8 +189,24 @@ export const updateProjectMilestoneSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update');
 
+export const projectTeamParamsSchema = z.object({
+  workspaceId: uuid,
+  projectId: uuid,
+  teamId: uuid,
+});
+
+export const addProjectTeamSchema = z
+  .object({
+    teamId: uuid,
+  })
+  .strict();
+
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 export type ListProjectsQuery = z.infer<typeof listProjectsQuerySchema>;
 export type TransferProjectOwnershipInput = z.infer<typeof transferProjectOwnershipSchema>;
 export type ProjectPermissionsResponse = z.infer<typeof projectPermissionsResponseSchema>;
+export type CompleteProjectInput = z.infer<typeof completeProjectSchema>;
+export type BulkAddProjectMembersByTeamInput = z.infer<typeof bulkAddProjectMembersByTeamSchema>;
+export type AssignProjectManagersInput = z.infer<typeof assignProjectManagersSchema>;
+export type AddProjectTeamInput = z.infer<typeof addProjectTeamSchema>;

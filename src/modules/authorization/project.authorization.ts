@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import type {
   OrganizationRole,
   PrismaClient,
@@ -88,7 +89,12 @@ export type ProjectAuthorizationClient = Pick<
   | 'taskAssignee'
   | 'comment'
   | 'fileAttachment'
->;
+> & {
+  projectTeam?: {
+    findMany: (args: Prisma.ProjectTeamFindManyArgs) => Promise<Array<{ teamId: string }>>;
+    count: (args: Prisma.ProjectTeamCountArgs) => Promise<number>;
+  };
+};
 
 const BASE_READ_PERMISSIONS: readonly ProjectPermissionValue[] = [
   'project.view',
@@ -229,31 +235,55 @@ export async function resolveProjectAuthorization(
   }
 
   // Team and department membership grant base read access to a
-  // DEPARTMENT_TEAM project. A project assigned to a team uses the team as the
-  // narrower scope; department membership alone does not bypass it.
+  // DEPARTMENT_TEAM project. A project assigned to one or more teams uses the
+  // associated teams as the narrower scope; department membership alone does not
+  // bypass team-scoped access when team associations exist.
   let teamMember = false;
-  if (project.visibility === 'DEPARTMENT_TEAM' && project.teamId) {
-    const team = await client.team.findFirst({
-      where: {
-        id: project.teamId,
-        workspaceId: project.workspaceId,
-        status: 'ACTIVE',
-        deletedAt: null,
-      },
-      select: { id: true },
-    });
-    if (team) {
-      teamMember = Boolean(
-        await client.teamMembership.findUnique({
-          where: { teamId_userId: { teamId: team.id, userId: actor.userId } },
-          select: { id: true },
-        }),
-      );
+  let hasTeamAssociation = Boolean(project.teamId);
+  const projectTeamClient = (client as unknown as { projectTeam?: unknown }).projectTeam as
+    | { findMany?: (args: Prisma.ProjectTeamFindManyArgs) => Promise<Array<{ teamId: string }>>; count?: (args: Prisma.ProjectTeamCountArgs) => Promise<number> }
+    | undefined;
+
+  if (project.visibility === 'DEPARTMENT_TEAM') {
+    const associatedTeamIds = new Set<string>();
+    if (project.teamId) associatedTeamIds.add(project.teamId);
+    if (projectTeamClient?.findMany) {
+      const joinTeams = (await projectTeamClient.findMany({
+        where: { projectId: project.id },
+        select: { teamId: true },
+      })) as Array<{ teamId: string }>;
+      for (const jt of joinTeams) associatedTeamIds.add(jt.teamId);
     }
+    hasTeamAssociation = associatedTeamIds.size > 0;
+
+    if (associatedTeamIds.size > 0) {
+      const teams = await client.team.findMany({
+        where: {
+          id: { in: [...associatedTeamIds] },
+          workspaceId: project.workspaceId,
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      const teamIds = teams.map((t) => t.id);
+      if (teamIds.length > 0) {
+        teamMember = Boolean(
+          await client.teamMembership.findFirst({
+            where: { teamId: { in: teamIds }, userId: actor.userId },
+            select: { id: true },
+          }),
+        );
+      }
+    }
+  } else if (projectTeamClient?.count) {
+    hasTeamAssociation = Boolean(
+      project.teamId || (await projectTeamClient.count({ where: { projectId: project.id } })) > 0,
+    );
   }
 
   let departmentMember = false;
-  if (project.visibility === 'DEPARTMENT_TEAM' && project.departmentId && !project.teamId) {
+  if (project.visibility === 'DEPARTMENT_TEAM' && project.departmentId && !hasTeamAssociation) {
     const department = await client.department.findFirst({
       where: { id: project.departmentId, workspaceId: project.workspaceId },
       select: { id: true },

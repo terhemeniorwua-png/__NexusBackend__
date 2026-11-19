@@ -1,30 +1,37 @@
-import type { PrismaClient, Team, TeamMembership, TeamRole, User } from '@prisma/client';
+import type { Prisma, PrismaClient, Team, TeamMembership, TeamRole, User } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import type { RequestContext } from '../auth/auth.types';
 import { TeamAuditAction, recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { AppError } from '../../utils/errors';
 import {
-  TeamCapability,
   DepartmentCapability,
+  TeamCapability,
+  WorkspaceCapability,
   requireDepartmentAccess,
   requireTeamAccess,
   requireWorkspaceAccess,
-  WorkspaceCapability,
 } from '../authorization';
 import type {
+  BulkAddTeamMembersInput,
   ChangeTeamLeadInput,
   CreateTeamInput,
+  TeamActivityQuery,
   UpdateTeamInput,
   UpdateTeamMemberRoleInput,
 } from './team.schemas';
-import type { TeamMemberSummary, TeamSummary } from './team.types';
+import type {
+  BulkAddTeamMembersResult,
+  TeamActivityResult,
+  TeamMemberSummary,
+  TeamOverview,
+  TeamProjectSummary,
+  TeamSummary,
+  TeamTaskCountsByStatus,
+} from './team.types';
 
 /**
  * Teams and their members.
- *
- * A team groups workspace members around a common purpose. Teams can be
- * associated with projects and their members receive targeted notifications.
  *
  * Authorization rules
  * -------------------
@@ -76,6 +83,10 @@ export interface TeamService {
     },
     ctx: RequestContext,
   ): Promise<TeamMemberSummary>;
+  bulkAddMembers(
+    input: { userId: string; workspaceId: string; teamId: string } & BulkAddTeamMembersInput,
+    ctx: RequestContext,
+  ): Promise<BulkAddTeamMembersResult>;
   updateMemberRole(
     input: {
       userId: string;
@@ -93,6 +104,15 @@ export interface TeamService {
     input: { userId: string; workspaceId: string; teamId: string } & ChangeTeamLeadInput,
     ctx: RequestContext,
   ): Promise<TeamSummary>;
+  overview(input: { userId: string; workspaceId: string; teamId: string }): Promise<TeamOverview>;
+  activity(
+    input: { userId: string; workspaceId: string; teamId: string } & TeamActivityQuery,
+  ): Promise<TeamActivityResult>;
+  listProjects(input: {
+    userId: string;
+    workspaceId: string;
+    teamId: string;
+  }): Promise<TeamProjectSummary[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +127,7 @@ function toSummary(team: TeamWithLead, memberCount: number): TeamSummary {
     workspaceId: team.workspaceId,
     name: team.name,
     description: team.description,
+    responsibilities: team.responsibilities ?? null,
     departmentId: team.departmentId,
     status: team.status,
     leadId: team.leadId,
@@ -131,6 +152,27 @@ function toMember(membership: MembershipWithUser): TeamMemberSummary {
     email: membership.user.email,
     joinedAt: membership.createdAt,
   };
+}
+
+function nameConflictError(): AppError {
+  return new AppError(
+    409,
+    'TEAM_NAME_CONFLICT',
+    'A team with that name already exists in this workspace',
+  );
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: string }).code === 'P2002'
+  );
+}
+
+function normalizeName(name: string): string {
+  return name.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +203,94 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
     return { team: teamData, memberCount: _count.members };
   }
 
+  async function assertUniqueTeamName(
+    workspaceId: string,
+    name: string,
+    excludeTeamId?: string,
+  ): Promise<void> {
+    const existing = await client.team.findFirst({
+      where: {
+        workspaceId,
+        deletedAt: null,
+        ...(excludeTeamId ? { id: { not: excludeTeamId } } : {}),
+        name: { equals: normalizeName(name), mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    if (existing) throw nameConflictError();
+  }
+
+  async function ensureNotRemovingLastLead(
+    tx: Prisma.TransactionClient,
+    teamId: string,
+    affectedUserId: string,
+    nextRoleForAffected?: TeamRole | null,
+    removing = false,
+  ): Promise<void> {
+    const leads = await tx.teamMembership.findMany({
+      where: { teamId, role: 'TEAM_LEAD' },
+      select: { userId: true },
+    });
+    const leadIds = new Set(leads.map((l) => l.userId));
+    const currentlyLead = leadIds.has(affectedUserId);
+    if (!currentlyLead) return;
+
+    let remainingLeadCount = leadIds.size;
+    if (removing) {
+      remainingLeadCount -= 1;
+    } else if (nextRoleForAffected && nextRoleForAffected !== 'TEAM_LEAD') {
+      remainingLeadCount -= 1;
+    }
+
+    if (remainingLeadCount < 1) {
+      throw new AppError(
+        409,
+        'TEAM_LAST_LEAD',
+        'A team must retain at least one team lead. Assign another lead before removing or demoting the last lead.',
+      );
+    }
+  }
+
+  async function syncPrimaryLead(
+    tx: Prisma.TransactionClient,
+    teamId: string,
+    preferredLeadId?: string | null,
+  ): Promise<string | null> {
+    const leadMembers = await tx.teamMembership.findMany({
+      where: { teamId, role: 'TEAM_LEAD' },
+      select: { userId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const leadIds = leadMembers.map((m) => m.userId);
+    let nextLeadId: string | null = null;
+    if (preferredLeadId && leadIds.includes(preferredLeadId)) nextLeadId = preferredLeadId;
+    else nextLeadId = leadIds[0] ?? null;
+    await tx.team.update({ where: { id: teamId }, data: { leadId: nextLeadId } });
+    return nextLeadId;
+  }
+
+  async function listTeamProjectRows(
+    db: PrismaClient | Prisma.TransactionClient,
+    teamId: string,
+  ): Promise<TeamProjectSummary[]> {
+    const rows = await db.project.findMany({
+      where: {
+        deletedAt: null,
+        OR: [{ teamId }, { projectTeams: { some: { teamId } } }],
+      },
+      select: {
+        id: true,
+        name: true,
+        key: true,
+        status: true,
+        visibility: true,
+        dueDate: true,
+      },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+    return rows;
+  }
+
   return {
     async create(input, ctx): Promise<TeamSummary> {
       // Creating a team requires workspace update permission.
@@ -169,6 +299,8 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         workspaceId: input.workspaceId,
         capability: WorkspaceCapability.UpdateWorkspace,
       });
+
+      await assertUniqueTeamName(workspace.id, input.name);
 
       // Validate leadId if provided — the lead must be a workspace member.
       if (input.leadId) {
@@ -201,61 +333,83 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
           ? 'TEAM_LEAD'
           : 'MEMBER';
 
-      const team = await client.$transaction(async (tx) => {
-        const created = await tx.team.create({
-          data: {
-            workspaceId: workspace.id,
-            name: input.name,
-            ...(input.description !== undefined ? { description: input.description } : {}),
-            ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
-            ...(input.leadId !== undefined ? { leadId: input.leadId } : {}),
-          },
-          include: {
-            lead: { select: { id: true, name: true, email: true } },
-          },
-        });
+      let team: TeamWithLead;
+      try {
+        team = await client.$transaction(async (tx) => {
+          const created = await tx.team.create({
+            data: {
+              workspaceId: workspace.id,
+              name: normalizeName(input.name),
+              ...(input.description !== undefined ? { description: input.description } : {}),
+              ...(input.responsibilities !== undefined
+                ? { responsibilities: input.responsibilities }
+                : {}),
+              ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
+              ...(input.leadId !== undefined ? { leadId: input.leadId } : {}),
+            },
+            include: {
+              lead: { select: { id: true, name: true, email: true } },
+            },
+          });
 
-        // Add the creator as a team member automatically.
-        await tx.teamMembership.create({
-          data: {
-            teamId: created.id,
-            userId: input.userId,
-            role: creatorRole,
-          },
-        });
-
-        // If a separate lead was specified and is not the creator, add them too.
-        if (input.leadId && input.leadId !== input.userId) {
+          // Add the creator as a team member automatically.
           await tx.teamMembership.create({
             data: {
               teamId: created.id,
-              userId: input.leadId,
-              role: 'TEAM_LEAD',
+              userId: input.userId,
+              role: creatorRole,
             },
           });
-        }
 
-        await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
-          actorId: input.userId,
-          action: TeamAuditAction.TeamCreated,
-          targetType: 'Team',
-          targetId: created.id,
-          metadata: {
-            name: created.name,
-            ...(created.leadId ? { leadId: created.leadId } : {}),
-          },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          // If a separate lead was specified and is not the creator, add them too.
+          if (input.leadId && input.leadId !== input.userId) {
+            await tx.teamMembership.create({
+              data: {
+                teamId: created.id,
+                userId: input.leadId,
+                role: 'TEAM_LEAD',
+              },
+            });
+          }
+
+          // Ensure primary lead is consistent with TEAM_LEAD memberships.
+          const preferredLead = input.leadId ?? (creatorRole === 'TEAM_LEAD' ? input.userId : null);
+          const syncedLeadId = await syncPrimaryLead(tx, created.id, preferredLead);
+          const finalTeam =
+            syncedLeadId === created.leadId
+              ? created
+              : await tx.team.update({
+                  where: { id: created.id },
+                  data: { leadId: syncedLeadId },
+                  include: { lead: { select: { id: true, name: true, email: true } } },
+                });
+
+          await recordAuditEvent(tx, {
+            workspaceId: workspace.id,
+            actorId: input.userId,
+            action: TeamAuditAction.TeamCreated,
+            targetType: 'Team',
+            targetId: created.id,
+            metadata: {
+              name: finalTeam.name,
+              ...(finalTeam.leadId ? { leadId: finalTeam.leadId } : {}),
+              ...(input.departmentId ? { departmentId: input.departmentId } : {}),
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+
+          return finalTeam;
         });
-
-        return created;
-      });
+      } catch (error) {
+        if (isUniqueConstraintError(error)) throw nameConflictError();
+        throw error;
+      }
 
       // Notify the lead if one was set and is not the creator.
-      if (input.leadId && input.leadId !== input.userId) {
+      if (team.leadId && team.leadId !== input.userId) {
         await createNotification(client, {
-          userId: input.leadId,
+          userId: team.leadId,
           type: 'MEMBERSHIP_CHANGED',
           title: `You are the lead of ${team.name}`,
           body: `You have been assigned as the team lead of ${team.name}.`,
@@ -263,8 +417,7 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         });
       }
 
-      const memberCount = 1 + (input.leadId && input.leadId !== input.userId ? 1 : 0);
-
+      const memberCount = await client.teamMembership.count({ where: { teamId: team.id } });
       return toSummary(team, memberCount);
     },
 
@@ -327,6 +480,10 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         capability: TeamCapability.UpdateTeam,
       });
 
+      if (input.name !== undefined) {
+        await assertUniqueTeamName(workspace.id, input.name, team.id);
+      }
+
       if (input.departmentId !== undefined && input.departmentId !== team.departmentId) {
         if (team.departmentId) {
           await requireDepartmentAccess(client, {
@@ -346,45 +503,57 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
         }
       }
 
-      const updatedTeam = await client.$transaction(async (tx) => {
-        const changed = await tx.team.update({
-          where: { id: input.teamId },
-          data: {
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.description !== undefined ? { description: input.description } : {}),
-            ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
-          },
-          include: {
-            lead: { select: { id: true, name: true, email: true } },
-          },
-        });
-
-        if (input.departmentId !== undefined && input.departmentId !== team.departmentId) {
-          await tx.project.updateMany({
-            where: { teamId: team.id, departmentId: team.departmentId },
-            data: { departmentId: changed.departmentId },
+      let updatedTeam: TeamWithLead;
+      try {
+        updatedTeam = await client.$transaction(async (tx) => {
+          const changed = await tx.team.update({
+            where: { id: input.teamId },
+            data: {
+              ...(input.name !== undefined ? { name: normalizeName(input.name) } : {}),
+              ...(input.description !== undefined ? { description: input.description } : {}),
+              ...(input.responsibilities !== undefined
+                ? { responsibilities: input.responsibilities }
+                : {}),
+              ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
+            },
+            include: {
+              lead: { select: { id: true, name: true, email: true } },
+            },
           });
-        }
 
-        await recordAuditEvent(tx, {
-          workspaceId: workspace.id,
-          actorId: input.userId,
-          action: TeamAuditAction.TeamUpdated,
-          targetType: 'Team',
-          targetId: changed.id,
-          metadata: {
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.description !== undefined ? { description: input.description } : {}),
-            ...(input.departmentId !== undefined
-              ? { previousDepartmentId: team.departmentId, departmentId: changed.departmentId }
-              : {}),
-          },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
+          if (input.departmentId !== undefined && input.departmentId !== team.departmentId) {
+            await tx.project.updateMany({
+              where: { teamId: team.id, departmentId: team.departmentId },
+              data: { departmentId: changed.departmentId },
+            });
+          }
+
+          await recordAuditEvent(tx, {
+            workspaceId: workspace.id,
+            actorId: input.userId,
+            action: TeamAuditAction.TeamUpdated,
+            targetType: 'Team',
+            targetId: changed.id,
+            metadata: {
+              ...(input.name !== undefined ? { name: changed.name } : {}),
+              ...(input.description !== undefined ? { description: input.description } : {}),
+              ...(input.responsibilities !== undefined
+                ? { responsibilities: input.responsibilities }
+                : {}),
+              ...(input.departmentId !== undefined
+                ? { previousDepartmentId: team.departmentId, departmentId: changed.departmentId }
+                : {}),
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+
+          return changed;
         });
-
-        return changed;
-      });
+      } catch (error) {
+        if (isUniqueConstraintError(error)) throw nameConflictError();
+        throw error;
+      }
 
       const memberCount = await client.teamMembership.count({
         where: { teamId: updatedTeam.id },
@@ -565,12 +734,9 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
           include: { user: { select: { id: true, name: true, email: true } } },
         });
 
-        // If the new member is added as TEAM_LEAD, update the team's leadId.
+        // If the new member is added as TEAM_LEAD, update/set the team's primary lead.
         if (input.role === 'TEAM_LEAD') {
-          await tx.team.update({
-            where: { id: team.id },
-            data: { leadId: input.targetUserId },
-          });
+          await syncPrimaryLead(tx, team.id, team.leadId ?? input.targetUserId);
         }
 
         await recordAuditEvent(tx, {
@@ -603,6 +769,108 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
       return toMember(newMembership);
     },
 
+    async bulkAddMembers(input, ctx): Promise<BulkAddTeamMembersResult> {
+      const { workspace, membership } = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      const { team } = await requireTeamAccess(client, {
+        userId: input.userId,
+        workspaceId: workspace.id,
+        teamId: input.teamId,
+        workspaceRole: membership.role,
+        capability: TeamCapability.ManageMembers,
+      });
+
+      const uniqueUserIds = [...new Set(input.members.map((m) => m.userId))];
+      const roleByUser = new Map<string, TeamRole>();
+      for (const m of input.members) {
+        // Last provided role wins for duplicates in request (deterministic).
+        roleByUser.set(m.userId, m.role);
+      }
+
+      const workspaceMembers = await client.workspaceMembership.findMany({
+        where: { workspaceId: workspace.id, userId: { in: uniqueUserIds } },
+        include: { user: { select: { id: true, name: true, email: true } } },
+      });
+      const wsMemberByUserId = new Map(workspaceMembers.map((m) => [m.userId, m]));
+      for (const userId of uniqueUserIds) {
+        if (!wsMemberByUserId.has(userId)) {
+          throw new AppError(
+            404,
+            'WORKSPACE_MEMBER_NOT_FOUND',
+            'One or more users are not members of this workspace',
+            { details: { userId } },
+          );
+        }
+      }
+
+      const existingMemberships = await client.teamMembership.findMany({
+        where: { teamId: team.id, userId: { in: uniqueUserIds } },
+        select: { userId: true },
+      });
+      const existingSet = new Set(existingMemberships.map((m) => m.userId));
+
+      const toAdd = uniqueUserIds.filter((id) => !existingSet.has(id));
+      const skipped = uniqueUserIds
+        .filter((id) => existingSet.has(id))
+        .map((id) => ({ userId: id, reason: 'ALREADY_A_MEMBER' }));
+
+      if (toAdd.length === 0) {
+        return { added: [], skipped };
+      }
+
+      const added = await client.$transaction(async (tx) => {
+        const createdRows: TeamMemberSummary[] = [];
+        for (const targetUserId of toAdd) {
+          const role = roleByUser.get(targetUserId) ?? 'MEMBER';
+          const wsMember = wsMemberByUserId.get(targetUserId)!;
+          const created = await tx.teamMembership.create({
+            data: { teamId: team.id, userId: targetUserId, role },
+            include: { user: { select: { id: true, name: true, email: true } } },
+          });
+
+          await recordAuditEvent(tx, {
+            workspaceId: workspace.id,
+            actorId: input.userId,
+            action: TeamAuditAction.MemberAdded,
+            targetType: 'TeamMembership',
+            targetId: created.id,
+            metadata: {
+              teamId: team.id,
+              userId: targetUserId,
+              email: wsMember.user.email,
+              role,
+              bulk: true,
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+
+          await createNotification(tx, {
+            userId: targetUserId,
+            type: 'MEMBERSHIP_CHANGED',
+            title: `You joined ${team.name}`,
+            body: `Your role in the team is ${role === 'TEAM_LEAD' ? 'Team Lead' : 'Member'}.`,
+            data: { workspaceId: workspace.id, teamId: team.id, role },
+          });
+
+          createdRows.push(toMember(created));
+        }
+
+        // If any leads were added and team has no primary lead, or to keep consistent.
+        if (toAdd.some((id) => roleByUser.get(id) === 'TEAM_LEAD') || !team.leadId) {
+          await syncPrimaryLead(tx, team.id, team.leadId ?? null);
+        }
+
+        return createdRows;
+      });
+
+      return { added, skipped };
+    },
+
     async updateMemberRole(input, ctx): Promise<TeamMemberSummary> {
       const { workspace, membership } = await requireWorkspaceAccess(client, {
         userId: input.userId,
@@ -628,6 +896,8 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
       }
 
       const updated = await client.$transaction(async (tx) => {
+        await ensureNotRemovingLastLead(tx, team.id, input.targetUserId, input.role as TeamRole, false);
+
         const previousRole = target.role;
         const changed = await tx.teamMembership.update({
           where: { id: target.id },
@@ -635,18 +905,11 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
           include: { user: { select: { id: true, name: true, email: true } } },
         });
 
-        // If the new role is TEAM_LEAD, update the team's leadId.
+        // Keep primary lead consistent with TEAM_LEAD memberships.
         if (input.role === 'TEAM_LEAD') {
-          await tx.team.update({
-            where: { id: team.id },
-            data: { leadId: input.targetUserId },
-          });
-        } else if (team.leadId === input.targetUserId) {
-          // If demoting the current lead, clear the leadId.
-          await tx.team.update({
-            where: { id: team.id },
-            data: { leadId: null },
-          });
+          await syncPrimaryLead(tx, team.id, team.leadId ?? input.targetUserId);
+        } else if (previousRole === 'TEAM_LEAD') {
+          await syncPrimaryLead(tx, team.id, team.leadId === input.targetUserId ? null : team.leadId);
         }
 
         await recordAuditEvent(tx, {
@@ -704,15 +967,12 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
       }
 
       await client.$transaction(async (tx) => {
+        await ensureNotRemovingLastLead(tx, team.id, input.targetUserId, null, true);
+
         await tx.teamMembership.delete({ where: { id: target.id } });
 
-        // If the removed member was the team lead, clear the lead.
-        if (team.leadId === input.targetUserId) {
-          await tx.team.update({
-            where: { id: team.id },
-            data: { leadId: null },
-          });
-        }
+        // If the removed member was a lead/primary lead, keep leadId consistent.
+        await syncPrimaryLead(tx, team.id, team.leadId === input.targetUserId ? null : team.leadId);
 
         await recordAuditEvent(tx, {
           workspaceId: workspace.id,
@@ -785,30 +1045,28 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
 
         const previousLeadId = currentTeam.leadId;
 
-        const changed = await tx.team.update({
-          where: { id: input.teamId },
-          data: { leadId: input.leadId },
-          include: {
-            lead: { select: { id: true, name: true, email: true } },
-          },
-        });
-
-        // Downgrade the previous lead to MEMBER (if they still have a membership row).
-        if (previousLeadId && previousLeadId !== input.leadId) {
-          const prevLeadMembership = await tx.teamMembership.findUnique({
-            where: { teamId_userId: { teamId: input.teamId, userId: previousLeadId } },
+        if (input.leadId === null) {
+          // Clearing explicit lead: only allowed if another TEAM_LEAD exists.
+          const leadCount = await tx.teamMembership.count({
+            where: { teamId: input.teamId, role: 'TEAM_LEAD' },
           });
-
-          if (prevLeadMembership?.role === 'TEAM_LEAD') {
-            await tx.teamMembership.update({
-              where: { id: prevLeadMembership.id },
-              data: { role: 'MEMBER' },
-            });
+          if (leadCount < 1) {
+            throw new AppError(
+              409,
+              'TEAM_LAST_LEAD',
+              'A team must retain at least one team lead. Assign a replacement lead first.',
+            );
           }
-        }
-
-        // Ensure the new lead has a team membership row with TEAM_LEAD role.
-        if (input.leadId) {
+          const synced = await syncPrimaryLead(tx, input.teamId, null);
+          if (!synced) {
+            throw new AppError(
+              409,
+              'TEAM_LAST_LEAD',
+              'A team must retain at least one team lead. Assign a replacement lead first.',
+            );
+          }
+        } else {
+          // Ensure the new lead has a team membership row with TEAM_LEAD role.
           const existingMembership = await tx.teamMembership.findUnique({
             where: { teamId_userId: { teamId: input.teamId, userId: input.leadId } },
           });
@@ -827,7 +1085,14 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
               },
             });
           }
+
+          await tx.team.update({ where: { id: input.teamId }, data: { leadId: input.leadId } });
         }
+
+        const changed = await tx.team.findFirstOrThrow({
+          where: { id: input.teamId },
+          include: { lead: { select: { id: true, name: true, email: true } } },
+        });
 
         await recordAuditEvent(tx, {
           workspaceId: workspace.id,
@@ -837,15 +1102,15 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
           targetId: changed.id,
           metadata: {
             previousLeadId,
-            newLeadId: input.leadId,
+            newLeadId: changed.leadId,
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
 
-        if (input.leadId && input.leadId !== input.userId) {
+        if (changed.leadId && changed.leadId !== previousLeadId && changed.leadId !== input.userId) {
           await createNotification(tx, {
-            userId: input.leadId,
+            userId: changed.leadId,
             type: 'MEMBERSHIP_CHANGED',
             title: `You are now the lead of ${changed.name}`,
             body: `You have been assigned as the team lead of ${changed.name}.`,
@@ -861,6 +1126,136 @@ export function createTeamService(prisma?: PrismaClient): TeamService {
       });
 
       return toSummary(updatedTeam, memberCount);
+    },
+
+    async overview(input): Promise<TeamOverview> {
+      const { workspace, membership } = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      await requireTeamAccess(client, {
+        userId: input.userId,
+        workspaceId: workspace.id,
+        teamId: input.teamId,
+        workspaceRole: membership.role,
+        capability: TeamCapability.ViewTeam,
+      });
+
+      const { team, memberCount } = await loadTeamWithCount(input.teamId, workspace.id);
+      const memberships = await client.teamMembership.findMany({
+        where: { teamId: input.teamId },
+        include: { user: { select: { id: true, name: true, email: true } } },
+        orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+      });
+      const members = memberships.map(toMember);
+      const leads = members.filter((m) => m.role === 'TEAM_LEAD');
+      const projects = await listTeamProjectRows(client, input.teamId);
+
+      const projectIds = projects.map((p) => p.id);
+      const taskCountsByStatus: TeamTaskCountsByStatus = {
+        ASSIGNED: 0,
+        IN_PROGRESS: 0,
+        SUBMITTED: 0,
+        UNDER_REVIEW: 0,
+        APPROVED: 0,
+        CHANGES_REQUESTED: 0,
+      };
+      if (projectIds.length > 0) {
+        const groups = await client.task.groupBy({
+          by: ['status'],
+          where: { projectId: { in: projectIds }, deletedAt: null, archivedAt: null },
+          _count: { _all: true },
+        });
+        for (const g of groups) {
+          if (g.status in taskCountsByStatus) {
+            taskCountsByStatus[g.status as keyof TeamTaskCountsByStatus] = g._count._all;
+          }
+        }
+      }
+
+      return {
+        team: toSummary(team, memberCount),
+        members,
+        leads,
+        projects,
+        taskCountsByStatus,
+      };
+    },
+
+    async activity(input): Promise<TeamActivityResult> {
+      const { workspace, membership } = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      await requireTeamAccess(client, {
+        userId: input.userId,
+        workspaceId: workspace.id,
+        teamId: input.teamId,
+        workspaceRole: membership.role,
+        capability: TeamCapability.ViewTeam,
+      });
+
+      // Team events are recorded as targetType Team (targetId = teamId) or
+      // TeamMembership with metadata.teamId = teamId.
+      const rows = await client.auditLog.findMany({
+        where: {
+          workspaceId: workspace.id,
+          ...(input.cursor ? { createdAt: { lt: new Date(input.cursor) } } : {}),
+          OR: [
+            { targetType: 'Team', targetId: input.teamId },
+            { targetType: 'TeamMembership', metadata: { path: ['teamId'], equals: input.teamId } },
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+        select: {
+          id: true,
+          action: true,
+          actorId: true,
+          targetType: true,
+          targetId: true,
+          metadata: true,
+          createdAt: true,
+        },
+      });
+
+      const hasMore = rows.length > input.limit;
+      const items = rows.slice(0, input.limit).map((r) => ({
+        id: r.id,
+        action: r.action,
+        actorId: r.actorId ?? null,
+        targetType: r.targetType,
+        targetId: r.targetId,
+        metadata: r.metadata,
+        createdAt: r.createdAt,
+      }));
+
+      return {
+        items,
+        nextCursor: hasMore ? (items.at(-1)?.createdAt.toISOString() ?? null) : null,
+      };
+    },
+
+    async listProjects(input): Promise<TeamProjectSummary[]> {
+      const { workspace, membership } = await requireWorkspaceAccess(client, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+
+      await requireTeamAccess(client, {
+        userId: input.userId,
+        workspaceId: workspace.id,
+        teamId: input.teamId,
+        workspaceRole: membership.role,
+        capability: TeamCapability.ViewTeam,
+      });
+
+      return listTeamProjectRows(client, input.teamId);
     },
   };
 }

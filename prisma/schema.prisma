@@ -290,8 +290,8 @@ model User {
   twoFactorSetupExpiresAt  DateTime?
 
   // Onboarding and AI-access fields
-  aiAccessEnabled          Boolean   @default(false)
-  aiAccessUpdatedAt        DateTime?
+  aiAccessEnabled   Boolean   @default(false)
+  aiAccessUpdatedAt DateTime?
 
   profile                       UserProfile?
   sessions                      Session[]
@@ -305,74 +305,76 @@ model User {
   departmentMemberships         DepartmentMembership[]
   institutionGroupMemberships   InstitutionGroupMembership[]
   projectMemberships            ProjectMembership[]
-  createdTasks                  Task[]                       @relation("TaskCreator")
-  submittedTasks                Task[]                       @relation("TaskSubmittedBy")
-  reviewedTasks                 Task[]                       @relation("TaskReviewedBy")
-  createdTaskDocuments          TaskDocument[]               @relation("TaskDocumentCreator")
-  savedTaskDocumentVersions     TaskDocumentVersion[]        @relation("TaskDocumentVersionSaver")
-  reportedTaskBlockers          TaskBlocker[]                @relation("TaskBlockerReporter")
-  notifiedTaskBlockers          TaskBlocker[]                @relation("TaskBlockerNotifyUser")
-  resolvedTaskBlockers          TaskBlocker[]                @relation("TaskBlockerResolver")
+  createdTasks                  Task[]                        @relation("TaskCreator")
+  submittedTasks                Task[]                        @relation("TaskSubmittedBy")
+  reviewedTasks                 Task[]                        @relation("TaskReviewedBy")
+  createdTaskDocuments          TaskDocument[]                @relation("TaskDocumentCreator")
+  savedTaskDocumentVersions     TaskDocumentVersion[]         @relation("TaskDocumentVersionSaver")
+  reportedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerReporter")
+  notifiedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerNotifyUser")
+  resolvedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerResolver")
   timeEntries                   TaskTimeEntry[]
   assignedTasks                 TaskAssignee[]
   authoredComments              Comment[]
   commentMentions               CommentMention[]
-  messageMentions MessageMention[]
+  messageMentions               MessageMention[]
   notifications                 Notification[]
   uploadedFiles                 FileAttachment[]
   auditLogs                     AuditLog[]
-  invitedWorkspaces             Invitation[]                 @relation("InvitedBy")
-  pendingInvitations            Invitation[]                 @relation("InvitedUser")
-  acceptedInvitations           Invitation[]                 @relation("AcceptedBy")
-  ownedWorkspaces               Workspace[]                  @relation("WorkspaceOwner")
-  ownedProjects                 Project[]                    @relation("ProjectOwner")
-  ledTeams                      Team[]                       @relation("TeamLead")
-  taskAssignments               TaskAssignee[]               @relation("TaskAssigner")
-  joinRequests                  JoinRequest[]                @relation("JoinRequestApplicant")
-  reviewedJoinRequests          JoinRequest[]                @relation("JoinRequestReviewer")
-  ledInstitutionGroups          InstitutionGroup[]           @relation("InstitutionGroupLead")
-  initiatedOwnershipTransfers   WorkspaceOwnershipTransfer[] @relation("OwnershipTransferInitiator")
-  receivedOwnershipTransfers    WorkspaceOwnershipTransfer[] @relation("OwnershipTransferRecipient")
-  acceptedBillingTransfers      WorkspaceOwnershipTransfer[] @relation("BillingResponsibilityAcceptor")
-  billingOwnedSubscriptions     Subscription[]               @relation("SubscriptionBillingOwner")
-  privacyRequests               PrivacyRequest[]             @relation("PrivacyRequestOwner")
-  reviewedPrivacyRequests       PrivacyRequest[]             @relation("PrivacyRequestReviewer")
-  channelsCreated               Channel[]                    @relation("ChannelCreatedBy")
-  channelMemberships            ChannelMembership[]          @relation("ChannelMemberships")
-  messagesAuthored              Message[]                    @relation("MessageAuthor")
-  messageReactions              MessageReaction[]            @relation("MessageReactions")
-  messageReadReceipts           MessageReadReceipt[]         @relation("MessageReadReceipts")
-  documentsAuthored             Document[]                   @relation("DocumentAuthor")
-  documentRevisions             DocumentRevision[]           @relation("DocumentRevisionAuthor")
-  documentComments              DocumentComment[]            @relation("DocumentCommentAuthor")
-  calendarEventsCreated         CalendarEvent[]              @relation("EventCreatedBy")
-  formsCreated                  Form[]                       @relation("FormCreatedBy")
-  formResponses                 FormResponse[]               @relation("FormSubmitter")
-  calendarInvitations           EventInvitation[]            @relation("EventInvitations")
-  integrations                  Integration[]                @relation("UserIntegrations")
-  automationsCreated            Automation[]                 @relation("AutomationCreatedBy")
-  meetingsCreated               Meeting[]                    @relation("MeetingCreatedBy")
-  meetingParticipations         MeetingParticipant[]         @relation("MeetingParticipants")
+  invitedWorkspaces             Invitation[]                  @relation("InvitedBy")
+  pendingInvitations            Invitation[]                  @relation("InvitedUser")
+  acceptedInvitations           Invitation[]                  @relation("AcceptedBy")
+  ownedWorkspaces               Workspace[]                   @relation("WorkspaceOwner")
+  ownedProjects                 Project[]                     @relation("ProjectOwner")
+  completedProjects             Project[]                     @relation("ProjectCompletedBy")
+  archivedProjects              Project[]                     @relation("ProjectArchivedBy")
+  ledTeams                      Team[]                        @relation("TeamLead")
+  taskAssignments               TaskAssignee[]                @relation("TaskAssigner")
+  joinRequests                  JoinRequest[]                 @relation("JoinRequestApplicant")
+  reviewedJoinRequests          JoinRequest[]                 @relation("JoinRequestReviewer")
+  ledInstitutionGroups          InstitutionGroup[]            @relation("InstitutionGroupLead")
+  initiatedOwnershipTransfers   WorkspaceOwnershipTransfer[]  @relation("OwnershipTransferInitiator")
+  receivedOwnershipTransfers    WorkspaceOwnershipTransfer[]  @relation("OwnershipTransferRecipient")
+  acceptedBillingTransfers      WorkspaceOwnershipTransfer[]  @relation("BillingResponsibilityAcceptor")
+  billingOwnedSubscriptions     Subscription[]                @relation("SubscriptionBillingOwner")
+  privacyRequests               PrivacyRequest[]              @relation("PrivacyRequestOwner")
+  reviewedPrivacyRequests       PrivacyRequest[]              @relation("PrivacyRequestReviewer")
+  channelsCreated               Channel[]                     @relation("ChannelCreatedBy")
+  channelMemberships            ChannelMembership[]           @relation("ChannelMemberships")
+  messagesAuthored              Message[]                     @relation("MessageAuthor")
+  messageReactions              MessageReaction[]             @relation("MessageReactions")
+  messageReadReceipts           MessageReadReceipt[]          @relation("MessageReadReceipts")
+  documentsAuthored             Document[]                    @relation("DocumentAuthor")
+  documentRevisions             DocumentRevision[]            @relation("DocumentRevisionAuthor")
+  documentComments              DocumentComment[]             @relation("DocumentCommentAuthor")
+  calendarEventsCreated         CalendarEvent[]               @relation("EventCreatedBy")
+  formsCreated                  Form[]                        @relation("FormCreatedBy")
+  formResponses                 FormResponse[]                @relation("FormSubmitter")
+  calendarInvitations           EventInvitation[]             @relation("EventInvitations")
+  integrations                  Integration[]                 @relation("UserIntegrations")
+  automationsCreated            Automation[]                  @relation("AutomationCreatedBy")
+  meetingsCreated               Meeting[]                     @relation("MeetingCreatedBy")
+  meetingParticipations         MeetingParticipant[]          @relation("MeetingParticipants")
   searchHistory                 SearchHistory[]
-  webhookSubscriptions          WebhookSubscription[]        @relation("WebhookSubscriptionCreatedBy")
-  integrationConnectionsCreated IntegrationConnection[]      @relation("IntegrationConnectionsCreatedBy")
-  taskDevLinksLinked            TaskDevLink[]                @relation("TaskDevLinksLinked")
-  aiConversations               AiConversation[]             @relation("AiConversationOwner")
-  aiUsageRecords                AiUsageRecord[]              @relation("AiUsageRecordOwner")
-  aiActionProposals             AiActionProposal[]           @relation("AiActionProposalOwner")
-  aiActionApprovals             AiActionApproval[]           @relation("AiActionApprovalActor")
-  aiWritingSessions             AiWritingSession[]           @relation("AiWritingSessionOwner")
-  createdCustomFields           ProjectCustomField[]         @relation("ProjectCustomFieldCreator")
-  taskSavedViews                TaskSavedView[]              @relation("TaskSavedViewOwner")
-  createdTaskTemplates          TaskTemplate[]               @relation("TaskTemplateCreator")
-  createdProjectTemplates       ProjectTemplate[]            @relation("ProjectTemplateCreator")
-  importJobsCreated             ImportJob[]                  @relation("ImportJobsCreatedBy")
-  createdSsoConfigs             WorkspaceSsoConfig[]         @relation("WorkspaceSsoConfigCreator")
-  scimTokens                    ScimToken[]                  @relation("ScimTokenUser")
-  resourceFoldersCreated        ResourceFolder[]             @relation("ResourceFoldersCreatedBy")
-  resourceFilesUploaded         ResourceFile[]               @relation("ResourceFilesUploadedBy")
-  resourceBookmarksCreated      ResourceBookmark[]           @relation("ResourceBookmarksCreatedBy")
-  resourceRecentItems           ResourceRecentItem[]         @relation("ResourceRecentItems")
+  webhookSubscriptions          WebhookSubscription[]         @relation("WebhookSubscriptionCreatedBy")
+  integrationConnectionsCreated IntegrationConnection[]       @relation("IntegrationConnectionsCreatedBy")
+  taskDevLinksLinked            TaskDevLink[]                 @relation("TaskDevLinksLinked")
+  aiConversations               AiConversation[]              @relation("AiConversationOwner")
+  aiUsageRecords                AiUsageRecord[]               @relation("AiUsageRecordOwner")
+  aiActionProposals             AiActionProposal[]            @relation("AiActionProposalOwner")
+  aiActionApprovals             AiActionApproval[]            @relation("AiActionApprovalActor")
+  aiWritingSessions             AiWritingSession[]            @relation("AiWritingSessionOwner")
+  createdCustomFields           ProjectCustomField[]          @relation("ProjectCustomFieldCreator")
+  taskSavedViews                TaskSavedView[]               @relation("TaskSavedViewOwner")
+  createdTaskTemplates          TaskTemplate[]                @relation("TaskTemplateCreator")
+  createdProjectTemplates       ProjectTemplate[]             @relation("ProjectTemplateCreator")
+  importJobsCreated             ImportJob[]                   @relation("ImportJobsCreatedBy")
+  createdSsoConfigs             WorkspaceSsoConfig[]          @relation("WorkspaceSsoConfigCreator")
+  scimTokens                    ScimToken[]                   @relation("ScimTokenUser")
+  resourceFoldersCreated        ResourceFolder[]              @relation("ResourceFoldersCreatedBy")
+  resourceFilesUploaded         ResourceFile[]                @relation("ResourceFilesUploadedBy")
+  resourceBookmarksCreated      ResourceBookmark[]            @relation("ResourceBookmarksCreatedBy")
+  resourceRecentItems           ResourceRecentItem[]          @relation("ResourceRecentItems")
   resourceDashboardPreferences  ResourceDashboardPreference[] @relation("ResourceDashboardPreferences")
   onboardingState               UserOnboardingState?          @relation("UserOnboardingState")
   legalAcceptances              UserLegalAcceptance[]         @relation("UserLegalAcceptance")
@@ -383,13 +385,13 @@ model User {
 }
 
 model UserOnboardingState {
-  id           String   @id @default(uuid())
-  userId       String   @unique
-  currentStep  String   @default("WELCOME")
+  id           String    @id @default(uuid())
+  userId       String    @unique
+  currentStep  String    @default("WELCOME")
   completedAt  DateTime?
-  skippedSteps String[] @default([])
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  skippedSteps String[]  @default([])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   user User @relation("UserOnboardingState", fields: [userId], references: [id], onDelete: Cascade)
 
@@ -397,14 +399,14 @@ model UserOnboardingState {
 }
 
 model UserLegalAcceptance {
-  id            String   @id @default(uuid())
-  userId        String
-  documentType  String
-  version       String
-  acceptedAt    DateTime @default(now())
-  ipAddress     String?
-  userAgent     String?
-  createdAt     DateTime @default(now())
+  id           String   @id @default(uuid())
+  userId       String
+  documentType String
+  version      String
+  acceptedAt   DateTime @default(now())
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
 
   user User @relation("UserLegalAcceptance", fields: [userId], references: [id], onDelete: Cascade)
 
@@ -934,16 +936,17 @@ model InstitutionGroupMembership {
 }
 
 model Team {
-  id           String     @id @default(uuid())
-  workspaceId  String
-  departmentId String?
-  name         String
-  description  String?
-  leadId       String?
-  status       TeamStatus @default(ACTIVE)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  deletedAt    DateTime?
+  id               String     @id @default(uuid())
+  workspaceId      String
+  departmentId     String?
+  name             String
+  description      String?
+  responsibilities String?
+  leadId           String?
+  status           TeamStatus @default(ACTIVE)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  deletedAt        DateTime?
 
   workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   department   Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
@@ -951,6 +954,7 @@ model Team {
   members      TeamMembership[]
   invitations  Invitation[]
   projects     Project[]
+  projectTeams ProjectTeam[]
   channels     Channel[]
   joinRequests JoinRequest[]
 
@@ -989,6 +993,7 @@ model Project {
   name          String
   key           String
   description   String?
+  objectives    Json?
   category      String?
   labels        String[]             @default([])
   status        ProjectStatus        @default(PLANNING)
@@ -997,31 +1002,38 @@ model Project {
   startDate     DateTime?
   dueDate       DateTime?
   ownerId       String
+  completedAt   DateTime?
+  completedById String?
+  archivedAt    DateTime?
+  archivedById  String?
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @default(now())
   deletedAt     DateTime?
 
-  workspace      Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  team           Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  department     Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  owner          User                 @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  members        ProjectMembership[]
-  milestones     ProjectMilestone[]
-  tasks          Task[]
-  channels       Channel[]
-  attachments    FileAttachment[]
-  documents      Document[]
-  calendarEvents CalendarEvent[]
-  meetings       Meeting[]
-  repositories   ProjectRepository[]  @relation("ProjectRepositories")
-  taskDevLinks   TaskDevLink[]
-  customFields   ProjectCustomField[]
-  savedViews     TaskSavedView[]
-  taskTemplates  TaskTemplate[]
-  resourceFolders              ResourceFolder[]             @relation("ProjectResourceFolders")
-  resourceFiles                ResourceFile[]               @relation("ProjectResourceFiles")
-  resourceBookmarks            ResourceBookmark[]           @relation("ProjectResourceBookmarks")
-  resourceRecentItems          ResourceRecentItem[]         @relation("ProjectResourceRecentItems")
+  workspace                    Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  team                         Team?                         @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  department                   Department?                   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  owner                        User                          @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  completedBy                  User?                         @relation("ProjectCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  archivedBy                   User?                         @relation("ProjectArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  members                      ProjectMembership[]
+  projectTeams                 ProjectTeam[]
+  milestones                   ProjectMilestone[]
+  tasks                        Task[]
+  channels                     Channel[]
+  attachments                  FileAttachment[]
+  documents                    Document[]
+  calendarEvents               CalendarEvent[]
+  meetings                     Meeting[]
+  repositories                 ProjectRepository[]           @relation("ProjectRepositories")
+  taskDevLinks                 TaskDevLink[]
+  customFields                 ProjectCustomField[]
+  savedViews                   TaskSavedView[]
+  taskTemplates                TaskTemplate[]
+  resourceFolders              ResourceFolder[]              @relation("ProjectResourceFolders")
+  resourceFiles                ResourceFile[]                @relation("ProjectResourceFiles")
+  resourceBookmarks            ResourceBookmark[]            @relation("ProjectResourceBookmarks")
+  resourceRecentItems          ResourceRecentItem[]          @relation("ProjectResourceRecentItems")
   resourceDashboardPreferences ResourceDashboardPreference[] @relation("ProjectResourceDashboardPreferences")
 
   @@unique([workspaceId, key])
@@ -1031,6 +1043,10 @@ model Project {
   @@index([departmentId])
   @@index([ownerId])
   @@index([dueDate])
+  @@index([completedById])
+  @@index([archivedById])
+  @@index([completedAt])
+  @@index([archivedAt])
 }
 
 model ProjectMilestone {
@@ -1045,9 +1061,24 @@ model ProjectMilestone {
   updatedAt   DateTime  @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   Task[]
 
   @@index([projectId, position])
   @@index([projectId, dueDate])
+}
+
+model ProjectTeam {
+  id        String   @id @default(uuid())
+  projectId String
+  teamId    String
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  team    Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, teamId])
+  @@index([projectId])
+  @@index([teamId])
 }
 
 model ProjectMembership {
@@ -1069,6 +1100,7 @@ model ProjectMembership {
 model Task {
   id                   String       @id @default(uuid())
   projectId            String
+  milestoneId          String?
   key                  String
   title                String
   description          String?
@@ -1099,6 +1131,7 @@ model Task {
   overdueNotifiedAt    DateTime?
 
   project             Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestone           ProjectMilestone?      @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   parentTask          Task?                  @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
   subTasks            Task[]                 @relation("TaskHierarchy")
   creator             User                   @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict)
@@ -1133,6 +1166,8 @@ model Task {
   @@index([completedAt])
   @@index([status, dueDate])
   @@index([recurrenceSourceId])
+  @@index([milestoneId])
+  @@index([projectId, milestoneId])
 }
 
 model TaskDocument {
@@ -1366,12 +1401,12 @@ model Message {
   replies      Message[]            @relation("MessageReplies")
   reactions    MessageReaction[]
   readReceipts MessageReadReceipt[]
+  mentions     MessageMention[]
 
   @@index([channelId, createdAt])
   @@index([authorId])
   @@index([parentId])
   @@index([pinnedAt])
-  mentions      MessageMention[]
 }
 
 model MessageReaction {

@@ -1,4 +1,3 @@
-import type { DevChangedFile, DevCommitSummary, DevPullRequestDetail } from '../dev-integration.types';
 import { createHmac, createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AppConfig } from '../../../config/env';
 import { getRedisClient } from '../../../db/redis';

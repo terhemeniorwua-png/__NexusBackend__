@@ -19,6 +19,12 @@ const descriptionSchema = z
   .max(500, 'Description must be at most 500 characters')
   .nullable();
 
+const responsibilitiesSchema = z
+  .string()
+  .trim()
+  .max(2000, 'Responsibilities must be at most 2000 characters')
+  .nullable();
+
 // ---------------------------------------------------------------------------
 // Parameter schemas
 // ---------------------------------------------------------------------------
@@ -59,6 +65,11 @@ export const listTeamInvitationsQuerySchema = z.object({
   status: z.enum(['PENDING', 'ACCEPTED', 'DECLINED', 'REVOKED', 'EXPIRED', 'ALL']).default('ALL'),
 });
 
+export const teamActivityQuerySchema = z.object({
+  cursor: z.string().datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
 // ---------------------------------------------------------------------------
 // Body schemas
 // ---------------------------------------------------------------------------
@@ -67,19 +78,23 @@ export const createTeamSchema = z
   .object({
     name: nameSchema,
     description: descriptionSchema.optional(),
+    responsibilities: responsibilitiesSchema.optional(),
     departmentId: z.string().trim().uuid('The department id is not valid').optional().nullable(),
     leadId: z.string().trim().uuid('The lead user id is not valid').optional().nullable(),
   })
   .strict();
 
-export const createTeamInvitationSchema = z.object({
-  targetUserId: z.string().trim().uuid('The user id is not valid'),
-}).strict();
+export const createTeamInvitationSchema = z
+  .object({
+    targetUserId: z.string().trim().uuid('The user id is not valid'),
+  })
+  .strict();
 
 export const updateTeamSchema = z
   .object({
     name: nameSchema.optional(),
     description: descriptionSchema.optional(),
+    responsibilities: responsibilitiesSchema.optional(),
     departmentId: z.string().trim().uuid('The department id is not valid').nullable().optional(),
   })
   .strict()
@@ -98,6 +113,22 @@ export const addTeamMemberSchema = z
   .object({
     userId: z.string().trim().uuid('The user id is not valid'),
     role: teamMemberRoleSchema.default('MEMBER'),
+  })
+  .strict();
+
+export const bulkAddTeamMembersSchema = z
+  .object({
+    members: z
+      .array(
+        z
+          .object({
+            userId: z.string().trim().uuid('The user id is not valid'),
+            role: teamMemberRoleSchema.default('MEMBER'),
+          })
+          .strict(),
+      )
+      .min(1, 'Provide at least one member to add')
+      .max(100, 'Cannot add more than 100 members at once'),
   })
   .strict();
 
@@ -120,6 +151,8 @@ export const changeTeamLeadSchema = z
 export type CreateTeamInput = z.infer<typeof createTeamSchema>;
 export type UpdateTeamInput = z.infer<typeof updateTeamSchema>;
 export type AddTeamMemberInput = z.infer<typeof addTeamMemberSchema>;
+export type BulkAddTeamMembersInput = z.infer<typeof bulkAddTeamMembersSchema>;
 export type UpdateTeamMemberRoleInput = z.infer<typeof updateTeamMemberRoleSchema>;
 export type ChangeTeamLeadInput = z.infer<typeof changeTeamLeadSchema>;
 export type ListTeamsQuery = z.infer<typeof listTeamsQuerySchema>;
+export type TeamActivityQuery = z.infer<typeof teamActivityQuerySchema>;
