@@ -77,6 +77,25 @@ export function createChannelService(prisma: PrismaClient = getPrismaClient()) {
     },
     async archive(i: Input & { channelId: string }, ctx: RequestContext) { const { channel } = await requireChannelAccess(prisma, { ...i, capability: ChannelCapability.Archive }); return prisma.$transaction(async (tx) => { const row = await tx.channel.update({ where: { id: channel.id }, data: { archivedAt: new Date() }, include: shape }); await recordAuditEvent(tx, { workspaceId: i.workspaceId, actorId: i.userId, action: ChannelAuditAction.Archived, targetType: 'Channel', targetId: row.id, ...ctx }); return summary(row); }); },
     async remove(i: Input & { channelId: string }, ctx: RequestContext) { const { channel } = await requireChannelAccess(prisma, { ...i, capability: ChannelCapability.Delete }); await prisma.$transaction(async (tx) => { await tx.channel.update({ where: { id: channel.id }, data: { deletedAt: new Date() } }); await recordAuditEvent(tx, { workspaceId: i.workspaceId, actorId: i.userId, action: ChannelAuditAction.Deleted, targetType: 'Channel', targetId: channel.id, ...ctx }); }); },
+    async listMembers(i: Input & { channelId: string }) {
+      await requireChannelAccess(prisma, { userId: i.userId, workspaceId: i.workspaceId, channelId: i.channelId, capability: ChannelCapability.View });
+      const rows = await prisma.workspaceMembership.findMany({
+        where: { workspaceId: i.workspaceId, status: 'ACTIVE' },
+        select: { user: { select: { id: true, name: true } } },
+        take: 200,
+      });
+      const checked = await Promise.all(rows.map(async (r) => {
+        try {
+          await requireChannelAccess(prisma, { userId: r.user.id, workspaceId: i.workspaceId, channelId: i.channelId, capability: ChannelCapability.View });
+          return { userId: r.user.id, name: r.user.name };
+        } catch (error) {
+          if (error instanceof AppError) return null;
+          throw error;
+        }
+      }));
+      return { items: checked.filter((x): x is { userId: string; name: string } => x !== null) };
+    },
+
     async addMember(i: Input & { channelId: string; targetUserId: string }, ctx: RequestContext) { const { channel } = await requireChannelAccess(prisma, { userId: i.userId, workspaceId: i.workspaceId, channelId: i.channelId, capability: ChannelCapability.AddMember }); if (channel.type !== 'PRIVATE') throw new AppError(400, 'PRIVATE_CHANNEL_REQUIRED', 'Membership is managed only for private channels'); const target = await prisma.workspaceMembership.findUnique({ where: { workspaceId_userId: { workspaceId: i.workspaceId, userId: i.targetUserId } } }); if (!target || target.status !== 'ACTIVE') throw new AppError(404, 'WORKSPACE_MEMBER_NOT_FOUND', 'That active workspace member does not exist'); return prisma.$transaction(async (tx) => { const m = await tx.channelMembership.upsert({ where: { channelId_userId: { channelId: channel.id, userId: i.targetUserId } }, create: { channelId: channel.id, userId: i.targetUserId, role: 'MEMBER' }, update: {}, select: { channelId: true, userId: true, role: true, createdAt: true } }); await recordAuditEvent(tx, { workspaceId: i.workspaceId, actorId: i.userId, action: ChannelAuditAction.MemberAdded, targetType: 'ChannelMembership', targetId: m.userId, metadata: { channelId: channel.id }, ...ctx }); await createNotification(tx, { userId: i.targetUserId, type: 'MEMBERSHIP_CHANGED', title: 'Added to a private channel', data: { workspaceId: i.workspaceId, channelId: channel.id } }); return m; }); },
     async removeMember(i: Input & { channelId: string; memberUserId: string }, ctx: RequestContext) { const { channel } = await requireChannelAccess(prisma, { ...i, capability: ChannelCapability.RemoveMember }); if (channel.type !== 'PRIVATE') throw new AppError(400, 'PRIVATE_CHANNEL_REQUIRED', 'Membership is managed only for private channels'); return prisma.$transaction(async (tx) => { const removed = await tx.channelMembership.deleteMany({ where: { channelId: channel.id, userId: i.memberUserId } }); if (!removed.count) throw new AppError(404, 'CHANNEL_MEMBER_NOT_FOUND', 'That channel member does not exist'); await recordAuditEvent(tx, { workspaceId: i.workspaceId, actorId: i.userId, action: ChannelAuditAction.MemberRemoved, targetType: 'ChannelMembership', targetId: i.memberUserId, metadata: { channelId: channel.id }, ...ctx }); await createNotification(tx, { userId: i.memberUserId, type: 'MEMBERSHIP_CHANGED', title: 'Removed from a private channel', data: { workspaceId: i.workspaceId, channelId: channel.id } }); return { channelId: channel.id, userId: i.memberUserId, removed: true }; }); },
   };
