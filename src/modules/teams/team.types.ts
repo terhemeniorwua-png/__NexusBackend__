@@ -1,4 +1,4 @@
-import type { TeamRole } from '@prisma/client';
+import type { ProjectStatus, ProjectVisibility, TeamRole } from '@prisma/client';
 
 /**
  * Response shapes returned by the team service.
@@ -12,6 +12,7 @@ export interface TeamSummary {
   workspaceId: string;
   name: string;
   description: string | null;
+  responsibilities: string | null;
   departmentId: string | null;
   status: 'ACTIVE' | 'ARCHIVED';
   leadId: string | null;
@@ -35,4 +36,50 @@ export interface TeamMemberSummary {
   name: string;
   email: string;
   joinedAt: Date;
+}
+
+export interface TeamProjectSummary {
+  id: string;
+  name: string;
+  key: string;
+  status: ProjectStatus;
+  visibility: ProjectVisibility;
+  dueDate: Date | null;
+}
+
+export interface TeamTaskCountsByStatus {
+  ASSIGNED: number;
+  IN_PROGRESS: number;
+  SUBMITTED: number;
+  UNDER_REVIEW: number;
+  APPROVED: number;
+  CHANGES_REQUESTED: number;
+}
+
+export interface TeamOverview {
+  team: TeamSummary;
+  members: TeamMemberSummary[];
+  leads: TeamMemberSummary[];
+  projects: TeamProjectSummary[];
+  taskCountsByStatus: TeamTaskCountsByStatus;
+}
+
+export interface TeamActivityItem {
+  id: string;
+  action: string;
+  actorId: string | null;
+  targetType: string;
+  targetId: string;
+  metadata: unknown;
+  createdAt: Date;
+}
+
+export interface TeamActivityResult {
+  items: TeamActivityItem[];
+  nextCursor: string | null;
+}
+
+export interface BulkAddTeamMembersResult {
+  added: TeamMemberSummary[];
+  skipped: Array<{ userId: string; reason: string }>;
 }

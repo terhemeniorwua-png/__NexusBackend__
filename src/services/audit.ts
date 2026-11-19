@@ -56,6 +56,8 @@ export const TeamAuditAction = {
   MemberRoleChanged: 'team.member_role_changed',
   MemberRemoved: 'team.member_removed',
   LeadChanged: 'team.lead_changed',
+  ProjectLinked: 'team.project_linked',
+  ProjectUnlinked: 'team.project_unlinked',
 } as const;
 
 export type TeamAuditActionValue = (typeof TeamAuditAction)[keyof typeof TeamAuditAction];

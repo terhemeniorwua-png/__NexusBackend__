@@ -12,6 +12,7 @@ import {
 } from '../authorization';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { extractTextFromUpload } from './text-extraction';
+import { assertProjectWritable } from '../projects/project-archive';
 
 export interface FileSummary {
   id: string;
@@ -84,7 +85,7 @@ export function createFileService(
 
       // If uploading to a project, verify project access
       if (input.projectId) {
-        await authorizeProject(prisma, {
+        const projectAccess = await authorizeProject(prisma, {
           actor: {
             userId: input.userId,
             workspaceId: input.workspaceId,
@@ -93,6 +94,7 @@ export function createFileService(
           projectId: input.projectId,
           permission: ProjectPermission.FileUpload,
         });
+        assertProjectWritable(projectAccess.project);
       }
 
       const store = requireStorage();
@@ -258,6 +260,7 @@ export function createFileService(
         // Project files: a project manager (or workspace administrator) may
         // delete any file, otherwise only the uploader may delete their own.
         const authorization = await getProjectAuthorization(prisma, actor, file.projectId);
+        assertProjectWritable(authorization.project);
         const permission = authorization.permissions.includes(ProjectPermission.FileDeleteAny)
           ? ProjectPermission.FileDeleteAny
           : ProjectPermission.FileDeleteOwn;

@@ -15,6 +15,7 @@ import {
   getProjectAuthorization,
   requireWorkspaceAccess,
 } from '../authorization';
+import { assertProjectWritable } from '../projects/project-archive';
 import { extractTextFromUpload } from '../files/text-extraction';
 import {
   ALLOWED_MIME_TYPES,
@@ -129,11 +130,12 @@ export function createResourceService(
       capability: WorkspaceCapability.ViewWorkspace,
     });
     if (input.projectId) {
-      await authorizeProject(prisma, {
+      const access = await authorizeProject(prisma, {
         actor: { userId: input.userId, workspaceId: input.workspaceId, workspaceRole: workspace.effectiveRole },
         projectId: input.projectId,
         permission: ProjectPermission.FileUpload,
       });
+      assertProjectWritable(access.project);
       return workspace;
     }
     // Workspace-wide: allow contributors (not pure viewers). OWNER/PROJECT_MANAGER/MEMBER are editors in practice.
@@ -248,6 +250,7 @@ export function createResourceService(
         workspaceId: input.workspaceId,
         workspaceRole: workspace.effectiveRole,
       }, input.projectId);
+      assertProjectWritable(auth.project);
       const isUploader = input.ownerId === input.userId;
       const canAny = auth.permissions.includes(ProjectPermission.FileDeleteAny);
       const canOwn = auth.permissions.includes(ProjectPermission.FileDeleteOwn);
@@ -753,7 +756,7 @@ export function createResourceService(
 
     // Recent items (project-scoped)
     async recordRecent(input: Input & { projectId: string; itemType: RecentItemType; itemId: string }) {
-      await authorizeScopeView({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
+      await authorizeScopeEdit({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
       const now = new Date();
       await prisma.resourceRecentItem.upsert({
         where: {
@@ -906,7 +909,7 @@ export function createResourceService(
     },
 
     async setDashboardPreference(input: Input & { projectId: string; cards: Array<{ id: string; visible: boolean; order: number }> }) {
-      await authorizeScopeView({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
+      await authorizeScopeEdit({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
       const pref = await prisma.resourceDashboardPreference.upsert({
         where: { userId_projectId: { userId: input.userId, projectId: input.projectId } },
         update: { cards: input.cards as any },

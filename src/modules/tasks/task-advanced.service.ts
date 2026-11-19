@@ -8,6 +8,7 @@ import {
   requireWorkspaceAccess,
   WorkspaceCapability,
 } from '../authorization';
+import { assertProjectWritable } from '../projects/project-archive';
 import type { RequestContext } from '../auth/auth.types';
 import type {
   CreateCustomFieldInput,
@@ -278,7 +279,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async createCustomField(input: { userId: string; workspaceId: string; projectId: string } & CreateCustomFieldInput, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      assertProjectWritable(access.project);
       const keyBase = input.key || slugifyKey(input.name);
       let key = keyBase;
       for (let i = 0; i < 50; i++) {
@@ -304,7 +306,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async updateCustomField(input: { userId: string; workspaceId: string; projectId: string; fieldId: string } & UpdateCustomFieldInput, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      assertProjectWritable(access.project);
       const existing = await prisma.projectCustomField.findFirst({ where: { id: input.fieldId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'CUSTOM_FIELD_NOT_FOUND', 'Custom field not found');
       const field = await prisma.projectCustomField.update({
@@ -322,7 +325,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async deleteCustomField(input: { userId: string; workspaceId: string; projectId: string; fieldId: string }, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      assertProjectWritable(access.project);
       const existing = await prisma.projectCustomField.findFirst({ where: { id: input.fieldId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'CUSTOM_FIELD_NOT_FOUND', 'Custom field not found');
       await prisma.projectCustomField.delete({ where: { id: existing.id } });
@@ -334,7 +338,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       input: { userId: string; workspaceId: string; projectId: string; taskId: string; values: Array<{ fieldId: string; value?: unknown }> },
       context: Ctx,
     ) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({ where: { id: input.taskId, projectId: input.projectId, deletedAt: null }, select: { id: true } });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
       const fieldIds = [...new Set(input.values.map((v) => v.fieldId))];
@@ -380,7 +385,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async createSavedView(input: { userId: string; workspaceId: string; projectId: string } & CreateSavedViewInput, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
+      assertProjectWritable(access.project);
       const view = await prisma.taskSavedView.create({
         data: {
           projectId: input.projectId,
@@ -395,7 +401,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async updateSavedView(input: { userId: string; workspaceId: string; projectId: string; viewId: string } & UpdateSavedViewInput, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
+      assertProjectWritable(access.project);
       const existing = await prisma.taskSavedView.findFirst({ where: { id: input.viewId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'SAVED_VIEW_NOT_FOUND', 'Saved view not found');
       if (existing.ownerId !== input.userId) {
@@ -420,7 +427,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async deleteSavedView(input: { userId: string; workspaceId: string; projectId: string; viewId: string }, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskView);
+      assertProjectWritable(access.project);
       const existing = await prisma.taskSavedView.findFirst({ where: { id: input.viewId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'SAVED_VIEW_NOT_FOUND', 'Saved view not found');
       if (existing.ownerId !== input.userId) {
@@ -443,7 +451,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async upsertRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string } & UpsertRecurrenceInput, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({ where: { id: input.taskId, projectId: input.projectId, deletedAt: null }, select: { id: true, dueDate: true } });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
       const from = task.dueDate ?? new Date();
@@ -478,7 +487,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async deleteRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string }, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskUpdate, { kind: 'task', taskId: input.taskId });
+      assertProjectWritable(access.project);
       const existing = await prisma.taskRecurrenceRule.findUnique({ where: { taskId: input.taskId } });
       if (!existing) throw new AppError(404, 'RECURRENCE_NOT_FOUND', 'Recurrence rule not found');
       await prisma.taskRecurrenceRule.delete({ where: { id: existing.id } });
@@ -487,7 +497,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
     },
 
     async generateNextRecurrence(input: { userId: string; workspaceId: string; projectId: string; taskId: string }, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskCreate);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskCreate);
+      assertProjectWritable(access.project);
       const source = await prisma.task.findFirst({
         where: { id: input.taskId, projectId: input.projectId, deletedAt: null },
         select: { id: true, projectId: true, project: { select: { workspaceId: true } }, recurrenceRule: { select: { id: true } } },
@@ -543,13 +554,15 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return prisma.taskTemplate.findMany({ where: { projectId: input.projectId }, orderBy: { updatedAt: 'desc' } });
     },
     async createTaskTemplate(input: { userId: string; workspaceId: string; projectId: string } & CreateTaskTemplateInput, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      assertProjectWritable(access.project);
       const tpl = await prisma.taskTemplate.create({ data: { workspaceId: input.workspaceId, projectId: input.projectId, name: input.name, description: input.description ?? null, data: input.data as unknown as Prisma.InputJsonValue, createdById: input.userId } });
       await recordAuditEvent(prisma, { workspaceId: input.workspaceId, actorId: input.userId, action: 'project.task_template_created', targetType: 'TaskTemplate', targetId: tpl.id, metadata: { projectId: input.projectId }, ...context });
       return tpl;
     },
     async updateTaskTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string } & UpdateTaskTemplateInput, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      assertProjectWritable(access.project);
       const existing = await prisma.taskTemplate.findFirst({ where: { id: input.templateId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'TASK_TEMPLATE_NOT_FOUND', 'Task template not found');
       const tpl = await prisma.taskTemplate.update({ where: { id: existing.id }, data: { ...(input.name !== undefined ? { name: input.name } : {}), ...(input.description !== undefined ? { description: input.description } : {}), ...(input.data !== undefined ? { data: input.data as unknown as Prisma.InputJsonValue } : {}) } });
@@ -557,7 +570,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return tpl;
     },
     async deleteTaskTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string }, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.Update);
+      assertProjectWritable(access.project);
       const existing = await prisma.taskTemplate.findFirst({ where: { id: input.templateId, projectId: input.projectId } });
       if (!existing) throw new AppError(404, 'TASK_TEMPLATE_NOT_FOUND', 'Task template not found');
       await prisma.taskTemplate.delete({ where: { id: existing.id } });
@@ -565,7 +579,8 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
       return { id: existing.id, deleted: true };
     },
     async createTaskFromTemplate(input: { userId: string; workspaceId: string; projectId: string; templateId: string; title?: string; assigneeIds?: string[]; startDate?: string | null; dueDate?: string | null }, context: Ctx) {
-      await authorizeProjectAccess(prisma, input, ProjectPermission.TaskCreate);
+      const access = await authorizeProjectAccess(prisma, input, ProjectPermission.TaskCreate);
+      assertProjectWritable(access.project);
       const tpl = await prisma.taskTemplate.findFirst({ where: { id: input.templateId, projectId: input.projectId } });
       if (!tpl) throw new AppError(404, 'TASK_TEMPLATE_NOT_FOUND', 'Task template not found');
       const project = await prisma.project.findUnique({ where: { id: input.projectId }, select: { id: true, key: true } });

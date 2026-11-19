@@ -6,19 +6,28 @@ import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
+  addProjectTeamSchema,
+  assignProjectManagersSchema,
+  bulkAddProjectMembersByTeamSchema,
+  completeProjectSchema,
+  createProjectMilestoneSchema,
   createProjectSchema,
   listProjectsQuerySchema,
   projectActivityQuerySchema,
   projectMemberParamsSchema,
   projectMemberSchema,
-  projectParamsSchema,
   projectMilestoneParamsSchema,
+  projectParamsSchema,
+  projectTeamParamsSchema,
   projectWorkspaceParamsSchema,
-  createProjectMilestoneSchema,
-  updateProjectMilestoneSchema,
   transferProjectOwnershipSchema,
   updateProjectMemberSchema,
+  updateProjectMilestoneSchema,
   updateProjectSchema,
+  type AddProjectTeamInput,
+  type AssignProjectManagersInput,
+  type BulkAddProjectMembersByTeamInput,
+  type CompleteProjectInput,
   type CreateProjectInput,
   type ListProjectsQuery,
   type TransferProjectOwnershipInput,
@@ -135,6 +144,127 @@ export function createProjectRouter({
           cursor: query.cursor ? new Date(query.cursor) : undefined,
           limit: query.limit,
         }),
+      );
+    },
+  );
+
+  router.get(
+    '/:projectId/progress',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      sendSuccess(res, await service.progress({ userId: userId(req), workspaceId, projectId }));
+    },
+  );
+
+  router.post(
+    '/:projectId/complete',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema, body: completeProjectSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      const body = req.validated!.body as CompleteProjectInput;
+      sendSuccess(
+        res,
+        await service.complete(
+          { userId: userId(req), workspaceId, projectId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.post(
+    '/:projectId/members/bulk-by-team',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema, body: bulkAddProjectMembersByTeamSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      const body = req.validated!.body as BulkAddProjectMembersByTeamInput;
+      sendSuccess(
+        res,
+        await service.bulkAddMembersByTeam(
+          { userId: userId(req), workspaceId, projectId, ...body },
+          context(req),
+        ),
+        201,
+      );
+    },
+  );
+
+  router.post(
+    '/:projectId/managers',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema, body: assignProjectManagersSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      const body = req.validated!.body as AssignProjectManagersInput;
+      sendSuccess(
+        res,
+        await service.assignManagers(
+          { userId: userId(req), workspaceId, projectId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.post(
+    '/:projectId/teams',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectParamsSchema, body: addProjectTeamSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+      };
+      const body = req.validated!.body as AddProjectTeamInput;
+      sendSuccess(
+        res,
+        await service.addTeam(
+          { userId: userId(req), workspaceId, projectId, ...body },
+          context(req),
+        ),
+        201,
+      );
+    },
+  );
+
+  router.delete(
+    '/:projectId/teams/:teamId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: projectTeamParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, teamId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        teamId: string;
+      };
+      sendSuccess(
+        res,
+        await service.removeTeam(
+          { userId: userId(req), workspaceId, projectId, teamId },
+          context(req),
+        ),
       );
     },
   );

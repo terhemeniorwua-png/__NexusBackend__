@@ -5,6 +5,7 @@ import { AppError } from '../../utils/errors';
 import { requireProjectAccess, ProjectCapability } from '../authorization/project.policy';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { projectVisibleToUser } from '../projects/project-visibility';
+import { assertProjectWritable } from '../projects/project-archive';
 
 export interface DocumentSummary {
   id: string;
@@ -56,6 +57,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
     userId: string; workspaceId: string; projectId: string | null; taskId: string | null;
     workspaceRole: Parameters<typeof requireProjectAccess>[1]['workspaceRole'];
     capability: typeof ProjectCapability.ViewFiles | typeof ProjectCapability.ManageFiles;
+    requireWritable?: boolean;
   }): Promise<string[]> {
     const projectIds = new Set<string>();
     if (input.projectId) projectIds.add(input.projectId);
@@ -71,10 +73,11 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       projectIds.add(task.projectId);
     }
     for (const projectId of projectIds) {
-      await requireProjectAccess(prisma, {
+      const access = await requireProjectAccess(prisma, {
         userId: input.userId, workspaceId: input.workspaceId, projectId,
         workspaceRole: input.workspaceRole, capability: input.capability,
       });
+      if (input.requireWritable) assertProjectWritable(access.project);
     }
     return [...projectIds];
   }
@@ -108,6 +111,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
         userId: input.userId, workspaceId: input.workspaceId,
         projectId: input.projectId ?? null, taskId: input.taskId ?? null,
         workspaceRole: workspace.effectiveRole, capability: ProjectCapability.ManageFiles,
+        requireWritable: true,
       });
 
       const doc = await prisma.$transaction(async (tx) => {
@@ -234,7 +238,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
 
       const projectIds = await documentProjectIds({ userId: input.userId, workspaceId: input.workspaceId,
         projectId: doc.projectId, taskId: doc.taskId, workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageFiles });
+        capability: ProjectCapability.ManageFiles, requireWritable: true });
       if (projectIds.length === 0) {
         const isOwner = doc.authorId === input.userId;
         const isAdmin = workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
@@ -281,7 +285,7 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
 
       const projectIds = await documentProjectIds({ userId: input.userId, workspaceId: input.workspaceId,
         projectId: doc.projectId, taskId: doc.taskId, workspaceRole: workspace.effectiveRole,
-        capability: ProjectCapability.ManageFiles });
+        capability: ProjectCapability.ManageFiles, requireWritable: true });
 
       const isOwner = doc.authorId === input.userId;
       const isAdmin = workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
@@ -318,6 +322,22 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
       input: Input & { documentId: string; body: string },
     ): Promise<DocumentCommentSummary> {
       await this.get(input); // Enforces access
+      const doc = await prisma.document.findFirst({
+        where: { id: input.documentId, workspaceId: input.workspaceId, deletedAt: null },
+        select: { projectId: true, taskId: true },
+      });
+      if (doc && (doc.projectId || doc.taskId)) {
+        const workspace = await requireWorkspaceAccess(prisma, {
+          userId: input.userId, workspaceId: input.workspaceId,
+          capability: WorkspaceCapability.ViewWorkspace,
+        });
+        await documentProjectIds({
+          userId: input.userId, workspaceId: input.workspaceId,
+          projectId: doc.projectId, taskId: doc.taskId,
+          workspaceRole: workspace.effectiveRole, capability: ProjectCapability.ViewFiles,
+          requireWritable: true,
+        });
+      }
 
       const comment = await prisma.$transaction(async (tx) => {
         const created = await tx.documentComment.create({
@@ -365,6 +385,18 @@ export function createDocumentService(prisma: PrismaClient = getPrismaClient()) 
         userId: input.userId, workspaceId: input.workspaceId,
         capability: WorkspaceCapability.ViewWorkspace,
       });
+      const doc = await prisma.document.findFirst({
+        where: { id: input.documentId, workspaceId: input.workspaceId, deletedAt: null },
+        select: { projectId: true, taskId: true },
+      });
+      if (doc && (doc.projectId || doc.taskId)) {
+        await documentProjectIds({
+          userId: input.userId, workspaceId: input.workspaceId,
+          projectId: doc.projectId, taskId: doc.taskId,
+          workspaceRole: workspace.effectiveRole, capability: ProjectCapability.ViewFiles,
+          requireWritable: true,
+        });
+      }
 
       const comment = await prisma.documentComment.findFirst({
         where: { id: input.commentId, documentId: input.documentId, deletedAt: null },

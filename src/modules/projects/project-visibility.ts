@@ -7,14 +7,11 @@ import type { Prisma } from '@prisma/client';
  * filter for that workspace themselves.
  */
 export function projectVisibleToUser(userId: string): Prisma.ProjectWhereInput {
-  return {
-    OR: [
-      { visibility: 'WORKSPACE' },
-      { ownerId: userId },
-      { members: { some: { userId } } },
+  const teamMemberAccess: Prisma.ProjectWhereInput = {
+    AND: [
+      { visibility: 'DEPARTMENT_TEAM' },
       {
-        AND: [
-          { visibility: 'DEPARTMENT_TEAM' },
+        OR: [
           {
             team: {
               is: {
@@ -24,12 +21,35 @@ export function projectVisibleToUser(userId: string): Prisma.ProjectWhereInput {
               },
             },
           },
+          {
+            projectTeams: {
+              some: {
+                team: {
+                  is: {
+                    status: 'ACTIVE',
+                    deletedAt: null,
+                    members: { some: { userId } },
+                  },
+                },
+              },
+            },
+          },
         ],
       },
+    ],
+  };
+
+  return {
+    OR: [
+      { visibility: 'WORKSPACE' },
+      { ownerId: userId },
+      { members: { some: { userId } } },
+      teamMemberAccess,
       {
         AND: [
           { visibility: 'DEPARTMENT_TEAM' },
           { teamId: null },
+          { projectTeams: { none: {} } },
           { department: { is: { members: { some: { userId } } } } },
         ],
       },

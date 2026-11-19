@@ -8,6 +8,7 @@ import { createNotification } from '../../services/notifications';
 import { emitDomainEvent } from '../../realtime/domain-events';
 import { enqueueAutomationRunsSafely } from '../automation/automation.events';
 import { AppError } from '../../utils/errors';
+import { assertProjectWritable } from '../projects/project-archive';
 import {
   ProjectPermission,
   assertNotSelfReview,
@@ -483,8 +484,7 @@ export function createTaskService(
       context: RequestContext,
     ) {
       const access = await authorize(input, ProjectPermission.TaskCreate);
-      if (access.project.status === 'ARCHIVED')
-        throw new AppError(404, 'PROJECT_NOT_FOUND', 'That project does not exist');
+      assertProjectWritable(access.project);
       if (
         input.assigneeIds?.length &&
         !access.permissions.includes(ProjectPermission.TaskAssign)
@@ -516,6 +516,19 @@ export function createTaskService(
             throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
         }
 
+        if (input.milestoneId) {
+          const milestone = await tx.projectMilestone.findFirst({
+            where: { id: input.milestoneId, projectId: access.project.id },
+            select: { id: true },
+          });
+          if (!milestone)
+            throw new AppError(
+              404,
+              'PROJECT_MILESTONE_NOT_FOUND',
+              'That project milestone does not exist',
+            );
+        }
+
         if (input.weight !== undefined && !input.parentTaskId) {
           throw new AppError(
             400,
@@ -538,6 +551,7 @@ export function createTaskService(
             dueDate: dateOrNull(input.dueDate) ?? null,
             position: input.position ?? 0,
             parentTaskId: input.parentTaskId ?? null,
+            ...(input.milestoneId !== undefined ? { milestoneId: input.milestoneId } : {}),
             ...(input.weight !== undefined ? { weight: input.weight } : {}),
             creatorId: input.userId,
             requiresApproval: input.requiresApproval ?? false,
@@ -687,6 +701,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -770,6 +785,19 @@ export function createTaskService(
           throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
       }
 
+      if (input.milestoneId !== undefined && input.milestoneId) {
+        const milestone = await prisma.projectMilestone.findFirst({
+          where: { id: input.milestoneId, projectId: access.project.id },
+          select: { id: true },
+        });
+        if (!milestone)
+          throw new AppError(
+            404,
+            'PROJECT_MILESTONE_NOT_FOUND',
+            'That project milestone does not exist',
+          );
+      }
+
       if (input.startDate !== undefined || input.dueDate !== undefined) {
         await assertDependencyDateConsistency(prisma, access.project.id, existing.id, {
           ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
@@ -809,6 +837,7 @@ export function createTaskService(
             ...(input.parentTaskId !== undefined
               ? { parentTaskId: input.parentTaskId }
               : {}),
+            ...(input.milestoneId !== undefined ? { milestoneId: input.milestoneId } : {}),
             ...(input.weight !== undefined ? { weight: input.weight } : {}),
             ...(input.requiresApproval !== undefined
               ? { requiresApproval: input.requiresApproval }
@@ -898,6 +927,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -935,6 +965,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -969,6 +1000,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1010,6 +1042,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1083,6 +1116,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1149,6 +1183,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1278,6 +1313,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1320,6 +1356,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1423,6 +1460,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1478,6 +1516,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1633,6 +1672,7 @@ export function createTaskService(
         taskId: input.taskId,
         commentId: input.commentId,
       });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1699,6 +1739,7 @@ export function createTaskService(
         taskId: input.taskId,
         commentId: input.commentId,
       });
+      assertProjectWritable(access.project);
       const task = await prisma.task.findFirst({
         where: {
           id: input.taskId,
@@ -1915,6 +1956,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
         include: taskInclude,
@@ -2000,6 +2042,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.taskId,
       });
+      assertProjectWritable(access.project);
       const existing = await prisma.task.findFirst({
         where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
         include: taskInclude,
@@ -2091,6 +2134,7 @@ export function createTaskService(
         kind: 'task',
         taskId: input.subtaskId,
       });
+      assertProjectWritable(access.project);
       const parent = await prisma.task.findFirst({
         where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
         select: { id: true, key: true, requiresApproval: true },
