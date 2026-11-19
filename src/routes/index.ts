@@ -16,6 +16,7 @@ import {
 } from '../modules/workspaces/join-request.service';
 import { createUsersRouter } from '../modules/users/users.routes';
 import type { UsersService } from '../modules/users/users.service';
+import { createOnboardingRouter } from '../modules/users/onboarding.routes';
 import { createWorkspaceRouter } from '../modules/workspaces/workspace.routes';
 import {
   createWorkspaceService,
@@ -114,6 +115,7 @@ export function createApiRouter({
     '/users',
     createUsersRouter({ config, ...(usersService ? { service: usersService } : {}) }),
   );
+  router.use('/onboarding', createOnboardingRouter({ config }));
   // Discovery and join routes must be registered before the workspace router
   // so `/workspaces/discover` is not read as a workspace id.
   router.use('/workspaces', createJoinRequestRouter({ config, service: joinRequestService }));
