@@ -15,7 +15,6 @@ import {
   getProjectAuthorization,
   requireWorkspaceAccess,
 } from '../authorization';
-import { extractTextFromUpload } from '../files/text-extraction';
 import {
   ALLOWED_MIME_TYPES,
   MAX_FILE_SIZE_BYTES,
@@ -191,13 +190,31 @@ export function createResourceService(
   }
 
   function translateFolderUniqueError(error: unknown): never {
-    if (error && typeof error === 'object' && 'code' in error && (error as any).code === 'P2002') {
-      throw new AppError(409, 'RESOURCE_FOLDER_NAME_CONFLICT', 'A folder with this name already exists in this location');
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 'P2002'
+    ) {
+      throw new AppError(
+        409,
+        'RESOURCE_FOLDER_NAME_CONFLICT',
+        'A folder with this name already exists in this location',
+      );
     }
     throw error;
   }
 
-  function mapFolder(row: any) {
+  function mapFolder(row: {
+    id: string;
+    workspaceId: string;
+    projectId: string | null;
+    parentId: string | null;
+    name: string;
+    createdById: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
     return {
       id: row.id,
       workspaceId: row.workspaceId,
@@ -210,7 +227,17 @@ export function createResourceService(
     };
   }
 
-  function mapFile(row: any) {
+  function mapFile(row: {
+    id: string;
+    workspaceId: string;
+    projectId: string | null;
+    folderId: string | null;
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+    uploadedById: string;
+    createdAt: Date;
+  }) {
     return {
       id: row.id,
       workspaceId: row.workspaceId,
@@ -224,7 +251,15 @@ export function createResourceService(
     };
   }
 
-  function mapBookmark(row: any) {
+  function mapBookmark(row: {
+    id: string;
+    workspaceId: string;
+    projectId: string | null;
+    title: string;
+    url: string;
+    createdById: string;
+    createdAt: Date;
+  }) {
     return {
       id: row.id,
       workspaceId: row.workspaceId,
@@ -588,7 +623,12 @@ export function createResourceService(
       function sanitizeRelativePath(raw: string): string[] {
         if (raw.includes('\\')) throw new AppError(400, 'INVALID_PATH', 'Backslashes are not allowed in paths');
         if (raw.includes('\0')) throw new AppError(400, 'INVALID_PATH', 'Paths contain invalid characters');
-        if (/[\x00-\x1f\x7f]/.test(raw)) throw new AppError(400, 'INVALID_PATH', 'Paths contain control characters');
+        for (let i = 0; i < raw.length; i += 1) {
+          const code = raw.charCodeAt(i);
+          if (code <= 0x1f || code === 0x7f) {
+            throw new AppError(400, 'INVALID_PATH', 'Paths contain control characters');
+          }
+        }
         if (raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) throw new AppError(400, 'INVALID_PATH', 'Absolute paths are not allowed');
         const segments = raw.split('/').filter((s) => s.length > 0);
         if (segments.length === 0) throw new AppError(400, 'INVALID_PATH', 'Path is empty');
@@ -634,8 +674,13 @@ export function createResourceService(
           });
           folderCache.set(cacheKey, created.id);
           return created.id;
-        } catch (error: any) {
-          if (error?.code === 'P2002') {
+        } catch (error: unknown) {
+          if (
+            error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            (error as { code?: unknown }).code === 'P2002'
+          ) {
             const again = await prisma.resourceFolder.findFirst({
               where: { workspaceId: input.workspaceId, projectId: scopeProjectId, parentId, name },
               select: { id: true },
@@ -650,7 +695,7 @@ export function createResourceService(
       }
 
       const store = requireStorage();
-      const createdFiles: any[] = [];
+      const createdFiles: Array<ReturnType<typeof mapFile>> = [];
       const createdFolderIds = new Set<string>();
 
       for (const entry of normalized) {
@@ -902,17 +947,17 @@ export function createResourceService(
       const pref = await prisma.resourceDashboardPreference.findUnique({
         where: { userId_projectId: { userId: input.userId, projectId: input.projectId } },
       });
-      return { cards: (pref?.cards as any[]) ?? [] };
+      return { cards: (pref?.cards as Array<{ id: string; visible: boolean; order: number }> | null) ?? [] };
     },
 
     async setDashboardPreference(input: Input & { projectId: string; cards: Array<{ id: string; visible: boolean; order: number }> }) {
       await authorizeScopeView({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
       const pref = await prisma.resourceDashboardPreference.upsert({
         where: { userId_projectId: { userId: input.userId, projectId: input.projectId } },
-        update: { cards: input.cards as any },
-        create: { userId: input.userId, projectId: input.projectId, cards: input.cards as any },
+        update: { cards: input.cards as unknown as Prisma.InputJsonValue },
+        create: { userId: input.userId, projectId: input.projectId, cards: input.cards as unknown as Prisma.InputJsonValue },
       });
-      return { cards: pref.cards as any[] };
+      return { cards: pref.cards as Array<{ id: string; visible: boolean; order: number }> };
     },
   };
 }

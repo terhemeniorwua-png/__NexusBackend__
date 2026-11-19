@@ -1,5 +1,6 @@
 import { Router, type Request } from 'express';
 import multer from 'multer';
+import type { z } from 'zod';
 import type { AppConfig } from '../../config/env';
 import { createRequireActiveAccount, createRequireAuth } from '../../middleware/authenticate';
 import { validate } from '../../middleware/validation';
@@ -70,43 +71,43 @@ export function createProjectResourcesRouter({ config, service: injected }: Reso
 
   // Folders
   router.get('/folders', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, query: listFoldersQuerySchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const q = req.validated!.query as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const q = req.validated!.query as z.infer<typeof listFoldersQuerySchema>;
     sendSuccess(res, await service.listFolders({ userId: userId(req), workspaceId, projectId, parentId: q.parentId ?? null }));
   });
 
   router.post('/folders', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, body: createFolderSchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof createFolderSchema>;
     sendSuccess(res, await service.createFolder({ userId: userId(req), workspaceId, projectId, parentId: body.parentId ?? null, name: body.name }), 201);
   });
 
   router.get('/folders/:folderId/delete-impact', requireAuth, requireActive, validate({ params: projectFolderParamsSchema }), async (req, res) => {
-    const { workspaceId, projectId, folderId } = req.validated!.params as any;
+    const { workspaceId, projectId, folderId } = req.validated!.params as z.infer<typeof projectFolderParamsSchema>;
     sendSuccess(res, await service.getFolderDeleteImpact({ userId: userId(req), workspaceId, projectId, folderId }));
   });
 
   router.patch('/folders/:folderId', requireAuth, requireActive, validate({ params: projectFolderParamsSchema, body: renameFolderSchema }), async (req, res) => {
-    const { workspaceId, projectId, folderId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId, folderId } = req.validated!.params as z.infer<typeof projectFolderParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof renameFolderSchema>;
     sendSuccess(res, await service.renameFolder({ userId: userId(req), workspaceId, projectId, folderId, name: body.name }));
   });
 
   router.post('/folders/:folderId/move', requireAuth, requireActive, validate({ params: projectFolderParamsSchema, body: moveFolderSchema }), async (req, res) => {
-    const { workspaceId, projectId, folderId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId, folderId } = req.validated!.params as z.infer<typeof projectFolderParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof moveFolderSchema>;
     sendSuccess(res, await service.moveFolder({ userId: userId(req), workspaceId, projectId, folderId, parentId: body.parentId ?? null }));
   });
 
   router.delete('/folders/:folderId', requireAuth, requireActive, validate({ params: projectFolderParamsSchema }), async (req, res) => {
-    const { workspaceId, projectId, folderId } = req.validated!.params as any;
+    const { workspaceId, projectId, folderId } = req.validated!.params as z.infer<typeof projectFolderParamsSchema>;
     sendSuccess(res, await service.deleteFolder({ userId: userId(req), workspaceId, projectId, folderId }));
   });
 
   // Files
   router.get('/files', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, query: listResourceFilesQuerySchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const q = req.validated!.query as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const q = req.validated!.query as z.infer<typeof listFoldersQuerySchema>;
     sendSuccess(res, await service.listFiles({ userId: userId(req), workspaceId, projectId, folderId: q.folderId, cursor: q.cursor, limit: q.limit }));
   });
 
@@ -121,8 +122,8 @@ export function createProjectResourcesRouter({ config, service: injected }: Reso
   }, validate({ params: projectScopeParamsSchema }), async (req, res) => {
     if (!req.file) throw new AppError(400, 'FILE_REQUIRED', 'Select a file to upload');
     const mimeType = req.file.mimetype;
-    if (!ALLOWED_MIME_TYPES.includes(mimeType as any)) throw new AppError(415, 'FILE_TYPE_NOT_ALLOWED', `File type '${mimeType}' is not permitted`);
-    const { workspaceId, projectId } = req.validated!.params as any;
+    if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(mimeType)) throw new AppError(415, 'FILE_TYPE_NOT_ALLOWED', `File type '${mimeType}' is not permitted`);
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
     const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId : null;
     sendSuccess(res, await service.uploadFile({ userId: userId(req), workspaceId, projectId, folderId, fileName: req.file.originalname, mimeType, sizeBytes: req.file.size, body: req.file.buffer }), 201);
   });
@@ -151,7 +152,7 @@ export function createProjectResourcesRouter({ config, service: injected }: Reso
     const meta = folderUploadMetaSchema.safeParse(metaRaw);
     if (!meta.success) throw new AppError(400, 'VALIDATION_ERROR', 'Invalid batch metadata', { details: meta.error.issues });
     if (meta.data.files.length !== files.length) throw new AppError(400, 'VALIDATION_ERROR', 'Each uploaded file must have a relative path');
-    const { workspaceId, projectId } = req.validated!.params as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
     const parentFolderId = typeof req.body?.parentFolderId === 'string' ? req.body.parentFolderId : null;
     const payload = files.map((f, i) => ({
       relativePath: meta.data.files[i]!.relativePath,
@@ -164,7 +165,7 @@ export function createProjectResourcesRouter({ config, service: injected }: Reso
   });
 
   router.get('/files/:fileId', requireAuth, requireActive, validate({ params: projectResourceFileParamsSchema }), async (req, res) => {
-    const { workspaceId, projectId, fileId } = req.validated!.params as any;
+    const { workspaceId, projectId, fileId } = req.validated!.params as z.infer<typeof projectResourceFileParamsSchema>;
     const result = await service.downloadFile({ userId: userId(req), workspaceId, projectId, fileId });
     res.setHeader('Content-Type', result.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(result.fileName)}"`);
@@ -172,67 +173,67 @@ export function createProjectResourcesRouter({ config, service: injected }: Reso
   });
 
   router.patch('/files/:fileId', requireAuth, requireActive, validate({ params: projectResourceFileParamsSchema, body: renameResourceFileSchema }), async (req, res) => {
-    const { workspaceId, projectId, fileId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId, fileId } = req.validated!.params as z.infer<typeof projectResourceFileParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof renameResourceFileSchema>;
     sendSuccess(res, await service.renameFile({ userId: userId(req), workspaceId, projectId, fileId, name: body.name }));
   });
 
   router.post('/files/:fileId/move', requireAuth, requireActive, validate({ params: projectResourceFileParamsSchema, body: moveResourceFileSchema }), async (req, res) => {
-    const { workspaceId, projectId, fileId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId, fileId } = req.validated!.params as z.infer<typeof projectResourceFileParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof moveResourceFileSchema>;
     sendSuccess(res, await service.moveFile({ userId: userId(req), workspaceId, projectId, fileId, folderId: body.folderId ?? null }));
   });
 
   router.delete('/files/:fileId', requireAuth, requireActive, validate({ params: projectResourceFileParamsSchema }), async (req, res) => {
-    const { workspaceId, projectId, fileId } = req.validated!.params as any;
+    const { workspaceId, projectId, fileId } = req.validated!.params as z.infer<typeof projectResourceFileParamsSchema>;
     sendSuccess(res, await service.deleteFile({ userId: userId(req), workspaceId, projectId, fileId }));
   });
 
   // Bookmarks
   router.get('/bookmarks', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, query: listBookmarksQuerySchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const q = req.validated!.query as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const q = req.validated!.query as z.infer<typeof listBookmarksQuerySchema>;
     sendSuccess(res, await service.listBookmarks({ userId: userId(req), workspaceId, projectId, limit: q.limit }));
   });
   router.post('/bookmarks', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, body: bookmarkSchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof bookmarkSchema>;
     sendSuccess(res, await service.createBookmark({ userId: userId(req), workspaceId, projectId, title: body.title, url: body.url }), 201);
   });
   router.patch('/bookmarks/:bookmarkId', requireAuth, requireActive, validate({ params: projectBookmarkParamsSchema, body: updateBookmarkSchema }), async (req, res) => {
-    const { workspaceId, projectId, bookmarkId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId, bookmarkId } = req.validated!.params as z.infer<typeof projectBookmarkParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof updateBookmarkSchema>;
     sendSuccess(res, await service.updateBookmark({ userId: userId(req), workspaceId, projectId, bookmarkId, title: body.title, url: body.url }));
   });
   router.delete('/bookmarks/:bookmarkId', requireAuth, requireActive, validate({ params: projectBookmarkParamsSchema }), async (req, res) => {
-    const { workspaceId, projectId, bookmarkId } = req.validated!.params as any;
+    const { workspaceId, projectId, bookmarkId } = req.validated!.params as z.infer<typeof projectBookmarkParamsSchema>;
     sendSuccess(res, await service.deleteBookmark({ userId: userId(req), workspaceId, projectId, bookmarkId }));
   });
 
   // Recent (project-scoped)
   router.get('/recent', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, query: listRecentQuerySchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const q = req.validated!.query as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const q = req.validated!.query as z.infer<typeof listRecentQuerySchema>;
     sendSuccess(res, await service.listRecent({ userId: userId(req), workspaceId, projectId, limit: q.limit }));
   });
   router.post('/recent', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, body: recordRecentSchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof recordRecentSchema>;
     sendSuccess(res, await service.recordRecent({ userId: userId(req), workspaceId, projectId, itemType: body.itemType, itemId: body.itemId }), 201);
   });
 
   // Dashboard
   router.get('/dashboard/overview', requireAuth, requireActive, validate({ params: projectScopeParamsSchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
     sendSuccess(res, await service.getProjectDashboardOverview({ userId: userId(req), workspaceId, projectId }));
   });
   router.get('/dashboard/preferences', requireAuth, requireActive, validate({ params: projectScopeParamsSchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
     sendSuccess(res, await service.getDashboardPreference({ userId: userId(req), workspaceId, projectId }));
   });
   router.put('/dashboard/preferences', requireAuth, requireActive, validate({ params: projectScopeParamsSchema, body: dashboardPreferenceSchema }), async (req, res) => {
-    const { workspaceId, projectId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, projectId } = req.validated!.params as z.infer<typeof projectScopeParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof dashboardPreferenceSchema>;
     sendSuccess(res, await service.setDashboardPreference({ userId: userId(req), workspaceId, projectId, cards: body.cards }));
   });
 
@@ -252,37 +253,37 @@ export function createWorkspaceResourcesRouter({ config, service: injected }: Re
   const projectId = null;
 
   router.get('/folders', requireAuth, requireActive, validate({ params: workspaceScopeParamsSchema, query: listFoldersQuerySchema }), async (req, res) => {
-    const { workspaceId } = req.validated!.params as any;
-    const q = req.validated!.query as any;
+    const { workspaceId } = req.validated!.params as z.infer<typeof workspaceScopeParamsSchema>;
+    const q = req.validated!.query as z.infer<typeof listFoldersQuerySchema>;
     sendSuccess(res, await service.listFolders({ userId: userId(req), workspaceId, projectId, parentId: q.parentId ?? null }));
   });
   router.post('/folders', requireAuth, requireActive, validate({ params: workspaceScopeParamsSchema, body: createFolderSchema }), async (req, res) => {
-    const { workspaceId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId } = req.validated!.params as z.infer<typeof workspaceScopeParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof createFolderSchema>;
     sendSuccess(res, await service.createFolder({ userId: userId(req), workspaceId, projectId, parentId: body.parentId ?? null, name: body.name }), 201);
   });
   router.get('/folders/:folderId/delete-impact', requireAuth, requireActive, async (req, res) => {
-    const { workspaceId, folderId } = req.params as any;
+    const { workspaceId, folderId } = req.params as { workspaceId: string; folderId: string };
     sendSuccess(res, await service.getFolderDeleteImpact({ userId: userId(req), workspaceId, projectId, folderId }));
   });
   router.patch('/folders/:folderId', requireAuth, requireActive, validate({ body: renameFolderSchema }), async (req, res) => {
-    const { workspaceId, folderId } = req.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, folderId } = req.params as { workspaceId: string; folderId: string };
+    const body = req.validated!.body as z.infer<typeof renameFolderSchema>;
     sendSuccess(res, await service.renameFolder({ userId: userId(req), workspaceId, projectId, folderId, name: body.name }));
   });
   router.post('/folders/:folderId/move', requireAuth, requireActive, validate({ body: moveFolderSchema }), async (req, res) => {
-    const { workspaceId, folderId } = req.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, folderId } = req.params as { workspaceId: string; folderId: string };
+    const body = req.validated!.body as z.infer<typeof moveFolderSchema>;
     sendSuccess(res, await service.moveFolder({ userId: userId(req), workspaceId, projectId, folderId, parentId: body.parentId ?? null }));
   });
   router.delete('/folders/:folderId', requireAuth, requireActive, async (req, res) => {
-    const { workspaceId, folderId } = req.params as any;
+    const { workspaceId, folderId } = req.params as { workspaceId: string; folderId: string };
     sendSuccess(res, await service.deleteFolder({ userId: userId(req), workspaceId, projectId, folderId }));
   });
 
   router.get('/files', requireAuth, requireActive, validate({ params: workspaceScopeParamsSchema, query: listResourceFilesQuerySchema }), async (req, res) => {
-    const { workspaceId } = req.validated!.params as any;
-    const q = req.validated!.query as any;
+    const { workspaceId } = req.validated!.params as z.infer<typeof workspaceScopeParamsSchema>;
+    const q = req.validated!.query as z.infer<typeof listResourceFilesQuerySchema>;
     sendSuccess(res, await service.listFiles({ userId: userId(req), workspaceId, projectId, folderId: q.folderId, cursor: q.cursor, limit: q.limit }));
   });
   router.post('/files', requireAuth, requireActive, (req, res, next) => {
@@ -294,8 +295,8 @@ export function createWorkspaceResourcesRouter({ config, service: injected }: Re
   }, async (req, res) => {
     if (!req.file) throw new AppError(400, 'FILE_REQUIRED', 'Select a file to upload');
     const mimeType = req.file.mimetype;
-    if (!ALLOWED_MIME_TYPES.includes(mimeType as any)) throw new AppError(415, 'FILE_TYPE_NOT_ALLOWED', `File type '${mimeType}' is not permitted`);
-    const { workspaceId } = req.params as any;
+    if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(mimeType)) throw new AppError(415, 'FILE_TYPE_NOT_ALLOWED', `File type '${mimeType}' is not permitted`);
+    const { workspaceId } = req.params as { workspaceId: string };
     const folderId = typeof req.body?.folderId === 'string' ? req.body.folderId : null;
     sendSuccess(res, await service.uploadFile({ userId: userId(req), workspaceId, projectId, folderId, fileName: req.file.originalname, mimeType, sizeBytes: req.file.size, body: req.file.buffer }), 201);
   });
@@ -316,50 +317,50 @@ export function createWorkspaceResourcesRouter({ config, service: injected }: Re
     const meta = folderUploadMetaSchema.safeParse(metaRaw);
     if (!meta.success) throw new AppError(400, 'VALIDATION_ERROR', 'Invalid batch metadata', { details: meta.error.issues });
     if (meta.data.files.length !== files.length) throw new AppError(400, 'VALIDATION_ERROR', 'Each uploaded file must have a relative path');
-    const { workspaceId } = req.params as any;
+    const { workspaceId } = req.params as { workspaceId: string };
     const parentFolderId = typeof req.body?.parentFolderId === 'string' ? req.body.parentFolderId : null;
     const payload = files.map((f, i) => ({ relativePath: meta.data.files[i]!.relativePath, fileName: f.originalname, mimeType: f.mimetype, sizeBytes: f.size, body: f.buffer }));
     sendSuccess(res, await service.uploadFolderBatch({ userId: userId(req), workspaceId, projectId, parentFolderId, files: payload }), 201);
   });
   router.get('/files/:fileId', requireAuth, requireActive, async (req, res) => {
-    const { workspaceId, fileId } = req.params as any;
+    const { workspaceId, fileId } = req.params as { workspaceId: string; fileId: string };
     const result = await service.downloadFile({ userId: userId(req), workspaceId, projectId, fileId });
     res.setHeader('Content-Type', result.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(result.fileName)}"`);
     res.status(200).send(result.body);
   });
   router.patch('/files/:fileId', requireAuth, requireActive, validate({ body: renameResourceFileSchema }), async (req, res) => {
-    const { workspaceId, fileId } = req.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, fileId } = req.params as { workspaceId: string; fileId: string };
+    const body = req.validated!.body as z.infer<typeof renameResourceFileSchema>;
     sendSuccess(res, await service.renameFile({ userId: userId(req), workspaceId, projectId, fileId, name: body.name }));
   });
   router.post('/files/:fileId/move', requireAuth, requireActive, validate({ body: moveResourceFileSchema }), async (req, res) => {
-    const { workspaceId, fileId } = req.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, fileId } = req.params as { workspaceId: string; fileId: string };
+    const body = req.validated!.body as z.infer<typeof moveResourceFileSchema>;
     sendSuccess(res, await service.moveFile({ userId: userId(req), workspaceId, projectId, fileId, folderId: body.folderId ?? null }));
   });
   router.delete('/files/:fileId', requireAuth, requireActive, async (req, res) => {
-    const { workspaceId, fileId } = req.params as any;
+    const { workspaceId, fileId } = req.params as { workspaceId: string; fileId: string };
     sendSuccess(res, await service.deleteFile({ userId: userId(req), workspaceId, projectId, fileId }));
   });
 
   router.get('/bookmarks', requireAuth, requireActive, validate({ params: workspaceScopeParamsSchema, query: listBookmarksQuerySchema }), async (req, res) => {
-    const { workspaceId } = req.validated!.params as any;
-    const q = req.validated!.query as any;
+    const { workspaceId } = req.validated!.params as z.infer<typeof workspaceScopeParamsSchema>;
+    const q = req.validated!.query as z.infer<typeof listBookmarksQuerySchema>;
     sendSuccess(res, await service.listBookmarks({ userId: userId(req), workspaceId, projectId, limit: q.limit }));
   });
   router.post('/bookmarks', requireAuth, requireActive, validate({ params: workspaceScopeParamsSchema, body: bookmarkSchema }), async (req, res) => {
-    const { workspaceId } = req.validated!.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId } = req.validated!.params as z.infer<typeof workspaceScopeParamsSchema>;
+    const body = req.validated!.body as z.infer<typeof bookmarkSchema>;
     sendSuccess(res, await service.createBookmark({ userId: userId(req), workspaceId, projectId, title: body.title, url: body.url }), 201);
   });
   router.patch('/bookmarks/:bookmarkId', requireAuth, requireActive, validate({ body: updateBookmarkSchema }), async (req, res) => {
-    const { workspaceId, bookmarkId } = req.params as any;
-    const body = req.validated!.body as any;
+    const { workspaceId, bookmarkId } = req.params as { workspaceId: string; bookmarkId: string };
+    const body = req.validated!.body as z.infer<typeof updateBookmarkSchema>;
     sendSuccess(res, await service.updateBookmark({ userId: userId(req), workspaceId, projectId, bookmarkId, title: body.title, url: body.url }));
   });
   router.delete('/bookmarks/:bookmarkId', requireAuth, requireActive, async (req, res) => {
-    const { workspaceId, bookmarkId } = req.params as any;
+    const { workspaceId, bookmarkId } = req.params as { workspaceId: string; bookmarkId: string };
     sendSuccess(res, await service.deleteBookmark({ userId: userId(req), workspaceId, projectId, bookmarkId }));
   });
 
