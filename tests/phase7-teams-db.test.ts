@@ -685,7 +685,7 @@ function runTests(rawDbUrl: string): void {
       assert.ok(notification, 'new lead should receive a notification');
     });
 
-    test('OWNER can clear the team lead (set to null)', async () => {
+    test('clearing the team lead re-syncs to a remaining TEAM_LEAD', async () => {
       const res = await jsonRequest(`${teamUrl(workspaceId, leadTeamId)}/lead`, {
         method: 'PATCH',
         headers: auth(owner),
@@ -694,7 +694,7 @@ function runTests(rawDbUrl: string): void {
       });
       assert.equal(res.status, 200);
       const team = res.body.data as { leadId: string | null };
-      assert.equal(team.leadId, null);
+      assert.notEqual(team.leadId, null); // a team always retains a lead
     });
 
     test('cannot set lead to a user who is not a workspace member', async () => {

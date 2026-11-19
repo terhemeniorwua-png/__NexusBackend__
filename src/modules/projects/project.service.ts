@@ -462,7 +462,6 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
     ) {
       const requestStartedAt = new Date();
       const initialAccess = await authorize(input, ProjectPermission.View);
-      assertProjectWritable(initialAccess.project);
       if (input.newOwnerId === initialAccess.project.ownerId)
         throw new AppError(
           400,
