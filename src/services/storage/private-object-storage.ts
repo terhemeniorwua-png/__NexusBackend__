@@ -1,9 +1,26 @@
 import { createHash, createHmac } from 'node:crypto';
 import { AppError } from '../../utils/errors';
 
+export interface StorageGetOptions {
+  /** When true, accept any content type instead of the default image-only allowlist. */
+  allowAnyContentType?: boolean;
+  /** Allowed content types when not allowing any. Defaults to image types for backward compatibility. */
+  allowedContentTypes?: readonly string[];
+  /** Maximum bytes to read into memory. Defaults to config.maxReadBytes ?? 2MB. */
+  maxReadBytes?: number;
+  /** App error code used when the response exceeds maxReadBytes. */
+  tooLargeCode?: string;
+  /** App error message used when the response exceeds maxReadBytes. */
+  tooLargeMessage?: string;
+  /** App error code used when content type is not allowed. */
+  invalidContentTypeCode?: string;
+  /** App error message used when content type is not allowed. */
+  invalidContentTypeMessage?: string;
+}
+
 export interface PrivateObjectStorage {
   put(input: { key: string; body: Buffer; contentType: string }): Promise<void>;
-  get(key: string): Promise<{ body: Buffer; contentType: string }>;
+  get(key: string, options?: StorageGetOptions): Promise<{ body: Buffer; contentType: string }>;
   delete(key: string): Promise<void>;
   exists(key: string): Promise<boolean>;
 }
@@ -159,18 +176,16 @@ export function createS3CompatibleObjectStorage(
     async put(input) {
       await request('PUT', input.key, input);
     },
-    async get(key) {
+    async get(key, options) {
       const response = await request('GET', key);
       if (!response) throw new Error('Unexpected missing object response');
       const contentLength = Number(response.headers.get('content-length'));
-      const maxReadBytes = config.maxReadBytes ?? 2 * 1024 * 1024;
+      const maxReadBytes = options?.maxReadBytes ?? config.maxReadBytes ?? 2 * 1024 * 1024;
+      const tooLargeCode = options?.tooLargeCode ?? 'OBJECT_STORAGE_RESPONSE_TOO_LARGE';
+      const tooLargeMessage = options?.tooLargeMessage ?? 'Stored logo exceeds the supported size';
       if (Number.isFinite(contentLength) && contentLength > maxReadBytes) {
         await response.body?.cancel();
-        throw new AppError(
-          502,
-          'OBJECT_STORAGE_RESPONSE_TOO_LARGE',
-          'Stored logo exceeds the supported size',
-        );
+        throw new AppError(502, tooLargeCode, tooLargeMessage);
       }
       const chunks: Buffer[] = [];
       let totalBytes = 0;
@@ -182,27 +197,25 @@ export function createS3CompatibleObjectStorage(
           totalBytes += value.byteLength;
           if (totalBytes > maxReadBytes) {
             await reader.cancel();
-            throw new AppError(
-              502,
-              'OBJECT_STORAGE_RESPONSE_TOO_LARGE',
-              'Stored logo exceeds the supported size',
-            );
+            throw new AppError(502, tooLargeCode, tooLargeMessage);
           }
           chunks.push(Buffer.from(value));
         }
       }
       const body = Buffer.concat(chunks, totalBytes);
-      const contentType = response.headers.get('content-type')?.split(';')[0]?.toLowerCase();
-      if (!['image/png', 'image/jpeg', 'image/webp'].includes(contentType ?? '')) {
+      const contentType = response.headers.get('content-type')?.split(';')[0]?.toLowerCase() ?? '';
+      const allowAnyContentType = options?.allowAnyContentType === true;
+      const allowedContentTypes = options?.allowedContentTypes ?? ['image/png', 'image/jpeg', 'image/webp'];
+      if (!allowAnyContentType && !allowedContentTypes.includes(contentType)) {
         throw new AppError(
           502,
-          'OBJECT_STORAGE_CONTENT_TYPE_INVALID',
-          'Stored logo has an unsupported content type',
+          options?.invalidContentTypeCode ?? 'OBJECT_STORAGE_CONTENT_TYPE_INVALID',
+          options?.invalidContentTypeMessage ?? 'Stored logo has an unsupported content type',
         );
       }
       return {
         body,
-        contentType: contentType!,
+        contentType: contentType || 'application/octet-stream',
       };
     },
     async delete(key) {
