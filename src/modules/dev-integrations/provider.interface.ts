@@ -1,4 +1,4 @@
-import type { DevChangedFile, DevCommitSummary, DevPullRequestDetail } from './dev-integration.types';
+import type { DevChangedFile, DevCommitDetail, DevCommitSummary, DevPullRequestDetail } from './dev-integration.types';
 import type { DevIntegrationProvider } from '@prisma/client';
 import type { AppConfig } from '../../config/env';
 import type {
@@ -92,6 +92,13 @@ export interface DevIntegrationProviderAdapter {
     page?: number;
     perPage?: number;
   }): Promise<DevCommitSummary[]>;
+
+  getCommit?(input: {
+    config: AppConfig;
+    encryptedCredentials: string;
+    repositoryFullName: string;
+    sha: string;
+  }): Promise<DevCommitDetail>;
 
   listBranchCommits?(input: {
     config: AppConfig;

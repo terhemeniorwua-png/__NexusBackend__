@@ -231,6 +231,18 @@ export function createProjectRepositoryRouter({
     },
   );
 
+  const commitParamsSchema = projectRepoResourceParamsSchema.extend({ sha: z.string().regex(/^[0-9a-fA-F]{7,40}$/) });
+
+  router.get(
+    '/:repositoryId/commits/:sha',
+    requireAuth, requireActive,
+    validate({ params: commitParamsSchema }),
+    async (req, res) => {
+      const p = req.validated!.params as { workspaceId: string; projectId: string; repositoryId: string; sha: string };
+      sendSuccess(res, await service.getRepositoryCommit({ userId: userId(req), ...p }));
+    },
+  );
+
   return router;
 }
 

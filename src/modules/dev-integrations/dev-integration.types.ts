@@ -140,3 +140,11 @@ export interface DevCommitSummary {
   date: string | null;
   url: string | null;
 }
+
+export interface DevCommitDetail extends DevCommitSummary {
+  additions: number;
+  deletions: number;
+  total: number;
+  parents: string[];
+  files: DevChangedFile[];
+}

@@ -587,6 +587,19 @@ export function createDevIntegrationService(
       });
     },
 
+    async getRepositoryCommit(input: {
+      userId: string; workspaceId: string; projectId: string; repositoryId: string; sha: string;
+    }) {
+      if (!/^[0-9a-fA-F]{7,40}$/.test(input.sha)) throw new AppError(400, 'INVALID_COMMIT_SHA', 'That is not a valid commit id');
+      const repo = await getActiveLinkedRepository(input);
+      const provider = providerFor(repo.provider);
+      if (!provider.getCommit) throw new AppError(501, 'NOT_SUPPORTED', 'This provider does not support commit details yet');
+      return provider.getCommit({
+        config, encryptedCredentials: repo.connection.encryptedCredentials,
+        repositoryFullName: repo.fullName, sha: input.sha,
+      });
+    },
+
     async listTaskDevLinks(input: {
       userId: string;
       workspaceId: string;
