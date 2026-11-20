@@ -81,7 +81,10 @@ function runTests(rawDbUrl: string): void {
     return { id, email, token, jar };
   }
 
-  async function addWorkspaceMember(user: TestUser, targetWorkspaceId = workspaceId): Promise<void> {
+  async function addWorkspaceMember(
+    user: TestUser,
+    targetWorkspaceId = workspaceId,
+  ): Promise<void> {
     const res = await jsonRequest(`${baseUrl}/api/v1/workspaces/${targetWorkspaceId}/members`, {
       method: 'POST',
       headers: auth(owner),
@@ -311,6 +314,50 @@ function runTests(rawDbUrl: string): void {
     const detail = await jsonRequest(projectUrl(projectId), { headers: auth(owner) });
     assert.equal(detail.status, 200, JSON.stringify(detail.body));
     assert.equal((detail.body.data as { type: string }).type, 'GENERAL');
+  });
+
+  test('private project type is hidden with 404 from workspace members without project membership', async () => {
+    const created = await createProject(owner, {
+      name: 'Hidden Type Project',
+      key: `HT${Date.now()}`,
+      visibility: 'PRIVATE',
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const projectId = (created.body.data as { id: string }).id;
+
+    const detail = await jsonRequest(projectUrl(projectId), { headers: auth(member) });
+    assert.equal(detail.status, 404, JSON.stringify(detail.body));
+    assert.equal(detail.body.error?.code, 'PROJECT_NOT_FOUND', JSON.stringify(detail.body));
+
+    const update = await jsonRequest(projectUrl(projectId), {
+      method: 'PATCH',
+      headers: auth(member),
+      body: JSON.stringify({ type: 'DESIGN' }),
+      jar: member.jar,
+    });
+    assert.equal(update.status, 404, JSON.stringify(update.body));
+
+    const ownerDetail = await jsonRequest(projectUrl(projectId), { headers: auth(owner) });
+    assert.equal(ownerDetail.status, 200, JSON.stringify(ownerDetail.body));
+    assert.equal((ownerDetail.body.data as { type: string }).type, 'GENERAL');
+  });
+
+  test('strict project schemas reject unknown fields and omitted type stays GENERAL', async () => {
+    const unknownField = await createProject(owner, {
+      name: 'Strict Type Project',
+      key: `ST${Date.now()}`,
+      visibility: 'WORKSPACE',
+      unexpectedField: 'x',
+    });
+    assert.equal(unknownField.status, 400, JSON.stringify(unknownField.body));
+
+    const created = await createProject(owner, {
+      name: 'Backward Compatible Type Project',
+      key: `BC${Date.now()}`,
+      visibility: 'WORKSPACE',
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal((created.body.data as { type: string }).type, 'GENERAL');
   });
 
   test('project list stays workspace-scoped and includes type', async () => {
