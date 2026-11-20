@@ -30,6 +30,21 @@ export interface RateLimiterOptions {
   client?: RateLimitRedisClient;
 }
 
+function normalizeRequestIp(req: Request): string {
+  return ipKeyGenerator(req.ip ?? 'unknown');
+}
+
+/**
+ * Presents a normalized IP to custom key generators. This lets every limiter
+ * that reads `req.ip` share one IPv6 subnet bucket without duplicating the
+ * ipKeyGenerator call in each route.
+ */
+function withNormalizedIp(req: Request): Request {
+  return Object.create(req, {
+    ip: { value: normalizeRequestIp(req), enumerable: true },
+  }) as Request;
+}
+
 export function createRateLimiter({
   namespace,
   windowMs,
@@ -40,13 +55,16 @@ export function createRateLimiter({
   skip,
   client,
 }: RateLimiterOptions): RequestHandler {
+  const resolvedKeyGenerator = (req: Request): string =>
+    keyGenerator ? keyGenerator(withNormalizedIp(req)) : normalizeRequestIp(req);
+
   return rateLimit({
     windowMs,
     limit,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     store: createRateLimitStore({ namespace, windowMs, client }),
-    keyGenerator: keyGenerator ?? ((req: Request) => ipKeyGenerator(req.ip ?? 'unknown')),
+    keyGenerator: resolvedKeyGenerator,
     skip,
     passOnStoreError: false,
     handler: (_req, _res, next) => {
