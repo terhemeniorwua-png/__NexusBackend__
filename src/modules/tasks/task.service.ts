@@ -20,6 +20,7 @@ import {
   type ProjectPermissionValue,
 } from '../authorization';
 import type { RequestContext } from '../auth/auth.types';
+import { assertTaskStatusTransition } from './task-status';
 import type {
   AddAssigneeInput,
   AddDependencyInput,
@@ -957,6 +958,10 @@ export function createTaskService(
         });
       }
 
+      if (input.status !== undefined && input.status !== existing.status) {
+        assertTaskStatusTransition(existing.status, input.status, 'update');
+      }
+
       const updatedTask = await prisma.$transaction(async (tx) => {
         const statusChanging = input.status !== undefined && input.status !== existing.status;
         const submissionFields: Prisma.TaskUpdateInput = {};
@@ -1207,6 +1212,8 @@ export function createTaskService(
       if (existing.status === 'APPROVED')
         return { id: existing.id, status: 'APPROVED', completedAt: null as Date | null };
 
+      assertTaskStatusTransition(existing.status, 'APPROVED', 'complete');
+
       const completed = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
           where: { id: existing.id },
@@ -1280,6 +1287,8 @@ export function createTaskService(
       if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
       if (existing.status !== 'APPROVED')
         return { id: existing.id, status: existing.status as TaskStatus, completedAt: null };
+
+      assertTaskStatusTransition(existing.status, 'IN_PROGRESS', 'reopen');
 
       const reopened = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
@@ -2108,6 +2117,7 @@ export function createTaskService(
       if (!['ASSIGNED', 'IN_PROGRESS', 'CHANGES_REQUESTED', 'SUBMITTED', 'UNDER_REVIEW'].includes(existing.status)) {
         throw new AppError(409, 'TASK_SUBMIT_NOT_ALLOWED', 'This task cannot be submitted in its current state');
       }
+      assertTaskStatusTransition(existing.status, 'SUBMITTED', 'submit');
       const isAssignee = existing.assignees.some((a) => a.userId === input.userId);
       const canSubmitAsManager = access.permissions.includes(ProjectPermission.TaskUpdate);
       if (!isAssignee && !canSubmitAsManager) {
@@ -2200,6 +2210,8 @@ export function createTaskService(
       if (input.decision === 'START_REVIEW') nextStatus = 'UNDER_REVIEW';
       else if (input.decision === 'APPROVE') nextStatus = 'APPROVED';
       else nextStatus = 'CHANGES_REQUESTED';
+
+      assertTaskStatusTransition(existing.status, nextStatus, 'review');
 
       const row = await prisma.$transaction(async (tx) => {
         const updated = await tx.task.update({
