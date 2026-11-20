@@ -122,6 +122,15 @@ enum ProjectStatus {
   ARCHIVED
 }
 
+enum ProjectType {
+  GENERAL
+  ENGINEERING
+  DESIGN
+  OPERATIONS
+  MARKETING
+  HR
+}
+
 enum ProjectVisibility {
   PRIVATE
   DEPARTMENT_TEAM
@@ -1005,6 +1014,7 @@ model Project {
   category      String?
   labels        String[]             @default([])
   status        ProjectStatus        @default(PLANNING)
+  type          ProjectType          @default(GENERAL)
   visibility    ProjectVisibility    @default(WORKSPACE)
   commentPolicy ProjectCommentPolicy @default(ASSIGNEES_ONLY)
   startDate     DateTime?
@@ -1047,6 +1057,7 @@ model Project {
   @@unique([workspaceId, key])
   @@index([workspaceId])
   @@index([workspaceId, status])
+  @@index([workspaceId, type])
   @@index([teamId])
   @@index([departmentId])
   @@index([ownerId])

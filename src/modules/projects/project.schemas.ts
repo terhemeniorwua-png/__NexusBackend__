@@ -8,6 +8,14 @@ const projectKey = z
   .max(16)
   .regex(/^[A-Za-z0-9_-]+$/);
 const dateInput = z.string().datetime({ offset: true }).optional().nullable();
+const projectTypeSchema = z.enum([
+  'GENERAL',
+  'ENGINEERING',
+  'DESIGN',
+  'OPERATIONS',
+  'MARKETING',
+  'HR',
+]);
 
 const objectiveSchema = z
   .object({
@@ -49,6 +57,7 @@ export const createProjectSchema = z
     objectives: objectivesSchema,
     category: z.string().trim().min(1).max(80).nullable().optional(),
     labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
+    type: projectTypeSchema.optional(),
     visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).default('WORKSPACE'),
     teamId: uuid.optional().nullable(),
     teamIds: z.array(uuid).max(50).optional(),
@@ -85,6 +94,7 @@ export const updateProjectSchema = z
     objectives: objectivesSchema,
     category: z.string().trim().min(1).max(80).nullable().optional(),
     labels: z.array(z.string().trim().min(1).max(40)).max(30).optional(),
+    type: projectTypeSchema.optional(),
     visibility: z.enum(['PRIVATE', 'DEPARTMENT_TEAM', 'WORKSPACE']).optional(),
     commentPolicy: z.enum(['ASSIGNEES_ONLY', 'TEAM_MEMBERS', 'ALL_VIEWERS']).optional(),
     status: z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED']).optional(),

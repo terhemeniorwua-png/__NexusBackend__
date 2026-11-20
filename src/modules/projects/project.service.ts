@@ -1,4 +1,9 @@
-import { Prisma, type PrismaClient, type Project, type ProjectRole } from '@prisma/client';
+import {
+  Prisma,
+  type PrismaClient,
+  type Project,
+  type ProjectRole,
+} from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { TeamAuditAction, recordAuditEvent } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
@@ -49,6 +54,7 @@ type ProjectSummary = Pick<
   | 'category'
   | 'labels'
   | 'status'
+  | 'type'
   | 'visibility'
   | 'commentPolicy'
   | 'startDate'
@@ -395,6 +401,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
                     : (input.objectives as Prisma.InputJsonValue),
               category: input.category ?? null,
               labels: input.labels ?? [],
+              ...(input.type !== undefined ? { type: input.type } : {}),
               visibility: input.visibility,
               teamId: primaryTeamId,
               departmentId,
@@ -829,6 +836,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
                 : {}),
               ...(input.category !== undefined ? { category: input.category } : {}),
               ...(input.labels !== undefined ? { labels: input.labels } : {}),
+              ...(input.type !== undefined ? { type: input.type } : {}),
               ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
               ...(input.commentPolicy !== undefined ? { commentPolicy: input.commentPolicy } : {}),
               ...(input.status !== undefined ? { status: input.status } : {}),
