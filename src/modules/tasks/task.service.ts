@@ -354,7 +354,7 @@ export function createTaskService(
     let depth = 1;
     let currentId = taskId;
     while (true) {
-      const row = await tx.task.findUnique({
+      const row: { parentTaskId: string | null } | null = await tx.task.findUnique({
         where: { id: currentId },
         select: { parentTaskId: true },
       });
@@ -399,7 +399,7 @@ export function createTaskService(
           'A task cannot be moved under itself or one of its descendants',
         );
       }
-      const row = await tx.task.findUnique({
+      const row: { parentTaskId: string | null } | null = await tx.task.findUnique({
         where: { id: currentId },
         select: { parentTaskId: true },
       });

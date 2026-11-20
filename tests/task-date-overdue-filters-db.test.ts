@@ -276,7 +276,7 @@ function runTests(rawDbUrl: string): void {
       data.schedule.overdue,
       isTaskOverdue({
         dueDate: data.task.dueDate ? new Date(data.task.dueDate) : null,
-        status: data.task.status as any,
+        status: data.task.status as Parameters<typeof isTaskOverdue>[0]['status'],
         archivedAt: data.task.archivedAt ? new Date(data.task.archivedAt) : null,
         deletedAt: data.task.deletedAt ? new Date(data.task.deletedAt) : null,
       }),
