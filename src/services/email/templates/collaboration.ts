@@ -60,6 +60,17 @@ export interface TaskAssignmentEmailInput {
   taskUrl: string;
 }
 
+export interface TaskSubmittedEmailInput {
+  to: string;
+  name: string;
+  brand: EmailBrand;
+  idempotencyKey?: string | undefined;
+  taskTitle: string;
+  projectName?: string | undefined;
+  submittedByName: string;
+  taskUrl: string;
+}
+
 export interface MentionEmailInput {
   to: string;
   name: string;
@@ -217,6 +228,35 @@ export function buildTaskAssignmentEmail(input: TaskAssignmentEmailInput): Email
     to: input.to,
     subject: `${input.assignedByName} assigned you a task: ${input.taskTitle}`,
     template: 'task_assignment',
+    text,
+    html,
+    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    metadata: { taskTitle: input.taskTitle, projectName: input.projectName ?? null },
+  };
+}
+
+export function buildTaskSubmittedEmail(input: TaskSubmittedEmailInput): EmailMessage {
+  const project = input.projectName ? ` in ${input.projectName}` : '';
+
+  const { html, text } = renderEmailDocument(
+    {
+      heading: 'A task was submitted for review',
+      preheader: `${input.submittedByName} submitted a task for review.`,
+      paragraphs: [
+        `Hi ${input.name},`,
+        `${input.submittedByName} submitted the task "${input.taskTitle}"${project} for review.`,
+        'Open the task to review the submission and take action.',
+      ],
+      action: { label: 'Review task', url: input.taskUrl },
+      footerNote: 'This is an automated message. Please do not reply to it.',
+    },
+    input.brand,
+  );
+
+  return {
+    to: input.to,
+    subject: `${input.submittedByName} submitted a task: ${input.taskTitle}`,
+    template: 'task_submitted',
     text,
     html,
     ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),

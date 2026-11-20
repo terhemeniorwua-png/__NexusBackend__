@@ -157,6 +157,12 @@ enum TaskPriority {
   URGENT
 }
 
+enum TaskAssigneeAcceptanceStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
 enum InvitationType {
   WORKSPACE
   TEAM
@@ -194,6 +200,7 @@ enum NotificationType {
   TASK_BLOCKER_RESOLVED
   TASK_DUE_SOON
   TASK_OVERDUE
+  TASK_DECLINED
   INTEGRATION_RECONNECT_REQUIRED
   SECURITY_ALERT
 }
@@ -308,6 +315,7 @@ model User {
   createdTasks                  Task[]                        @relation("TaskCreator")
   submittedTasks                Task[]                        @relation("TaskSubmittedBy")
   reviewedTasks                 Task[]                        @relation("TaskReviewedBy")
+  tasksToReview                 Task[]                        @relation("TaskReviewer")
   createdTaskDocuments          TaskDocument[]                @relation("TaskDocumentCreator")
   savedTaskDocumentVersions     TaskDocumentVersion[]         @relation("TaskDocumentVersionSaver")
   reportedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerReporter")
@@ -1123,6 +1131,8 @@ model Task {
   reviewFeedback       String?
   reviewedAt           DateTime?
   reviewedById         String?
+  reviewerId           String?
+  startedAt            DateTime?
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @default(now())
   archivedAt           DateTime?
@@ -1137,6 +1147,7 @@ model Task {
   creator             User                   @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict)
   submittedBy         User?                  @relation("TaskSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
   reviewedBy          User?                  @relation("TaskReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewer            User?                  @relation("TaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   assignees           TaskAssignee[]
   dependencies        TaskDependency[]       @relation("BlockedTask")
   blockers            TaskDependency[]       @relation("BlockingTask")
@@ -1161,6 +1172,7 @@ model Task {
   @@index([creatorId])
   @@index([submittedById])
   @@index([reviewedById])
+  @@index([reviewerId])
   @@index([dueDate])
   @@index([createdAt])
   @@index([completedAt])
@@ -1253,11 +1265,15 @@ model TaskDocumentVersion {
 }
 
 model TaskAssignee {
-  id         String   @id @default(uuid())
-  taskId     String
-  userId     String
-  assignedBy String?
-  assignedAt DateTime @default(now())
+  id               String                       @id @default(uuid())
+  taskId           String
+  userId           String
+  assignedBy       String?
+  assignedAt       DateTime                     @default(now())
+  acceptanceStatus TaskAssigneeAcceptanceStatus @default(PENDING)
+  acceptedAt       DateTime?
+  declinedAt       DateTime?
+  declineReason    String?
 
   task     Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user     User  @relation(fields: [userId], references: [id], onDelete: Cascade)

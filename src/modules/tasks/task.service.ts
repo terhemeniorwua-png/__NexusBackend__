@@ -1,6 +1,7 @@
 import type { TaskAssignmentNotifier } from '../../services/task-assignment-notifier';
 import type { MentionEmailNotifier } from '../../services/mention-email-notifier';
 import type { SlackEventNotifier } from '../integrations/slack.events';
+import type { AppConfig } from '../../config/env';
 import { Prisma, type PrismaClient, type TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
@@ -22,6 +23,14 @@ import {
 import type { RequestContext } from '../auth/auth.types';
 import { assertTaskStatusTransition } from './task-status';
 import { isTaskOverdue, taskNotOverdueWhere, taskOverdueWhere } from './task-overdue';
+import {
+  buildEmailBrand,
+  buildTaskSubmittedEmail,
+  sendEmail,
+} from '../../services/email';
+import { isAddressSuppressed } from '../../services/email/suppression.service';
+import { isEmailNotificationEnabled } from '../../services/notification-preferences';
+import { logger as defaultLogger } from '../../utils/logger';
 import type {
   AddAssigneeInput,
   AddDependencyInput,
@@ -43,6 +52,7 @@ const taskInclude = {
   creator: { select: { id: true, name: true } },
   submittedBy: { select: { id: true, name: true } },
   reviewedBy: { select: { id: true, name: true } },
+  reviewer: { select: { id: true, name: true } },
   assignees: {
     include: { user: { select: { id: true, name: true, email: true } } },
   },
@@ -315,6 +325,7 @@ export async function assertDependencyPairDateConsistency(
 }
 
 export interface TaskServiceDependencies {
+  config?: AppConfig;
   assignmentNotifier?: TaskAssignmentNotifier;
   mentionNotifier?: MentionEmailNotifier;
   /** Best-effort Slack delivery for task assignment events. */
@@ -500,6 +511,263 @@ export function createTaskService(
       }
       throw error;
     }
+  };
+
+  const assertEligibleReviewer = async (input: {
+    workspaceId: string;
+    projectId: string;
+    reviewerId: string;
+    assigneeIds: readonly string[];
+  }): Promise<void> => {
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: {
+        workspaceId_userId: {
+          workspaceId: input.workspaceId,
+          userId: input.reviewerId,
+        },
+      },
+      select: { status: true },
+    });
+    if (!membership || membership.status !== 'ACTIVE') {
+      throw new AppError(403, 'REVIEWER_NOT_ELIGIBLE', 'The selected reviewer is not eligible');
+    }
+
+    let access;
+    try {
+      access = await resolveProjectAuthorization(prisma, {
+        userId: input.reviewerId,
+        workspaceId: input.workspaceId,
+        workspaceRole: 'MEMBER',
+      }, input.projectId);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        (error.code === 'PROJECT_NOT_FOUND' ||
+          error.code === 'PROJECT_ACCESS_DENIED' ||
+          error.code === 'PERMISSION_DENIED' ||
+          error.code === 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH')
+      ) {
+        throw new AppError(403, 'REVIEWER_NOT_ELIGIBLE', 'The selected reviewer is not eligible');
+      }
+      throw error;
+    }
+
+    const canReview =
+      access.permissions.includes(ProjectPermission.SubmissionReview) ||
+      access.permissions.includes(ProjectPermission.SubmissionApprove);
+    if (!canReview) {
+      throw new AppError(403, 'REVIEWER_NOT_ELIGIBLE', 'The selected reviewer is not eligible');
+    }
+
+    if (input.assigneeIds.includes(input.reviewerId)) {
+      throw new AppError(
+        409,
+        'REVIEWER_CANNOT_BE_ASSIGNEE',
+        'A reviewer cannot be an assignee of the same task',
+      );
+    }
+  };
+
+  const buildTaskUrl = (input: { projectId: string; taskId: string }): string | null => {
+    if (!deps.config) return null;
+    const path = deps.config.taskAssignmentLinkPath
+      .replaceAll(':projectId', encodeURIComponent(input.projectId))
+      .replaceAll(':taskId', encodeURIComponent(input.taskId));
+    return `${deps.config.emailAppUrl.replace(/\/+$/, '')}${path}`;
+  };
+
+  const sendTaskSubmittedEmails = async (input: {
+    workspaceId: string;
+    workspaceName: string;
+    projectId: string;
+    projectName: string;
+    taskId: string;
+    taskTitle: string;
+    submittedByName: string;
+    submittedAt: Date;
+    recipientIds: string[];
+  }): Promise<void> => {
+    if (!deps.config || input.recipientIds.length === 0) return;
+    const brand = buildEmailBrand(deps.config);
+    const taskUrl = buildTaskUrl({ projectId: input.projectId, taskId: input.taskId });
+    if (!taskUrl) return;
+
+    const recipients = await prisma.user.findMany({
+      where: {
+        id: { in: input.recipientIds },
+        deletedAt: null,
+        status: 'ACTIVE',
+      },
+      select: { id: true, name: true, email: true },
+    });
+
+    for (const recipient of recipients) {
+      try {
+        if (await isAddressSuppressed(prisma, recipient.email)) continue;
+        const emailEnabled = await isEmailNotificationEnabled(prisma, {
+          workspaceId: input.workspaceId,
+          userId: recipient.id,
+          type: 'TASK_SUBMITTED',
+        });
+        if (!emailEnabled) continue;
+
+        const message = buildTaskSubmittedEmail({
+          to: recipient.email,
+          name: recipient.name,
+          brand,
+          taskTitle: input.taskTitle,
+          projectName: input.projectName,
+          submittedByName: input.submittedByName,
+          taskUrl,
+          idempotencyKey: `task-submitted:${input.taskId}:${recipient.id}:${input.submittedAt.toISOString()}`,
+        });
+        message.metadata = {
+          ...message.metadata,
+          taskId: input.taskId,
+          projectId: input.projectId,
+          workspaceId: input.workspaceId,
+          workspaceName: input.workspaceName,
+        };
+        const result = await sendEmail(message);
+        if (!result.accepted) {
+          defaultLogger.warn('task_submitted_email_failed', {
+            taskId: input.taskId,
+            recipientId: recipient.id,
+            error: result.error ?? 'The email was not accepted',
+          });
+        }
+      } catch (error) {
+        defaultLogger.error('task_submitted_email_failed', {
+          taskId: input.taskId,
+          recipientId: recipient.id,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    }
+  };
+
+  const notifyTaskSubmitted = async (input: {
+    workspaceId: string;
+    projectId: string;
+    projectName: string;
+    workspaceName: string;
+    taskId: string;
+    taskTitle: string;
+    submittedById: string;
+    submittedByName: string;
+    submittedAt: Date;
+    reviewerId: string | null;
+  }): Promise<void> => {
+    try {
+      let recipientIds: string[] = [];
+      if (input.reviewerId) {
+        recipientIds = [input.reviewerId];
+      } else {
+        const approvers = await prisma.projectMembership.findMany({
+          where: {
+            projectId: input.projectId,
+            role: 'PROJECT_MANAGER',
+            user: {
+              deletedAt: null,
+              status: 'ACTIVE',
+              workspaceMemberships: {
+                some: { workspaceId: input.workspaceId, status: 'ACTIVE' },
+              },
+            },
+          },
+          select: { userId: true },
+          take: 25,
+        });
+        recipientIds = Array.from(new Set(approvers.map((m) => m.userId)));
+        if (recipientIds.length < 25) {
+          const project = await prisma.project.findFirst({
+            where: { id: input.projectId },
+            select: { ownerId: true },
+          });
+          if (project?.ownerId && !recipientIds.includes(project.ownerId)) {
+            const owner = await prisma.user.findFirst({
+              where: {
+                id: project.ownerId,
+                deletedAt: null,
+                status: 'ACTIVE',
+                workspaceMemberships: { some: { workspaceId: input.workspaceId, status: 'ACTIVE' } },
+              },
+              select: { id: true },
+            });
+            if (owner) recipientIds.push(owner.id);
+          }
+        }
+        recipientIds = Array.from(new Set(recipientIds)).slice(0, 25);
+      }
+
+      recipientIds = recipientIds.filter((id) => id !== input.submittedById);
+      if (recipientIds.length === 0) return;
+
+      await prisma.$transaction(async (tx) => {
+        for (const recipientId of recipientIds) {
+          await createNotification(tx, {
+            userId: recipientId,
+            type: 'TASK_SUBMITTED',
+            title: 'Task submitted for review',
+            data: {
+              workspaceId: input.workspaceId,
+              projectId: input.projectId,
+              taskId: input.taskId,
+            },
+          });
+        }
+      });
+
+      await sendTaskSubmittedEmails({
+        workspaceId: input.workspaceId,
+        workspaceName: input.workspaceName,
+        projectId: input.projectId,
+        projectName: input.projectName,
+        taskId: input.taskId,
+        taskTitle: input.taskTitle,
+        submittedByName: input.submittedByName,
+        submittedAt: input.submittedAt,
+        recipientIds,
+      });
+    } catch (error) {
+      defaultLogger.error('task_submitted_notification_failed', {
+        taskId: input.taskId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  };
+
+  const resolveAssigneeTaskAction = async (input: {
+    userId: string;
+    workspaceId: string;
+    projectId: string;
+    taskId: string;
+  }) => {
+    const workspace = await requireWorkspaceAccess(prisma, {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      capability: WorkspaceCapability.ViewWorkspace,
+    });
+    const access = await authorizeProject(prisma, {
+      actor: {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        workspaceRole: workspace.effectiveRole,
+      },
+      projectId: input.projectId,
+      permission: ProjectPermission.TaskView,
+      resource: { kind: 'task', taskId: input.taskId },
+    });
+    const task = await prisma.task.findFirst({
+      where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+      include: taskInclude,
+    });
+    if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+    const assignee = task.assignees.find((a) => a.userId === input.userId);
+    if (!assignee) {
+      throw new AppError(403, 'NOT_TASK_ASSIGNEE', 'Only an assignee can perform this action');
+    }
+    return { access, workspace, task, assignee };
   };
 
   return {
@@ -694,6 +962,23 @@ export function createTaskService(
         });
       }
 
+      if (input.reviewerId !== undefined && input.reviewerId !== null) {
+        if (!access.permissions.includes(ProjectPermission.TaskAssign)) {
+          throw new AppError(
+            403,
+            'PERMISSION_DENIED',
+            'Your project role does not allow assigning a reviewer',
+            { requiredPermission: ProjectPermission.TaskAssign },
+          );
+        }
+        await assertEligibleReviewer({
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          reviewerId: input.reviewerId,
+          assigneeIds,
+        });
+      }
+
       const projectKey = access.project.key;
 
       const created = await prisma.$transaction(async (tx) => {
@@ -780,10 +1065,12 @@ export function createTaskService(
                     create: assigneeIds.map((userId) => ({
                       userId,
                       assignedBy: input.userId,
+                      acceptanceStatus: 'PENDING',
                     })),
                   },
                 }
               : {}),
+            ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
           },
           include: taskInclude,
         });
@@ -928,6 +1215,8 @@ export function createTaskService(
           status: true,
           creatorId: true,
           parentTaskId: true,
+          reviewerId: true,
+          startedAt: true,
           assignees: { select: { userId: true } },
         },
       });
@@ -1037,6 +1326,27 @@ export function createTaskService(
           );
       }
 
+      if (input.reviewerId !== undefined) {
+        if (!access.permissions.includes(ProjectPermission.TaskAssign)) {
+          throw new AppError(
+            403,
+            'PERMISSION_DENIED',
+            'Your project role does not allow assigning a reviewer',
+            { requiredPermission: ProjectPermission.TaskAssign },
+          );
+        }
+        if (input.reviewerId === null) {
+          // allowed: clear reviewer
+        } else {
+          await assertEligibleReviewer({
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            reviewerId: input.reviewerId,
+            assigneeIds: existing.assignees.map((a) => a.userId),
+          });
+        }
+      }
+
       if (input.startDate !== undefined || input.dueDate !== undefined) {
         await assertDependencyDateConsistency(prisma, access.project.id, existing.id, {
           ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
@@ -1066,6 +1376,9 @@ export function createTaskService(
             // keep existing reviewFeedback unless explicitly managed via dedicated endpoints
           }
         }
+        if (statusChanging && input.status === 'IN_PROGRESS' && !existing.startedAt) {
+          submissionFields.startedAt = new Date();
+        }
         const row = await tx.task.update({
           where: { id: existing.id },
           data: {
@@ -1086,6 +1399,7 @@ export function createTaskService(
             ...(input.requiresApproval !== undefined
               ? { requiresApproval: input.requiresApproval }
               : {}),
+            ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
             ...(input.expectedDeliverables !== undefined
               ? {
                   expectedDeliverables:
@@ -1370,7 +1684,7 @@ export function createTaskService(
           projectId: access.project.id,
           deletedAt: null,
         },
-        select: { id: true, key: true, title: true, status: true },
+        select: { id: true, key: true, title: true, status: true, startedAt: true },
       });
       if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
       if (existing.status !== 'APPROVED')
@@ -1382,7 +1696,11 @@ export function createTaskService(
       const reopened = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
           where: { id: existing.id },
-          data: { status: 'IN_PROGRESS', completedAt: null },
+          data: {
+            status: 'IN_PROGRESS',
+            completedAt: null,
+            ...(existing.startedAt ? {} : { startedAt: new Date() }),
+          },
           select: { id: true, key: true, status: true, completedAt: true, updatedAt: true },
         });
         await recordAuditEvent(tx, {
@@ -1440,9 +1758,17 @@ export function createTaskService(
           projectId: access.project.id,
           deletedAt: null,
         },
-        select: { id: true, key: true, title: true, status: true },
+        select: { id: true, key: true, title: true, status: true, reviewerId: true },
       });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      if (task.reviewerId && task.reviewerId === input.targetUserId) {
+        throw new AppError(
+          409,
+          'REVIEWER_CANNOT_BE_ASSIGNEE',
+          'A reviewer cannot be an assignee of the same task',
+        );
+      }
 
       await assertAssignableProjectMember({
         workspaceId: input.workspaceId,
@@ -1459,8 +1785,19 @@ export function createTaskService(
             taskId: task.id,
             userId: input.targetUserId,
             assignedBy: input.userId,
+            acceptanceStatus: 'PENDING',
+            acceptedAt: null,
+            declinedAt: null,
+            declineReason: null,
           },
-          update: {},
+          update: {
+            assignedBy: input.userId,
+            assignedAt: new Date(),
+            acceptanceStatus: 'PENDING',
+            acceptedAt: null,
+            declinedAt: null,
+            declineReason: null,
+          },
           include: { user: { select: { id: true, name: true, email: true } } },
         });
 
@@ -1492,8 +1829,12 @@ export function createTaskService(
           taskId: task.id,
           userId: assignee.userId,
           user: assignee.user,
-          assignedBy: input.userId,
+          assignedBy: assignee.assignedBy,
           assignedAt: assignee.assignedAt,
+          acceptanceStatus: assignee.acceptanceStatus,
+          acceptedAt: assignee.acceptedAt,
+          declinedAt: assignee.declinedAt,
+          declineReason: assignee.declineReason,
         };
       });
 
@@ -2119,8 +2460,8 @@ export function createTaskService(
         people: {
           assignees: taskSummary.assignees,
           assignedBy,
-          reviewer: taskSummary.reviewedBy
-            ? { id: taskSummary.reviewedBy.id, name: taskSummary.reviewedBy.name }
+          reviewer: taskSummary.reviewer
+            ? { id: taskSummary.reviewer.id, name: taskSummary.reviewer.name }
             : null,
         },
         schedule: {
@@ -2264,6 +2605,26 @@ export function createTaskService(
         },
       });
 
+      const [submitter, projectWithWorkspace] = await Promise.all([
+        prisma.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
+        prisma.project.findUnique({
+          where: { id: access.project.id },
+          select: { name: true, workspace: { select: { name: true } } },
+        }),
+      ]);
+      await notifyTaskSubmitted({
+        workspaceId: input.workspaceId,
+        projectId: access.project.id,
+        projectName: projectWithWorkspace?.name ?? access.project.name ?? 'Project',
+        workspaceName: projectWithWorkspace?.workspace.name ?? '',
+        taskId: row.id,
+        taskTitle: row.title,
+        submittedById: input.userId,
+        submittedByName: submitter?.name ?? 'A member',
+        submittedAt: row.submittedAt ?? new Date(),
+        reviewerId: row.reviewerId ?? existing.reviewerId ?? null,
+      });
+
       return row;
     },
 
@@ -2287,6 +2648,19 @@ export function createTaskService(
         include: taskInclude,
       });
       if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      if (existing.reviewerId && existing.reviewerId !== input.userId) {
+        const isProjectOwner = access.project.ownerId === input.userId;
+        const isProjectManager = access.projectRole === 'PROJECT_MANAGER';
+        if (!isProjectOwner && !isProjectManager) {
+          throw new AppError(
+            403,
+            'REVIEWER_ONLY',
+            'Only the assigned reviewer or a project manager may review this task',
+            { reviewerId: existing.reviewerId },
+          );
+        }
+      }
 
       const isSubmitter = existing.submittedById === input.userId || existing.assignees.some((a) => a.userId === input.userId);
       if (isSubmitter && input.decision !== 'START_REVIEW') {
@@ -2366,6 +2740,283 @@ export function createTaskService(
       }
 
       return row;
+    },
+
+    async acceptTask(
+      input: Input & { projectId: string; taskId: string },
+      context: RequestContext,
+    ) {
+      const { access, task, assignee } = await resolveAssigneeTaskAction({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        taskId: input.taskId,
+      });
+      assertProjectWritable(access.project);
+
+      if (assignee.acceptanceStatus !== 'PENDING') {
+        throw new AppError(
+          409,
+          'INVALID_ACCEPTANCE_STATE',
+          'This assignment cannot be accepted in its current state',
+          { acceptanceStatus: assignee.acceptanceStatus },
+        );
+      }
+
+      const updatedAssignee = await prisma.$transaction(async (tx) => {
+        const row = await tx.taskAssignee.update({
+          where: { id: assignee.id },
+          data: {
+            acceptanceStatus: 'ACCEPTED',
+            acceptedAt: new Date(),
+            declinedAt: null,
+            declineReason: null,
+          },
+          include: { user: { select: { id: true, name: true, email: true } } },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'task.assignee_accepted',
+          targetType: 'TaskAssignee',
+          targetId: row.userId,
+          metadata: {
+            taskId: task.id,
+            taskKey: task.key,
+            projectId: access.project.id,
+            acceptanceStatus: row.acceptanceStatus,
+          },
+          ...context,
+        });
+        return row;
+      });
+
+      const refreshed = await prisma.task.findFirst({
+        where: { id: task.id, projectId: access.project.id, deletedAt: null },
+        include: taskInclude,
+      });
+      if (!refreshed) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+      return {
+        task: toSummary(refreshed),
+        assignee: {
+          taskId: task.id,
+          userId: updatedAssignee.userId,
+          user: updatedAssignee.user,
+          assignedBy: updatedAssignee.assignedBy,
+          assignedAt: updatedAssignee.assignedAt,
+          acceptanceStatus: updatedAssignee.acceptanceStatus,
+          acceptedAt: updatedAssignee.acceptedAt,
+          declinedAt: updatedAssignee.declinedAt,
+          declineReason: updatedAssignee.declineReason,
+        },
+      };
+    },
+
+    async declineTask(
+      input: Input & { projectId: string; taskId: string; reason: string },
+      context: RequestContext,
+    ) {
+      const { access, task, assignee } = await resolveAssigneeTaskAction({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        taskId: input.taskId,
+      });
+      assertProjectWritable(access.project);
+
+      if (assignee.acceptanceStatus !== 'PENDING') {
+        throw new AppError(
+          409,
+          'INVALID_ACCEPTANCE_STATE',
+          'This assignment cannot be declined in its current state',
+          { acceptanceStatus: assignee.acceptanceStatus },
+        );
+      }
+
+      const reason = input.reason.trim();
+      if (reason.length < 3) {
+        throw new AppError(400, 'INVALID_DECLINE_REASON', 'A decline reason of at least 3 characters is required');
+      }
+
+      const declinedAssignee = await prisma.$transaction(async (tx) => {
+        const row = await tx.taskAssignee.update({
+          where: { id: assignee.id },
+          data: {
+            acceptanceStatus: 'DECLINED',
+            declinedAt: new Date(),
+            acceptedAt: null,
+            declineReason: reason,
+          },
+          include: { user: { select: { id: true, name: true, email: true } } },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'task.assignee_declined',
+          targetType: 'TaskAssignee',
+          targetId: row.userId,
+          metadata: {
+            taskId: task.id,
+            taskKey: task.key,
+            projectId: access.project.id,
+            acceptanceStatus: row.acceptanceStatus,
+            reason,
+          },
+          ...context,
+        });
+        if (task.creatorId && task.creatorId !== input.userId) {
+          await createNotification(tx, {
+            userId: task.creatorId,
+            type: 'TASK_DECLINED',
+            title: 'Task assignment declined',
+            data: {
+              workspaceId: input.workspaceId,
+              projectId: access.project.id,
+              taskId: task.id,
+              reason,
+            },
+          });
+        }
+        return row;
+      });
+
+      const refreshed = await prisma.task.findFirst({
+        where: { id: task.id, projectId: access.project.id, deletedAt: null },
+        include: taskInclude,
+      });
+      if (!refreshed) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+      return {
+        task: toSummary(refreshed),
+        assignee: {
+          taskId: task.id,
+          userId: declinedAssignee.userId,
+          user: declinedAssignee.user,
+          assignedBy: declinedAssignee.assignedBy,
+          assignedAt: declinedAssignee.assignedAt,
+          acceptanceStatus: declinedAssignee.acceptanceStatus,
+          acceptedAt: declinedAssignee.acceptedAt,
+          declinedAt: declinedAssignee.declinedAt,
+          declineReason: declinedAssignee.declineReason,
+        },
+      };
+    },
+
+    async startTask(
+      input: Input & { projectId: string; taskId: string },
+      context: RequestContext,
+    ) {
+      const { access, task, assignee } = await resolveAssigneeTaskAction({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        taskId: input.taskId,
+      });
+      assertProjectWritable(access.project);
+
+      if (task.status !== 'ASSIGNED') {
+        throw new AppError(
+          409,
+          'INVALID_STATUS_TRANSITION',
+          `Cannot transition task from ${task.status} to IN_PROGRESS`,
+          { from: task.status, to: 'IN_PROGRESS' },
+        );
+      }
+      assertTaskStatusTransition(task.status, 'IN_PROGRESS', 'start');
+      await assertTaskDependenciesSatisfied(prisma, task.id, 'IN_PROGRESS');
+
+      const now = new Date();
+      const result = await prisma.$transaction(async (tx) => {
+        const updatedTask = await tx.task.update({
+          where: { id: task.id },
+          data: {
+            status: 'IN_PROGRESS',
+            ...(task.startedAt ? {} : { startedAt: now }),
+          },
+          include: taskInclude,
+        });
+
+        const implicitlyAccepted = assignee.acceptanceStatus !== 'ACCEPTED';
+        const updatedAssignee = await tx.taskAssignee.update({
+          where: { id: assignee.id },
+          data: {
+            acceptanceStatus: 'ACCEPTED',
+            acceptedAt: assignee.acceptedAt ?? now,
+            declinedAt: null,
+            declineReason: null,
+          },
+          include: { user: { select: { id: true, name: true, email: true } } },
+        });
+
+        if (implicitlyAccepted) {
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: 'task.assignee_accepted',
+            targetType: 'TaskAssignee',
+            targetId: updatedAssignee.userId,
+            metadata: {
+              taskId: task.id,
+              taskKey: task.key,
+              projectId: access.project.id,
+              acceptanceStatus: updatedAssignee.acceptanceStatus,
+              implicit: true,
+            },
+            ...context,
+          });
+        }
+
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'task.started',
+          targetType: 'Task',
+          targetId: updatedTask.id,
+          metadata: {
+            taskId: task.id,
+            taskKey: task.key,
+            projectId: access.project.id,
+            previousStatus: task.status,
+            status: updatedTask.status,
+            startedAt: updatedTask.startedAt,
+          },
+          ...context,
+        });
+
+        return { task: toSummary(updatedTask), assignee: updatedAssignee };
+      });
+
+      if (task.status !== result.task.status) {
+        await enqueueAutomationRunsSafely({
+          workspaceId: input.workspaceId,
+          trigger: 'EVENT_TASK_STATUS_CHANGED' as never,
+          eventKey: `task.status_changed:${result.task.id}:${result.task.updatedAt}`,
+          payload: {
+            workspaceId: input.workspaceId,
+            projectId: access.project.id,
+            taskId: result.task.id,
+            key: result.task.key,
+            title: result.task.title,
+            previousStatus: task.status,
+            status: result.task.status,
+            actorId: input.userId,
+          },
+        });
+      }
+
+      return {
+        task: result.task,
+        assignee: {
+          taskId: task.id,
+          userId: result.assignee.userId,
+          user: result.assignee.user,
+          assignedBy: result.assignee.assignedBy,
+          assignedAt: result.assignee.assignedAt,
+          acceptanceStatus: result.assignee.acceptanceStatus,
+          acceptedAt: result.assignee.acceptedAt,
+          declinedAt: result.assignee.declinedAt,
+          declineReason: result.assignee.declineReason,
+        },
+      };
     },
 
     async completeSubtask(
