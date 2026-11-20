@@ -547,6 +547,14 @@ The backend must support:
 - Project timeline.
 - Project insights.
 
+### Project type
+
+Project records expose a `type` field with values `GENERAL`, `ENGINEERING`,
+`DESIGN`, `OPERATIONS`, `MARKETING` and `HR`. It defaults to `GENERAL` for
+existing clients that omit it and is indexed for workspace-scoped filtering.
+Project type selects which environment renders the project; it grants no access
+and does not change visibility, membership or permissions.
+
 ### Visibility enforcement
 
 Project visibility must also apply to associated resources:

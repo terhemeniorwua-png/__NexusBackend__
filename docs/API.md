@@ -687,6 +687,16 @@ but lacks the required permission, the server returns
 `403 PERMISSION_DENIED` with the standard error envelope and
 `error.requiredPermission` set to the missing permission.
 
+### Project type
+
+`Project.type` is a classification with values `GENERAL` (the default),
+`ENGINEERING`, `DESIGN`, `OPERATIONS`, `MARKETING` and `HR`. It is accepted on
+project create and update and returned in project list and detail responses.
+The value only selects which environment renders the project; it grants no
+access and does not change visibility, membership or project permissions.
+Existing clients that omit `type` receive `GENERAL` and keep their current
+behavior.
+
 ### Project roles and permission catalog
 
 Project roles: `PROJECT_MANAGER`, `MEMBER`, `COLLABORATOR`, `VIEWER`.
@@ -724,11 +734,11 @@ and self-review protection.
 | Method | Path | Access | Purpose |
 | --- | --- | --- | --- |
 | GET | `/workspaces/{workspaceId}/projects` | Active workspace member | Cursor-paginated visible projects; supports `status`, `visibility`, `teamId`, `departmentId`, `search`, and `includeArchived`. |
-| POST | `/workspaces/{workspaceId}/projects` | Workspace role with project creation capability | Create project; body includes `name`, `key`, optional `description`, `category`, `labels`, `visibility`, `teamId`, `departmentId`, `startDate`, `dueDate`. Owner and initial PROJECT_MANAGER membership are server-assigned. |
+| POST | `/workspaces/{workspaceId}/projects` | Workspace role with project creation capability | Create project; body includes `name`, `key`, optional `description`, `category`, `labels`, `type`, `visibility`, `teamId`, `departmentId`, `startDate`, `dueDate`. `type` defaults to `GENERAL`. Owner and initial PROJECT_MANAGER membership are server-assigned. |
 | GET | `/workspaces/{workspaceId}/project-roles` | Active workspace member | Project role catalog: `{ items: [{ role, label, description, permissions }] }`. |
 | GET | `/workspaces/{workspaceId}/projects/{projectId}` | Project reader (`project.view`) | Read an authorized project. |
 | GET | `/workspaces/{workspaceId}/projects/{projectId}/permissions` | Active workspace member with project visibility | Effective permissions: `{ projectId, workspaceRole, projectRole, accessSource, permissions: string[], assignableRoles: string[] }`. |
-| PATCH | `/workspaces/{workspaceId}/projects/{projectId}` | `project.update` | Update metadata, scope, visibility, category/labels, lifecycle status (excluding ARCHIVED), and dates. |
+| PATCH | `/workspaces/{workspaceId}/projects/{projectId}` | `project.update` | Update metadata, scope, visibility, category/type/labels, lifecycle status (excluding ARCHIVED), and dates. |
 | POST | `/workspaces/{workspaceId}/projects/{projectId}/transfer-ownership` | Current project owner or workspace OWNER/PROJECT_MANAGER (including organization owner/admin) | Immediately transfer ownership. Body: `{newOwnerId, previousOwnerRole?}` where prior role is `MANAGER` (default), `MEMBER`, or `REMOVE`. No notification is sent. |
 | DELETE | `/workspaces/{workspaceId}/projects/{projectId}` | `project.delete` (workspace admin or project owner) | Soft-delete project. |
 | POST | `/workspaces/{workspaceId}/projects/{projectId}/archive` | `project.archive` | Archive project. |

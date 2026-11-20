@@ -20324,6 +20324,17 @@ components:
           const: true
         data:
           $ref: '#/components/schemas/InstitutionGroupMember'
+    ProjectType:
+      type: string
+      description: Environment selector for a project. It grants no access.
+      enum:
+      - GENERAL
+      - ENGINEERING
+      - DESIGN
+      - OPERATIONS
+      - MARKETING
+      - HR
+      default: GENERAL
     ProjectSummary:
       type: object
       required:
@@ -20334,6 +20345,7 @@ components:
       - category
       - labels
       - status
+      - type
       - visibility
       - ownerId
       - memberCount
@@ -20382,6 +20394,8 @@ components:
           - ON_HOLD
           - COMPLETED
           - ARCHIVED
+        type:
+          $ref: '#/components/schemas/ProjectType'
         visibility:
           type: string
           enum:
@@ -20463,6 +20477,8 @@ components:
             type: string
             minLength: 1
             maxLength: 40
+        type:
+          $ref: '#/components/schemas/ProjectType'
         visibility:
           type: string
           enum:
@@ -20521,6 +20537,8 @@ components:
             type: string
             minLength: 1
             maxLength: 40
+        type:
+          $ref: '#/components/schemas/ProjectType'
         visibility:
           type: string
           enum:
