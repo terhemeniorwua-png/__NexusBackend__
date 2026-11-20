@@ -206,6 +206,15 @@ function runTests(rawDbUrl: string): void {
     });
     assert.equal(viewerResolve.status, 403, JSON.stringify(viewerResolve.body));
 
+    // A project member who is not the reporter, owner or a manager must not resolve it either.
+    const memberOtherResolve = await jsonRequest(`${blockersUrl()}/${collabBlockerId}/resolve`, {
+      method: 'POST',
+      headers: auth(memberOther),
+      body: JSON.stringify({}),
+      jar: memberOther.jar,
+    });
+    assert.equal(memberOtherResolve.status, 403, JSON.stringify(memberOtherResolve.body));
+
     // task owner/PM can resolve
     const pmResolve = await jsonRequest(`${blockersUrl()}/${collabBlockerId}/resolve`, {
       method: 'POST',

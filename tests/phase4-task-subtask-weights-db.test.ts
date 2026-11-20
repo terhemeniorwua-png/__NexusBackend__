@@ -210,15 +210,14 @@ function runTests(rawDbUrl: string): void {
     assert.equal(subRes.status, 201, JSON.stringify(subRes.body));
     const subId = (subRes.body.data as { id: string }).id;
 
-    // Project members may update tasks they are assigned to under the current permission model.
+    // Ordinary assigned member (project MEMBER, not manager) must not be able to modify weight.
     const memberUpdate = await jsonRequest(taskUrl(subId), {
       method: 'PATCH',
       headers: auth(member),
       body: JSON.stringify({ weight: 5 }),
       jar: member.jar,
     });
-    assert.equal(memberUpdate.status, 200, JSON.stringify(memberUpdate.body));
-    assert.equal((memberUpdate.body.data as { weight: number }).weight, 5);
+    assert.equal(memberUpdate.status, 403, JSON.stringify(memberUpdate.body));
 
     // Viewer cannot modify
     const viewerUpdate = await jsonRequest(taskUrl(subId), {

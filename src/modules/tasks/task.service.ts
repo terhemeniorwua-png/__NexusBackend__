@@ -738,6 +738,18 @@ export function createTaskService(
           );
         }
 
+        if (
+          input.weight !== undefined &&
+          !access.permissions.includes(ProjectPermission.TaskAssign)
+        ) {
+          throw new AppError(
+            403,
+            'PERMISSION_DENIED',
+            'Your project role does not allow setting subtask weights',
+            { requiredPermission: ProjectPermission.TaskAssign },
+          );
+        }
+
         const task = await tx.task.create({
           data: {
             projectId: access.project.id,
@@ -926,6 +938,18 @@ export function createTaskService(
           400,
           'INVALID_REQUEST',
           'Weight can only be set on subtasks',
+        );
+      }
+
+      if (
+        input.weight !== undefined &&
+        !access.permissions.includes(ProjectPermission.TaskAssign)
+      ) {
+        throw new AppError(
+          403,
+          'PERMISSION_DENIED',
+          'Your project role does not allow changing subtask weights',
+          { requiredPermission: ProjectPermission.TaskAssign },
         );
       }
 
