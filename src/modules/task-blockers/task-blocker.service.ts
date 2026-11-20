@@ -191,7 +191,7 @@ export function createTaskBlockerService(prisma: PrismaClient = getPrismaClient(
       const isTaskOwner = task.creatorId === input.userId;
       const isPmOrAdmin =
         access.isWorkspaceAdmin ||
-        access.permissions.includes(ProjectPermission.TaskUpdate) ||
+        access.permissions.includes(ProjectPermission.TaskAssign) ||
         access.permissions.includes(ProjectPermission.ManageMembers);
       if (!isReporter && !isTaskOwner && !isPmOrAdmin) {
         throw new AppError(403, 'PERMISSION_DENIED', 'You do not have permission to resolve this blocker');
