@@ -2225,7 +2225,7 @@ export function createTaskService(
 
         const siblings = await tx.task.findMany({
           where: { projectId: access.project.id, parentTaskId: parent.id, deletedAt: null },
-          select: { status: true },
+          select: { status: true, weight: true },
         });
         const progress = computeProgress(siblings);
         return { subtask: toSummary(updated), progress, requiresApproval, submissionCreated: requiresApproval };

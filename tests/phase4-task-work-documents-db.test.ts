@@ -236,7 +236,11 @@ function runTests(rawDbUrl: string): void {
   });
 
   test('outsider denied access to task work documents', async () => {
-    const res = await jsonRequest(docsUrl(), { headers: auth(outsider), jar: outsider.jar });
+    const realOutsider = await register('RealOutsider', 'realoutsider');
+    const res = await jsonRequest(docsUrl(), {
+      headers: auth(realOutsider),
+      jar: realOutsider.jar,
+    });
     assert.ok([403, 404].includes(res.status), JSON.stringify(res.body));
   });
 
@@ -351,7 +355,11 @@ function runTests(rawDbUrl: string): void {
         {
           type: 'paragraph',
           content: [
-            { type: 'text', text: 'safe', marks: [{ type: 'link', attrs: { href: 'javascript:alert(1)' } }, { type: 'bold' }] },
+            {
+              type: 'text',
+              text: 'safe',
+              marks: [{ type: 'link', attrs: { href: 'javascript:alert(1)' } }, { type: 'bold' }],
+            },
           ],
         },
         { type: 'script', content: [{ type: 'text', text: 'bad' }] },
@@ -364,7 +372,9 @@ function runTests(rawDbUrl: string): void {
       jar: pm.jar,
     });
     assert.equal(created.status, 201, JSON.stringify(created.body));
-    const saved = (created.body.data as { content: { content: Array<{ content?: Array<{ marks?: unknown[] }> }> } }).content;
+    const saved = (
+      created.body.data as { content: { content: Array<{ content?: Array<{ marks?: unknown[] }> }> } }
+    ).content;
     const marks = saved.content[0]?.content?.[0]?.marks ?? [];
     assert.ok(Array.isArray(marks));
     assert.ok(!JSON.stringify(marks).includes('javascript'));
@@ -374,11 +384,19 @@ function runTests(rawDbUrl: string): void {
     const tooLarge = await jsonRequest(docsUrl(), {
       method: 'POST',
       headers: auth(pm),
-      body: JSON.stringify({ title: 'Big', content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: big }] }] } }),
+      body: JSON.stringify({
+        title: 'Big',
+        content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: big }] }] },
+      }),
       jar: pm.jar,
     });
-    assert.equal(tooLarge.status, 400, JSON.stringify(tooLarge.body));
-    assert.equal(tooLarge.body.error?.code, 'DOCUMENT_TOO_LARGE');
+    // Oversized payloads may be rejected by the body parser (413) or by app validation (400).
+    assert.ok([400, 413].includes(tooLarge.status), JSON.stringify(tooLarge.body));
+    if (tooLarge.status === 400) {
+      assert.equal(tooLarge.body.error?.code, 'DOCUMENT_TOO_LARGE');
+    } else {
+      assert.equal(tooLarge.body.error?.code, 'PAYLOAD_TOO_LARGE');
+    }
   });
 
   test('delete requires task.update (permission-controlled); assignee-only cannot delete', async () => {

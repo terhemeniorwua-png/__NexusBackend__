@@ -240,6 +240,9 @@ describe('Task deadline notification worker', { skip: skipReason || false }, () 
     const owner = await createUser('Owner', 'prefs');
     const assignee = await createUser('Assignee', 'prefs');
     const { workspaceId, projectId } = await createWorkspaceProject(owner);
+    await prisma.workspaceMembership.create({
+      data: { workspaceId, userId: assignee, role: 'MEMBER' },
+    });
     await prisma.notificationPreference.create({
       data: { workspaceId, userId: assignee, type: 'TASK_DUE_SOON' as NotificationType, inAppEnabled: false },
     });

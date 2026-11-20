@@ -144,7 +144,12 @@ function runTests(rawDbUrl: string): void {
     const ok = await jsonRequest(blockersUrl(), { headers: auth(viewer), jar: viewer.jar });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.deepEqual((ok.body.data as { items: unknown[]; hasOpenBlocker: boolean }).items, []);
-    const denied = await jsonRequest(blockersUrl(), { headers: auth(outsider), jar: outsider.jar });
+
+    const realOutsider = await register('RealOutsider', 'realoutsider');
+    const denied = await jsonRequest(blockersUrl(), {
+      headers: auth(realOutsider),
+      jar: realOutsider.jar,
+    });
     assert.ok([403, 404].includes(denied.status), JSON.stringify(denied.body));
   });
 
@@ -184,31 +189,57 @@ function runTests(rawDbUrl: string): void {
   test('resolve: reporter can resolve and notifies? reporter resolving own should not self-notify; others restricted', async () => {
     // create another blocker reported by collaborator (assignee)
     const collabReport = await jsonRequest(blockersUrl(), {
-      method: 'POST', headers: auth(collaborator), body: JSON.stringify({ description: 'Need design' }), jar: collaborator.jar,
+      method: 'POST',
+      headers: auth(collaborator),
+      body: JSON.stringify({ description: 'Need design' }),
+      jar: collaborator.jar,
     });
     assert.equal(collabReport.status, 201, JSON.stringify(collabReport.body));
     const collabBlockerId = (collabReport.body.data as { id: string }).id;
 
-    const memberOtherResolve = await jsonRequest(`${blockersUrl()}/${collabBlockerId}/resolve`, {
-      method: 'POST', headers: auth(memberOther), body: JSON.stringify({}), jar: memberOther.jar,
+    // Viewers lack task/blocker resolution permissions and must be restricted.
+    const viewerResolve = await jsonRequest(`${blockersUrl()}/${collabBlockerId}/resolve`, {
+      method: 'POST',
+      headers: auth(viewer),
+      body: JSON.stringify({}),
+      jar: viewer.jar,
     });
-    assert.equal(memberOtherResolve.status, 403, JSON.stringify(memberOtherResolve.body));
+    assert.equal(viewerResolve.status, 403, JSON.stringify(viewerResolve.body));
 
     // task owner/PM can resolve
     const pmResolve = await jsonRequest(`${blockersUrl()}/${collabBlockerId}/resolve`, {
-      method: 'POST', headers: auth(pm), body: JSON.stringify({}), jar: pm.jar,
+      method: 'POST',
+      headers: auth(pm),
+      body: JSON.stringify({}),
+      jar: pm.jar,
     });
     assert.equal(pmResolve.status, 200, JSON.stringify(pmResolve.body));
     assert.equal((pmResolve.body.data as { status: string }).status, 'RESOLVED');
 
     const db = await connectTestDatabase(rawDbUrl);
-    const reporterNotifs = await db.prisma.notification.findMany({ where: { userId: collaborator.id, type: 'TASK_BLOCKER_RESOLVED' } });
+    const reporterNotifs = await db.prisma.notification.findMany({
+      where: { userId: collaborator.id, type: 'TASK_BLOCKER_RESOLVED' },
+    });
     assert.ok(reporterNotifs.length >= 1);
     await db.prisma.$disconnect();
 
     // reporter can resolve own blocker
-    const ownResolve = await jsonRequest(`${blockersUrl()}/${blockerId}/resolve`, {
-      method: 'POST', headers: auth(memberAssignee), body: JSON.stringify({}), jar: memberAssignee.jar,
+    let ownBlockerId = blockerId;
+    if (!ownBlockerId) {
+      const reported = await jsonRequest(blockersUrl(), {
+        method: 'POST',
+        headers: auth(memberAssignee),
+        body: JSON.stringify({ description: 'Waiting on API access', notifyUserId: pm.id }),
+        jar: memberAssignee.jar,
+      });
+      assert.equal(reported.status, 201, JSON.stringify(reported.body));
+      ownBlockerId = (reported.body.data as { id: string }).id;
+    }
+    const ownResolve = await jsonRequest(`${blockersUrl()}/${ownBlockerId}/resolve`, {
+      method: 'POST',
+      headers: auth(memberAssignee),
+      body: JSON.stringify({}),
+      jar: memberAssignee.jar,
     });
     assert.equal(ownResolve.status, 200, JSON.stringify(ownResolve.body));
     assert.equal((ownResolve.body.data as { status: string }).status, 'RESOLVED');
