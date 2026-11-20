@@ -215,25 +215,57 @@ function runTests(rawDbUrl: string): void {
   });
 
   test('workspace aggregate: allowed for PM/MEMBER/COLLABORATOR/VIEWER, denied for outsider', async () => {
+    // Collaborators may only access tasks assigned to them; assign collaborator to this task for access.
+    const assignCollab = await jsonRequest(`${taskUrl(parentTaskId)}/assignees`, {
+      method: 'POST',
+      headers: auth(pm),
+      body: JSON.stringify({ targetUserId: collaborator.id }),
+      jar: pm.jar,
+    });
+    assert.ok(
+      [200, 201, 409].includes(assignCollab.status),
+      JSON.stringify(assignCollab.body),
+    );
+
     for (const user of [pm, member, collaborator, viewer]) {
-      const res = await jsonRequest(`${taskUrl(parentTaskId)}/workspace`, { headers: auth(user), jar: user.jar });
+      const res = await jsonRequest(`${taskUrl(parentTaskId)}/workspace`, {
+        headers: auth(user),
+        jar: user.jar,
+      });
       assert.equal(res.status, 200, `${user.email} ${JSON.stringify(res.body)}`);
-      const data = res.body.data as { progress: { total: number; completed: number }; subtasks: unknown[]; task: { id: string } };
+      const data = res.body.data as {
+        progress: { total: number; completed: number };
+        subtasks: unknown[];
+        task: { id: string };
+      };
       assert.equal(data.task.id, parentTaskId);
       assert.ok(Array.isArray(data.subtasks));
       assert.equal(typeof data.progress.total, 'number');
     }
-    const denied = await jsonRequest(`${taskUrl(parentTaskId)}/workspace`, { headers: auth(outsider), jar: outsider.jar });
+
+    const realOutsider = await register('RealOutsider', 'realoutsider-ws');
+    const denied = await jsonRequest(`${taskUrl(parentTaskId)}/workspace`, {
+      headers: auth(realOutsider),
+      jar: realOutsider.jar,
+    });
     assert.ok([403, 404].includes(denied.status), JSON.stringify(denied.body));
   });
 
   test('activity endpoint: paginated for viewer, denied for outsider', async () => {
-    const res = await jsonRequest(`${taskUrl(parentTaskId)}/activity?limit=10`, { headers: auth(viewer), jar: viewer.jar });
+    const res = await jsonRequest(`${taskUrl(parentTaskId)}/activity?limit=10`, {
+      headers: auth(viewer),
+      jar: viewer.jar,
+    });
     assert.equal(res.status, 200, JSON.stringify(res.body));
     const data = res.body.data as { items: unknown[]; nextCursor: string | null };
     assert.ok(Array.isArray(data.items));
-    const denied = await jsonRequest(`${taskUrl(parentTaskId)}/activity`, { headers: auth(outsider), jar: outsider.jar });
-    assert.ok([403, 404].includes(denied.status));
+
+    const realOutsider = await register('RealOutsiderAct', 'realoutsider-act');
+    const denied = await jsonRequest(`${taskUrl(parentTaskId)}/activity`, {
+      headers: auth(realOutsider),
+      jar: realOutsider.jar,
+    });
+    assert.ok([403, 404].includes(denied.status), JSON.stringify(denied.body));
   });
 
   test('subtask completion: assignee/member can complete non-approval subtask; collaborator allowed when assigned; viewer denied', async () => {

@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { taskOverdueWhere } from '../../modules/tasks/task-overdue';
 import type { WorkerHealthRecorder } from './worker-health';
 import type { Logger } from '../../utils/logger';
 import { logger as defaultLogger } from '../../utils/logger';
@@ -138,14 +139,12 @@ export function createTaskDeadlineNotificationWorker(
   async function notifyOverdue(now: Date): Promise<number> {
     let notified = 0;
 
+    const overdueBaseWhere = taskOverdueWhere(now);
     const candidates = await deps.prisma.task.findMany({
       where: {
-        dueDate: { lte: now },
+        ...overdueBaseWhere,
         overdueNotifiedAt: null,
-        deletedAt: null,
-        archivedAt: null,
         completedAt: null,
-        status: { not: 'APPROVED' },
         assignees: { some: {} },
       },
       select: { id: true },
@@ -158,12 +157,9 @@ export function createTaskDeadlineNotificationWorker(
         const claimed = await tx.task.updateMany({
           where: {
             id: candidate.id,
+            ...overdueBaseWhere,
             overdueNotifiedAt: null,
-            dueDate: { lte: now },
-            deletedAt: null,
-            archivedAt: null,
             completedAt: null,
-            status: { not: 'APPROVED' },
           },
           data: { overdueNotifiedAt: now },
         });

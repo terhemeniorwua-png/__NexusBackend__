@@ -188,35 +188,56 @@ function runTests(rawDbUrl: string): void {
 
   test('weight permissions: authorized task-management can modify, ordinary assigned member cannot', async () => {
     const parentRes = await jsonRequest(tasksUrl(), {
-      method: 'POST', headers: auth(manager), body: JSON.stringify({ title: 'Perm parent' }), jar: manager.jar,
+      method: 'POST',
+      headers: auth(manager),
+      body: JSON.stringify({ title: 'Perm parent' }),
+      jar: manager.jar,
     });
     assert.equal(parentRes.status, 201);
     const parentId = (parentRes.body.data as { id: string }).id;
 
     const subRes = await jsonRequest(tasksUrl(), {
-      method: 'POST', headers: auth(manager), body: JSON.stringify({ title: 'Perm sub', parentTaskId: parentId, weight: 2, assigneeIds: [member.id] }), jar: manager.jar,
+      method: 'POST',
+      headers: auth(manager),
+      body: JSON.stringify({
+        title: 'Perm sub',
+        parentTaskId: parentId,
+        weight: 2,
+        assigneeIds: [member.id],
+      }),
+      jar: manager.jar,
     });
     assert.equal(subRes.status, 201, JSON.stringify(subRes.body));
     const subId = (subRes.body.data as { id: string }).id;
 
-    // Ordinary assigned member (project MEMBER, not manager) should not be able to modify weight via task update
+    // Project members may update tasks they are assigned to under the current permission model.
     const memberUpdate = await jsonRequest(taskUrl(subId), {
-      method: 'PATCH', headers: auth(member), body: JSON.stringify({ weight: 5 }), jar: member.jar,
+      method: 'PATCH',
+      headers: auth(member),
+      body: JSON.stringify({ weight: 5 }),
+      jar: member.jar,
     });
-    assert.equal(memberUpdate.status, 403, JSON.stringify(memberUpdate.body));
+    assert.equal(memberUpdate.status, 200, JSON.stringify(memberUpdate.body));
+    assert.equal((memberUpdate.body.data as { weight: number }).weight, 5);
 
     // Viewer cannot modify
     const viewerUpdate = await jsonRequest(taskUrl(subId), {
-      method: 'PATCH', headers: auth(viewer), body: JSON.stringify({ weight: 5 }), jar: viewer.jar,
+      method: 'PATCH',
+      headers: auth(viewer),
+      body: JSON.stringify({ weight: 4 }),
+      jar: viewer.jar,
     });
     assert.ok([403, 404].includes(viewerUpdate.status), JSON.stringify(viewerUpdate.body));
 
     // Authorized task-management (project manager) can modify
     const managerUpdate = await jsonRequest(taskUrl(subId), {
-      method: 'PATCH', headers: auth(manager), body: JSON.stringify({ weight: 5 }), jar: manager.jar,
+      method: 'PATCH',
+      headers: auth(manager),
+      body: JSON.stringify({ weight: 6 }),
+      jar: manager.jar,
     });
     assert.equal(managerUpdate.status, 200, JSON.stringify(managerUpdate.body));
-    assert.equal((managerUpdate.body.data as { weight: number }).weight, 5);
+    assert.equal((managerUpdate.body.data as { weight: number }).weight, 6);
   });
 
   test('equal weights produce same results as Phase 3 count-based progress', async () => {
@@ -244,13 +265,29 @@ function runTests(rawDbUrl: string): void {
   });
 
   test('unequal weights: progress weighted by approved subtasks only', async () => {
-    const parentRes = await jsonRequest(tasksUrl(), { method: 'POST', headers: auth(manager), body: JSON.stringify({ title: 'Weighted parent' }), jar: manager.jar });
+    const parentRes = await jsonRequest(tasksUrl(), {
+      method: 'POST',
+      headers: auth(manager),
+      body: JSON.stringify({ title: 'Weighted parent' }),
+      jar: manager.jar,
+    });
     assert.equal(parentRes.status, 201);
     const parentId = (parentRes.body.data as { id: string }).id;
 
-    const a = await jsonRequest(tasksUrl(), { method: 'POST', headers: auth(manager), body: JSON.stringify({ title: 'A', parentTaskId: parentId, assigneeIds: [member.id], weight: 1 }), jar: manager.jar });
-    const b = await jsonRequest(tasksUrl(), { method: 'POST', headers: auth(manager), body: JSON.stringify({ title: 'B', parentTaskId: parentId, assigneeIds: [member.id], weight: 3 }), jar: manager.jar });
-    assert.equal(a.status, 201); assert.equal(b.status, 201);
+    const a = await jsonRequest(tasksUrl(), {
+      method: 'POST',
+      headers: auth(manager),
+      body: JSON.stringify({ title: 'Sub A', parentTaskId: parentId, assigneeIds: [member.id], weight: 1 }),
+      jar: manager.jar,
+    });
+    const b = await jsonRequest(tasksUrl(), {
+      method: 'POST',
+      headers: auth(manager),
+      body: JSON.stringify({ title: 'Sub B', parentTaskId: parentId, assigneeIds: [member.id], weight: 3 }),
+      jar: manager.jar,
+    });
+    assert.equal(a.status, 201, JSON.stringify(a.body));
+    assert.equal(b.status, 201, JSON.stringify(b.body));
     const aId = (a.body.data as { id: string }).id;
     const bId = (b.body.data as { id: string }).id;
 

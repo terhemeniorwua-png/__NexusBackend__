@@ -14,11 +14,14 @@ import {
   assertNotSelfReview,
   authorizeProject,
   requireWorkspaceAccess,
+  resolveProjectAuthorization,
   WorkspaceCapability,
   type ProjectAuthorizationResource,
   type ProjectPermissionValue,
 } from '../authorization';
 import type { RequestContext } from '../auth/auth.types';
+import { assertTaskStatusTransition } from './task-status';
+import { isTaskOverdue, taskNotOverdueWhere, taskOverdueWhere } from './task-overdue';
 import type {
   AddAssigneeInput,
   AddDependencyInput,
@@ -33,6 +36,8 @@ import type {
 } from './task.schemas';
 
 type Input = { userId: string; workspaceId: string };
+
+const MAX_TASK_DEPTH = 3;
 
 const taskInclude = {
   creator: { select: { id: true, name: true } },
@@ -342,6 +347,161 @@ export function createTaskService(
     });
   };
 
+  const getTaskDepth = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    taskId: string,
+  ): Promise<number> => {
+    let depth = 1;
+    let currentId = taskId;
+    while (true) {
+      const row: { parentTaskId: string | null } | null = await tx.task.findUnique({
+        where: { id: currentId },
+        select: { parentTaskId: true },
+      });
+      if (!row?.parentTaskId) return depth;
+      depth += 1;
+      currentId = row.parentTaskId;
+      if (depth > MAX_TASK_DEPTH + 5) return depth;
+    }
+  };
+
+  const getTaskSubtreeHeight = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    taskId: string,
+  ): Promise<number> => {
+    const children = await tx.task.findMany({
+      where: { parentTaskId: taskId, deletedAt: null },
+      select: { id: true },
+    });
+    if (children.length === 0) return 1;
+    let maxChildHeight = 0;
+    for (const child of children) {
+      const childHeight = await getTaskSubtreeHeight(tx, child.id);
+      if (childHeight > maxChildHeight) maxChildHeight = childHeight;
+    }
+    return 1 + maxChildHeight;
+  };
+
+  const assertNotTaskCycle = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    taskId: string,
+    parentTaskId: string,
+  ): Promise<void> => {
+    if (taskId === parentTaskId) {
+      throw new AppError(400, 'TASK_SELF_PARENT', 'A task cannot be its own parent');
+    }
+    let currentId: string | null = parentTaskId;
+    while (currentId) {
+      if (currentId === taskId) {
+        throw new AppError(
+          400,
+          'TASK_PARENT_CYCLE',
+          'A task cannot be moved under itself or one of its descendants',
+        );
+      }
+      const row: { parentTaskId: string | null } | null = await tx.task.findUnique({
+        where: { id: currentId },
+        select: { parentTaskId: true },
+      });
+      currentId = row?.parentTaskId ?? null;
+    }
+  };
+
+  const assertTaskDepthWithinLimit = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    input: { parentTaskId?: string | null; subtreeHeight?: number },
+  ): Promise<void> => {
+    const parentDepth = input.parentTaskId ? await getTaskDepth(tx, input.parentTaskId) : 0;
+    const newDepth = parentDepth + 1;
+    const subtreeHeight = input.subtreeHeight ?? 1;
+    if (newDepth > MAX_TASK_DEPTH || newDepth + subtreeHeight - 1 > MAX_TASK_DEPTH) {
+      throw new AppError(
+        400,
+        'TASK_MAX_DEPTH_EXCEEDED',
+        `Tasks cannot exceed a depth of ${MAX_TASK_DEPTH} levels`,
+      );
+    }
+  };
+
+  const assertTaskDependenciesSatisfied = async (
+    tx: Pick<PrismaClient, 'taskDependency'> | Prisma.TransactionClient,
+    taskId: string,
+    targetStatus: TaskStatus,
+  ): Promise<void> => {
+    if (!['IN_PROGRESS', 'SUBMITTED', 'APPROVED'].includes(targetStatus)) return;
+    const dependencies = await tx.taskDependency.findMany({
+      where: { taskId },
+      select: {
+        dependsOnTaskId: true,
+        dependsOnTask: {
+          select: { id: true, status: true, deletedAt: true, archivedAt: true },
+        },
+      },
+    });
+    const blockingTaskIds = dependencies
+      .filter((dep) => {
+        const blocker = dep.dependsOnTask;
+        if (!blocker) return false;
+        if (blocker.deletedAt || blocker.archivedAt) return false;
+        return blocker.status !== 'APPROVED';
+      })
+      .map((dep) => dep.dependsOnTaskId);
+    if (blockingTaskIds.length > 0) {
+      throw new AppError(
+        409,
+        'TASK_BLOCKED_BY_DEPENDENCIES',
+        'This task is blocked by incomplete dependencies',
+        { details: { blockingTaskIds } },
+      );
+    }
+  };
+
+  const assertAssignableProjectMember = async (input: {
+    workspaceId: string;
+    projectId: string;
+    targetUserId: string;
+  }): Promise<void> => {
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: {
+        workspaceId_userId: {
+          workspaceId: input.workspaceId,
+          userId: input.targetUserId,
+        },
+      },
+      select: { status: true },
+    });
+    if (!membership || membership.status !== 'ACTIVE') {
+      throw new AppError(
+        403,
+        'ASSIGNEE_NOT_PROJECT_MEMBER',
+        'The selected user is not an eligible project member',
+      );
+    }
+
+    try {
+      await resolveProjectAuthorization(prisma, {
+        userId: input.targetUserId,
+        workspaceId: input.workspaceId,
+        workspaceRole: 'MEMBER',
+      }, input.projectId);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        (error.code === 'PROJECT_NOT_FOUND' ||
+          error.code === 'PROJECT_ACCESS_DENIED' ||
+          error.code === 'PERMISSION_DENIED' ||
+          error.code === 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH')
+      ) {
+        throw new AppError(
+          403,
+          'ASSIGNEE_NOT_PROJECT_MEMBER',
+          'The selected user is not an eligible project member',
+        );
+      }
+      throw error;
+    }
+  };
+
   return {
     // -------------------------------------------------------------------------
     // List
@@ -369,6 +529,22 @@ export function createTaskService(
         }
       })();
 
+      const now = new Date();
+      const andFilters: Prisma.TaskWhereInput[] = [];
+      if (input.assigneeId) {
+        andFilters.push({ assignees: { some: { userId: input.assigneeId } } });
+      }
+      if (input.dueFrom || input.dueTo) {
+        andFilters.push({
+          dueDate: {
+            ...(input.dueFrom ? { gte: new Date(input.dueFrom) } : {}),
+            ...(input.dueTo ? { lte: new Date(input.dueTo) } : {}),
+          },
+        });
+      }
+      if (input.overdue === true) andFilters.push(taskOverdueWhere(now));
+      if (input.overdue === false) andFilters.push(taskNotOverdueWhere(now));
+
       const rows = await prisma.task.findMany({
         where: {
           projectId: input.projectId,
@@ -378,9 +554,6 @@ export function createTaskService(
             : {}),
           ...(input.status ? { status: input.status } : {}),
           ...(input.priority ? { priority: input.priority } : {}),
-          ...(input.assigneeId
-            ? { AND: [{ assignees: { some: { userId: input.assigneeId } } }] }
-            : {}),
           ...(input.labels && input.labels.length
             ? { labels: { hasSome: input.labels } }
             : {}),
@@ -393,6 +566,7 @@ export function createTaskService(
               }
             : {}),
           ...(!input.includeArchived ? { archivedAt: null } : {}),
+          ...(andFilters.length ? { AND: andFilters } : {}),
         },
         orderBy,
         ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
@@ -454,6 +628,19 @@ export function createTaskService(
       );
       const projectIds = checks.filter((id): id is string => id !== null);
 
+      const now = new Date();
+      const andFilters: Prisma.TaskWhereInput[] = [];
+      if (input.dueFrom || input.dueTo) {
+        andFilters.push({
+          dueDate: {
+            ...(input.dueFrom ? { gte: new Date(input.dueFrom) } : {}),
+            ...(input.dueTo ? { lte: new Date(input.dueTo) } : {}),
+          },
+        });
+      }
+      if (input.overdue === true) andFilters.push(taskOverdueWhere(now));
+      if (input.overdue === false) andFilters.push(taskNotOverdueWhere(now));
+
       const rows = await prisma.task.findMany({
         where: {
           projectId: { in: projectIds },
@@ -462,6 +649,7 @@ export function createTaskService(
           ...(input.status ? { status: input.status } : {}),
           ...(input.priority ? { priority: input.priority } : {}),
           ...(!input.includeArchived ? { archivedAt: null } : {}),
+          ...(andFilters.length ? { AND: andFilters } : {}),
         },
         orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
         ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
@@ -497,6 +685,15 @@ export function createTaskService(
         );
       }
 
+      const assigneeIds = Array.from(new Set(input.assigneeIds ?? []));
+      for (const targetUserId of assigneeIds) {
+        await assertAssignableProjectMember({
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          targetUserId,
+        });
+      }
+
       const projectKey = access.project.key;
 
       const created = await prisma.$transaction(async (tx) => {
@@ -514,6 +711,10 @@ export function createTaskService(
           });
           if (!parent)
             throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
+          await assertTaskDepthWithinLimit(tx, {
+            parentTaskId: input.parentTaskId,
+            subtreeHeight: 1,
+          });
         }
 
         if (input.milestoneId) {
@@ -561,10 +762,10 @@ export function createTaskService(
                 : input.expectedDeliverables === null
                   ? Prisma.JsonNull
                   : (input.expectedDeliverables as Prisma.InputJsonValue),
-            ...(input.assigneeIds?.length
+            ...(assigneeIds.length
               ? {
                   assignees: {
-                    create: input.assigneeIds.map((userId) => ({
+                    create: assigneeIds.map((userId) => ({
                       userId,
                       assignedBy: input.userId,
                     })),
@@ -586,8 +787,8 @@ export function createTaskService(
         });
 
         // Create notifications for each assignee (other than the creator).
-        if (input.assigneeIds?.length) {
-          for (const assigneeId of input.assigneeIds) {
+        if (assigneeIds.length) {
+          for (const assigneeId of assigneeIds) {
             if (assigneeId === input.userId) continue;
             await createNotification(tx, {
               userId: assigneeId,
@@ -628,7 +829,7 @@ export function createTaskService(
         actorId: input.userId,
         task: { id: created.id, key: created.key, title: created.title, status: created.status },
       });
-      for (const assigneeId of input.assigneeIds ?? []) {
+      for (const assigneeId of assigneeIds) {
         if (assigneeId !== input.userId) {
           emitDomainEvent('task.assigned', {
             workspaceId: input.workspaceId,
@@ -766,23 +967,37 @@ export function createTaskService(
       }
 
       // Verify parent task if changing.
-      if (input.parentTaskId !== undefined && input.parentTaskId) {
-        if (input.parentTaskId === input.taskId)
-          throw new AppError(
-            400,
-            'TASK_SELF_PARENT',
-            'A task cannot be its own parent',
-          );
-        const parent = await prisma.task.findFirst({
-          where: {
-            id: input.parentTaskId,
-            projectId: access.project.id,
-            deletedAt: null,
-          },
-          select: { id: true },
-        });
-        if (!parent)
-          throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
+      if (input.parentTaskId !== undefined && input.parentTaskId !== existing.parentTaskId) {
+        if (input.parentTaskId) {
+          if (input.parentTaskId === input.taskId)
+            throw new AppError(
+              400,
+              'TASK_SELF_PARENT',
+              'A task cannot be its own parent',
+            );
+          const parent = await prisma.task.findFirst({
+            where: {
+              id: input.parentTaskId,
+              projectId: access.project.id,
+              deletedAt: null,
+            },
+            select: { id: true },
+          });
+          if (!parent)
+            throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
+          await assertNotTaskCycle(prisma, existing.id, input.parentTaskId);
+          const subtreeHeight = await getTaskSubtreeHeight(prisma, existing.id);
+          await assertTaskDepthWithinLimit(prisma, {
+            parentTaskId: input.parentTaskId,
+            subtreeHeight,
+          });
+        } else {
+          const subtreeHeight = await getTaskSubtreeHeight(prisma, existing.id);
+          await assertTaskDepthWithinLimit(prisma, {
+            parentTaskId: null,
+            subtreeHeight,
+          });
+        }
       }
 
       if (input.milestoneId !== undefined && input.milestoneId) {
@@ -803,6 +1018,11 @@ export function createTaskService(
           ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
           ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
         });
+      }
+
+      if (input.status !== undefined && input.status !== existing.status) {
+        assertTaskStatusTransition(existing.status, input.status, 'update');
+        await assertTaskDependenciesSatisfied(prisma, existing.id, input.status);
       }
 
       const updatedTask = await prisma.$transaction(async (tx) => {
@@ -1055,6 +1275,9 @@ export function createTaskService(
       if (existing.status === 'APPROVED')
         return { id: existing.id, status: 'APPROVED', completedAt: null as Date | null };
 
+      assertTaskStatusTransition(existing.status, 'APPROVED', 'complete');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, 'APPROVED');
+
       const completed = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
           where: { id: existing.id },
@@ -1129,6 +1352,9 @@ export function createTaskService(
       if (existing.status !== 'APPROVED')
         return { id: existing.id, status: existing.status as TaskStatus, completedAt: null };
 
+      assertTaskStatusTransition(existing.status, 'IN_PROGRESS', 'reopen');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, 'IN_PROGRESS');
+
       const reopened = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
           where: { id: existing.id },
@@ -1194,21 +1420,11 @@ export function createTaskService(
       });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
 
-      // Verify the target is an active workspace member.
-      const target = await prisma.workspaceMembership.findUnique({
-        where: {
-          workspaceId_userId: {
-            workspaceId: input.workspaceId,
-            userId: input.targetUserId,
-          },
-        },
+      await assertAssignableProjectMember({
+        workspaceId: input.workspaceId,
+        projectId: access.project.id,
+        targetUserId: input.targetUserId,
       });
-      if (!target || target.status !== 'ACTIVE')
-        throw new AppError(
-          404,
-          'WORKSPACE_MEMBER_NOT_FOUND',
-          'That active workspace member does not exist',
-        );
 
       const result = await prisma.$transaction(async (tx) => {
         const assignee = await tx.taskAssignee.upsert({
@@ -1400,7 +1616,7 @@ export function createTaskService(
       if (existing)
         throw new AppError(
           409,
-          'DEPENDENCY_EXISTS',
+          'DEPENDENCY_ALREADY_EXISTS',
           'This dependency already exists',
         );
 
@@ -1886,10 +2102,7 @@ export function createTaskService(
         schedule: {
           startDate: taskSummary.startDate,
           dueDate: taskSummary.dueDate,
-          overdue:
-            Boolean(taskSummary.dueDate) &&
-            taskSummary.status !== 'APPROVED' &&
-            new Date(taskSummary.dueDate as Date).getTime() < Date.now(),
+          overdue: isTaskOverdue(task),
         },
         recentActivity: recent,
       };
@@ -1966,6 +2179,8 @@ export function createTaskService(
       if (!['ASSIGNED', 'IN_PROGRESS', 'CHANGES_REQUESTED', 'SUBMITTED', 'UNDER_REVIEW'].includes(existing.status)) {
         throw new AppError(409, 'TASK_SUBMIT_NOT_ALLOWED', 'This task cannot be submitted in its current state');
       }
+      assertTaskStatusTransition(existing.status, 'SUBMITTED', 'submit');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, 'SUBMITTED');
       const isAssignee = existing.assignees.some((a) => a.userId === input.userId);
       const canSubmitAsManager = access.permissions.includes(ProjectPermission.TaskUpdate);
       if (!isAssignee && !canSubmitAsManager) {
@@ -2058,6 +2273,9 @@ export function createTaskService(
       if (input.decision === 'START_REVIEW') nextStatus = 'UNDER_REVIEW';
       else if (input.decision === 'APPROVE') nextStatus = 'APPROVED';
       else nextStatus = 'CHANGES_REQUESTED';
+
+      assertTaskStatusTransition(existing.status, nextStatus, 'review');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, nextStatus);
 
       const row = await prisma.$transaction(async (tx) => {
         const updated = await tx.task.update({
@@ -2225,7 +2443,7 @@ export function createTaskService(
 
         const siblings = await tx.task.findMany({
           where: { projectId: access.project.id, parentTaskId: parent.id, deletedAt: null },
-          select: { status: true },
+          select: { status: true, weight: true },
         });
         const progress = computeProgress(siblings);
         return { subtask: toSummary(updated), progress, requiresApproval, submissionCreated: requiresApproval };
