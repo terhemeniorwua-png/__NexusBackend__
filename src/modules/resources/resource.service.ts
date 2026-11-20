@@ -817,7 +817,7 @@ export function createResourceService(
     async getProjectDashboardOverview(input: Input & { projectId: string }) {
       await authorizeScopeView({ userId: input.userId, workspaceId: input.workspaceId, projectId: input.projectId });
 
-      const [recent, bookmarks, folders, files, taskDocs, tasks] = await Promise.all([
+      const [recent, bookmarks, folders, files, taskDocs, projectDocs, tasks] = await Promise.all([
         prisma.resourceRecentItem.findMany({
           where: { userId: input.userId, projectId: input.projectId },
           orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
@@ -846,6 +846,12 @@ export function createResourceService(
             createdBy: { select: { id: true, name: true } },
             task: { select: { id: true, key: true, title: true } },
           },
+        }),
+        prisma.document.findMany({
+          where: { workspaceId: input.workspaceId, projectId: input.projectId, deletedAt: null },
+          orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+          take: 10,
+          include: { author: { select: { id: true, name: true } } },
         }),
         prisma.task.findMany({
           where: { projectId: input.projectId, deletedAt: null, archivedAt: null },
@@ -887,17 +893,34 @@ export function createResourceService(
 
       return {
         recent: recent.map((i) => ({ id: i.id, itemType: i.itemType, itemId: i.itemId, openedAt: i.openedAt })),
-        docs: taskDocs.map((d) => ({
-          id: d.id,
-          taskId: d.taskId,
-          taskKey: d.task.key,
-          taskTitle: d.task.title,
-          title: d.title,
-          currentVersion: d.currentVersion,
-          createdById: d.createdById,
-          createdByName: d.createdBy.name,
-          updatedAt: d.updatedAt,
-        })),
+        docs: [
+          ...taskDocs.map((d) => ({
+            kind: 'TASK_DOC' as const,
+            id: d.id,
+            taskId: d.taskId as string | null,
+            taskKey: d.task.key as string | null,
+            taskTitle: d.task.title as string | null,
+            title: d.title,
+            currentVersion: d.currentVersion as number | null,
+            createdById: d.createdById,
+            createdByName: d.createdBy.name,
+            updatedAt: d.updatedAt,
+          })),
+          ...projectDocs.map((d) => ({
+            kind: 'PROJECT_DOC' as const,
+            id: d.id,
+            taskId: d.taskId,
+            taskKey: null as string | null,
+            taskTitle: null as string | null,
+            title: d.title,
+            currentVersion: null as number | null,
+            createdById: d.authorId,
+            createdByName: d.author.name,
+            updatedAt: d.updatedAt,
+          })),
+        ]
+          .sort((x, y) => y.updatedAt.getTime() - x.updatedAt.getTime())
+          .slice(0, 10),
         bookmarks: bookmarks.map(mapBookmark),
         folders: folders.map(mapFolder),
         files: files.map(mapFile),
