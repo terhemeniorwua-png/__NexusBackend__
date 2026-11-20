@@ -33,6 +33,7 @@ export const listNotificationsQuerySchema = z.object({
       'TASK_BLOCKER_RESOLVED',
       'TASK_DUE_SOON',
       'TASK_OVERDUE',
+      'TASK_DECLINED',
       'INTEGRATION_RECONNECT_REQUIRED',
     ])
     .optional(),
@@ -67,6 +68,7 @@ export const updatePreferenceSchema = z
       'TASK_BLOCKER_RESOLVED',
       'TASK_DUE_SOON',
       'TASK_OVERDUE',
+      'TASK_DECLINED',
       'INTEGRATION_RECONNECT_REQUIRED',
     ]),
     inAppEnabled: z.boolean().optional(),

@@ -67,6 +67,7 @@ export const createTaskSchema = z
     assigneeIds: z.array(uuid).max(50).optional(),
     requiresApproval: z.boolean().optional(),
     expectedDeliverables: expectedDeliverablesSchema.optional().nullable(),
+    reviewerId: uuid.optional().nullable(),
   })
   .strict()
   .refine(
@@ -109,6 +110,7 @@ export const updateTaskSchema = z
     weight: z.number().int().positive().optional(),
     requiresApproval: z.boolean().optional(),
     expectedDeliverables: expectedDeliverablesSchema.optional().nullable(),
+    reviewerId: uuid.optional().nullable(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update')
@@ -161,6 +163,19 @@ export const completeSubtaskSchema = z
   .strict();
 
 export type CompleteSubtaskInput = z.infer<typeof completeSubtaskSchema>;
+
+export const acceptTaskSchema = z.object({}).strict();
+export type AcceptTaskInput = z.infer<typeof acceptTaskSchema>;
+
+export const declineTaskSchema = z
+  .object({
+    reason: z.string().trim().min(3).max(2000),
+  })
+  .strict();
+export type DeclineTaskInput = z.infer<typeof declineTaskSchema>;
+
+export const startTaskSchema = z.object({}).strict();
+export type StartTaskInput = z.infer<typeof startTaskSchema>;
 
 // ---------------------------------------------------------------------------
 // List tasks query

@@ -6,6 +6,7 @@ import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
+  acceptTaskSchema,
   addAssigneeSchema,
   addDependencySchema,
   assigneeParamsSchema,
@@ -13,10 +14,12 @@ import {
   completeSubtaskSchema,
   createCommentSchema,
   createTaskSchema,
+  declineTaskSchema,
   dependencyParamsSchema,
   listCommentsQuerySchema,
   listTasksQuerySchema,
   reviewTaskSchema,
+  startTaskSchema,
   subtaskParamsSchema,
   submitTaskSchema,
   taskActivityQuerySchema,
@@ -24,14 +27,17 @@ import {
   taskWorkspaceProjectParamsSchema,
   updateCommentSchema,
   updateTaskSchema,
+  type AcceptTaskInput,
   type AddAssigneeInput,
   type AddDependencyInput,
   type CompleteSubtaskInput,
   type CreateCommentInput,
   type CreateTaskInput,
+  type DeclineTaskInput,
   type ListTaskActivityQuery,
   type ListTasksQuery,
   type ReviewTaskInput,
+  type StartTaskInput,
   type SubmitTaskInput,
   type UpdateCommentInput,
   type UpdateTaskInput,
@@ -68,6 +74,7 @@ function userId(req: Request): string {
 export function createTaskRouter({
   config,
   service = createTaskService(undefined, {
+    config,
     assignmentNotifier: createTaskAssignmentNotifier(config),
     mentionNotifier: createMentionEmailNotifier(config),
     slackNotifier: createSlackEventNotifier(),
@@ -516,6 +523,72 @@ export function createTaskRouter({
         res,
         await service.review(
           { userId: userId(req), workspaceId, projectId, taskId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/accept',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: acceptTaskSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      void (req.validated!.body as AcceptTaskInput);
+      sendSuccess(
+        res,
+        await service.acceptTask(
+          { userId: userId(req), workspaceId, projectId, taskId },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/decline',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: declineTaskSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const body = req.validated!.body as DeclineTaskInput;
+      sendSuccess(
+        res,
+        await service.declineTask(
+          { userId: userId(req), workspaceId, projectId, taskId, reason: body.reason },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/start',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: startTaskSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      void (req.validated!.body as StartTaskInput);
+      sendSuccess(
+        res,
+        await service.startTask(
+          { userId: userId(req), workspaceId, projectId, taskId },
           context(req),
         ),
       );
