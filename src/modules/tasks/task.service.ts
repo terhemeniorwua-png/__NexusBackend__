@@ -21,6 +21,7 @@ import {
 } from '../authorization';
 import type { RequestContext } from '../auth/auth.types';
 import { assertTaskStatusTransition } from './task-status';
+import { isTaskOverdue, taskNotOverdueWhere, taskOverdueWhere } from './task-overdue';
 import type {
   AddAssigneeInput,
   AddDependencyInput,
@@ -528,6 +529,22 @@ export function createTaskService(
         }
       })();
 
+      const now = new Date();
+      const andFilters: Prisma.TaskWhereInput[] = [];
+      if (input.assigneeId) {
+        andFilters.push({ assignees: { some: { userId: input.assigneeId } } });
+      }
+      if (input.dueFrom || input.dueTo) {
+        andFilters.push({
+          dueDate: {
+            ...(input.dueFrom ? { gte: new Date(input.dueFrom) } : {}),
+            ...(input.dueTo ? { lte: new Date(input.dueTo) } : {}),
+          },
+        });
+      }
+      if (input.overdue === true) andFilters.push(taskOverdueWhere(now));
+      if (input.overdue === false) andFilters.push(taskNotOverdueWhere(now));
+
       const rows = await prisma.task.findMany({
         where: {
           projectId: input.projectId,
@@ -537,9 +554,6 @@ export function createTaskService(
             : {}),
           ...(input.status ? { status: input.status } : {}),
           ...(input.priority ? { priority: input.priority } : {}),
-          ...(input.assigneeId
-            ? { AND: [{ assignees: { some: { userId: input.assigneeId } } }] }
-            : {}),
           ...(input.labels && input.labels.length
             ? { labels: { hasSome: input.labels } }
             : {}),
@@ -552,6 +566,7 @@ export function createTaskService(
               }
             : {}),
           ...(!input.includeArchived ? { archivedAt: null } : {}),
+          ...(andFilters.length ? { AND: andFilters } : {}),
         },
         orderBy,
         ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
@@ -613,6 +628,19 @@ export function createTaskService(
       );
       const projectIds = checks.filter((id): id is string => id !== null);
 
+      const now = new Date();
+      const andFilters: Prisma.TaskWhereInput[] = [];
+      if (input.dueFrom || input.dueTo) {
+        andFilters.push({
+          dueDate: {
+            ...(input.dueFrom ? { gte: new Date(input.dueFrom) } : {}),
+            ...(input.dueTo ? { lte: new Date(input.dueTo) } : {}),
+          },
+        });
+      }
+      if (input.overdue === true) andFilters.push(taskOverdueWhere(now));
+      if (input.overdue === false) andFilters.push(taskNotOverdueWhere(now));
+
       const rows = await prisma.task.findMany({
         where: {
           projectId: { in: projectIds },
@@ -621,6 +649,7 @@ export function createTaskService(
           ...(input.status ? { status: input.status } : {}),
           ...(input.priority ? { priority: input.priority } : {}),
           ...(!input.includeArchived ? { archivedAt: null } : {}),
+          ...(andFilters.length ? { AND: andFilters } : {}),
         },
         orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
         ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
@@ -2073,10 +2102,7 @@ export function createTaskService(
         schedule: {
           startDate: taskSummary.startDate,
           dueDate: taskSummary.dueDate,
-          overdue:
-            Boolean(taskSummary.dueDate) &&
-            taskSummary.status !== 'APPROVED' &&
-            new Date(taskSummary.dueDate as Date).getTime() < Date.now(),
+          overdue: isTaskOverdue(task),
         },
         recentActivity: recent,
       };

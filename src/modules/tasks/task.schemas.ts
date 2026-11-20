@@ -166,35 +166,50 @@ export type CompleteSubtaskInput = z.infer<typeof completeSubtaskSchema>;
 // List tasks query
 // ---------------------------------------------------------------------------
 
-export const listTasksQuerySchema = z.object({
-  cursor: uuid.optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(25),
-  status: z
-    .enum([
-      'ASSIGNED',
-      'IN_PROGRESS',
-      'SUBMITTED',
-      'UNDER_REVIEW',
-      'APPROVED',
-      'CHANGES_REQUESTED',
-    ])
-    .optional(),
-  priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
-  assigneeId: uuid.optional(),
-  labels: z
-    .union([z.array(z.string().trim().min(1).max(40)), z.string().transform((value) => [value])])
-    .optional(),
-  search: z.string().trim().min(1).max(100).optional(),
-  sortBy: z
-    .enum(['position', 'dueDate', 'priority', 'createdAt'])
-    .optional()
-    .default('position'),
-  sortOrder: z.enum(['asc', 'desc']).optional().default('asc'),
-  includeArchived: z
-    .enum(['true', 'false'])
-    .optional()
-    .transform((value) => value === 'true'),
-});
+export const listTasksQuerySchema = z
+  .object({
+    cursor: uuid.optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(25),
+    status: z
+      .enum([
+        'ASSIGNED',
+        'IN_PROGRESS',
+        'SUBMITTED',
+        'UNDER_REVIEW',
+        'APPROVED',
+        'CHANGES_REQUESTED',
+      ])
+      .optional(),
+    priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+    assigneeId: uuid.optional(),
+    labels: z
+      .union([z.array(z.string().trim().min(1).max(40)), z.string().transform((value) => [value])])
+      .optional(),
+    search: z.string().trim().min(1).max(100).optional(),
+    sortBy: z
+      .enum(['position', 'dueDate', 'priority', 'createdAt'])
+      .optional()
+      .default('position'),
+    sortOrder: z.enum(['asc', 'desc']).optional().default('asc'),
+    includeArchived: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((value) => value === 'true'),
+    dueFrom: z.string().datetime({ offset: true }).optional(),
+    dueTo: z.string().datetime({ offset: true }).optional(),
+    overdue: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value === 'true')),
+  })
+  .refine(
+    (value) =>
+      !value.dueFrom || !value.dueTo || new Date(value.dueFrom).getTime() <= new Date(value.dueTo).getTime(),
+    {
+      message: 'dueFrom must be on or before dueTo',
+      path: ['dueTo'],
+    },
+  );
 
 export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
 
