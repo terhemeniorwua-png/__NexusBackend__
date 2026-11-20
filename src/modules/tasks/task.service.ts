@@ -422,6 +422,39 @@ export function createTaskService(
     }
   };
 
+  const assertTaskDependenciesSatisfied = async (
+    tx: Pick<PrismaClient, 'taskDependency'> | Prisma.TransactionClient,
+    taskId: string,
+    targetStatus: TaskStatus,
+  ): Promise<void> => {
+    if (!['IN_PROGRESS', 'SUBMITTED', 'APPROVED'].includes(targetStatus)) return;
+    const dependencies = await tx.taskDependency.findMany({
+      where: { taskId },
+      select: {
+        dependsOnTaskId: true,
+        dependsOnTask: {
+          select: { id: true, status: true, deletedAt: true, archivedAt: true },
+        },
+      },
+    });
+    const blockingTaskIds = dependencies
+      .filter((dep) => {
+        const blocker = dep.dependsOnTask;
+        if (!blocker) return false;
+        if (blocker.deletedAt || blocker.archivedAt) return false;
+        return blocker.status !== 'APPROVED';
+      })
+      .map((dep) => dep.dependsOnTaskId);
+    if (blockingTaskIds.length > 0) {
+      throw new AppError(
+        409,
+        'TASK_BLOCKED_BY_DEPENDENCIES',
+        'This task is blocked by incomplete dependencies',
+        { details: { blockingTaskIds } },
+      );
+    }
+  };
+
   const assertAssignableProjectMember = async (input: {
     workspaceId: string;
     projectId: string;
@@ -960,6 +993,7 @@ export function createTaskService(
 
       if (input.status !== undefined && input.status !== existing.status) {
         assertTaskStatusTransition(existing.status, input.status, 'update');
+        await assertTaskDependenciesSatisfied(prisma, existing.id, input.status);
       }
 
       const updatedTask = await prisma.$transaction(async (tx) => {
@@ -1213,6 +1247,7 @@ export function createTaskService(
         return { id: existing.id, status: 'APPROVED', completedAt: null as Date | null };
 
       assertTaskStatusTransition(existing.status, 'APPROVED', 'complete');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, 'APPROVED');
 
       const completed = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
@@ -1289,6 +1324,7 @@ export function createTaskService(
         return { id: existing.id, status: existing.status as TaskStatus, completedAt: null };
 
       assertTaskStatusTransition(existing.status, 'IN_PROGRESS', 'reopen');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, 'IN_PROGRESS');
 
       const reopened = await prisma.$transaction(async (tx) => {
         const row = await tx.task.update({
@@ -1551,7 +1587,7 @@ export function createTaskService(
       if (existing)
         throw new AppError(
           409,
-          'DEPENDENCY_EXISTS',
+          'DEPENDENCY_ALREADY_EXISTS',
           'This dependency already exists',
         );
 
@@ -2118,6 +2154,7 @@ export function createTaskService(
         throw new AppError(409, 'TASK_SUBMIT_NOT_ALLOWED', 'This task cannot be submitted in its current state');
       }
       assertTaskStatusTransition(existing.status, 'SUBMITTED', 'submit');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, 'SUBMITTED');
       const isAssignee = existing.assignees.some((a) => a.userId === input.userId);
       const canSubmitAsManager = access.permissions.includes(ProjectPermission.TaskUpdate);
       if (!isAssignee && !canSubmitAsManager) {
@@ -2212,6 +2249,7 @@ export function createTaskService(
       else nextStatus = 'CHANGES_REQUESTED';
 
       assertTaskStatusTransition(existing.status, nextStatus, 'review');
+      await assertTaskDependenciesSatisfied(prisma, existing.id, nextStatus);
 
       const row = await prisma.$transaction(async (tx) => {
         const updated = await tx.task.update({
