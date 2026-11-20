@@ -35,6 +35,8 @@ import type {
 
 type Input = { userId: string; workspaceId: string };
 
+const MAX_TASK_DEPTH = 3;
+
 const taskInclude = {
   creator: { select: { id: true, name: true } },
   submittedBy: { select: { id: true, name: true } },
@@ -343,6 +345,82 @@ export function createTaskService(
     });
   };
 
+  const getTaskDepth = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    taskId: string,
+  ): Promise<number> => {
+    let depth = 1;
+    let currentId = taskId;
+    while (true) {
+      const row = await tx.task.findUnique({
+        where: { id: currentId },
+        select: { parentTaskId: true },
+      });
+      if (!row?.parentTaskId) return depth;
+      depth += 1;
+      currentId = row.parentTaskId;
+      if (depth > MAX_TASK_DEPTH + 5) return depth;
+    }
+  };
+
+  const getTaskSubtreeHeight = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    taskId: string,
+  ): Promise<number> => {
+    const children = await tx.task.findMany({
+      where: { parentTaskId: taskId, deletedAt: null },
+      select: { id: true },
+    });
+    if (children.length === 0) return 1;
+    let maxChildHeight = 0;
+    for (const child of children) {
+      const childHeight = await getTaskSubtreeHeight(tx, child.id);
+      if (childHeight > maxChildHeight) maxChildHeight = childHeight;
+    }
+    return 1 + maxChildHeight;
+  };
+
+  const assertNotTaskCycle = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    taskId: string,
+    parentTaskId: string,
+  ): Promise<void> => {
+    if (taskId === parentTaskId) {
+      throw new AppError(400, 'TASK_SELF_PARENT', 'A task cannot be its own parent');
+    }
+    let currentId: string | null = parentTaskId;
+    while (currentId) {
+      if (currentId === taskId) {
+        throw new AppError(
+          400,
+          'TASK_PARENT_CYCLE',
+          'A task cannot be moved under itself or one of its descendants',
+        );
+      }
+      const row = await tx.task.findUnique({
+        where: { id: currentId },
+        select: { parentTaskId: true },
+      });
+      currentId = row?.parentTaskId ?? null;
+    }
+  };
+
+  const assertTaskDepthWithinLimit = async (
+    tx: Pick<PrismaClient, 'task'> | Prisma.TransactionClient,
+    input: { parentTaskId?: string | null; subtreeHeight?: number },
+  ): Promise<void> => {
+    const parentDepth = input.parentTaskId ? await getTaskDepth(tx, input.parentTaskId) : 0;
+    const newDepth = parentDepth + 1;
+    const subtreeHeight = input.subtreeHeight ?? 1;
+    if (newDepth > MAX_TASK_DEPTH || newDepth + subtreeHeight - 1 > MAX_TASK_DEPTH) {
+      throw new AppError(
+        400,
+        'TASK_MAX_DEPTH_EXCEEDED',
+        `Tasks cannot exceed a depth of ${MAX_TASK_DEPTH} levels`,
+      );
+    }
+  };
+
   const assertAssignableProjectMember = async (input: {
     workspaceId: string;
     projectId: string;
@@ -570,6 +648,10 @@ export function createTaskService(
           });
           if (!parent)
             throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
+          await assertTaskDepthWithinLimit(tx, {
+            parentTaskId: input.parentTaskId,
+            subtreeHeight: 1,
+          });
         }
 
         if (input.milestoneId) {
@@ -822,23 +904,37 @@ export function createTaskService(
       }
 
       // Verify parent task if changing.
-      if (input.parentTaskId !== undefined && input.parentTaskId) {
-        if (input.parentTaskId === input.taskId)
-          throw new AppError(
-            400,
-            'TASK_SELF_PARENT',
-            'A task cannot be its own parent',
-          );
-        const parent = await prisma.task.findFirst({
-          where: {
-            id: input.parentTaskId,
-            projectId: access.project.id,
-            deletedAt: null,
-          },
-          select: { id: true },
-        });
-        if (!parent)
-          throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
+      if (input.parentTaskId !== undefined && input.parentTaskId !== existing.parentTaskId) {
+        if (input.parentTaskId) {
+          if (input.parentTaskId === input.taskId)
+            throw new AppError(
+              400,
+              'TASK_SELF_PARENT',
+              'A task cannot be its own parent',
+            );
+          const parent = await prisma.task.findFirst({
+            where: {
+              id: input.parentTaskId,
+              projectId: access.project.id,
+              deletedAt: null,
+            },
+            select: { id: true },
+          });
+          if (!parent)
+            throw new AppError(404, 'TASK_NOT_FOUND', 'The parent task does not exist');
+          await assertNotTaskCycle(prisma, existing.id, input.parentTaskId);
+          const subtreeHeight = await getTaskSubtreeHeight(prisma, existing.id);
+          await assertTaskDepthWithinLimit(prisma, {
+            parentTaskId: input.parentTaskId,
+            subtreeHeight,
+          });
+        } else {
+          const subtreeHeight = await getTaskSubtreeHeight(prisma, existing.id);
+          await assertTaskDepthWithinLimit(prisma, {
+            parentTaskId: null,
+            subtreeHeight,
+          });
+        }
       }
 
       if (input.milestoneId !== undefined && input.milestoneId) {
