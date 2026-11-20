@@ -14,6 +14,7 @@ import {
   assertNotSelfReview,
   authorizeProject,
   requireWorkspaceAccess,
+  resolveProjectAuthorization,
   WorkspaceCapability,
   type ProjectAuthorizationResource,
   type ProjectPermissionValue,
@@ -342,6 +343,52 @@ export function createTaskService(
     });
   };
 
+  const assertAssignableProjectMember = async (input: {
+    workspaceId: string;
+    projectId: string;
+    targetUserId: string;
+  }): Promise<void> => {
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: {
+        workspaceId_userId: {
+          workspaceId: input.workspaceId,
+          userId: input.targetUserId,
+        },
+      },
+      select: { status: true },
+    });
+    if (!membership || membership.status !== 'ACTIVE') {
+      throw new AppError(
+        403,
+        'ASSIGNEE_NOT_PROJECT_MEMBER',
+        'The selected user is not an eligible project member',
+      );
+    }
+
+    try {
+      await resolveProjectAuthorization(prisma, {
+        userId: input.targetUserId,
+        workspaceId: input.workspaceId,
+        workspaceRole: 'MEMBER',
+      }, input.projectId);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        (error.code === 'PROJECT_NOT_FOUND' ||
+          error.code === 'PROJECT_ACCESS_DENIED' ||
+          error.code === 'PERMISSION_DENIED' ||
+          error.code === 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH')
+      ) {
+        throw new AppError(
+          403,
+          'ASSIGNEE_NOT_PROJECT_MEMBER',
+          'The selected user is not an eligible project member',
+        );
+      }
+      throw error;
+    }
+  };
+
   return {
     // -------------------------------------------------------------------------
     // List
@@ -497,6 +544,15 @@ export function createTaskService(
         );
       }
 
+      const assigneeIds = Array.from(new Set(input.assigneeIds ?? []));
+      for (const targetUserId of assigneeIds) {
+        await assertAssignableProjectMember({
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          targetUserId,
+        });
+      }
+
       const projectKey = access.project.key;
 
       const created = await prisma.$transaction(async (tx) => {
@@ -561,10 +617,10 @@ export function createTaskService(
                 : input.expectedDeliverables === null
                   ? Prisma.JsonNull
                   : (input.expectedDeliverables as Prisma.InputJsonValue),
-            ...(input.assigneeIds?.length
+            ...(assigneeIds.length
               ? {
                   assignees: {
-                    create: input.assigneeIds.map((userId) => ({
+                    create: assigneeIds.map((userId) => ({
                       userId,
                       assignedBy: input.userId,
                     })),
@@ -586,8 +642,8 @@ export function createTaskService(
         });
 
         // Create notifications for each assignee (other than the creator).
-        if (input.assigneeIds?.length) {
-          for (const assigneeId of input.assigneeIds) {
+        if (assigneeIds.length) {
+          for (const assigneeId of assigneeIds) {
             if (assigneeId === input.userId) continue;
             await createNotification(tx, {
               userId: assigneeId,
@@ -628,7 +684,7 @@ export function createTaskService(
         actorId: input.userId,
         task: { id: created.id, key: created.key, title: created.title, status: created.status },
       });
-      for (const assigneeId of input.assigneeIds ?? []) {
+      for (const assigneeId of assigneeIds) {
         if (assigneeId !== input.userId) {
           emitDomainEvent('task.assigned', {
             workspaceId: input.workspaceId,
@@ -1194,21 +1250,11 @@ export function createTaskService(
       });
       if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
 
-      // Verify the target is an active workspace member.
-      const target = await prisma.workspaceMembership.findUnique({
-        where: {
-          workspaceId_userId: {
-            workspaceId: input.workspaceId,
-            userId: input.targetUserId,
-          },
-        },
+      await assertAssignableProjectMember({
+        workspaceId: input.workspaceId,
+        projectId: access.project.id,
+        targetUserId: input.targetUserId,
       });
-      if (!target || target.status !== 'ACTIVE')
-        throw new AppError(
-          404,
-          'WORKSPACE_MEMBER_NOT_FOUND',
-          'That active workspace member does not exist',
-        );
 
       const result = await prisma.$transaction(async (tx) => {
         const assignee = await tx.taskAssignee.upsert({
