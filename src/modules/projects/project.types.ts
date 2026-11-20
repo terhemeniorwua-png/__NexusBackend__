@@ -1,4 +1,4 @@
-import type { ProjectRole, ProjectStatus, ProjectVisibility } from '@prisma/client';
+import type { ProjectRole, ProjectStatus, ProjectType, ProjectVisibility } from '@prisma/client';
 
 /**
  * Response shapes returned by the project service.
@@ -30,6 +30,7 @@ export interface ProjectSummary {
   category: string | null;
   labels: string[];
   status: ProjectStatus;
+  type: ProjectType;
   visibility: ProjectVisibility;
   commentPolicy: string;
   startDate: Date | null;
