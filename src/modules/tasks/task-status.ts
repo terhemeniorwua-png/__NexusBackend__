@@ -16,7 +16,8 @@ export type StatusTransitionContext =
   | 'reopen'
   | 'submit'
   | 'review'
-  | 'subtask_complete';
+  | 'subtask_complete'
+  | 'start';
 
 function isAllowedByMatrix(from: TaskStatus, to: TaskStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;

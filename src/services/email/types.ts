@@ -21,6 +21,7 @@ export type EmailTemplate =
   | 'team_invitation'
   | 'project_invitation'
   | 'task_assignment'
+  | 'task_submitted'
   | 'mention'
   | 'meeting_invitation'
   | 'join_request_approved'

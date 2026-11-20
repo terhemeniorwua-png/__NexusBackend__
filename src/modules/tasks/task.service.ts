@@ -2657,7 +2657,7 @@ export function createTaskService(
             403,
             'REVIEWER_ONLY',
             'Only the assigned reviewer or a project manager may review this task',
-            { reviewerId: existing.reviewerId },
+            { details: { reviewerId: existing.reviewerId } },
           );
         }
       }
@@ -2759,7 +2759,7 @@ export function createTaskService(
           409,
           'INVALID_ACCEPTANCE_STATE',
           'This assignment cannot be accepted in its current state',
-          { acceptanceStatus: assignee.acceptanceStatus },
+          { details: { acceptanceStatus: assignee.acceptanceStatus } },
         );
       }
 
@@ -2829,7 +2829,7 @@ export function createTaskService(
           409,
           'INVALID_ACCEPTANCE_STATE',
           'This assignment cannot be declined in its current state',
-          { acceptanceStatus: assignee.acceptanceStatus },
+          { details: { acceptanceStatus: assignee.acceptanceStatus } },
         );
       }
 
@@ -2918,7 +2918,7 @@ export function createTaskService(
           409,
           'INVALID_STATUS_TRANSITION',
           `Cannot transition task from ${task.status} to IN_PROGRESS`,
-          { from: task.status, to: 'IN_PROGRESS' },
+          { details: { from: task.status, to: 'IN_PROGRESS' } },
         );
       }
       assertTaskStatusTransition(task.status, 'IN_PROGRESS', 'start');
