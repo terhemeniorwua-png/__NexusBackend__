@@ -208,7 +208,7 @@ function runTests(rawDbUrl: string): void {
     // Existing submit guard rejects non-submit states; matrix enforcement also rejects APPROVED -> SUBMITTED.
     assert.equal(submit.status, 409, JSON.stringify(submit.body));
     assert.ok(
-      ['TASK_SUBMIT_NOT_ALLOWED', 'INVALID_STATUS_TRANSITION'].includes(submit.body.error?.code),
+      ['TASK_SUBMIT_NOT_ALLOWED', 'INVALID_STATUS_TRANSITION'].includes(submit.body.error?.code ?? ''),
       JSON.stringify(submit.body),
     );
   });

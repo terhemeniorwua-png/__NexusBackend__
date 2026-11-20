@@ -173,7 +173,7 @@ function runTests(rawDbUrl: string): void {
       jar: pm.jar,
     });
     assert.equal(self.status, 400, JSON.stringify(self.body));
-    assert.ok(['TASK_SELF_PARENT', 'TASK_PARENT_CYCLE'].includes(self.body.error?.code));
+    assert.ok(['TASK_SELF_PARENT', 'TASK_PARENT_CYCLE'].includes(self.body.error?.code ?? ''));
 
     const descendant = await jsonRequest(taskUrl(root), {
       method: 'PATCH',
