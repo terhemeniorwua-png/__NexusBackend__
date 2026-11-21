@@ -634,7 +634,7 @@ request and response fields. Paths below are relative to `/api/v1`.
 | Tasks | `/workspaces/{workspaceId}/projects/{projectId}/tasks` | List/create/get/update/delete tasks; manage assignees, dependencies, comments, and activity. |
 | Channels and messages | `/workspaces/{workspaceId}/channels` and `/workspaces/{workspaceId}/channels/{channelId}/messages` | Manage channels and membership; create/list/update/delete messages, replies, reactions, pins, and read state. |
 | Notifications | `/notifications` | List notifications and unread counts; mark read; read activity and manage workspace notification preferences. |
-| Files | `/workspaces/{workspaceId}/files` | List/upload files, obtain authorized download access, and delete files. Storage configuration is required for uploads. |
+| Files | `/workspaces/{workspaceId}/files` | List/upload files, obtain authorized download access, and delete files. File versions and version feedback are documented in the BE-3 section below. Storage configuration is required for uploads. |
 | Documents | `/workspaces/{workspaceId}/documents` | Create/list/get/update/delete documents; read revisions and comments; add or remove comments. Project-bound documents inherit project visibility. |
 | Calendar | `/workspaces/{workspaceId}/events` | Create/list/get/update/cancel/delete events; manage invitations and responses. |
 | Meetings | `/workspaces/{workspaceId}/meetings` | Create/list/get/update/delete meetings; join/leave and manage participants. This API stores meeting state but does not provide a calling SDK. |
@@ -660,6 +660,66 @@ Department routes cover listing, creation, renaming, and member assignment or
 removal; department deletion and department-settings routes are not
 registered. The OpenAPI document does not yet describe all these registered
 route families and is incomplete relative to the running router.
+
+## File attachment versions (BE-3)
+
+File versions apply to `FileAttachment` only (not `ResourceFile`). Creating a
+file with `POST /workspaces/{workspaceId}/files` still creates a new attachment
+and its v1 version; `POST /workspaces/{workspaceId}/files/{fileId}/versions`
+never infers a version from the filename. The legacy
+`FileAttachment.storageKey` remains the v1 object key and is never used for
+downloads. `FileAttachment.fileName`, `mimeType` and `sizeBytes` mirror the
+current version and are updated in the same transaction as upload,
+make-current, delete-promote and attachment deletion. `FileSummary` is
+unchanged and does not expose a storage key.
+
+All routes below are relative to `/api/v1`, require authentication and an
+active account, and return `{ "success": true, "data": ... }` on success.
+Cursor pagination uses `limit` (1-100, default 25) and `cursor`, ordered by
+`(createdAt, id)`.
+
+| Method | Path | Response data | Notes |
+| --- | --- | --- | --- |
+| `GET` | `/workspaces/{workspaceId}/files/{fileId}/versions` | `{ items, nextCursor }` | Live versions only. |
+| `POST` | `/workspaces/{workspaceId}/files/{fileId}/versions` | `{ version }` (201) | Multipart `file`; optional `changeNote`. |
+| `GET` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}` | `{ version }` | Live version only. |
+| `GET` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}/download` | Raw bytes | `Content-Type` is the stored version `mimeType`. |
+| `POST` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}/make-current` | `{ version }` | 200 no-op if already current. IDs and storage keys never change. |
+| `DELETE` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}` | `{ ok: true }` | 409 `LAST_VERSION` for the last live version; deleting the current version promotes the highest remaining live version. |
+| `GET` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}/feedback` | `{ items, nextCursor }` | Feedback on any live version. |
+| `POST` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}/feedback` | `{ feedback }` (201) | Body `body` (1-4000 non-blank characters). |
+| `PATCH` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}/feedback/{feedbackId}` | `{ feedback }` | Author only; live feedback. Sets `editedAt`. |
+| `DELETE` | `/workspaces/{workspaceId}/files/{fileId}/versions/{versionId}/feedback/{feedbackId}` | `{ ok: true }` | Author or project/workspace admin. |
+
+`AttachmentVersionSummary` fields: `id`, `attachmentId`, `versionNumber`,
+`isCurrent`, `fileName`, `mimeType`, `sizeBytes`, `uploadedById`, `changeNote`,
+`createdAt` (ISO-8601). Storage keys are not exposed in summaries.
+
+`FeedbackSummary` fields: `id`, `attachmentVersionId`, `authorId`, `body`,
+`createdAt`, `updatedAt`, `editedAt` (ISO-8601 or `null`).
+
+Permission matrix (server-side): outsiders and wrong-workspace requests are
+403/404 as for existing attachment routes; private or invisible projects are
+404; project reads require `project.view`; project version/feedback writes and
+make-current require `file.upload`; workspace-level writes reject `VIEWER`
+with 403 `INSUFFICIENT_ROLE`. Soft-deleted attachments, versions and feedback
+return 404. Feedback is visible to anyone who can view its version.
+
+`sizeBytes` is always derived from the bytes actually put into private object
+storage; client-declared sizes are ignored. Download reads use explicit
+`allowedContentTypes` (`ALLOWED_MIME_TYPES`) and
+`maxReadBytes = min(version.sizeBytes, MAX_FILE_SIZE_BYTES)`, leaving storage
+adapter defaults for avatars and logos untouched. Deleting a version or an
+attachment removes only the objects referenced by version rows, best effort.
+
+Audit events are written in the same transaction as the mutation:
+`file.version.created`, `file.version.made_current`, `file.version.deleted`,
+`file.feedback.created`, `file.feedback.updated`, `file.feedback.deleted`.
+No notifications or `NotificationType` values are created by BE-3.
+
+Known limitations: a crash between object put and commit leaves an orphaned
+object; soft-deleted objects are retained until a separate retention task;
+signed/direct uploads, streaming and content sniffing are out of scope.
 
 ## Projects and project visibility (Phase 8 — in progress)
 
