@@ -199,6 +199,40 @@ test('route-level limiters fail closed when Redis is unavailable', async () => {
   });
 });
 
+test('custom key generators bucket IPv6 addresses in the same /64 together', async () => {
+  const redis = new FakeRedisClient();
+  const app = express();
+  app.set('trust proxy', true);
+
+  app.use(
+    createRateLimiter({
+      namespace: uniqueNamespace('ipv6-keygen'),
+      windowMs: 60_000,
+      limit: 1,
+      client: redis,
+      keyGenerator: (req) => `ip:${req.ip ?? 'unknown'}`,
+    }),
+  );
+
+  app.get('/limited', (_req, res) => {
+    res.json({ success: true, data: { ok: true } });
+  });
+
+  app.use(createErrorHandler(new Logger('silent'), { isProduction: true }));
+
+  await withServer(app, async (baseUrl) => {
+    const first = await fetch(`${baseUrl}/limited`, {
+      headers: { 'x-forwarded-for': '2001:db8:1234:5678::1' },
+    });
+    assert.equal(first.status, 200);
+
+    const second = await fetch(`${baseUrl}/limited`, {
+      headers: { 'x-forwarded-for': '2001:db8:1234:5678::2' },
+    });
+    assert.equal(second.status, 429);
+  });
+});
+
 test('the global limiter does not trust forwarded addresses when proxying is disabled', async () => {
   const app = createApp({
     config: createTestConfig({
