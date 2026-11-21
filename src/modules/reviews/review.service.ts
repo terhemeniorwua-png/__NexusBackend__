@@ -6,6 +6,7 @@ import {
   type ReviewStatus,
 } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
+import { recordAuditEvent, ReviewAuditAction } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import {
   ProjectPermission,
@@ -153,6 +154,33 @@ function submissionActionForDecision(
   if (decision === 'APPROVED') return 'approve';
   if (decision === 'REJECTED') return 'reject';
   return 'request_revision';
+}
+
+function auditActionForDecision(decision: ReviewDecisionType): string {
+  switch (decision) {
+    case 'APPROVED':
+      return ReviewAuditAction.ReviewApproved;
+    case 'REJECTED':
+      return ReviewAuditAction.ReviewRejected;
+    case 'CHANGES_REQUESTED':
+      return ReviewAuditAction.ReviewChangesRequested;
+  }
+}
+
+function reviewAudit(
+  input: Input,
+  reviewId: string,
+  action: string,
+  metadata: Record<string, unknown> = {},
+) {
+  return {
+    workspaceId: input.workspaceId,
+    actorId: input.userId,
+    action,
+    targetType: 'Review',
+    targetId: reviewId,
+    metadata: { projectId: input.projectId, ...metadata },
+  };
 }
 
 function toReviewView(row: ReviewRow): ReviewView {
@@ -493,6 +521,14 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         throw error;
       }
 
+      await recordAuditEvent(
+        tx,
+        reviewAudit(input, input.reviewId, auditActionForDecision(decision), {
+          round: input.round,
+          decision,
+        }),
+      );
+
       const updated = await getRequiredReviewRow(tx, input);
       return { review: toReviewView(updated), decision: toDecisionView(createdDecision) };
     });
@@ -586,6 +622,15 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
           }
           throw error;
         }
+
+        await recordAuditEvent(
+          tx,
+          reviewAudit(input, created.id, ReviewAuditAction.ReviewCreated, {
+            targetKind: scopedTarget.kind,
+            targetId: scopedTarget.id,
+            round: 1,
+          }),
+        );
 
         const row = await getRequiredReviewRow(tx, { ...input, reviewId: created.id });
         return { review: toReviewView(row) };
@@ -694,6 +739,13 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
           throw new AppError(409, 'REVIEW_NOT_OPEN', 'Only open reviews can be assigned');
         }
 
+        await recordAuditEvent(
+          tx,
+          reviewAudit(input, input.reviewId, ReviewAuditAction.ReviewAssigned, {
+            assigneeId: input.assigneeId,
+          }),
+        );
+
         const updated = await getRequiredReviewRow(tx, input);
         return { review: toReviewView(updated) };
       });
@@ -724,6 +776,8 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         if (result.count === 0) {
           throw new AppError(409, 'STALE_ROUND', 'The review changed before it could be started');
         }
+
+        await recordAuditEvent(tx, reviewAudit(input, input.reviewId, ReviewAuditAction.ReviewStarted));
 
         const updated = await getRequiredReviewRow(tx, input);
         return { review: toReviewView(updated) };
@@ -775,6 +829,14 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         if (result.count === 0) {
           throw new AppError(409, 'STALE_ROUND', 'The review round has changed');
         }
+
+        await recordAuditEvent(
+          tx,
+          reviewAudit(input, input.reviewId, ReviewAuditAction.ReviewResubmitted, {
+            round: row.round,
+            nextRound: row.round + 1,
+          }),
+        );
 
         const updated = await getRequiredReviewRow(tx, input);
         return { review: toReviewView(updated) };
