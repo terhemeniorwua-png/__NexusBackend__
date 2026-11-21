@@ -48,6 +48,7 @@ import { createTaskTimeEntryRouter } from '../modules/task-time-entries/task-tim
 import { createMessageRouter } from '../modules/messaging/message.routes';
 import { createNotificationRouter } from '../modules/notifications/notification.routes';
 import { createFileRouter } from '../modules/files/file.routes';
+import { createChecklistRouter } from '../modules/checklists/checklist.routes';
 import { createDocumentRouter } from '../modules/documents/document.routes';
 import { createCalendarRouter } from '../modules/calendar/calendar.routes';
 import { createMeetingRouter } from '../modules/meetings/meeting.routes';
@@ -184,6 +185,11 @@ export function createApiRouter({
   router.use('/workspaces/:workspaceId/audit', createAuditRouter({ config }));
   // Files are workspace-scoped
   router.use('/workspaces/:workspaceId/files', createFileRouter({ config }));
+  // Project checklists (BE-4) are nested under projects.
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/checklists',
+    createChecklistRouter({ config }),
+  );
   // Documents are workspace-scoped
   router.use('/workspaces/:workspaceId/documents', createDocumentRouter({ config }));
   // Resource library (folders, uploaded files, bookmarks) and project dashboard

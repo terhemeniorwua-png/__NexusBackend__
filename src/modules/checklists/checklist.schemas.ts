@@ -1,0 +1,44 @@
+import { z } from 'zod';
+
+const uuid = z.string().uuid();
+
+const title = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((value) => value.trim().length > 0, { message: 'Checklist title cannot be blank' });
+
+const description = z
+  .string()
+  .max(2000)
+  .refine((value) => value.trim().length > 0, { message: 'Checklist description cannot be blank' })
+  .nullable()
+  .optional();
+
+export const checklistProjectParamsSchema = z.object({ workspaceId: uuid, projectId: uuid });
+export const checklistParamsSchema = checklistProjectParamsSchema.extend({ checklistId: uuid });
+export const checklistItemParamsSchema = checklistParamsSchema.extend({ itemId: uuid });
+export const checklistFeedbackParamsSchema = checklistItemParamsSchema.extend({ feedbackId: uuid });
+
+export const listChecklistsQuerySchema = z.object({
+  cursor: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const createChecklistSchema = z.object({
+  title,
+  description,
+});
+
+export const updateChecklistSchema = z
+  .object({
+    title: title.optional(),
+    description,
+  })
+  .refine((value) => value.title !== undefined || value.description !== undefined, {
+    message: 'At least one field must be provided',
+  });
+
+export type ListChecklistsQuery = z.infer<typeof listChecklistsQuerySchema>;
+export type CreateChecklistInput = z.infer<typeof createChecklistSchema>;
+export type UpdateChecklistInput = z.infer<typeof updateChecklistSchema>;
