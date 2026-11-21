@@ -2,6 +2,7 @@ import {
   Prisma,
   type PrismaClient,
   type ReviewDecision,
+  type ReviewDecisionType,
   type ReviewStatus,
 } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
@@ -105,6 +106,43 @@ function toDecisionView(decision: ReviewDecision): ReviewDecisionView {
     decidedById: decision.decidedById,
     decidedAt: decision.decidedAt.toISOString(),
   };
+}
+
+function assertDecisionNote(decision: ReviewDecisionType, note?: string): void {
+  if (decision === 'APPROVED') {
+    if (note === undefined) return;
+    if (note.length < 1 || note.length > 2000 || note.trim().length === 0) {
+      throw new AppError(
+        400,
+        'VALIDATION_ERROR',
+        'Decision note must be between 1 and 2000 non-blank characters',
+      );
+    }
+    return;
+  }
+
+  if (note === undefined || note.length < 1 || note.length > 2000 || note.trim().length === 0) {
+    throw new AppError(
+      400,
+      'VALIDATION_ERROR',
+      'A note between 1 and 2000 non-blank characters is required for this decision',
+    );
+  }
+}
+
+function targetStatusForDecision(decision: ReviewDecisionType): ReviewStatus {
+  return decision === 'APPROVED' ? 'APPROVED' : 'CHANGES_REQUESTED';
+}
+
+function permissionForDecision(decision: ReviewDecisionType): ProjectPermissionValue {
+  switch (decision) {
+    case 'APPROVED':
+      return ProjectPermission.SubmissionApprove;
+    case 'REJECTED':
+      return ProjectPermission.SubmissionReject;
+    case 'CHANGES_REQUESTED':
+      return ProjectPermission.SubmissionRequestRevision;
+  }
 }
 
 function toReviewView(row: ReviewRow): ReviewView {
@@ -375,6 +413,72 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     }
   }
 
+  async function decide(
+    input: Input & { reviewId: string; round: number; note?: string },
+    decision: ReviewDecisionType,
+  ) {
+    assertDecisionNote(decision, input.note);
+    const { authorization } = await loadProjectContext(input, 'write');
+    await getRequiredReviewRow(prisma, input);
+    assertPermission(authorization, permissionForDecision(decision));
+
+    return prisma.$transaction(async (tx) => {
+      await lockReview(tx, input.reviewId);
+      const row = await getRequiredReviewRow(tx, input);
+
+      if (row.round !== input.round) {
+        throw new AppError(409, 'STALE_ROUND', 'The review round has changed', {
+          details: { expected: input.round, actual: row.round },
+        });
+      }
+
+      await assertChecklistRevisionCurrent(tx, row);
+
+      const nextStatus = targetStatusForDecision(decision);
+      assertReviewTransition(row.status, nextStatus, row.round);
+
+      const result = await tx.review.updateMany({
+        where: {
+          id: input.reviewId,
+          round: input.round,
+          status: { in: ['SUBMITTED', 'UNDER_REVIEW'] },
+        },
+        data: { status: nextStatus },
+      });
+      if (result.count === 0) {
+        throw new AppError(409, 'REVIEW_ALREADY_DECIDED', 'This review round was already decided', {
+          details: { round: input.round },
+        });
+      }
+
+      let createdDecision;
+      try {
+        createdDecision = await tx.reviewDecision.create({
+          data: {
+            reviewId: input.reviewId,
+            round: input.round,
+            decision,
+            note: input.note ?? null,
+            decidedById: input.userId,
+          },
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw new AppError(
+            409,
+            'REVIEW_ALREADY_DECIDED',
+            'This review round was already decided',
+            { details: { round: input.round } },
+          );
+        }
+        throw error;
+      }
+
+      const updated = await getRequiredReviewRow(tx, input);
+      return { review: toReviewView(updated), decision: toDecisionView(createdDecision) };
+    });
+  }
+
   return {
     async create(
       input: Input & {
@@ -625,6 +729,18 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         const updated = await getRequiredReviewRow(tx, input);
         return { review: toReviewView(updated) };
       });
+    },
+
+    async approve(input: Input & { reviewId: string; round: number; note?: string }) {
+      return decide(input, 'APPROVED');
+    },
+
+    async reject(input: Input & { reviewId: string; round: number; note: string }) {
+      return decide(input, 'REJECTED');
+    },
+
+    async requestChanges(input: Input & { reviewId: string; round: number; note: string }) {
+      return decide(input, 'CHANGES_REQUESTED');
     },
   };
 }

@@ -5,15 +5,21 @@ import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
+  approveReviewSchema,
   assignReviewSchema,
   createReviewSchema,
   listReviewsQuerySchema,
+  rejectReviewSchema,
+  requestChangesReviewSchema,
   resubmitReviewSchema,
   reviewParamsSchema,
   reviewProjectParamsSchema,
+  type ApproveReviewInput,
   type AssignReviewInput,
   type CreateReviewInput,
   type ListReviewsQuery,
+  type RejectReviewInput,
+  type RequestChangesReviewInput,
   type ResubmitReviewInput,
 } from './review.schemas';
 import { createReviewService } from './review.service';
@@ -156,6 +162,87 @@ export function createReviewRouter({ config, service: injectedService }: ReviewR
           projectId,
           reviewId,
           round: body.round,
+        }),
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/projects/:projectId/reviews/:reviewId/approve
+  router.post(
+    '/:reviewId/approve',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: reviewParamsSchema, body: approveReviewSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, reviewId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        reviewId: string;
+      };
+      const body = req.validated!.body as ApproveReviewInput;
+      sendSuccess(
+        res,
+        await service.approve({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          reviewId,
+          round: body.round,
+          note: body.note,
+        }),
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/projects/:projectId/reviews/:reviewId/reject
+  router.post(
+    '/:reviewId/reject',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: reviewParamsSchema, body: rejectReviewSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, reviewId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        reviewId: string;
+      };
+      const body = req.validated!.body as RejectReviewInput;
+      sendSuccess(
+        res,
+        await service.reject({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          reviewId,
+          round: body.round,
+          note: body.note,
+        }),
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/projects/:projectId/reviews/:reviewId/request-changes
+  router.post(
+    '/:reviewId/request-changes',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: reviewParamsSchema, body: requestChangesReviewSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, reviewId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        reviewId: string;
+      };
+      const body = req.validated!.body as RequestChangesReviewInput;
+      sendSuccess(
+        res,
+        await service.requestChanges({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          reviewId,
+          round: body.round,
+          note: body.note,
         }),
       );
     },

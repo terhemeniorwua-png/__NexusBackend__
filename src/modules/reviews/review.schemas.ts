@@ -39,7 +39,33 @@ export const resubmitReviewSchema = z.object({
   round: z.number().int().positive(),
 });
 
+const decisionNote = z
+  .string()
+  .min(1)
+  .max(2000)
+  .refine((value) => value.trim().length > 0, { message: 'Decision note cannot be blank' });
+
+const decisionRound = z.number().int().positive();
+
+export const approveReviewSchema = z.object({
+  round: decisionRound,
+  note: decisionNote.optional(),
+});
+
+export const rejectReviewSchema = z.object({
+  round: decisionRound,
+  note: decisionNote,
+});
+
+export const requestChangesReviewSchema = z.object({
+  round: decisionRound,
+  note: decisionNote,
+});
+
 export type ListReviewsQuery = z.infer<typeof listReviewsQuerySchema>;
 export type CreateReviewInput = z.infer<typeof createReviewSchema>;
 export type AssignReviewInput = z.infer<typeof assignReviewSchema>;
 export type ResubmitReviewInput = z.infer<typeof resubmitReviewSchema>;
+export type ApproveReviewInput = z.infer<typeof approveReviewSchema>;
+export type RejectReviewInput = z.infer<typeof rejectReviewSchema>;
+export type RequestChangesReviewInput = z.infer<typeof requestChangesReviewSchema>;
