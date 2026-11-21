@@ -26,6 +26,9 @@ export const ChecklistAuditAction = {
   ItemUncompleted: 'checklist_item.uncompleted',
   ItemSignedOff: 'checklist_item.signed_off',
   ItemSignOffRemoved: 'checklist_item.sign_off_removed',
+  FeedbackCreated: 'checklist_item.feedback_created',
+  FeedbackUpdated: 'checklist_item.feedback_updated',
+  FeedbackDeleted: 'checklist_item.feedback_deleted',
 } as const;
 
 export const MAX_LIVE_ITEMS = 200;
@@ -52,6 +55,16 @@ export interface ChecklistItemSummary {
   completedAt: string | null;
   signedOffById: string | null;
   signedOffAt: string | null;
+}
+
+export interface ChecklistItemFeedbackSummary {
+  id: string;
+  checklistItemId: string;
+  authorId: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  editedAt: string | null;
 }
 
 type Input = { userId: string; workspaceId: string };
@@ -95,12 +108,41 @@ function toItemSummary(row: ChecklistItemRow): ChecklistItemSummary {
   };
 }
 
+type FeedbackRow = {
+  id: string;
+  checklistItemId: string;
+  authorId: string;
+  body: string;
+  createdAt: Date;
+  updatedAt: Date;
+  editedAt: Date | null;
+};
+
+function toFeedbackSummary(row: FeedbackRow): ChecklistItemFeedbackSummary {
+  return {
+    ...row,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    editedAt: row.editedAt ? row.editedAt.toISOString() : null,
+  };
+}
+
 function assertItemText(text: string): void {
   if (text.length < 1 || text.length > 500 || text.trim().length === 0) {
     throw new AppError(
       400,
       'VALIDATION_ERROR',
       'Item text must be between 1 and 500 non-blank characters',
+    );
+  }
+}
+
+function assertFeedbackBody(body: string): void {
+  if (body.length < 1 || body.length > 4000 || body.trim().length === 0) {
+    throw new AppError(
+      400,
+      'VALIDATION_ERROR',
+      'Feedback body must be between 1 and 4000 non-blank characters',
     );
   }
 }
@@ -835,6 +877,176 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
         });
         return { item: toItemSummary(updated), revision };
       });
+    },
+
+    async listFeedback(
+      input: Input & {
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+        cursor?: string;
+        limit: number;
+      },
+    ) {
+      await loadItem(input, ProjectPermission.View, 'view');
+      const rows = await prisma.checklistItemFeedback.findMany({
+        where: { checklistItemId: input.itemId, deletedAt: null },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
+      const hasMore = rows.length > input.limit;
+      const items = (hasMore ? rows.slice(0, input.limit) : rows).map(toFeedbackSummary);
+      return { items, nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null };
+    },
+
+    async createFeedback(
+      input: Input & {
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+        body: string;
+      },
+    ) {
+      await loadItem(input, ProjectPermission.Update, 'write');
+      assertFeedbackBody(input.body);
+      const feedback = await prisma.$transaction(async (tx) => {
+        const item = await findLiveItem(tx, input.checklistId, input.itemId);
+        if (!item) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        const created = await tx.checklistItemFeedback.create({
+          data: {
+            checklistItemId: item.id,
+            authorId: input.userId,
+            body: input.body,
+          },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.FeedbackCreated,
+          targetType: 'ChecklistItemFeedback',
+          targetId: created.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: item.id,
+            feedbackId: created.id,
+          },
+        });
+        return created;
+      });
+      return { feedback: toFeedbackSummary(feedback) };
+    },
+
+    async editFeedback(
+      input: Input & {
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+        feedbackId: string;
+        body: string;
+      },
+    ) {
+      await loadItem(input, ProjectPermission.Update, 'write');
+      assertFeedbackBody(input.body);
+      const feedback = await prisma.$transaction(async (tx) => {
+        const item = await findLiveItem(tx, input.checklistId, input.itemId);
+        if (!item) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        const existing = await tx.checklistItemFeedback.findFirst({
+          where: { id: input.feedbackId, checklistItemId: item.id, deletedAt: null },
+        });
+        if (!existing) {
+          throw new AppError(
+            404,
+            'CHECKLIST_ITEM_FEEDBACK_NOT_FOUND',
+            'That feedback does not exist',
+          );
+        }
+        if (existing.authorId !== input.userId) {
+          throw new AppError(403, 'FEEDBACK_FORBIDDEN', 'Only the author can edit this feedback');
+        }
+        const now = new Date();
+        const updated = await tx.checklistItemFeedback.update({
+          where: { id: existing.id },
+          data: { body: input.body, editedAt: now, updatedAt: now },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.FeedbackUpdated,
+          targetType: 'ChecklistItemFeedback',
+          targetId: updated.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: item.id,
+            feedbackId: updated.id,
+          },
+        });
+        return updated;
+      });
+      return { feedback: toFeedbackSummary(feedback) };
+    },
+
+    async deleteFeedback(
+      input: Input & {
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+        feedbackId: string;
+      },
+    ) {
+      const { workspace, authorization } = await loadItem(
+        input,
+        ProjectPermission.Update,
+        'write',
+      );
+      await prisma.$transaction(async (tx) => {
+        const item = await findLiveItem(tx, input.checklistId, input.itemId);
+        if (!item) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        const existing = await tx.checklistItemFeedback.findFirst({
+          where: { id: input.feedbackId, checklistItemId: item.id, deletedAt: null },
+        });
+        if (!existing) {
+          throw new AppError(
+            404,
+            'CHECKLIST_ITEM_FEEDBACK_NOT_FOUND',
+            'That feedback does not exist',
+          );
+        }
+        const isAuthor = existing.authorId === input.userId;
+        const isWorkspaceAdmin =
+          workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
+        if (!isAuthor && !isWorkspaceAdmin && !isManagerOrAdmin(authorization)) {
+          throw new AppError(
+            403,
+            'FEEDBACK_FORBIDDEN',
+            'Only the author or an admin can delete this feedback',
+          );
+        }
+        const now = new Date();
+        await tx.checklistItemFeedback.update({
+          where: { id: existing.id },
+          data: { deletedAt: now, updatedAt: now },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.FeedbackDeleted,
+          targetType: 'ChecklistItemFeedback',
+          targetId: existing.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: item.id,
+            feedbackId: existing.id,
+          },
+        });
+      });
+      return { ok: true };
     },
   };
 }

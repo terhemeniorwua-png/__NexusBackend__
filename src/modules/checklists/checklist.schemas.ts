@@ -49,9 +49,26 @@ export const createItemSchema = z.object({ text: itemText });
 export const updateItemSchema = z.object({ text: itemText });
 export const reorderItemsSchema = z.object({ itemIds: z.array(uuid) });
 
+export const listFeedbackQuerySchema = z.object({
+  cursor: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+const feedbackBody = z
+  .string()
+  .min(1)
+  .max(4000)
+  .refine((value) => value.trim().length > 0, { message: 'Feedback cannot be blank' });
+
+export const createFeedbackSchema = z.object({ body: feedbackBody });
+export const updateFeedbackSchema = z.object({ body: feedbackBody });
+
 export type ListChecklistsQuery = z.infer<typeof listChecklistsQuerySchema>;
 export type CreateChecklistInput = z.infer<typeof createChecklistSchema>;
 export type UpdateChecklistInput = z.infer<typeof updateChecklistSchema>;
 export type CreateItemInput = z.infer<typeof createItemSchema>;
 export type UpdateItemInput = z.infer<typeof updateItemSchema>;
 export type ReorderItemsInput = z.infer<typeof reorderItemsSchema>;
+export type ListFeedbackQuery = z.infer<typeof listFeedbackQuerySchema>;
+export type CreateFeedbackInput = z.infer<typeof createFeedbackSchema>;
+export type UpdateFeedbackInput = z.infer<typeof updateFeedbackSchema>;

@@ -5,20 +5,27 @@ import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
+  checklistFeedbackParamsSchema,
   checklistItemParamsSchema,
   checklistParamsSchema,
   checklistProjectParamsSchema,
   createChecklistSchema,
+  createFeedbackSchema,
   createItemSchema,
   listChecklistsQuerySchema,
+  listFeedbackQuerySchema,
   reorderItemsSchema,
   updateChecklistSchema,
+  updateFeedbackSchema,
   updateItemSchema,
   type CreateChecklistInput,
+  type CreateFeedbackInput,
   type CreateItemInput,
   type ListChecklistsQuery,
+  type ListFeedbackQuery,
   type ReorderItemsInput,
   type UpdateChecklistInput,
+  type UpdateFeedbackInput,
   type UpdateItemInput,
 } from './checklist.schemas';
 import { createChecklistService } from './checklist.service';
@@ -372,6 +379,121 @@ export function createChecklistRouter({
           projectId,
           checklistId,
           itemId,
+        }),
+      );
+    },
+  );
+
+  // Feedback on one live checklist item (concrete FK, BE-3 parity).
+  router.get(
+    '/:checklistId/items/:itemId/feedback',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema, query: listFeedbackQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      const query = req.validated!.query as ListFeedbackQuery;
+      sendSuccess(
+        res,
+        await service.listFeedback({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+          cursor: query.cursor,
+          limit: query.limit,
+        }),
+      );
+    },
+  );
+
+  router.post(
+    '/:checklistId/items/:itemId/feedback',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema, body: createFeedbackSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      const body = req.validated!.body as CreateFeedbackInput;
+      sendSuccess(
+        res,
+        await service.createFeedback({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+          body: body.body,
+        }),
+        201,
+      );
+    },
+  );
+
+  router.patch(
+    '/:checklistId/items/:itemId/feedback/:feedbackId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistFeedbackParamsSchema, body: updateFeedbackSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId, feedbackId } = req.validated!
+        .params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+        feedbackId: string;
+      };
+      const body = req.validated!.body as UpdateFeedbackInput;
+      sendSuccess(
+        res,
+        await service.editFeedback({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+          feedbackId,
+          body: body.body,
+        }),
+      );
+    },
+  );
+
+  router.delete(
+    '/:checklistId/items/:itemId/feedback/:feedbackId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistFeedbackParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId, feedbackId } = req.validated!
+        .params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+        feedbackId: string;
+      };
+      sendSuccess(
+        res,
+        await service.deleteFeedback({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+          feedbackId,
         }),
       );
     },
