@@ -83,6 +83,35 @@ export function createFileService(
     return { ...row, createdAt: row.createdAt.toISOString() };
   }
 
+  type FeedbackSummaryRow = {
+    id: string;
+    attachmentVersionId: string;
+    authorId: string;
+    body: string;
+    createdAt: Date;
+    updatedAt: Date;
+    editedAt: Date | null;
+  };
+
+  function toFeedbackSummary(row: FeedbackSummaryRow) {
+    return {
+      ...row,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+      editedAt: row.editedAt ? row.editedAt.toISOString() : null,
+    };
+  }
+
+  function assertFeedbackBody(body: string): void {
+    if (body.length < 1 || body.length > 4000 || body.trim().length === 0) {
+      throw new AppError(
+        400,
+        'VALIDATION_ERROR',
+        'Feedback body must be between 1 and 4000 non-blank characters',
+      );
+    }
+  }
+
   /**
    * Loads a live attachment after proving workspace access and the requested
    * project permission. `write` additionally applies the workspace VIEWER and
@@ -507,6 +536,152 @@ export function createFileService(
         return target.storageKey;
       });
       await deleteStoredObject(deletedKey);
+      return { ok: true };
+    },
+
+    async listFeedback(
+      input: Input & { fileId: string; versionId: string; cursor?: string; limit: number },
+    ): Promise<{ items: Array<ReturnType<typeof toFeedbackSummary>>; nextCursor: string | null }> {
+      const { file } = await loadAttachment(input, 'view');
+      const version = await prisma.attachmentVersion.findFirst({
+        where: { id: input.versionId, attachmentId: file.id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!version) {
+        throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+      }
+      const rows = await prisma.attachmentVersionFeedback.findMany({
+        where: { attachmentVersionId: version.id, deletedAt: null },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
+      const hasMore = rows.length > input.limit;
+      const items = (hasMore ? rows.slice(0, input.limit) : rows).map(toFeedbackSummary);
+      return { items, nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null };
+    },
+
+    async createFeedback(
+      input: Input & { fileId: string; versionId: string; body: string },
+    ): Promise<{ feedback: ReturnType<typeof toFeedbackSummary> }> {
+      const { file } = await loadAttachment(input, 'write');
+      assertFeedbackBody(input.body);
+      const feedback = await prisma.$transaction(async (tx) => {
+        const version = await tx.attachmentVersion.findFirst({
+          where: { id: input.versionId, attachmentId: file.id, deletedAt: null },
+        });
+        if (!version) {
+          throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+        }
+        const created = await tx.attachmentVersionFeedback.create({
+          data: {
+            attachmentVersionId: version.id,
+            authorId: input.userId,
+            body: input.body,
+          },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'file.feedback.created',
+          targetType: 'AttachmentVersionFeedback',
+          targetId: created.id,
+          metadata: { fileId: file.id, attachmentVersionId: version.id },
+        });
+        return created;
+      });
+      return { feedback: toFeedbackSummary(feedback) };
+    },
+
+    async editFeedback(
+      input: Input & { fileId: string; versionId: string; feedbackId: string; body: string },
+    ): Promise<{ feedback: ReturnType<typeof toFeedbackSummary> }> {
+      const { file } = await loadAttachment(input, 'write');
+      assertFeedbackBody(input.body);
+      const feedback = await prisma.$transaction(async (tx) => {
+        const version = await tx.attachmentVersion.findFirst({
+          where: { id: input.versionId, attachmentId: file.id, deletedAt: null },
+          select: { id: true },
+        });
+        if (!version) {
+          throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+        }
+        const existing = await tx.attachmentVersionFeedback.findFirst({
+          where: {
+            id: input.feedbackId,
+            attachmentVersionId: version.id,
+            deletedAt: null,
+          },
+        });
+        if (!existing) {
+          throw new AppError(404, 'FILE_FEEDBACK_NOT_FOUND', 'That feedback does not exist');
+        }
+        if (existing.authorId !== input.userId) {
+          throw new AppError(403, 'FEEDBACK_FORBIDDEN', 'Only the author can edit this feedback');
+        }
+        const now = new Date();
+        const updated = await tx.attachmentVersionFeedback.update({
+          where: { id: existing.id },
+          data: { body: input.body, editedAt: now, updatedAt: now },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'file.feedback.updated',
+          targetType: 'AttachmentVersionFeedback',
+          targetId: updated.id,
+          metadata: { fileId: file.id, attachmentVersionId: version.id },
+        });
+        return updated;
+      });
+      return { feedback: toFeedbackSummary(feedback) };
+    },
+
+    async deleteFeedback(
+      input: Input & { fileId: string; versionId: string; feedbackId: string },
+    ): Promise<{ ok: true }> {
+      const { workspace, file, authorization } = await loadAttachment(input, 'write');
+      await prisma.$transaction(async (tx) => {
+        const version = await tx.attachmentVersion.findFirst({
+          where: { id: input.versionId, attachmentId: file.id, deletedAt: null },
+          select: { id: true },
+        });
+        if (!version) {
+          throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+        }
+        const existing = await tx.attachmentVersionFeedback.findFirst({
+          where: {
+            id: input.feedbackId,
+            attachmentVersionId: version.id,
+            deletedAt: null,
+          },
+        });
+        if (!existing) {
+          throw new AppError(404, 'FILE_FEEDBACK_NOT_FOUND', 'That feedback does not exist');
+        }
+        const isAuthor = existing.authorId === input.userId;
+        const isWorkspaceAdmin =
+          workspace.effectiveRole === 'OWNER' || workspace.effectiveRole === 'PROJECT_MANAGER';
+        const isProjectAdmin =
+          authorization?.isWorkspaceAdmin === true ||
+          authorization?.permissions.includes(ProjectPermission.FileDeleteAny) === true;
+        if (!isAuthor && !isWorkspaceAdmin && !isProjectAdmin) {
+          throw new AppError(403, 'FEEDBACK_FORBIDDEN', 'Only the author or an admin can delete this feedback');
+        }
+        const now = new Date();
+        await tx.attachmentVersionFeedback.update({
+          where: { id: existing.id },
+          data: { deletedAt: now, updatedAt: now },
+        });
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'file.feedback.deleted',
+          targetType: 'AttachmentVersionFeedback',
+          targetId: existing.id,
+          metadata: { fileId: file.id, attachmentVersionId: version.id },
+        });
+      });
       return { ok: true };
     },
 

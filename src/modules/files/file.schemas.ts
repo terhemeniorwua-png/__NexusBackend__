@@ -19,6 +19,7 @@ export const fileProjectFileParamsSchema = z.object({
   fileId: uuid,
 });
 export const fileVersionParamsSchema = fileParamsSchema.extend({ versionId: uuid });
+export const fileFeedbackParamsSchema = fileVersionParamsSchema.extend({ feedbackId: uuid });
 
 export const listFilesQuerySchema = z.object({
   cursor: uuid.optional(),
@@ -63,5 +64,16 @@ export const listVersionsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
+const feedbackBody = z
+  .string()
+  .min(1)
+  .max(4000)
+  .refine((value) => value.trim().length > 0, { message: 'Feedback cannot be blank' });
+
+export const createFeedbackSchema = z.object({ body: feedbackBody });
+export const updateFeedbackSchema = z.object({ body: feedbackBody });
+
 export type ListFilesQuery = z.infer<typeof listFilesQuerySchema>;
 export type ListVersionsQuery = z.infer<typeof listVersionsQuerySchema>;
+export type CreateFeedbackInput = z.infer<typeof createFeedbackSchema>;
+export type UpdateFeedbackInput = z.infer<typeof updateFeedbackSchema>;

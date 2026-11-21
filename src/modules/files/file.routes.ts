@@ -9,13 +9,18 @@ import { sendSuccess } from '../../utils/http';
 import {
   ALLOWED_MIME_TYPES,
   fileParamsSchema,
+  createFeedbackSchema,
+  fileFeedbackParamsSchema,
   fileVersionParamsSchema,
   fileWorkspaceParamsSchema,
   listFilesQuerySchema,
   listVersionsQuerySchema,
   MAX_FILE_SIZE_BYTES,
+  updateFeedbackSchema,
+  type CreateFeedbackInput,
   type ListFilesQuery,
   type ListVersionsQuery,
+  type UpdateFeedbackInput,
 } from './file.schemas';
 import { createFileService } from './file.service';
 
@@ -299,6 +304,111 @@ export function createFileRouter({
       sendSuccess(
         res,
         await service.deleteVersion({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // Feedback on any live version
+  router.get(
+    '/:fileId/versions/:versionId/feedback',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema, query: listVersionsQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      const query = req.validated!.query as ListVersionsQuery;
+      sendSuccess(
+        res,
+        await service.listFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          cursor: query.cursor,
+          limit: query.limit,
+        }),
+      );
+    },
+  );
+
+  router.post(
+    '/:fileId/versions/:versionId/feedback',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema, body: createFeedbackSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      const body = req.validated!.body as CreateFeedbackInput;
+      sendSuccess(
+        res,
+        await service.createFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          body: body.body,
+        }),
+        201,
+      );
+    },
+  );
+
+  router.patch(
+    '/:fileId/versions/:versionId/feedback/:feedbackId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileFeedbackParamsSchema, body: updateFeedbackSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId, feedbackId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+        feedbackId: string;
+      };
+      const body = req.validated!.body as UpdateFeedbackInput;
+      sendSuccess(
+        res,
+        await service.editFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          feedbackId,
+          body: body.body,
+        }),
+      );
+    },
+  );
+
+  router.delete(
+    '/:fileId/versions/:versionId/feedback/:feedbackId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileFeedbackParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId, feedbackId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+        feedbackId: string;
+      };
+      sendSuccess(
+        res,
+        await service.deleteFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          feedbackId,
+        }),
       );
     },
   );
