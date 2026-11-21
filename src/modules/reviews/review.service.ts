@@ -750,6 +750,9 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         }
 
         await assertChecklistRevisionCurrent(tx, row);
+        if (row.checklistId) {
+          await assertChecklistReady(tx, row.checklistId);
+        }
 
         assertReviewTransition(row.status, 'SUBMITTED', row.round);
         if (row.status !== 'CHANGES_REQUESTED') {
