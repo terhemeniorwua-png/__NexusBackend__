@@ -337,6 +337,8 @@ model User {
   messageMentions               MessageMention[]
   notifications                 Notification[]
   uploadedFiles                 FileAttachment[]
+  attachmentVersionsUploaded    AttachmentVersion[]           @relation("AttachmentVersionUploader")
+  attachmentVersionFeedback     AttachmentVersionFeedback[]   @relation("AttachmentVersionFeedbackAuthor")
   auditLogs                     AuditLog[]
   invitedWorkspaces             Invitation[]                  @relation("InvitedBy")
   pendingInvitations            Invitation[]                  @relation("InvitedUser")
@@ -1590,6 +1592,7 @@ model FileAttachment {
   task      Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   comment   Comment?  @relation(fields: [commentId], references: [id], onDelete: Cascade)
   uploader  User      @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  versions  AttachmentVersion[]
 
   @@index([workspaceId])
   @@index([projectId])
@@ -1598,6 +1601,55 @@ model FileAttachment {
   @@index([uploadedById])
   @@index([storageKey])
   @@index([workspaceId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Attachment versions (BE-3)
+// ---------------------------------------------------------------------------
+
+/// A stored version of a FileAttachment. The legacy FileAttachment.storageKey
+/// remains the v1 object key; every version owns exactly one object key.
+model AttachmentVersion {
+  id            String    @id @default(uuid())
+  attachmentId  String
+  versionNumber Int
+  isCurrent     Boolean   @default(false)
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  storageKey    String    @unique
+  changeNote    String?
+  extractedText String?
+  uploadedById  String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  attachment FileAttachment              @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+  uploader   User                        @relation("AttachmentVersionUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  feedback   AttachmentVersionFeedback[]
+
+  @@unique([attachmentId, versionNumber])
+  @@index([attachmentId, createdAt])
+  @@index([uploadedById])
+}
+
+/// Review feedback attached to one live attachment version.
+model AttachmentVersionFeedback {
+  id                  String    @id @default(uuid())
+  attachmentVersionId String
+  authorId            String
+  body                String
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  editedAt            DateTime?
+  deletedAt           DateTime?
+
+  version AttachmentVersion @relation(fields: [attachmentVersionId], references: [id], onDelete: Cascade)
+  author  User              @relation("AttachmentVersionFeedbackAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([attachmentVersionId, createdAt])
+  @@index([authorId])
 }
 
 // ---------------------------------------------------------------------------

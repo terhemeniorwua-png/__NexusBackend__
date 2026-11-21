@@ -9,10 +9,18 @@ import { sendSuccess } from '../../utils/http';
 import {
   ALLOWED_MIME_TYPES,
   fileParamsSchema,
+  createFeedbackSchema,
+  fileFeedbackParamsSchema,
+  fileVersionParamsSchema,
   fileWorkspaceParamsSchema,
   listFilesQuerySchema,
+  listVersionsQuerySchema,
   MAX_FILE_SIZE_BYTES,
+  updateFeedbackSchema,
+  type CreateFeedbackInput,
   type ListFilesQuery,
+  type ListVersionsQuery,
+  type UpdateFeedbackInput,
 } from './file.schemas';
 import { createFileService } from './file.service';
 
@@ -24,6 +32,18 @@ export interface FileRouterOptions {
 function userId(req: Request): string {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in');
   return req.auth.userId;
+}
+
+function sendFileBytes(
+  res: Parameters<typeof sendSuccess>[0],
+  result: { body: Buffer; contentType: string; fileName: string },
+): void {
+  res.setHeader('Content-Type', result.contentType);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${encodeURIComponent(result.fileName)}"`,
+  );
+  res.status(200).send(result.body);
 }
 
 export function createFileRouter({
@@ -50,6 +70,11 @@ export function createFileRouter({
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1, fields: 3 },
+  }).single('file');
+
+  const versionUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1, fields: 2 },
   }).single('file');
 
   // GET /workspaces/:workspaceId/files — list workspace files
@@ -136,6 +161,258 @@ export function createFileRouter({
     },
   );
 
+  // POST /workspaces/:workspaceId/files/:fileId/versions — upload the next version
+  router.post(
+    '/:fileId/versions',
+    requireAuth,
+    requireActiveAccount,
+    (req, res, next) => {
+      versionUpload(req, res, (error: unknown) => {
+        if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+          return next(new AppError(413, 'FILE_TOO_LARGE', `File exceeds the ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB limit`));
+        }
+        if (error) {
+          return next(new AppError(400, 'FILE_UPLOAD_INVALID', 'Invalid file upload'));
+        }
+        next();
+      });
+    },
+    validate({ params: fileParamsSchema }),
+    async (req, res) => {
+      if (!req.file) {
+        throw new AppError(400, 'FILE_REQUIRED', 'Select a file to upload');
+      }
+      const mimeType = req.file.mimetype;
+      if (!ALLOWED_MIME_TYPES.includes(mimeType as (typeof ALLOWED_MIME_TYPES)[number])) {
+        throw new AppError(415, 'FILE_TYPE_NOT_ALLOWED', `File type '${mimeType}' is not permitted`);
+      }
+      const { workspaceId, fileId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+      };
+      const changeNote = typeof req.body?.changeNote === 'string' ? req.body.changeNote : null;
+      sendSuccess(
+        res,
+        await service.uploadVersion({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          fileName: req.file.originalname,
+          mimeType,
+          body: req.file.buffer,
+          changeNote,
+        }),
+        201,
+      );
+    },
+  );
+
+  // GET /workspaces/:workspaceId/files/:fileId/versions — list live versions
+  router.get(
+    '/:fileId/versions',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileParamsSchema, query: listVersionsQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, fileId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+      };
+      const query = req.validated!.query as ListVersionsQuery;
+      sendSuccess(
+        res,
+        await service.listVersions({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          cursor: query.cursor,
+          limit: query.limit,
+        }),
+      );
+    },
+  );
+
+  // GET /workspaces/:workspaceId/files/:fileId/versions/:versionId — version metadata
+  router.get(
+    '/:fileId/versions/:versionId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendSuccess(
+        res,
+        await service.getVersion({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // GET /workspaces/:workspaceId/files/:fileId/versions/:versionId/download — raw bytes
+  router.get(
+    '/:fileId/versions/:versionId/download',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendFileBytes(
+        res,
+        await service.downloadVersion({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/files/:fileId/versions/:versionId/make-current
+  router.post(
+    '/:fileId/versions/:versionId/make-current',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendSuccess(
+        res,
+        await service.makeCurrent({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // DELETE /workspaces/:workspaceId/files/:fileId/versions/:versionId
+  router.delete(
+    '/:fileId/versions/:versionId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendSuccess(
+        res,
+        await service.deleteVersion({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // Feedback on any live version
+  router.get(
+    '/:fileId/versions/:versionId/feedback',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema, query: listVersionsQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      const query = req.validated!.query as ListVersionsQuery;
+      sendSuccess(
+        res,
+        await service.listFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          cursor: query.cursor,
+          limit: query.limit,
+        }),
+      );
+    },
+  );
+
+  router.post(
+    '/:fileId/versions/:versionId/feedback',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema, body: createFeedbackSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      const body = req.validated!.body as CreateFeedbackInput;
+      sendSuccess(
+        res,
+        await service.createFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          body: body.body,
+        }),
+        201,
+      );
+    },
+  );
+
+  router.patch(
+    '/:fileId/versions/:versionId/feedback/:feedbackId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileFeedbackParamsSchema, body: updateFeedbackSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId, feedbackId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+        feedbackId: string;
+      };
+      const body = req.validated!.body as UpdateFeedbackInput;
+      sendSuccess(
+        res,
+        await service.editFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          feedbackId,
+          body: body.body,
+        }),
+      );
+    },
+  );
+
+  router.delete(
+    '/:fileId/versions/:versionId/feedback/:feedbackId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileFeedbackParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId, feedbackId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+        feedbackId: string;
+      };
+      sendSuccess(
+        res,
+        await service.deleteFeedback({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          versionId,
+          feedbackId,
+        }),
+      );
+    },
+  );
+
   // GET /workspaces/:workspaceId/files/:fileId — download a file
   router.get(
     '/:fileId',
@@ -147,13 +424,10 @@ export function createFileRouter({
         workspaceId: string;
         fileId: string;
       };
-      const result = await service.download({ userId: userId(req), workspaceId, fileId });
-      res.setHeader('Content-Type', result.contentType);
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${encodeURIComponent(result.fileName)}"`,
+      sendFileBytes(
+        res,
+        await service.download({ userId: userId(req), workspaceId, fileId }),
       );
-      res.status(200).send(result.body);
     },
   );
 
