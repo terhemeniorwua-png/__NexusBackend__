@@ -821,6 +821,95 @@ Uncomplete is allowed for the completer or a project manager/admin (workspace
 admins included) and a non-completer `MEMBER` gets 403; create, edit and delete
 of items stay on `project.update`.
 
+## Submission reviews (BE-2)
+
+A shared review binds to exactly one typed target — an attachment version or a
+checklist — and records status, round and a decision log. There is no
+polymorphic `resourceId`. A checklist review pins the observed
+`Checklist.revision`, so an approval applies to one exact item state; edits that
+advance the revision leave the review stale until it is resubmitted. New rows
+start in `SUBMITTED` at round 1. `SUBMITTED` and `UNDER_REVIEW` are open states;
+`APPROVED` is terminal. `reject` and `request-changes` both set
+`CHANGES_REQUESTED`, distinguishable by the decision log. Assignment is
+optional/advisory: any holder of the decision permission may decide. BE-2
+creates no notifications; it writes audit events only.
+
+All routes below are under `/api/v1`, require authentication and an active
+account, and return `{ "success": true, "data": ... }` on success. Listing uses
+cursor pagination (`limit` 1-100, default 25, `cursor` a review id), ordered by
+`(createdAt, id)`. Reads require `project.view`; writes require the submission
+permission named below. Project visibility applies to the target as usual, and
+a soft-deleted target hides its reviews with 404.
+
+| Method | Path | Response data | Notes |
+| --- | --- | --- | --- |
+| `GET` | `/workspaces/{workspaceId}/projects/{projectId}/reviews` | `{ items, nextCursor }` | Filters `targetKind`, `targetId`, `status`, `assigneeId`, `cursor`, `limit`. Requires `project.view`. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/reviews` | `{ review }` (201) | Body has exactly one of `attachmentVersionId` or `checklistId`, plus optional `assigneeId`. Requires `submission.submit`. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/assign` | `{ review }` | Body `{ assigneeId }`; assignee must be a project member with `submission.review` and differ from the submitter. Requires `submission.review`. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/start` | `{ review }` | No body. Requires `submission.review`. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/resubmit` | `{ review }` | Body `{ round }`; reopens a `CHANGES_REQUESTED` review on the same row. Requires `submission.submit`. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/approve` | `{ review, decision }` | Body `{ round, note? }`; requires `submission.approve`. Direct `SUBMITTED → APPROVED` is allowed. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/reject` | `{ review, decision }` | Body `{ round, note }` (note required); requires `submission.reject`. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/request-changes` | `{ review, decision }` | Body `{ round, note }` (note required); requires `submission.request_revision`. |
+| `GET` | `/workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}` | `{ review }` | Requires `project.view`. |
+
+**Request shapes.** The list query accepts `targetKind` (`attachmentVersion` or
+`checklist`), `targetId` (uuid), `status` (`SUBMITTED`, `UNDER_REVIEW`,
+`APPROVED`, `CHANGES_REQUESTED`), `assigneeId` (uuid), `cursor` (uuid) and
+`limit` (1-100, default 25). Create takes exactly one of `attachmentVersionId`
+or `checklistId` (uuid) and an optional `assigneeId` (uuid). `assign` takes
+`{ assigneeId: uuid }`; `start` takes no body. `resubmit`, `approve`, `reject`
+and `request-changes` take a positive integer `round`; `approve` allows an
+optional `note` (1-2000 non-blank characters) while `reject` and
+`request-changes` require it.
+
+**Response shapes.** `ReviewView`: `id`, `workspaceId`, `projectId`, `resource`
+(`{ kind: "attachmentVersion"|"checklist", id, revision? }`, where `revision`
+appears only for checklists), `status`, `round`, `assigneeId` (uuid or `null`),
+`submittedById`, `submittedAt`, `checklistRevision` (integer or `null`),
+`lastDecision` (`ReviewDecisionView` or `null`), `stale` (boolean), `createdAt`,
+`updatedAt` (timestamps ISO-8601). `ReviewDecisionView`: `id`, `reviewId`,
+`round`, `decision` (`APPROVED`|`REJECTED`|`CHANGES_REQUESTED`), `note` (string
+or `null`), `decidedById`, `decidedAt` (ISO-8601).
+
+**Rules and concurrency.** Decision and resubmit bodies must carry the current
+`round`; a mismatch returns 409 `STALE_ROUND`, and a decided round returns 409
+`REVIEW_ALREADY_DECIDED`. Submitting a checklist requires at least one live item
+with every live item completed, otherwise 409 `CHECKLIST_NOT_READY` (create and
+resubmit). The checklist revision is pinned on the review; deciding or
+resubmitting against a newer revision returns 409 `CHECKLIST_REVISION_STALE`.
+Resubmit reopens the same `Review` row (it never creates a new one). An existing
+`APPROVED` review for the same attachment version, or the same checklist at the
+same revision, returns 409 `REVIEW_ALREADY_APPROVED`; an open review for the same
+target returns 409 `REVIEW_ALREADY_OPEN`. Assigning the same assignee and
+starting an already `UNDER_REVIEW` review are 200 no-ops. Soft-deleted targets
+hide their reviews with 404 `REVIEW_TARGET_NOT_FOUND` (or `REVIEW_NOT_FOUND`
+when addressed by review id).
+
+Audit events are written in the same transaction as the mutation:
+`review.created`, `review.assigned`, `review.started`, `review.resubmitted`,
+`review.approved`, `review.rejected`, `review.changes_requested`. BE-2 adds no
+`NotificationType` values and creates no notifications.
+
+| Error code | HTTP | Meaning |
+| --- | --- | --- |
+| `VALIDATION_ERROR` | 400 | Malformed target/assignee ids, body or query; invalid round or note. |
+| `AUTHENTICATION_REQUIRED` | 401 | No valid bearer access token. |
+| `PERMISSION_DENIED` | 403 | Caller lacks the required project/submission permission. |
+| `SELF_REVIEW_FORBIDDEN` | 403 | Assignee or decision maker is the submitter. |
+| `WORKSPACE_ACCESS_DENIED` | 403 | Caller is not an active member of the workspace. |
+| `REVIEW_NOT_FOUND` | 404 | Review id is unknown or its target is soft-deleted. |
+| `REVIEW_TARGET_NOT_FOUND` | 404 | The referenced attachment version or checklist does not exist in the project or is soft-deleted. |
+| `PROJECT_NOT_FOUND` | 404 | Project is missing or invisible to the caller. |
+| `REVIEW_ALREADY_OPEN` | 409 | An open review already exists for this target. |
+| `REVIEW_ALREADY_APPROVED` | 409 | This target already has an approved review (checklist: same pinned revision). |
+| `CHECKLIST_NOT_READY` | 409 | Checklist has no live items or some live item is incomplete. |
+| `CHECKLIST_REVISION_STALE` | 409 | Checklist revision advanced past the pinned revision. |
+| `STALE_ROUND` | 409 | Body `round` does not match the review's current round. |
+| `REVIEW_ALREADY_DECIDED` | 409 | This review round was already decided. |
+| `REVIEW_NOT_OPEN` | 409 | Assignment requires an open (`SUBMITTED`/`UNDER_REVIEW`) review. |
+| `INVALID_STATUS_TRANSITION` | 409 | Resubmit is not allowed from the review's current status. |
+
 ## Projects and project visibility (Phase 8 — in progress)
 
 Project records are workspace-scoped. All project-scoped routes enforce access

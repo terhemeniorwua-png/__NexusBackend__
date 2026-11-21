@@ -120,6 +120,23 @@ export type ProjectAuditActionValue =
   (typeof ProjectAuditAction)[keyof typeof ProjectAuditAction];
 
 /**
+ * BE-2 submission review lifecycle. Review changes are recorded in the audit
+ * trail only: they never create general notifications (BE-5 owns those).
+ */
+export const ReviewAuditAction = {
+  ReviewCreated: 'review.created',
+  ReviewAssigned: 'review.assigned',
+  ReviewStarted: 'review.started',
+  ReviewResubmitted: 'review.resubmitted',
+  ReviewApproved: 'review.approved',
+  ReviewRejected: 'review.rejected',
+  ReviewChangesRequested: 'review.changes_requested',
+} as const;
+
+export type ReviewAuditActionValue =
+  (typeof ReviewAuditAction)[keyof typeof ReviewAuditAction];
+
+/**
  * Audit actions that represent a security-relevant change to a workspace or
  * its membership. These are flagged on the audit log so they can be queried
  * and monitored separately from routine entries.

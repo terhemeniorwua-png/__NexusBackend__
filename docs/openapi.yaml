@@ -37,6 +37,8 @@ tags:
   description: Workspace-scoped projects, visibility, project membership, activity, and milestones
 - name: Checklists
   description: Project-scoped checklists, dense item ordering, sign-off and item feedback (BE-4)
+- name: Submission reviews
+  description: Shared BE-2 submission reviews for attachment versions and checklists
 - name: Billing
   description: Workspace subscription and payment management
 - name: Integrations
@@ -18323,6 +18325,344 @@ paths:
         '404':
           description: Feedback not found
 
+  /workspaces/{workspaceId}/projects/{projectId}/reviews:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags:
+      - Submission reviews
+      operationId: listSubmissionReviews
+      summary: List project submission reviews (cursor pagination)
+      description: Requires project.view. Results are ordered by (createdAt, id). A soft-deleted review target hides its review.
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: query
+        name: targetKind
+        required: false
+        schema:
+          type: string
+          enum:
+          - attachmentVersion
+          - checklist
+      - in: query
+        name: targetId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: status
+        required: false
+        schema:
+          type: string
+          enum:
+          - SUBMITTED
+          - UNDER_REVIEW
+          - APPROVED
+          - CHANGES_REQUESTED
+      - in: query
+        name: assigneeId
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+      responses:
+        '200':
+          description: Review list with cursor pagination.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewListResponse'
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: PROJECT_NOT_FOUND
+    post:
+      tags:
+      - Submission reviews
+      operationId: createSubmissionReview
+      summary: Submit an attachment version or checklist for review
+      description: Requires submission.submit. The body must contain exactly one typed target (never a polymorphic resourceId). New reviews start in SUBMITTED at round 1. Checklist targets require at least one live item with every live item completed.
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReviewRequest'
+      responses:
+        '201':
+          description: Created review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResponse'
+        '400':
+          description: VALIDATION_ERROR (exactly one target required).
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED or SELF_REVIEW_FORBIDDEN
+        '404':
+          description: PROJECT_NOT_FOUND or REVIEW_TARGET_NOT_FOUND
+        '409':
+          description: REVIEW_ALREADY_OPEN, REVIEW_ALREADY_APPROVED or CHECKLIST_NOT_READY
+  /workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/assign:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ReviewId'
+    post:
+      tags:
+      - Submission reviews
+      operationId: assignSubmissionReview
+      summary: Assign a reviewer (optional and advisory)
+      description: Requires submission.review. The assignee must be a project member holding submission.review and must differ from the submitter. Assigning the current assignee is a 200 no-op.
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+      responses:
+        '200':
+          description: Review with the updated assignee.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResponse'
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED, SELF_REVIEW_FORBIDDEN or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: REVIEW_NOT_FOUND, REVIEW_TARGET_NOT_FOUND or PROJECT_NOT_FOUND
+        '409':
+          description: REVIEW_NOT_OPEN
+  /workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/start:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ReviewId'
+    post:
+      tags:
+      - Submission reviews
+      operationId: startSubmissionReview
+      summary: Start reviewing (SUBMITTED to UNDER_REVIEW)
+      description: Requires submission.review. No request body. Already UNDER_REVIEW is a 200 no-op. Any holder of a decision permission may decide; assignment does not restrict decision makers.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Review moved to UNDER_REVIEW.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResponse'
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: REVIEW_NOT_FOUND, REVIEW_TARGET_NOT_FOUND or PROJECT_NOT_FOUND
+        '409':
+          description: STALE_ROUND or INVALID_STATUS_TRANSITION
+  /workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/resubmit:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ReviewId'
+    post:
+      tags:
+      - Submission reviews
+      operationId: resubmitSubmissionReview
+      summary: Resubmit a changes-requested review
+      description: Requires submission.submit. Reopens the same Review row at the next round; it never creates a new Review. Checklist resubmits require a ready checklist at the pinned revision.
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResubmitRequest'
+      responses:
+        '200':
+          description: Review reopened at SUBMITTED.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResponse'
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: REVIEW_NOT_FOUND, REVIEW_TARGET_NOT_FOUND or PROJECT_NOT_FOUND
+        '409':
+          description: CHECKLIST_NOT_READY, CHECKLIST_REVISION_STALE, STALE_ROUND, INVALID_STATUS_TRANSITION or REVIEW_ALREADY_OPEN
+  /workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/approve:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ReviewId'
+    post:
+      tags:
+      - Submission reviews
+      operationId: approveSubmissionReview
+      summary: Approve a review round
+      description: Requires submission.approve. Sets status APPROVED (terminal) and records a decision. SUBMITTED can be approved directly. note is optional.
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+      responses:
+        '200':
+          description: Approved review and recorded decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDecisionResponse'
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED, SELF_REVIEW_FORBIDDEN or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: REVIEW_NOT_FOUND, REVIEW_TARGET_NOT_FOUND or PROJECT_NOT_FOUND
+        '409':
+          description: CHECKLIST_REVISION_STALE, STALE_ROUND, REVIEW_ALREADY_DECIDED, REVIEW_ALREADY_APPROVED or INVALID_STATUS_TRANSITION
+  /workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/reject:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ReviewId'
+    post:
+      tags:
+      - Submission reviews
+      operationId: rejectSubmissionReview
+      summary: Reject a review round
+      description: Requires submission.reject. Records a REJECTED decision and sets status CHANGES_REQUESTED; a non-blank note is required.
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionWithNoteRequest'
+      responses:
+        '200':
+          description: Review and recorded decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDecisionResponse'
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED, SELF_REVIEW_FORBIDDEN or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: REVIEW_NOT_FOUND, REVIEW_TARGET_NOT_FOUND or PROJECT_NOT_FOUND
+        '409':
+          description: CHECKLIST_REVISION_STALE, STALE_ROUND, REVIEW_ALREADY_DECIDED or INVALID_STATUS_TRANSITION
+  /workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}/request-changes:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ReviewId'
+    post:
+      tags:
+      - Submission reviews
+      operationId: requestChangesOnSubmissionReview
+      summary: Request changes on a review round
+      description: Requires submission.request_revision. Records a CHANGES_REQUESTED decision and sets status CHANGES_REQUESTED; a non-blank note is required. Reject and request-changes share the target status and are distinguished by the decision log.
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionWithNoteRequest'
+      responses:
+        '200':
+          description: Review and recorded decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDecisionResponse'
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED, SELF_REVIEW_FORBIDDEN or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: REVIEW_NOT_FOUND, REVIEW_TARGET_NOT_FOUND or PROJECT_NOT_FOUND
+        '409':
+          description: CHECKLIST_REVISION_STALE, STALE_ROUND, REVIEW_ALREADY_DECIDED or INVALID_STATUS_TRANSITION
+  /workspaces/{workspaceId}/projects/{projectId}/reviews/{reviewId}:
+    parameters:
+    - $ref: '#/components/parameters/WorkspaceId'
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ReviewId'
+    get:
+      tags:
+      - Submission reviews
+      operationId: getSubmissionReview
+      summary: Read one submission review
+      description: Requires project.view. Soft-deleted targets hide their reviews with 404.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: One review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResponse'
+        '401':
+          description: AUTHENTICATION_REQUIRED
+        '403':
+          description: PERMISSION_DENIED or WORKSPACE_ACCESS_DENIED
+        '404':
+          description: REVIEW_NOT_FOUND, REVIEW_TARGET_NOT_FOUND or PROJECT_NOT_FOUND
+
 components:
   securitySchemes:
     bearerAuth:
@@ -18384,6 +18724,14 @@ components:
       in: path
       required: true
       description: The join request.
+      schema:
+        type: string
+        format: uuid
+    ReviewId:
+      name: reviewId
+      in: path
+      required: true
+      description: The shared submission review.
       schema:
         type: string
         format: uuid
@@ -18782,6 +19130,268 @@ components:
           properties:
             feedback:
               $ref: '#/components/schemas/ChecklistItemFeedbackSummary'
+    ReviewResource:
+      type: object
+      required:
+      - kind
+      - id
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - attachmentVersion
+          - checklist
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 1
+          description: Present only for checklist resources; the pinned checklist revision.
+    ReviewDecisionView:
+      type: object
+      required:
+      - id
+      - reviewId
+      - round
+      - decision
+      - note
+      - decidedById
+      - decidedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        reviewId:
+          type: string
+          format: uuid
+        round:
+          type: integer
+          minimum: 1
+        decision:
+          type: string
+          enum:
+          - APPROVED
+          - REJECTED
+          - CHANGES_REQUESTED
+        note:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        decidedById:
+          type: string
+          format: uuid
+        decidedAt:
+          type: string
+          format: date-time
+    ReviewView:
+      type: object
+      required:
+      - id
+      - workspaceId
+      - projectId
+      - resource
+      - status
+      - round
+      - assigneeId
+      - submittedById
+      - submittedAt
+      - checklistRevision
+      - lastDecision
+      - stale
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        resource:
+          $ref: '#/components/schemas/ReviewResource'
+        status:
+          type: string
+          enum:
+          - SUBMITTED
+          - UNDER_REVIEW
+          - APPROVED
+          - CHANGES_REQUESTED
+        round:
+          type: integer
+          minimum: 1
+        assigneeId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        submittedById:
+          type: string
+          format: uuid
+        submittedAt:
+          type: string
+          format: date-time
+        checklistRevision:
+          type:
+          - integer
+          - 'null'
+          minimum: 1
+          description: Pinned checklist revision, or null for attachment-version reviews.
+        lastDecision:
+          anyOf:
+          - $ref: '#/components/schemas/ReviewDecisionView'
+          - type: 'null'
+        stale:
+          type: boolean
+          description: True when the pinned checklist revision no longer matches the live checklist.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateReviewRequest:
+      type: object
+      additionalProperties: false
+      description: Exactly one typed target is required; there is no polymorphic resourceId.
+      properties:
+        attachmentVersionId:
+          type: string
+          format: uuid
+        checklistId:
+          type: string
+          format: uuid
+        assigneeId:
+          type: string
+          format: uuid
+      oneOf:
+      - required:
+        - attachmentVersionId
+        not:
+          required:
+          - checklistId
+      - required:
+        - checklistId
+        not:
+          required:
+          - attachmentVersionId
+    AssignRequest:
+      type: object
+      required:
+      - assigneeId
+      additionalProperties: false
+      properties:
+        assigneeId:
+          type: string
+          format: uuid
+          description: Must be a project member with submission.review and must differ from the submitter.
+    ResubmitRequest:
+      type: object
+      required:
+      - round
+      additionalProperties: false
+      properties:
+        round:
+          type: integer
+          minimum: 1
+          description: Must match the review's current round.
+    DecisionRequest:
+      type: object
+      required:
+      - round
+      additionalProperties: false
+      description: Used by approve; note is optional.
+      properties:
+        round:
+          type: integer
+          minimum: 1
+          description: Must match the review's current round.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Optional non-blank decision note, 1-2000 characters.
+    DecisionWithNoteRequest:
+      type: object
+      required:
+      - round
+      - note
+      additionalProperties: false
+      description: Used by reject and request-changes; note is required.
+      properties:
+        round:
+          type: integer
+          minimum: 1
+          description: Must match the review's current round.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Required non-blank decision note, 1-2000 characters.
+    ReviewResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - review
+          properties:
+            review:
+              $ref: '#/components/schemas/ReviewView'
+    ReviewDecisionResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - review
+          - decision
+          properties:
+            review:
+              $ref: '#/components/schemas/ReviewView'
+            decision:
+              $ref: '#/components/schemas/ReviewDecisionView'
+    ReviewListResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - items
+          - nextCursor
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewView'
+            nextCursor:
+              type:
+              - string
+              - 'null'
+              format: uuid
     HealthResponse:
       type: object
       required:

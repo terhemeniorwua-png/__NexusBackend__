@@ -49,6 +49,7 @@ import { createMessageRouter } from '../modules/messaging/message.routes';
 import { createNotificationRouter } from '../modules/notifications/notification.routes';
 import { createFileRouter } from '../modules/files/file.routes';
 import { createChecklistRouter } from '../modules/checklists/checklist.routes';
+import { createReviewRouter } from '../modules/reviews/review.routes';
 import { createDocumentRouter } from '../modules/documents/document.routes';
 import { createCalendarRouter } from '../modules/calendar/calendar.routes';
 import { createMeetingRouter } from '../modules/meetings/meeting.routes';
@@ -189,6 +190,11 @@ export function createApiRouter({
   router.use(
     '/workspaces/:workspaceId/projects/:projectId/checklists',
     createChecklistRouter({ config }),
+  );
+  // Shared BE-2 reviews are nested under projects.
+  router.use(
+    '/workspaces/:workspaceId/projects/:projectId/reviews',
+    createReviewRouter({ config }),
   );
   // Documents are workspace-scoped
   router.use('/workspaces/:workspaceId/documents', createDocumentRouter({ config }));
