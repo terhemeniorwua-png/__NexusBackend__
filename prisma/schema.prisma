@@ -339,6 +339,10 @@ model User {
   uploadedFiles                 FileAttachment[]
   attachmentVersionsUploaded    AttachmentVersion[]           @relation("AttachmentVersionUploader")
   attachmentVersionFeedback     AttachmentVersionFeedback[]   @relation("AttachmentVersionFeedbackAuthor")
+  checklistsCreated             Checklist[]                   @relation("ChecklistCreator")
+  checklistItemsCompleted       ChecklistItem[]              @relation("ChecklistItemCompletedBy")
+  checklistItemsSignedOff       ChecklistItem[]              @relation("ChecklistItemSignedOffBy")
+  checklistItemFeedback         ChecklistItemFeedback[]       @relation("ChecklistItemFeedbackAuthor")
   auditLogs                     AuditLog[]
   invitedWorkspaces             Invitation[]                  @relation("InvitedBy")
   pendingInvitations            Invitation[]                  @relation("InvitedUser")
@@ -602,6 +606,7 @@ model Workspace {
   invitations            Invitation[]
   joinRequests           JoinRequest[]
   files                  FileAttachment[]
+  checklists             Checklist[]
   documents              Document[]
   calendarEvents         CalendarEvent[]
   forms                  Form[]
@@ -1042,6 +1047,7 @@ model Project {
   tasks                        Task[]
   channels                     Channel[]
   attachments                  FileAttachment[]
+  checklists                   Checklist[]
   documents                    Document[]
   calendarEvents               CalendarEvent[]
   meetings                     Meeting[]
@@ -1649,6 +1655,77 @@ model AttachmentVersionFeedback {
   author  User              @relation("AttachmentVersionFeedbackAuthor", fields: [authorId], references: [id], onDelete: Restrict)
 
   @@index([attachmentVersionId, createdAt])
+  @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Project checklists (BE-4)
+// ---------------------------------------------------------------------------
+
+/// A project-scoped checklist. `revision` is the optimistic/approval boundary
+/// captured by BE-2 bindings; it advances on every real item write.
+model Checklist {
+  id          String    @id @default(uuid())
+  workspaceId String
+  projectId   String
+  title       String
+  description String?
+  revision    Int       @default(1)
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("ChecklistCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  items     ChecklistItem[]
+
+  @@index([workspaceId, projectId])
+  @@index([projectId, createdAt, id])
+}
+
+/// One dense, server-positioned line in a checklist. State fields are paired
+/// with actor/timestamp columns; raw CHECKs in the migration enforce the pairs.
+model ChecklistItem {
+  id            String    @id @default(uuid())
+  checklistId   String
+  position      Int
+  text          String
+  completed     Boolean   @default(false)
+  completedById String?
+  completedAt   DateTime?
+  signedOffById String?
+  signedOffAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  checklist   Checklist               @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  completedBy User?                   @relation("ChecklistItemCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
+  signedOffBy User?                   @relation("ChecklistItemSignedOffBy", fields: [signedOffById], references: [id], onDelete: Restrict)
+  feedback    ChecklistItemFeedback[]
+
+  @@index([checklistId, position])
+  @@index([checklistId, createdAt, id])
+  @@index([checklistId, deletedAt])
+}
+
+/// Review feedback on exactly one checklist item (concrete FK, not polymorphic).
+model ChecklistItemFeedback {
+  id              String    @id @default(uuid())
+  checklistItemId String
+  authorId        String
+  body            String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  editedAt        DateTime?
+  deletedAt       DateTime?
+
+  checklistItem ChecklistItem @relation(fields: [checklistItemId], references: [id], onDelete: Cascade)
+  author        User          @relation("ChecklistItemFeedbackAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([checklistItemId, createdAt])
   @@index([authorId])
 }
 
