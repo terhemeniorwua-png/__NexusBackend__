@@ -9,10 +9,13 @@ import { sendSuccess } from '../../utils/http';
 import {
   ALLOWED_MIME_TYPES,
   fileParamsSchema,
+  fileVersionParamsSchema,
   fileWorkspaceParamsSchema,
   listFilesQuerySchema,
+  listVersionsQuerySchema,
   MAX_FILE_SIZE_BYTES,
   type ListFilesQuery,
+  type ListVersionsQuery,
 } from './file.schemas';
 import { createFileService } from './file.service';
 
@@ -24,6 +27,18 @@ export interface FileRouterOptions {
 function userId(req: Request): string {
   if (!req.auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'You must be signed in');
   return req.auth.userId;
+}
+
+function sendFileBytes(
+  res: Parameters<typeof sendSuccess>[0],
+  result: { body: Buffer; contentType: string; fileName: string },
+): void {
+  res.setHeader('Content-Type', result.contentType);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${encodeURIComponent(result.fileName)}"`,
+  );
+  res.status(200).send(result.body);
 }
 
 export function createFileRouter({
@@ -187,6 +202,107 @@ export function createFileRouter({
     },
   );
 
+  // GET /workspaces/:workspaceId/files/:fileId/versions — list live versions
+  router.get(
+    '/:fileId/versions',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileParamsSchema, query: listVersionsQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, fileId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+      };
+      const query = req.validated!.query as ListVersionsQuery;
+      sendSuccess(
+        res,
+        await service.listVersions({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          cursor: query.cursor,
+          limit: query.limit,
+        }),
+      );
+    },
+  );
+
+  // GET /workspaces/:workspaceId/files/:fileId/versions/:versionId — version metadata
+  router.get(
+    '/:fileId/versions/:versionId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendSuccess(
+        res,
+        await service.getVersion({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // GET /workspaces/:workspaceId/files/:fileId/versions/:versionId/download — raw bytes
+  router.get(
+    '/:fileId/versions/:versionId/download',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendFileBytes(
+        res,
+        await service.downloadVersion({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/files/:fileId/versions/:versionId/make-current
+  router.post(
+    '/:fileId/versions/:versionId/make-current',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendSuccess(
+        res,
+        await service.makeCurrent({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
+  // DELETE /workspaces/:workspaceId/files/:fileId/versions/:versionId
+  router.delete(
+    '/:fileId/versions/:versionId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: fileVersionParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, fileId, versionId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+        versionId: string;
+      };
+      sendSuccess(
+        res,
+        await service.deleteVersion({ userId: userId(req), workspaceId, fileId, versionId }),
+      );
+    },
+  );
+
   // GET /workspaces/:workspaceId/files/:fileId — download a file
   router.get(
     '/:fileId',
@@ -198,13 +314,10 @@ export function createFileRouter({
         workspaceId: string;
         fileId: string;
       };
-      const result = await service.download({ userId: userId(req), workspaceId, fileId });
-      res.setHeader('Content-Type', result.contentType);
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${encodeURIComponent(result.fileName)}"`,
+      sendFileBytes(
+        res,
+        await service.download({ userId: userId(req), workspaceId, fileId }),
       );
-      res.status(200).send(result.body);
     },
   );
 

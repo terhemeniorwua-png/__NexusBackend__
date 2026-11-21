@@ -330,6 +330,186 @@ export function createFileService(
       }
     },
 
+    async listVersions(
+      input: Input & { fileId: string; cursor?: string; limit: number },
+    ): Promise<{ items: Array<ReturnType<typeof toVersionSummary>>; nextCursor: string | null }> {
+      await loadAttachment(input, 'view');
+      const rows = await prisma.attachmentVersion.findMany({
+        where: { attachmentId: input.fileId, deletedAt: null },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
+      const hasMore = rows.length > input.limit;
+      const items = (hasMore ? rows.slice(0, input.limit) : rows).map(toVersionSummary);
+      return { items, nextCursor: hasMore ? (items[items.length - 1]?.id ?? null) : null };
+    },
+
+    async getVersion(
+      input: Input & { fileId: string; versionId: string },
+    ): Promise<{ version: ReturnType<typeof toVersionSummary> }> {
+      await loadAttachment(input, 'view');
+      const version = await prisma.attachmentVersion.findFirst({
+        where: { id: input.versionId, attachmentId: input.fileId, deletedAt: null },
+      });
+      if (!version) {
+        throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+      }
+      return { version: toVersionSummary(version) };
+    },
+
+    async downloadVersion(
+      input: Input & { fileId: string; versionId: string },
+    ): Promise<{ body: Buffer; contentType: string; fileName: string }> {
+      await loadAttachment(input, 'view');
+      const version = await prisma.attachmentVersion.findFirst({
+        where: { id: input.versionId, attachmentId: input.fileId, deletedAt: null },
+      });
+      if (!version) {
+        throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+      }
+      const result = await requireStorage().get(version.storageKey, {
+        allowedContentTypes: ALLOWED_MIME_TYPES,
+        maxReadBytes: Math.min(version.sizeBytes, MAX_FILE_SIZE_BYTES),
+        tooLargeCode: 'FILE_VERSION_TOO_LARGE',
+        tooLargeMessage: 'Stored file exceeds its recorded size',
+        invalidContentTypeCode: 'FILE_VERSION_CONTENT_TYPE_INVALID',
+        invalidContentTypeMessage: 'Stored file has an unsupported content type',
+      });
+      return { body: result.body, contentType: version.mimeType, fileName: version.fileName };
+    },
+
+    async makeCurrent(
+      input: Input & { fileId: string; versionId: string },
+    ): Promise<{ version: ReturnType<typeof toVersionSummary> }> {
+      await loadAttachment(input, 'write');
+      const version = await prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "FileAttachment" WHERE "id" = ${input.fileId} FOR UPDATE
+        `;
+        if (locked.length === 0) {
+          throw new AppError(404, 'FILE_NOT_FOUND', 'That file does not exist');
+        }
+        const target = await tx.attachmentVersion.findFirst({
+          where: { id: input.versionId, attachmentId: input.fileId, deletedAt: null },
+        });
+        if (!target) {
+          throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+        }
+        const now = new Date();
+        if (!target.isCurrent) {
+          await tx.attachmentVersion.updateMany({
+            where: {
+              attachmentId: input.fileId,
+              isCurrent: true,
+              deletedAt: null,
+              id: { not: target.id },
+            },
+            data: { isCurrent: false, updatedAt: now },
+          });
+          await tx.attachmentVersion.update({
+            where: { id: target.id },
+            data: { isCurrent: true, updatedAt: now },
+          });
+          await tx.fileAttachment.update({
+            where: { id: input.fileId },
+            data: {
+              fileName: target.fileName,
+              mimeType: target.mimeType,
+              sizeBytes: target.sizeBytes,
+              updatedAt: now,
+            },
+          });
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: 'file.version.made_current',
+            targetType: 'AttachmentVersion',
+            targetId: target.id,
+            metadata: {
+              fileId: input.fileId,
+              versionNumber: target.versionNumber,
+              storageKey: target.storageKey,
+            },
+          });
+          return { ...target, isCurrent: true, updatedAt: now };
+        }
+        return target;
+      });
+      return { version: toVersionSummary(version) };
+    },
+
+    async deleteVersion(
+      input: Input & { fileId: string; versionId: string },
+    ): Promise<{ ok: true }> {
+      await loadAttachment(input, 'write');
+      const deletedKey = await prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "FileAttachment" WHERE "id" = ${input.fileId} FOR UPDATE
+        `;
+        if (locked.length === 0) {
+          throw new AppError(404, 'FILE_NOT_FOUND', 'That file does not exist');
+        }
+        const target = await tx.attachmentVersion.findFirst({
+          where: { id: input.versionId, attachmentId: input.fileId, deletedAt: null },
+        });
+        if (!target) {
+          throw new AppError(404, 'FILE_VERSION_NOT_FOUND', 'That file version does not exist');
+        }
+        const liveCount = await tx.attachmentVersion.count({
+          where: { attachmentId: input.fileId, deletedAt: null },
+        });
+        if (liveCount === 1) {
+          throw new AppError(409, 'LAST_VERSION', 'The last live version cannot be deleted');
+        }
+
+        const now = new Date();
+        await tx.attachmentVersion.update({
+          where: { id: target.id },
+          data: { deletedAt: now, isCurrent: false, updatedAt: now },
+        });
+
+        if (target.isCurrent) {
+          const promoted = await tx.attachmentVersion.findFirst({
+            where: { attachmentId: input.fileId, deletedAt: null },
+            orderBy: [{ versionNumber: 'desc' }, { id: 'desc' }],
+          });
+          if (!promoted) {
+            throw new AppError(409, 'LAST_VERSION', 'The last live version cannot be deleted');
+          }
+          await tx.attachmentVersion.update({
+            where: { id: promoted.id },
+            data: { isCurrent: true, updatedAt: now },
+          });
+          await tx.fileAttachment.update({
+            where: { id: input.fileId },
+            data: {
+              fileName: promoted.fileName,
+              mimeType: promoted.mimeType,
+              sizeBytes: promoted.sizeBytes,
+              updatedAt: now,
+            },
+          });
+        }
+
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'file.version.deleted',
+          targetType: 'AttachmentVersion',
+          targetId: target.id,
+          metadata: {
+            fileId: input.fileId,
+            versionNumber: target.versionNumber,
+            storageKey: target.storageKey,
+          },
+        });
+        return target.storageKey;
+      });
+      await deleteStoredObject(deletedKey);
+      return { ok: true };
+    },
+
     async download(
       input: Input & { fileId: string },
     ): Promise<{ body: Buffer; contentType: string; fileName: string }> {
@@ -503,10 +683,21 @@ export function createFileService(
         }
       }
 
+      const now = new Date();
+      let versionKeys: string[] = [];
       await prisma.$transaction(async (tx) => {
+        const liveVersions = await tx.attachmentVersion.findMany({
+          where: { attachmentId: file.id, deletedAt: null },
+          select: { id: true, storageKey: true },
+        });
+        versionKeys = liveVersions.map((version) => version.storageKey);
+        await tx.attachmentVersion.updateMany({
+          where: { attachmentId: file.id, deletedAt: null },
+          data: { deletedAt: now, isCurrent: false, updatedAt: now },
+        });
         await tx.fileAttachment.update({
           where: { id: file.id },
-          data: { deletedAt: new Date() },
+          data: { deletedAt: now },
         });
 
         await recordAuditEvent(tx, {
@@ -519,8 +710,10 @@ export function createFileService(
         });
       });
 
-      // Best-effort delete from storage — failure doesn't fail the request
-      await deleteStoredObject(file.storageKey);
+      // Objects belong to version rows; best-effort cleanup after commit.
+      for (const key of versionKeys) {
+        await deleteStoredObject(key);
+      }
     },
 
     async getUsage(input: Input): Promise<{ totalBytes: number; fileCount: number }> {

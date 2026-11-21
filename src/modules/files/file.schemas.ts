@@ -18,6 +18,7 @@ export const fileProjectFileParamsSchema = z.object({
   projectId: uuid,
   fileId: uuid,
 });
+export const fileVersionParamsSchema = fileParamsSchema.extend({ versionId: uuid });
 
 export const listFilesQuerySchema = z.object({
   cursor: uuid.optional(),
@@ -57,4 +58,10 @@ export const ALLOWED_MIME_TYPES = [
 
 export const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
+export const listVersionsQuerySchema = z.object({
+  cursor: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
 export type ListFilesQuery = z.infer<typeof listFilesQuerySchema>;
+export type ListVersionsQuery = z.infer<typeof listVersionsQuerySchema>;
