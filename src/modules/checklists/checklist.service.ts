@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
@@ -15,7 +15,13 @@ export const ChecklistAuditAction = {
   Created: 'checklist.created',
   Updated: 'checklist.updated',
   Deleted: 'checklist.deleted',
+  ItemCreated: 'checklist_item.created',
+  ItemUpdated: 'checklist_item.updated',
+  ItemDeleted: 'checklist_item.deleted',
+  ItemReordered: 'checklist_item.reordered',
 } as const;
+
+export const MAX_LIVE_ITEMS = 200;
 
 export interface ChecklistSummary {
   id: string;
@@ -27,6 +33,18 @@ export interface ChecklistSummary {
   createdById: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ChecklistItemSummary {
+  id: string;
+  checklistId: string;
+  position: number;
+  text: string;
+  completed: boolean;
+  completedById: string | null;
+  completedAt: string | null;
+  signedOffById: string | null;
+  signedOffAt: string | null;
 }
 
 type Input = { userId: string; workspaceId: string };
@@ -42,12 +60,42 @@ type ChecklistRow = {
   updatedAt: Date;
 };
 
+type ChecklistItemRow = {
+  id: string;
+  checklistId: string;
+  position: number;
+  text: string;
+  completed: boolean;
+  completedById: string | null;
+  completedAt: Date | null;
+  signedOffById: string | null;
+  signedOffAt: Date | null;
+};
+
 function toChecklistSummary(row: ChecklistRow): ChecklistSummary {
   return {
     ...row,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+function toItemSummary(row: ChecklistItemRow): ChecklistItemSummary {
+  return {
+    ...row,
+    completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+    signedOffAt: row.signedOffAt ? row.signedOffAt.toISOString() : null,
+  };
+}
+
+function assertItemText(text: string): void {
+  if (text.length < 1 || text.length > 500 || text.trim().length === 0) {
+    throw new AppError(
+      400,
+      'VALIDATION_ERROR',
+      'Item text must be between 1 and 500 non-blank characters',
+    );
+  }
 }
 
 export function createChecklistService(prisma: PrismaClient = getPrismaClient()) {
@@ -108,6 +156,35 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
     });
     if (mode === 'write') assertProjectWritable(authorization.project);
     return { workspace, actor, checklist, authorization };
+  }
+
+  /** Serializes all dense-position and revision writes for one checklist. */
+  async function lockChecklist(tx: Prisma.TransactionClient, checklistId: string): Promise<void> {
+    await tx.$queryRaw`SELECT "id" FROM "Checklist" WHERE "id" = ${checklistId} FOR UPDATE`;
+  }
+
+  async function bumpRevision(tx: Prisma.TransactionClient, checklistId: string): Promise<number> {
+    const updated = await tx.checklist.update({
+      where: { id: checklistId },
+      data: { revision: { increment: 1 } },
+      select: { revision: true },
+    });
+    return updated.revision;
+  }
+
+  async function loadItem(
+    input: Input & { projectId: string; checklistId: string; itemId: string },
+    permission: ProjectPermissionValue,
+    mode: 'view' | 'write',
+  ) {
+    const loaded = await loadChecklist(input, permission, mode);
+    const item = await prisma.checklistItem.findFirst({
+      where: { id: input.itemId, checklistId: input.checklistId, deletedAt: null },
+    });
+    if (!item) {
+      throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+    }
+    return { ...loaded, item };
   }
 
   return {
@@ -237,6 +314,221 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
           },
         });
         return { ok: true };
+      });
+    },
+
+    async listItems(input: Input & { projectId: string; checklistId: string }) {
+      await loadChecklist(input, ProjectPermission.View, 'view');
+      const rows = await prisma.checklistItem.findMany({
+        where: { checklistId: input.checklistId, deletedAt: null },
+        orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      });
+      return { items: rows.map(toItemSummary) };
+    },
+
+    async createItem(
+      input: Input & {
+        projectId: string;
+        checklistId: string;
+        text: string;
+      },
+    ) {
+      assertItemText(input.text);
+      await loadChecklist(input, ProjectPermission.Update, 'write');
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const liveCount = await tx.checklistItem.count({
+          where: { checklistId: input.checklistId, deletedAt: null },
+        });
+        if (liveCount >= MAX_LIVE_ITEMS) {
+          throw new AppError(
+            409,
+            'CHECKLIST_ITEM_LIMIT',
+            `A checklist can contain at most ${MAX_LIVE_ITEMS} live items`,
+          );
+        }
+        const item = await tx.checklistItem.create({
+          data: {
+            checklistId: input.checklistId,
+            position: liveCount,
+            text: input.text,
+          },
+        });
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemCreated,
+          targetType: 'ChecklistItem',
+          targetId: item.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: item.id,
+            position: item.position,
+            revision,
+            text: item.text,
+          },
+        });
+        return { item: toItemSummary(item), revision };
+      });
+    },
+
+    async updateItem(
+      input: Input & {
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+        text: string;
+      },
+    ) {
+      assertItemText(input.text);
+      await loadItem(input, ProjectPermission.Update, 'write');
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const current = await tx.checklistItem.findFirst({
+          where: { id: input.itemId, checklistId: input.checklistId, deletedAt: null },
+        });
+        if (!current) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        if (current.text === input.text) {
+          const checklist = await tx.checklist.findUniqueOrThrow({
+            where: { id: input.checklistId },
+            select: { revision: true },
+          });
+          return { item: toItemSummary(current), revision: checklist.revision };
+        }
+        const item = await tx.checklistItem.update({
+          where: { id: current.id },
+          data: { text: input.text },
+        });
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemUpdated,
+          targetType: 'ChecklistItem',
+          targetId: item.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: item.id,
+            revision,
+            before: { text: current.text },
+            after: { text: item.text },
+          },
+        });
+        return { item: toItemSummary(item), revision };
+      });
+    },
+
+    async deleteItem(input: Input & { projectId: string; checklistId: string; itemId: string }) {
+      await loadItem(input, ProjectPermission.Update, 'write');
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const item = await tx.checklistItem.findFirst({
+          where: { id: input.itemId, checklistId: input.checklistId, deletedAt: null },
+        });
+        if (!item) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        await tx.checklistItem.update({
+          where: { id: item.id },
+          data: { deletedAt: new Date() },
+        });
+        const remaining = await tx.checklistItem.findMany({
+          where: { checklistId: input.checklistId, deletedAt: null },
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        });
+        for (const [index, row] of remaining.entries()) {
+          if (row.position !== index) {
+            await tx.checklistItem.update({
+              where: { id: row.id },
+              data: { position: index },
+            });
+          }
+        }
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemDeleted,
+          targetType: 'ChecklistItem',
+          targetId: item.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: item.id,
+            revision,
+            previousPosition: item.position,
+          },
+        });
+        return { ok: true, revision };
+      });
+    },
+
+    async reorderItems(
+      input: Input & {
+        projectId: string;
+        checklistId: string;
+        itemIds: string[];
+      },
+    ) {
+      await loadChecklist(input, ProjectPermission.Update, 'write');
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const live = await tx.checklistItem.findMany({
+          where: { checklistId: input.checklistId, deletedAt: null },
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        });
+        const liveIds = new Set(live.map((row) => row.id));
+        const requestedIds = new Set(input.itemIds);
+        if (
+          requestedIds.size !== input.itemIds.length ||
+          input.itemIds.length !== liveIds.size ||
+          input.itemIds.some((id) => !liveIds.has(id))
+        ) {
+          throw new AppError(
+            409,
+            'CHECKLIST_ITEMS_MISMATCH',
+            'itemIds must be the complete ordered list of live checklist item ids',
+          );
+        }
+        const byId = new Map(live.map((row) => [row.id, row]));
+        let changed = false;
+        for (const [index, id] of input.itemIds.entries()) {
+          const row = byId.get(id)!;
+          if (row.position !== index) {
+            await tx.checklistItem.update({
+              where: { id },
+              data: { position: index },
+            });
+            changed = true;
+          }
+        }
+        const items = await tx.checklistItem.findMany({
+          where: { checklistId: input.checklistId, deletedAt: null },
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        });
+        if (!changed) {
+          const checklist = await tx.checklist.findUniqueOrThrow({
+            where: { id: input.checklistId },
+            select: { revision: true },
+          });
+          return { items: items.map(toItemSummary), revision: checklist.revision };
+        }
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemReordered,
+          targetType: 'Checklist',
+          targetId: input.checklistId,
+          metadata: {
+            checklistId: input.checklistId,
+            itemIds: input.itemIds,
+            revision,
+          },
+        });
+        return { items: items.map(toItemSummary), revision };
       });
     },
   };

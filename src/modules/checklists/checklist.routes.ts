@@ -5,14 +5,21 @@ import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
+  checklistItemParamsSchema,
   checklistParamsSchema,
   checklistProjectParamsSchema,
   createChecklistSchema,
+  createItemSchema,
   listChecklistsQuerySchema,
+  reorderItemsSchema,
   updateChecklistSchema,
+  updateItemSchema,
   type CreateChecklistInput,
+  type CreateItemInput,
   type ListChecklistsQuery,
+  type ReorderItemsInput,
   type UpdateChecklistInput,
+  type UpdateItemInput,
 } from './checklist.schemas';
 import { createChecklistService } from './checklist.service';
 
@@ -150,6 +157,128 @@ export function createChecklistRouter({
       sendSuccess(
         res,
         await service.delete({ userId: userId(req), workspaceId, projectId, checklistId }),
+      );
+    },
+  );
+
+  // Items are ordered by position and are not paginated (max 200 live items).
+  router.get(
+    '/:checklistId/items',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+      };
+      sendSuccess(
+        res,
+        await service.listItems({ userId: userId(req), workspaceId, projectId, checklistId }),
+      );
+    },
+  );
+
+  router.post(
+    '/:checklistId/items',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistParamsSchema, body: createItemSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+      };
+      const body = req.validated!.body as CreateItemInput;
+      sendSuccess(
+        res,
+        await service.createItem({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          text: body.text,
+        }),
+        201,
+      );
+    },
+  );
+
+  router.post(
+    '/:checklistId/items/reorder',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistParamsSchema, body: reorderItemsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+      };
+      const body = req.validated!.body as ReorderItemsInput;
+      sendSuccess(
+        res,
+        await service.reorderItems({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemIds: body.itemIds,
+        }),
+      );
+    },
+  );
+
+  router.patch(
+    '/:checklistId/items/:itemId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema, body: updateItemSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      const body = req.validated!.body as UpdateItemInput;
+      sendSuccess(
+        res,
+        await service.updateItem({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+          text: body.text,
+        }),
+      );
+    },
+  );
+
+  router.delete(
+    '/:checklistId/items/:itemId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      sendSuccess(
+        res,
+        await service.deleteItem({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+        }),
       );
     },
   );
