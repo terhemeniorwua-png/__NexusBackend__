@@ -35,6 +35,8 @@ tags:
   description: Workspace-scoped teams and team membership
 - name: Projects
   description: Workspace-scoped projects, visibility, project membership, activity, and milestones
+- name: Checklists
+  description: Project-scoped checklists, dense item ordering, sign-off and item feedback (BE-4)
 - name: Billing
   description: Workspace subscription and payment management
 - name: Integrations
@@ -17392,6 +17394,935 @@ paths:
         '403': { description: Insufficient workspace role. }
         '404': { description: Group not found. }
 
+  /workspaces/{workspaceId}/projects/{projectId}/checklists:
+    get:
+      tags:
+      - Checklists
+      operationId: listChecklists
+      summary: List project checklists (cursor pagination)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+      responses:
+        '200':
+          description: Checklist list
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: object
+                    required:
+                    - items
+                    - nextCursor
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ChecklistSummary'
+                      nextCursor:
+                        type:
+                        - string
+                        - 'null'
+                        format: uuid
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Project not found
+    post:
+      tags:
+      - Checklists
+      operationId: createChecklist
+      summary: Create a project checklist
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChecklistRequest'
+      responses:
+        '201':
+          description: Created checklist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Project not found
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}:
+    get:
+      tags:
+      - Checklists
+      operationId: getChecklist
+      summary: Get one live checklist
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: One checklist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Checklist not found
+    patch:
+      tags:
+      - Checklists
+      operationId: updateChecklist
+      summary: Update checklist title or description
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateChecklistRequest'
+      responses:
+        '200':
+          description: Updated checklist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist not found
+    delete:
+      tags:
+      - Checklists
+      operationId: deleteChecklist
+      summary: Soft-delete a checklist and its live items
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Checklist deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist not found
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items:
+    get:
+      tags:
+      - Checklists
+      operationId: listChecklistItems
+      summary: List all live checklist items by position (not paginated)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Item list
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: object
+                    required:
+                    - items
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ChecklistItemSummary'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Checklist not found
+    post:
+      tags:
+      - Checklists
+      operationId: createChecklistItem
+      summary: Append a checklist item at position = live count
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistItemTextRequest'
+      responses:
+        '201':
+          description: Created item and new checklist revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist not found
+        '409':
+          description: 200 live item limit reached (CHECKLIST_ITEM_LIMIT)
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/reorder:
+    post:
+      tags:
+      - Checklists
+      operationId: reorderChecklistItems
+      summary: Reorder items with the full ordered list of live item ids
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistItemReorderRequest'
+      responses:
+        '200':
+          description: Reordered items and new checklist revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemsResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist not found
+        '409':
+          description: Missing, extra or duplicate ids (CHECKLIST_ITEMS_MISMATCH)
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}:
+    patch:
+      tags:
+      - Checklists
+      operationId: updateChecklistItem
+      summary: Edit item text (position is not client-writable)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistItemTextRequest'
+      responses:
+        '200':
+          description: Updated item and checklist revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist item not found
+    delete:
+      tags:
+      - Checklists
+      operationId: deleteChecklistItem
+      summary: Soft-delete an item and renumber remaining live items densely
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Item deleted and new checklist revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemDeleteResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist item not found
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/complete:
+    post:
+      tags:
+      - Checklists
+      operationId: completeChecklistItem
+      summary: Complete an item (idempotent conditional update)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Completed item and checklist revision (no-op when already completed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist item not found
+        '409':
+          description: Concurrent state conflict
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/uncomplete:
+    post:
+      tags:
+      - Checklists
+      operationId: uncompleteChecklistItem
+      summary: Uncomplete an item (completer or manager/admin only)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Uncompleted item and checklist revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (completer or manager/admin only)
+        '404':
+          description: Checklist item not found
+        '409':
+          description: Item is signed off (ITEM_SIGNED_OFF) or concurrent conflict
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/sign-off:
+    post:
+      tags:
+      - Checklists
+      operationId: signOffChecklistItem
+      summary: Sign off a completed item (signer must differ from completer)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Signed-off item and checklist revision (no-op when already signed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (submission.approve required, or self-review)
+        '404':
+          description: Checklist item not found
+        '409':
+          description: Item not completed (ITEM_NOT_COMPLETED) or concurrent conflict
+    delete:
+      tags:
+      - Checklists
+      operationId: removeChecklistItemSignOff
+      summary: Remove a sign-off (original signer or manager/admin only)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Unsigned item and checklist revision (no-op when unsigned)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (original signer or manager/admin only)
+        '404':
+          description: Checklist item not found
+        '409':
+          description: Concurrent state conflict
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/feedback:
+    get:
+      tags:
+      - Checklists
+      operationId: listChecklistItemFeedback
+      summary: List feedback on one live checklist item (cursor pagination)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+      responses:
+        '200':
+          description: Feedback list
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  data:
+                    type: object
+                    required:
+                    - items
+                    - nextCursor
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ChecklistItemFeedbackSummary'
+                      nextCursor:
+                        type:
+                        - string
+                        - 'null'
+                        format: uuid
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Checklist item not found
+    post:
+      tags:
+      - Checklists
+      operationId: createChecklistItemFeedback
+      summary: Add feedback to a checklist item
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistItemFeedbackRequest'
+      responses:
+        '201':
+          description: Created feedback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemFeedbackResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (project.update required)
+        '404':
+          description: Checklist item not found
+  /workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/feedback/{feedbackId}:
+    patch:
+      tags:
+      - Checklists
+      operationId: updateChecklistItemFeedback
+      summary: Edit feedback (author only)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: feedbackId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistItemFeedbackRequest'
+      responses:
+        '200':
+          description: Updated feedback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistItemFeedbackResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (author only)
+        '404':
+          description: Feedback not found
+    delete:
+      tags:
+      - Checklists
+      operationId: deleteChecklistItemFeedback
+      summary: Delete feedback (author or project/workspace admin)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: checklistId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: feedbackId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Feedback deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (author or admin only)
+        '404':
+          description: Feedback not found
+
 components:
   securitySchemes:
     bearerAuth:
@@ -17549,6 +18480,308 @@ components:
           minLength: 1
           maxLength: 4000
           description: 1-4000 non-blank characters
+    ChecklistSummary:
+      type: object
+      required:
+      - id
+      - workspaceId
+      - projectId
+      - title
+      - description
+      - revision
+      - createdById
+      - createdAt
+      - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+        revision:
+          type: integer
+          minimum: 1
+          description: Captured by BE-2 review bindings; advances on real item changes.
+        createdById:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ChecklistItemSummary:
+      type: object
+      required:
+      - id
+      - checklistId
+      - position
+      - text
+      - completed
+      - completedById
+      - completedAt
+      - signedOffById
+      - signedOffAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        checklistId:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 0
+          description: Dense, server-assigned index in the live item list.
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+        completed:
+          type: boolean
+        completedById:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        completedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        signedOffById:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        signedOffAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    ChecklistItemFeedbackSummary:
+      type: object
+      required:
+      - id
+      - checklistItemId
+      - authorId
+      - body
+      - createdAt
+      - updatedAt
+      - editedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        checklistItemId:
+          type: string
+          format: uuid
+        authorId:
+          type: string
+          format: uuid
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        editedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    CreateChecklistRequest:
+      type: object
+      required:
+      - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: 1-200 non-blank characters
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+          description: Optional, 1-2000 non-blank characters or null
+    UpdateChecklistRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: 1-200 non-blank characters
+        description:
+          type:
+          - string
+          - 'null'
+          maxLength: 2000
+          description: 1-2000 non-blank characters or null
+    ChecklistItemTextRequest:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: 1-500 non-blank characters
+    ChecklistItemReorderRequest:
+      type: object
+      required:
+      - itemIds
+      properties:
+        itemIds:
+          type: array
+          description: Complete ordered list of live checklist item ids.
+          items:
+            type: string
+            format: uuid
+    ChecklistItemFeedbackRequest:
+      type: object
+      required:
+      - body
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: 1-4000 non-blank characters
+    OkResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - ok
+          properties:
+            ok:
+              type: boolean
+              const: true
+    ChecklistResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - checklist
+          properties:
+            checklist:
+              $ref: '#/components/schemas/ChecklistSummary'
+    ChecklistItemResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - item
+          - revision
+          properties:
+            item:
+              $ref: '#/components/schemas/ChecklistItemSummary'
+            revision:
+              type: integer
+              minimum: 1
+    ChecklistItemsResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - items
+          - revision
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ChecklistItemSummary'
+            revision:
+              type: integer
+              minimum: 1
+    ChecklistItemDeleteResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - ok
+          - revision
+          properties:
+            ok:
+              type: boolean
+              const: true
+            revision:
+              type: integer
+              minimum: 1
+    ChecklistItemFeedbackResponse:
+      type: object
+      required:
+      - success
+      - data
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: object
+          required:
+          - feedback
+          properties:
+            feedback:
+              $ref: '#/components/schemas/ChecklistItemFeedbackSummary'
     HealthResponse:
       type: object
       required:

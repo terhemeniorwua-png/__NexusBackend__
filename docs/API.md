@@ -721,6 +721,106 @@ Known limitations: a crash between object put and commit leaves an orphaned
 object; soft-deleted objects are retained until a separate retention task;
 signed/direct uploads, streaming and content sniffing are out of scope.
 
+## Project checklists (BE-4)
+
+A checklist is workspace/project-scoped and owns an ordered list of live items
+plus a `revision` counter. BE-2 binds a review to a checklist by storing the
+stable `Checklist.id` together with the observed `revision`, so an approval is
+pinned to one exact item state; editing an approved checklist starts a new
+review there. BE-4 itself adds no `taskId` link and no roll-up to task
+progress. Templates (`ChecklistTemplate`, `ChecklistTemplateItem`) are
+deferred and are not present in this schema.
+
+All routes below are under `/api/v1`, require authentication and an active
+account, and return `{ "success": true, "data": ... }` on success. Checklist
+listing and feedback listing use cursor pagination (`limit` 1-100, default 25,
+ordered by `(createdAt, id)`). Checklist items are **not** paginated: a
+checklist holds at most 200 live items, ordered by dense `position`.
+
+| Method | Path | Response data | Notes |
+| --- | --- | --- | --- |
+| `GET` | `/workspaces/{workspaceId}/projects/{projectId}/checklists` | `{ items, nextCursor }` | Cursor-paginated live checklists. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/checklists` | `{ checklist }` (201) | Body `title` (1-200 non-blank) and optional `description` (0-2000 or `null`). |
+| `GET` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}` | `{ checklist }` | Live checklist only. |
+| `PATCH` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}` | `{ checklist }` | Body `title` and/or `description`; does not change `revision`. |
+| `DELETE` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}` | `{ ok: true }` | Soft-deletes the checklist and its live items. |
+| `GET` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items` | `{ items }` | All live items by `position`. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items` | `{ item, revision }` (201) | Body `text` (1-500 non-blank). Appends at `position = live count`; 409 `CHECKLIST_ITEM_LIMIT` at 200. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/reorder` | `{ items, revision }` | Body `itemIds`: the complete ordered list of live item ids. Extras, missing or duplicate ids give 409 `CHECKLIST_ITEMS_MISMATCH`. |
+| `PATCH` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}` | `{ item, revision }` | Body `text` only; `position` is not client-writable. |
+| `DELETE` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}` | `{ ok: true, revision }` | Soft-deletes the item and renumbers remaining live items densely. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/complete` | `{ item, revision }` | Conditional update; already completed is a 200 no-op with no audit event. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/uncomplete` | `{ item, revision }` | 409 `ITEM_SIGNED_OFF` if signed off; completer or manager/admin only. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/sign-off` | `{ item, revision }` | Requires completion, `submission.approve`, and a signer different from the completer; already signed is a 200 no-op. |
+| `DELETE` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/sign-off` | `{ item, revision }` | Original signer or project/workspace admin; leaves `completed` unchanged; no-op when unsigned. |
+| `GET` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/feedback` | `{ items, nextCursor }` | Feedback on one live item. |
+| `POST` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/feedback` | `{ feedback }` (201) | Body `body` (1-4000 non-blank). |
+| `PATCH` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/feedback/{feedbackId}` | `{ feedback }` | Author only; sets `editedAt`. |
+| `DELETE` | `/workspaces/{workspaceId}/projects/{projectId}/checklists/{checklistId}/items/{itemId}/feedback/{feedbackId}` | `{ ok: true }` | Author or project/workspace admin. |
+
+`ChecklistSummary` fields: `id`, `workspaceId`, `projectId`, `title`,
+`description`, `revision`, `createdById`, `createdAt`, `updatedAt` (timestamps
+are ISO-8601). `ChecklistItemSummary` fields: `id`, `checklistId`, `position`,
+`text`, `completed`, `completedById`, `completedAt`, `signedOffById`,
+`signedOffAt` (timestamps ISO-8601 or `null`).
+`ChecklistItemFeedbackSummary` fields: `id`, `checklistItemId`, `authorId`,
+`body`, `createdAt`, `updatedAt`, `editedAt` (ISO-8601 or `null`).
+
+Permission rules (server-side, same 403/404 order as other project routes):
+outsiders get 403, wrong-workspace checklist ids and private/invisible
+projects get 404, and `VIEWER` gets 403 on every write. Reads require
+`project.update`-independent `project.view`; checklist creation/edit/delete and
+all item create/edit/delete/reorder/complete/feedback writes require
+`project.update` (held by `PROJECT_MANAGER` and workspace admins — a plain
+`MEMBER` does **not** hold it). `uncomplete` is additionally allowed for the
+completer or a project manager/admin; a non-completer `MEMBER` gets 403.
+Sign-off requires `submission.approve` (`PROJECT_MANAGER` and workspace
+`OWNER`/`PROJECT_MANAGER` admins, not `MEMBER`/`COLLABORATOR`/`VIEWER`) and a
+signer different from the completer (403 `SELF_REVIEW_FORBIDDEN`). Sign-off
+removal is allowed for the original signer or a project manager/admin, with no
+signer-differs check. Feedback is visible to anyone who can view its item;
+editing requires the author, deletion requires the author or an admin.
+Soft-deleted checklists, items and feedback return 404.
+
+Ordering and concurrency: `position` is dense and server-assigned. New items
+append at `position = live count`; deleting an item renumbers the remaining
+live items densely in the same transaction. `Checklist ... FOR UPDATE`
+serializes reorder, item create/delete and every revision-changing write, so
+concurrent reorders cannot produce duplicate or sparse positions. `revision`
+starts at 1 and is incremented with an atomic `UPDATE ... SET revision =
+revision + 1` inside the same transaction on every real item create, edit,
+delete, reorder, complete, uncomplete, sign-off or sign-off removal. No-ops and
+feedback writes do not change `revision` and emit no audit event; real state
+conflicts return 409. Complete and sign-off use conditional `updateMany`
+statements with no separate item lock.
+
+The migration `20261120150000_be4_checklists` adds three tables (no backfill,
+no edits to applied migrations) with raw-SQL CHECKs: `position >= 0`, item text
+1-500 non-blank, feedback body 1-4000 non-blank, `signedOffAt` requires
+`completedAt`, and `completedById`/`signedOffById` present if and only if their
+timestamp is. The actor FKs use `ON DELETE RESTRICT`, matching BE-3.
+
+Audit events are written in the same transaction as the mutation:
+`checklist.created`, `checklist.updated`, `checklist.deleted`,
+`checklist_item.created`, `checklist_item.updated`, `checklist_item.deleted`,
+`checklist_item.reordered`, `checklist_item.completed`,
+`checklist_item.uncompleted`, `checklist_item.signed_off`,
+`checklist_item.sign_off_removed`, `checklist_item.feedback_created`,
+`checklist_item.feedback_updated`, `checklist_item.feedback_deleted`. BE-4
+emits audit events only: it creates no notifications and changes no
+`NotificationType` values (BE-5 owns those).
+
+Owner-confirmed amendments that override the earlier design note on conflict:
+(1) complete and sign-off use conditional `updateMany` only, with no separate
+item lock; the `Checklist FOR UPDATE` lock is for reorder, item create, item
+delete and any revision change. (2) Deleting an item renumbers remaining live
+items densely in the same transaction under the `Checklist` lock — "position
+changes only by reorder" is amended to "only by reorder or by item
+delete/create", with new items appended at `position = live count`. (3)
+Uncomplete is allowed for the completer or a project manager/admin (workspace
+admins included) and a non-completer `MEMBER` gets 403; create, edit and delete
+of items stay on `project.update`.
+
 ## Projects and project visibility (Phase 8 — in progress)
 
 Project records are workspace-scoped. All project-scoped routes enforce access
