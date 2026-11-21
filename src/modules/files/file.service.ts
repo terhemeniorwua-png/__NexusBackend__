@@ -13,6 +13,7 @@ import {
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
 import { extractTextFromUpload } from './text-extraction';
 import { assertProjectWritable } from '../projects/project-archive';
+import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from './file.schemas';
 
 export interface FileSummary {
   id: string;
@@ -175,8 +176,37 @@ export function createFileService(
         });
       }
 
-      const result = await requireStorage().get(file.storageKey);
-      return { body: result.body, contentType: result.contentType, fileName: file.fileName };
+      // The attachment row keeps the legacy v1 storage key for compatibility;
+      // downloads always use the current live version object and metadata.
+      const version = await prisma.attachmentVersion.findFirst({
+        where: {
+          attachmentId: file.id,
+          isCurrent: true,
+          deletedAt: null,
+        },
+        orderBy: { versionNumber: 'desc' },
+      });
+      if (!version) {
+        throw new AppError(
+          404,
+          'FILE_VERSION_NOT_FOUND',
+          'The current version of this file does not exist',
+        );
+      }
+
+      const result = await requireStorage().get(version.storageKey, {
+        allowedContentTypes: ALLOWED_MIME_TYPES,
+        maxReadBytes: Math.min(version.sizeBytes, MAX_FILE_SIZE_BYTES),
+        tooLargeCode: 'FILE_VERSION_TOO_LARGE',
+        tooLargeMessage: 'Stored file exceeds its recorded size',
+        invalidContentTypeCode: 'FILE_VERSION_CONTENT_TYPE_INVALID',
+        invalidContentTypeMessage: 'Stored file has an unsupported content type',
+      });
+      return {
+        body: result.body,
+        contentType: version.mimeType,
+        fileName: version.fileName,
+      };
     },
 
     async list(
