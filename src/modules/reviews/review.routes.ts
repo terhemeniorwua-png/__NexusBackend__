@@ -5,12 +5,16 @@ import { validate } from '../../middleware/validation';
 import { AppError } from '../../utils/errors';
 import { sendSuccess } from '../../utils/http';
 import {
+  assignReviewSchema,
   createReviewSchema,
   listReviewsQuerySchema,
+  resubmitReviewSchema,
   reviewParamsSchema,
   reviewProjectParamsSchema,
+  type AssignReviewInput,
   type CreateReviewInput,
   type ListReviewsQuery,
+  type ResubmitReviewInput,
 } from './review.schemas';
 import { createReviewService } from './review.service';
 
@@ -82,6 +86,77 @@ export function createReviewRouter({ config, service: injectedService }: ReviewR
           assigneeId: body.assigneeId,
         }),
         201,
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/projects/:projectId/reviews/:reviewId/assign
+  router.post(
+    '/:reviewId/assign',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: reviewParamsSchema, body: assignReviewSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, reviewId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        reviewId: string;
+      };
+      const body = req.validated!.body as AssignReviewInput;
+      sendSuccess(
+        res,
+        await service.assign({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          reviewId,
+          assigneeId: body.assigneeId,
+        }),
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/projects/:projectId/reviews/:reviewId/start
+  router.post(
+    '/:reviewId/start',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: reviewParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, reviewId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        reviewId: string;
+      };
+      sendSuccess(
+        res,
+        await service.start({ userId: userId(req), workspaceId, projectId, reviewId }),
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/projects/:projectId/reviews/:reviewId/resubmit
+  router.post(
+    '/:reviewId/resubmit',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: reviewParamsSchema, body: resubmitReviewSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, reviewId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        reviewId: string;
+      };
+      const body = req.validated!.body as ResubmitReviewInput;
+      sendSuccess(
+        res,
+        await service.resubmit({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          reviewId,
+          round: body.round,
+        }),
       );
     },
   );

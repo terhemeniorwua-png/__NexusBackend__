@@ -16,6 +16,7 @@ import {
 } from '../authorization';
 import { assertProjectWritable } from '../projects/project-archive';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { assertReviewTransition, isOpenReviewStatus } from './review-status';
 
 const reviewInclude = {
   decisions: { orderBy: { round: 'desc' }, take: 1 },
@@ -254,12 +255,17 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     return { kind: 'checklist', id: checklist.id };
   }
 
-  async function assertAssignee(input: Input, authorization: ProjectAuthorization, assigneeId: string) {
-    if (assigneeId === input.userId) {
+  async function assertAssignee(
+    input: Input,
+    authorization: ProjectAuthorization,
+    assigneeId: string,
+    submittedById: string = input.userId,
+  ) {
+    if (assigneeId === submittedById) {
       throw new AppError(
         403,
         'SELF_REVIEW_FORBIDDEN',
-        'You cannot assign your own submission for review',
+        'The assignee cannot review their own submission',
       );
     }
 
@@ -331,6 +337,42 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     }
     assertTargetVisible(row, input);
     return row;
+  }
+
+  async function lockReview(tx: Prisma.TransactionClient, reviewId: string): Promise<void> {
+    await tx.$queryRaw`SELECT "id" FROM "Review" WHERE "id" = ${reviewId} FOR UPDATE`;
+  }
+
+  /**
+   * Decisions and resubmissions must observe the same checklist revision that
+   * is attached to the review. A later item write advances Checklist.revision,
+   * which makes the old review stale.
+   */
+  async function assertChecklistRevisionCurrent(
+    tx: Prisma.TransactionClient,
+    row: ReviewRow,
+  ): Promise<void> {
+    if (!row.checklistId) return;
+    if (row.checklistRevision === null) {
+      throw new AppError(500, 'REVIEW_TARGET_INVALID', 'Checklist review is missing its revision');
+    }
+
+    const locked = await tx.$queryRaw<
+      Array<{ revision: number; deletedAt: Date | null }>
+    >`SELECT "revision", "deletedAt" FROM "Checklist" WHERE "id" = ${row.checklistId} FOR SHARE`;
+    const current = locked[0];
+    if (
+      !current ||
+      current.deletedAt !== null ||
+      current.revision !== row.checklistRevision
+    ) {
+      throw new AppError(
+        409,
+        'CHECKLIST_REVISION_STALE',
+        'The checklist has changed since this review was submitted',
+        { details: { expected: row.checklistRevision, actual: current?.revision ?? null } },
+      );
+    }
   }
 
   return {
@@ -482,6 +524,107 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
       const row = await getRequiredReviewRow(prisma, input);
       assertPermission(authorization, ProjectPermission.View);
       return { review: toReviewView(row) };
+    },
+
+    async assign(input: Input & { reviewId: string; assigneeId: string }) {
+      const { authorization } = await loadProjectContext(input, 'write');
+      const current = await getRequiredReviewRow(prisma, input);
+      assertPermission(authorization, ProjectPermission.SubmissionReview);
+      await assertAssignee(input, authorization, input.assigneeId, current.submittedById);
+
+      return prisma.$transaction(async (tx) => {
+        await lockReview(tx, input.reviewId);
+        const row = await getRequiredReviewRow(tx, input);
+        if (row.assigneeId === input.assigneeId) {
+          return { review: toReviewView(row) };
+        }
+        if (!isOpenReviewStatus(row.status)) {
+          throw new AppError(409, 'REVIEW_NOT_OPEN', 'Only open reviews can be assigned');
+        }
+
+        const result = await tx.review.updateMany({
+          where: {
+            id: input.reviewId,
+            status: { in: ['SUBMITTED', 'UNDER_REVIEW'] },
+          },
+          data: { assigneeId: input.assigneeId },
+        });
+        if (result.count === 0) {
+          throw new AppError(409, 'REVIEW_NOT_OPEN', 'Only open reviews can be assigned');
+        }
+
+        const updated = await getRequiredReviewRow(tx, input);
+        return { review: toReviewView(updated) };
+      });
+    },
+
+    async start(input: Input & { reviewId: string }) {
+      const { authorization } = await loadProjectContext(input, 'write');
+      await getRequiredReviewRow(prisma, input);
+      assertPermission(authorization, ProjectPermission.SubmissionReview);
+
+      return prisma.$transaction(async (tx) => {
+        await lockReview(tx, input.reviewId);
+        const row = await getRequiredReviewRow(tx, input);
+        if (row.status === 'UNDER_REVIEW') {
+          return { review: toReviewView(row) };
+        }
+        assertReviewTransition(row.status, 'UNDER_REVIEW', row.round);
+
+        const result = await tx.review.updateMany({
+          where: { id: input.reviewId, status: 'SUBMITTED' },
+          data: { status: 'UNDER_REVIEW' },
+        });
+        if (result.count === 0) {
+          throw new AppError(409, 'STALE_ROUND', 'The review changed before it could be started');
+        }
+
+        const updated = await getRequiredReviewRow(tx, input);
+        return { review: toReviewView(updated) };
+      });
+    },
+
+    async resubmit(input: Input & { reviewId: string; round: number }) {
+      const { authorization } = await loadProjectContext(input, 'write');
+
+      return prisma.$transaction(async (tx) => {
+        await lockReview(tx, input.reviewId);
+        const row = await getRequiredReviewRow(tx, input);
+        assertPermission(authorization, ProjectPermission.SubmissionSubmit);
+
+        if (row.round !== input.round) {
+          throw new AppError(409, 'STALE_ROUND', 'The review round has changed', {
+            details: { expected: input.round, actual: row.round },
+          });
+        }
+
+        await assertChecklistRevisionCurrent(tx, row);
+
+        assertReviewTransition(row.status, 'SUBMITTED', row.round);
+        if (row.status !== 'CHANGES_REQUESTED') {
+          throw new AppError(
+            409,
+            'INVALID_STATUS_TRANSITION',
+            'This status transition is not allowed',
+            { details: { from: row.status, to: 'SUBMITTED', round: row.round } },
+          );
+        }
+
+        const result = await tx.review.updateMany({
+          where: { id: input.reviewId, round: input.round, status: 'CHANGES_REQUESTED' },
+          data: {
+            status: 'SUBMITTED',
+            round: { increment: 1 },
+            submittedAt: new Date(),
+          },
+        });
+        if (result.count === 0) {
+          throw new AppError(409, 'STALE_ROUND', 'The review round has changed');
+        }
+
+        const updated = await getRequiredReviewRow(tx, input);
+        return { review: toReviewView(updated) };
+      });
     },
   };
 }

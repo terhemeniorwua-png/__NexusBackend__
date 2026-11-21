@@ -33,5 +33,13 @@ export const createReviewSchema = z
     message: 'Exactly one review target must be provided',
   });
 
+export const assignReviewSchema = z.object({ assigneeId: uuid });
+
+export const resubmitReviewSchema = z.object({
+  round: z.number().int().positive(),
+});
+
 export type ListReviewsQuery = z.infer<typeof listReviewsQuerySchema>;
 export type CreateReviewInput = z.infer<typeof createReviewSchema>;
+export type AssignReviewInput = z.infer<typeof assignReviewSchema>;
+export type ResubmitReviewInput = z.infer<typeof resubmitReviewSchema>;
