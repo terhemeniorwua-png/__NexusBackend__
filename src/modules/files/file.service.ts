@@ -15,6 +15,16 @@ import { extractTextFromUpload } from './text-extraction';
 import { assertProjectWritable } from '../projects/project-archive';
 import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from './file.schemas';
 
+/** BE-3 emits audit events only; notifications remain owned by BE-5. */
+export const FileVersionAuditAction = {
+  Created: 'file.version.created',
+  MadeCurrent: 'file.version.made_current',
+  Deleted: 'file.version.deleted',
+  FeedbackCreated: 'file.feedback.created',
+  FeedbackUpdated: 'file.feedback.updated',
+  FeedbackDeleted: 'file.feedback.deleted',
+} as const;
+
 export interface FileSummary {
   id: string;
   workspaceId: string;
@@ -353,7 +363,7 @@ export function createFileService(
           await recordAuditEvent(tx, {
             workspaceId: input.workspaceId,
             actorId: actor.userId,
-            action: 'file.version.created',
+            action: FileVersionAuditAction.Created,
             targetType: 'AttachmentVersion',
             targetId: created.id,
             metadata: {
@@ -468,7 +478,7 @@ export function createFileService(
           await recordAuditEvent(tx, {
             workspaceId: input.workspaceId,
             actorId: input.userId,
-            action: 'file.version.made_current',
+            action: FileVersionAuditAction.MadeCurrent,
             targetType: 'AttachmentVersion',
             targetId: target.id,
             metadata: {
@@ -540,7 +550,7 @@ export function createFileService(
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: 'file.version.deleted',
+          action: FileVersionAuditAction.Deleted,
           targetType: 'AttachmentVersion',
           targetId: target.id,
           metadata: {
@@ -599,7 +609,7 @@ export function createFileService(
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: 'file.feedback.created',
+          action: FileVersionAuditAction.FeedbackCreated,
           targetType: 'AttachmentVersionFeedback',
           targetId: created.id,
           metadata: { fileId: file.id, attachmentVersionId: version.id },
@@ -643,7 +653,7 @@ export function createFileService(
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: 'file.feedback.updated',
+          action: FileVersionAuditAction.FeedbackUpdated,
           targetType: 'AttachmentVersionFeedback',
           targetId: updated.id,
           metadata: { fileId: file.id, attachmentVersionId: version.id },
@@ -692,7 +702,7 @@ export function createFileService(
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
           actorId: input.userId,
-          action: 'file.feedback.deleted',
+          action: FileVersionAuditAction.FeedbackDeleted,
           targetType: 'AttachmentVersionFeedback',
           targetId: existing.id,
           metadata: { fileId: file.id, attachmentVersionId: version.id },
