@@ -52,6 +52,11 @@ export function createFileRouter({
     limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1, fields: 3 },
   }).single('file');
 
+  const versionUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1, fields: 2 },
+  }).single('file');
+
   // GET /workspaces/:workspaceId/files — list workspace files
   router.get(
     '/',
@@ -130,6 +135,52 @@ export function createFileRouter({
           body: req.file.buffer,
           projectId: projectId ?? null,
           taskId: taskId ?? null,
+        }),
+        201,
+      );
+    },
+  );
+
+  // POST /workspaces/:workspaceId/files/:fileId/versions — upload the next version
+  router.post(
+    '/:fileId/versions',
+    requireAuth,
+    requireActiveAccount,
+    (req, res, next) => {
+      versionUpload(req, res, (error: unknown) => {
+        if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+          return next(new AppError(413, 'FILE_TOO_LARGE', `File exceeds the ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB limit`));
+        }
+        if (error) {
+          return next(new AppError(400, 'FILE_UPLOAD_INVALID', 'Invalid file upload'));
+        }
+        next();
+      });
+    },
+    validate({ params: fileParamsSchema }),
+    async (req, res) => {
+      if (!req.file) {
+        throw new AppError(400, 'FILE_REQUIRED', 'Select a file to upload');
+      }
+      const mimeType = req.file.mimetype;
+      if (!ALLOWED_MIME_TYPES.includes(mimeType as (typeof ALLOWED_MIME_TYPES)[number])) {
+        throw new AppError(415, 'FILE_TYPE_NOT_ALLOWED', `File type '${mimeType}' is not permitted`);
+      }
+      const { workspaceId, fileId } = req.validated!.params as {
+        workspaceId: string;
+        fileId: string;
+      };
+      const changeNote = typeof req.body?.changeNote === 'string' ? req.body.changeNote : null;
+      sendSuccess(
+        res,
+        await service.uploadVersion({
+          userId: userId(req),
+          workspaceId,
+          fileId,
+          fileName: req.file.originalname,
+          mimeType,
+          body: req.file.buffer,
+          changeNote,
         }),
         201,
       );

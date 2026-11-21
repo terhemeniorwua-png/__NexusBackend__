@@ -66,6 +66,73 @@ export function createFileService(
     return { ...row, createdAt: row.createdAt.toISOString() };
   }
 
+  type VersionSummaryRow = {
+    id: string;
+    attachmentId: string;
+    versionNumber: number;
+    isCurrent: boolean;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    uploadedById: string;
+    changeNote: string | null;
+    createdAt: Date;
+  };
+
+  function toVersionSummary(row: VersionSummaryRow) {
+    return { ...row, createdAt: row.createdAt.toISOString() };
+  }
+
+  /**
+   * Loads a live attachment after proving workspace access and the requested
+   * project permission. `write` additionally applies the workspace VIEWER and
+   * archived-project guards shared by all BE-3 mutation endpoints.
+   */
+  async function loadAttachment(
+    input: Input & { fileId: string },
+    mode: 'view' | 'write',
+  ) {
+    const workspace = await requireWorkspaceAccess(prisma, {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      capability: WorkspaceCapability.ViewWorkspace,
+    });
+
+    const file = await prisma.fileAttachment.findFirst({
+      where: { id: input.fileId, workspaceId: input.workspaceId, deletedAt: null },
+    });
+    if (!file) {
+      throw new AppError(404, 'FILE_NOT_FOUND', 'That file does not exist');
+    }
+
+    const actor = {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      workspaceRole: workspace.effectiveRole,
+    };
+
+    if (file.projectId) {
+      const authorization = await authorizeProject(prisma, {
+        actor,
+        projectId: file.projectId,
+        permission: mode === 'write' ? ProjectPermission.FileUpload : ProjectPermission.View,
+      });
+      if (mode === 'write') {
+        assertProjectWritable(authorization.project);
+      }
+      return { workspace, actor, file, authorization };
+    }
+
+    if (mode === 'write' && workspace.effectiveRole === 'VIEWER') {
+      throw new AppError(
+        403,
+        'INSUFFICIENT_ROLE',
+        'Your role does not allow modifying workspace files',
+      );
+    }
+    return { workspace, actor, file, authorization: null };
+  }
+
   return {
     async upload(
       input: Input & {
@@ -101,45 +168,166 @@ export function createFileService(
       const store = requireStorage();
       const storageKey = `workspaces/${input.workspaceId}/files/${randomUUID()}/${input.fileName}`;
 
+      // Never trust a client-declared size: persist what was actually stored.
+      const sizeBytes = input.body.byteLength;
       await store.put({ key: storageKey, body: input.body, contentType: input.mimeType });
 
       const extractedText = extractTextFromUpload(input.fileName, input.mimeType, input.body);
 
-      const file = await prisma.$transaction(async (tx) => {
-        const created = await tx.fileAttachment.create({
-          data: {
+      let committed = false;
+      try {
+        const file = await prisma.$transaction(async (tx) => {
+          const created = await tx.fileAttachment.create({
+            data: {
+              workspaceId: input.workspaceId,
+              projectId: input.projectId ?? null,
+              taskId: input.taskId ?? null,
+              uploadedById: input.userId,
+              fileName: input.fileName,
+              mimeType: input.mimeType,
+              sizeBytes,
+              storageKey,
+              extractedText,
+              textExtractedAt: extractedText ? new Date() : null,
+            },
+          });
+
+          // The legacy attachment key stays the v1 version key.
+          await tx.attachmentVersion.create({
+            data: {
+              attachmentId: created.id,
+              versionNumber: 1,
+              isCurrent: true,
+              fileName: created.fileName,
+              mimeType: created.mimeType,
+              sizeBytes,
+              storageKey,
+              extractedText,
+              uploadedById: created.uploadedById,
+              createdAt: created.createdAt,
+              updatedAt: new Date(),
+            },
+          });
+
+          await recordAuditEvent(tx, {
             workspaceId: input.workspaceId,
-            projectId: input.projectId ?? null,
-            taskId: input.taskId ?? null,
-            uploadedById: input.userId,
-            fileName: input.fileName,
-            mimeType: input.mimeType,
-            sizeBytes: input.sizeBytes,
-            storageKey,
-            extractedText,
-            textExtractedAt: extractedText ? new Date() : null,
-          },
+            actorId: input.userId,
+            action: 'file.uploaded',
+            targetType: 'FileAttachment',
+            targetId: created.id,
+            metadata: {
+              fileName: input.fileName,
+              mimeType: input.mimeType,
+              sizeBytes,
+              projectId: input.projectId ?? null,
+              taskId: input.taskId ?? null,
+            },
+          });
+
+          return created;
         });
+        committed = true;
+        return toSummary(file);
+      } finally {
+        if (!committed) await deleteStoredObject(storageKey);
+      }
+    },
 
-        await recordAuditEvent(tx, {
-          workspaceId: input.workspaceId,
-          actorId: input.userId,
-          action: 'file.uploaded',
-          targetType: 'FileAttachment',
-          targetId: created.id,
-          metadata: {
-            fileName: input.fileName,
-            mimeType: input.mimeType,
-            sizeBytes: input.sizeBytes,
-            projectId: input.projectId ?? null,
-            taskId: input.taskId ?? null,
-          },
+    async uploadVersion(
+      input: Input & {
+        fileId: string;
+        fileName: string;
+        mimeType: string;
+        body: Buffer;
+        changeNote?: string | null;
+      },
+    ): Promise<{ version: ReturnType<typeof toVersionSummary> }> {
+      const { actor, file } = await loadAttachment(input, 'write');
+      const store = requireStorage();
+      const sizeBytes = input.body.byteLength;
+      const storageKey = `workspaces/${input.workspaceId}/files/${file.id}/versions/${randomUUID()}/${input.fileName}`;
+      const changeNote = input.changeNote?.trim() || null;
+
+      await store.put({ key: storageKey, body: input.body, contentType: input.mimeType });
+
+      let committed = false;
+      try {
+        const version = await prisma.$transaction(async (tx) => {
+          // Serializes concurrent version allocations for the same attachment.
+          const locked = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT "id" FROM "FileAttachment" WHERE "id" = ${file.id} FOR UPDATE
+          `;
+          if (locked.length === 0) {
+            throw new AppError(404, 'FILE_NOT_FOUND', 'That file does not exist');
+          }
+
+          const max = await tx.attachmentVersion.aggregate({
+            where: { attachmentId: file.id },
+            _max: { versionNumber: true },
+          });
+          const versionNumber = (max._max.versionNumber ?? 0) + 1;
+          const now = new Date();
+          const extractedText = extractTextFromUpload(input.fileName, input.mimeType, input.body);
+
+          const created = await tx.attachmentVersion.create({
+            data: {
+              attachmentId: file.id,
+              versionNumber,
+              isCurrent: false,
+              fileName: input.fileName,
+              mimeType: input.mimeType,
+              sizeBytes,
+              storageKey,
+              changeNote,
+              extractedText,
+              uploadedById: input.userId,
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+
+          await tx.attachmentVersion.updateMany({
+            where: {
+              attachmentId: file.id,
+              isCurrent: true,
+              deletedAt: null,
+              id: { not: created.id },
+            },
+            data: { isCurrent: false, updatedAt: now },
+          });
+          await tx.attachmentVersion.update({
+            where: { id: created.id },
+            data: { isCurrent: true, updatedAt: now },
+          });
+
+          await tx.fileAttachment.update({
+            where: { id: file.id },
+            data: { fileName: input.fileName, mimeType: input.mimeType, sizeBytes, updatedAt: now },
+          });
+
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: actor.userId,
+            action: 'file.version.created',
+            targetType: 'AttachmentVersion',
+            targetId: created.id,
+            metadata: {
+              fileId: file.id,
+              versionNumber,
+              fileName: created.fileName,
+              mimeType: created.mimeType,
+              sizeBytes,
+              storageKey,
+            },
+          });
+
+          return created;
         });
-
-        return created;
-      });
-
-      return toSummary(file);
+        committed = true;
+        return { version: toVersionSummary(version) };
+      } finally {
+        if (!committed) await deleteStoredObject(storageKey);
+      }
     },
 
     async download(
