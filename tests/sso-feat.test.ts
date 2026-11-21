@@ -1,3 +1,5 @@
+process.env.JWT_ACCESS_SECRET ??= 'test-only-jwt-access-secret-not-for-production-use';
+
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import { verifyOAuthState, createOAuthState } from '../src/modules/integrations/oauth-state';
