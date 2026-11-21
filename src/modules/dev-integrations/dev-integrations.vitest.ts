@@ -408,6 +408,197 @@ describe('GitHub webhook ingestion (Feature C)', () => {
   });
 });
 
+
+  it('moves linked CHANGES_REQUESTED task to SUBMITTED on merged PR', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const { recordAuditEvent } = await import('../../services/audit');
+    vi.mocked(recordAuditEvent).mockResolvedValue(undefined);
+    const body = Buffer.from(JSON.stringify({
+      action: 'closed',
+      repository: { full_name: 'owner/repo' },
+      pull_request: {
+        id: 556,
+        number: 43,
+        title: 'Fix again',
+        state: 'closed',
+        merged: true,
+        html_url: 'https://github.com/owner/repo/pull/43',
+        head: { ref: 'fix2' },
+        base: { ref: 'main' },
+      },
+    }));
+    const sig = 'sha256=' + createHmac('sha256', 's').update(body).digest('hex');
+    const txTaskUpdateMany = vi.fn(async () => ({ count: 1 }));
+    const prisma: any = {
+      gitHubWebhookDelivery: {
+        create: vi.fn(async () => ({})),
+        update: vi.fn(async () => ({})),
+      },
+      taskDevLink: {
+        findMany: vi.fn(async () => ([{
+          id: 'link-2',
+          taskId: 'task-2',
+          externalId: '556',
+          task: { id: 'task-2', status: 'CHANGES_REQUESTED', key: 'T-2', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
+        }])),
+      },
+      $transaction: vi.fn(async (fn: any) => fn({
+        taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
+        task: { updateMany: txTaskUpdateMany },
+      })),
+    };
+    const out = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'deliv-merge-2', event: 'pull_request' });
+    expect(out).toBe('processed');
+    expect(txTaskUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'task-2', status: { in: ['IN_PROGRESS', 'CHANGES_REQUESTED'] } },
+      data: expect.objectContaining({ status: 'SUBMITTED' }),
+    }));
+  });
+
+  it('does not move ASSIGNED task on merged PR', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const body = Buffer.from(JSON.stringify({
+      action: 'closed',
+      repository: { full_name: 'owner/repo' },
+      pull_request: {
+        id: 557,
+        number: 44,
+        title: 'Fix three',
+        state: 'closed',
+        merged: true,
+        html_url: 'https://github.com/owner/repo/pull/44',
+        head: { ref: 'fix3' },
+        base: { ref: 'main' },
+      },
+    }));
+    const sig = 'sha256=' + createHmac('sha256', 's').update(body).digest('hex');
+    const txTaskUpdateMany = vi.fn(async () => ({ count: 0 }));
+    const prisma: any = {
+      gitHubWebhookDelivery: {
+        create: vi.fn(async () => ({})),
+        update: vi.fn(async () => ({})),
+      },
+      taskDevLink: {
+        findMany: vi.fn(async () => ([{
+          id: 'link-3',
+          taskId: 'task-3',
+          externalId: '557',
+          task: { id: 'task-3', status: 'ASSIGNED', key: 'T-3', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
+        }])),
+      },
+      $transaction: vi.fn(async (fn: any) => fn({
+        taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
+        task: { updateMany: txTaskUpdateMany },
+      })),
+    };
+    const out = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'deliv-merge-3', event: 'pull_request' });
+    expect(out).toBe('processed');
+    expect(txTaskUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'task-3', status: { in: ['IN_PROGRESS', 'CHANGES_REQUESTED'] } },
+    }));
+  });
+
+  it('produces one transition for concurrent-style double processing via conditional update (idempotent status change)', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const { recordAuditEvent } = await import('../../services/audit');
+    vi.mocked(recordAuditEvent).mockResolvedValue(undefined);
+    const body = Buffer.from(JSON.stringify({
+      action: 'closed',
+      repository: { full_name: 'owner/repo' },
+      pull_request: {
+        id: 558,
+        number: 45,
+        state: 'closed',
+        merged: true,
+        html_url: 'https://github.com/owner/repo/pull/45',
+        head: { ref: 'fix4' },
+        base: { ref: 'main' },
+      },
+    }));
+    const sig = 'sha256=' + createHmac('sha256', 's').update(body).digest('hex');
+    const txTaskUpdateMany = vi.fn()
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    const prisma: any = {
+      gitHubWebhookDelivery: {
+        create: vi.fn(async () => ({})),
+        update: vi.fn(async () => ({})),
+      },
+      taskDevLink: {
+        findMany: vi.fn(async () => ([{
+          id: 'link-4',
+          taskId: 'task-4',
+          externalId: '558',
+          task: { id: 'task-4', status: 'IN_PROGRESS', key: 'T-4', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
+        }])),
+      },
+      $transaction: vi.fn(async (fn: any) => fn({
+        taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
+        task: { updateMany: txTaskUpdateMany },
+      })),
+    };
+    const out1 = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'deliv-merge-4a', event: 'pull_request' });
+    const out2 = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'deliv-merge-4b', event: 'pull_request' });
+    expect(out1).toBe('processed');
+    expect(out2).toBe('processed');
+    expect(txTaskUpdateMany).toHaveBeenCalledTimes(2);
+  });
+
+
+  it('sets submittedAt and clears review fields on webhook merge submit transition', async () => {
+    const { processGithubWebhook } = await import('./github-webhook.service');
+    const { recordAuditEvent } = await import('../../services/audit');
+    vi.mocked(recordAuditEvent).mockResolvedValue(undefined);
+    const body = Buffer.from(JSON.stringify({
+      action: 'closed',
+      repository: { full_name: 'owner/repo' },
+      pull_request: {
+        id: 559,
+        number: 46,
+        state: 'closed',
+        merged: true,
+        html_url: 'https://github.com/owner/repo/pull/46',
+        head: { ref: 'fix5' },
+        base: { ref: 'main' },
+      },
+    }));
+    const sig = 'sha256=' + createHmac('sha256', 's').update(body).digest('hex');
+    const txTaskUpdateMany = vi.fn(async () => ({ count: 1 }));
+    const prisma: any = {
+      gitHubWebhookDelivery: {
+        create: vi.fn(async () => ({})),
+        update: vi.fn(async () => ({})),
+      },
+      taskDevLink: {
+        findMany: vi.fn(async () => ([{
+          id: 'link-5',
+          taskId: 'task-5',
+          externalId: '559',
+          task: { id: 'task-5', status: 'IN_PROGRESS', key: 'T-5', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
+        }])),
+      },
+      $transaction: vi.fn(async (fn: any) => fn({
+        taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
+        task: { updateMany: txTaskUpdateMany },
+      })),
+    };
+    const out = await processGithubWebhook({ prisma, rawBody: body, signature: sig, secret: 's', deliveryId: 'deliv-merge-5', event: 'pull_request' });
+    expect(out).toBe('processed');
+    expect(txTaskUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'SUBMITTED',
+        submittedById: null,
+        submissionSummary: null,
+        reviewFeedback: null,
+        reviewedAt: null,
+        reviewedById: null,
+      }),
+    }));
+    // submittedAt should be set (a Date)
+    const callData = txTaskUpdateMany.mock.calls[0][0].data;
+    expect(callData.submittedAt).toBeInstanceOf(Date);
+  });
+
 describe('GitLab dev-integration provider (Feature D)', () => {
   const gitlabConfig: any = {
     ...config,
@@ -522,6 +713,8 @@ describe('GitLab dev-integration provider (Feature D)', () => {
     expect(prs[0]).toMatchObject({ externalId: '9001', number: 7, title: 'Add feature', state: 'open', headRef: 'feat', baseRef: 'main', authorLogin: 'dev' });
   });
 });
+
+
 
 describe('GitLab webhook ingestion (Feature D)', () => {
   beforeEach(() => {
