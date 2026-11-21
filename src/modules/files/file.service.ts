@@ -102,6 +102,22 @@ export function createFileService(
     };
   }
 
+  /** Plain file downloads always resolve the single current live version. */
+  async function requireCurrentVersion(attachmentId: string) {
+    const version = await prisma.attachmentVersion.findFirst({
+      where: { attachmentId, isCurrent: true, deletedAt: null },
+      orderBy: { versionNumber: 'desc' },
+    });
+    if (!version) {
+      throw new AppError(
+        404,
+        'FILE_VERSION_NOT_FOUND',
+        'The current version of this file does not exist',
+      );
+    }
+    return version;
+  }
+
   function assertFeedbackBody(body: string): void {
     if (body.length < 1 || body.length > 4000 || body.trim().length === 0) {
       throw new AppError(
@@ -721,21 +737,7 @@ export function createFileService(
 
       // The attachment row keeps the legacy v1 storage key for compatibility;
       // downloads always use the current live version object and metadata.
-      const version = await prisma.attachmentVersion.findFirst({
-        where: {
-          attachmentId: file.id,
-          isCurrent: true,
-          deletedAt: null,
-        },
-        orderBy: { versionNumber: 'desc' },
-      });
-      if (!version) {
-        throw new AppError(
-          404,
-          'FILE_VERSION_NOT_FOUND',
-          'The current version of this file does not exist',
-        );
-      }
+      const version = await requireCurrentVersion(file.id);
 
       const result = await requireStorage().get(version.storageKey, {
         allowedContentTypes: ALLOWED_MIME_TYPES,
