@@ -9,10 +9,12 @@ import { getPrismaClient } from '../../db/prisma';
 import { AppError } from '../../utils/errors';
 import {
   ProjectPermission,
+  authorizeProject,
   getProjectAuthorization,
   projectRoleHasPermission,
   type ProjectActor,
   type ProjectAuthorization,
+  type ProjectAuthorizationResource,
   type ProjectPermissionValue,
 } from '../authorization';
 import { assertProjectWritable } from '../projects/project-archive';
@@ -86,14 +88,14 @@ export interface ReviewView {
   updatedAt: string;
 }
 
-function assertPermission(
-  authorization: ProjectAuthorization,
-  permission: ProjectPermissionValue,
-): void {
-  if (authorization.permissions.includes(permission)) return;
-  throw new AppError(403, 'PERMISSION_DENIED', 'Your project role does not allow this action', {
-    requiredPermission: permission,
-  });
+type SubmissionAction = Extract<ProjectAuthorizationResource, { kind: 'submission' }>['action'];
+
+function submissionResource(
+  submissionId: string,
+  subjectUserId: string,
+  action: SubmissionAction,
+): ProjectAuthorizationResource {
+  return { kind: 'submission', submissionId, subjectUserId, action };
 }
 
 function toDecisionView(decision: ReviewDecision): ReviewDecisionView {
@@ -143,6 +145,14 @@ function permissionForDecision(decision: ReviewDecisionType): ProjectPermissionV
     case 'CHANGES_REQUESTED':
       return ProjectPermission.SubmissionRequestRevision;
   }
+}
+
+function submissionActionForDecision(
+  decision: ReviewDecisionType,
+): 'approve' | 'reject' | 'request_revision' {
+  if (decision === 'APPROVED') return 'approve';
+  if (decision === 'REJECTED') return 'reject';
+  return 'request_revision';
 }
 
 function toReviewView(row: ReviewRow): ReviewView {
@@ -418,9 +428,18 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     decision: ReviewDecisionType,
   ) {
     assertDecisionNote(decision, input.note);
-    const { authorization } = await loadProjectContext(input, 'write');
-    await getRequiredReviewRow(prisma, input);
-    assertPermission(authorization, permissionForDecision(decision));
+    const { actor } = await loadProjectContext(input, 'write');
+    const current = await getRequiredReviewRow(prisma, input);
+    await authorizeProject(prisma, {
+      actor,
+      projectId: input.projectId,
+      permission: permissionForDecision(decision),
+      resource: submissionResource(
+        current.id,
+        current.submittedById,
+        submissionActionForDecision(decision),
+      ),
+    });
 
     return prisma.$transaction(async (tx) => {
       await lockReview(tx, input.reviewId);
@@ -490,9 +509,14 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
       const target: Target = input.attachmentVersionId
         ? { kind: 'attachmentVersion', id: input.attachmentVersionId }
         : { kind: 'checklist', id: input.checklistId as string };
-      const { authorization } = await loadProjectContext(input, 'write');
+      const { actor, authorization } = await loadProjectContext(input, 'write');
       const scopedTarget = await resolveTarget(input, target);
-      assertPermission(authorization, ProjectPermission.SubmissionSubmit);
+      await authorizeProject(prisma, {
+        actor,
+        projectId: input.projectId,
+        permission: ProjectPermission.SubmissionSubmit,
+        resource: submissionResource(scopedTarget.id, input.userId, 'submit'),
+      });
       if (input.assigneeId) {
         await assertAssignee(input, authorization, input.assigneeId);
       }
@@ -578,8 +602,12 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         limit: number;
       },
     ) {
-      const { authorization } = await loadProjectContext(input, 'view');
-      assertPermission(authorization, ProjectPermission.View);
+      const { actor } = await loadProjectContext(input, 'view');
+      await authorizeProject(prisma, {
+        actor,
+        projectId: input.projectId,
+        permission: ProjectPermission.View,
+      });
 
       const where: Prisma.ReviewWhereInput = {
         workspaceId: input.workspaceId,
@@ -624,16 +652,25 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async get(input: Input & { reviewId: string }) {
-      const { authorization } = await loadProjectContext(input, 'view');
+      const { actor } = await loadProjectContext(input, 'view');
       const row = await getRequiredReviewRow(prisma, input);
-      assertPermission(authorization, ProjectPermission.View);
+      await authorizeProject(prisma, {
+        actor,
+        projectId: input.projectId,
+        permission: ProjectPermission.View,
+      });
       return { review: toReviewView(row) };
     },
 
     async assign(input: Input & { reviewId: string; assigneeId: string }) {
-      const { authorization } = await loadProjectContext(input, 'write');
+      const { actor, authorization } = await loadProjectContext(input, 'write');
       const current = await getRequiredReviewRow(prisma, input);
-      assertPermission(authorization, ProjectPermission.SubmissionReview);
+      await authorizeProject(prisma, {
+        actor,
+        projectId: input.projectId,
+        permission: ProjectPermission.SubmissionReview,
+        resource: submissionResource(current.id, current.submittedById, 'review'),
+      });
       await assertAssignee(input, authorization, input.assigneeId, current.submittedById);
 
       return prisma.$transaction(async (tx) => {
@@ -663,9 +700,14 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async start(input: Input & { reviewId: string }) {
-      const { authorization } = await loadProjectContext(input, 'write');
-      await getRequiredReviewRow(prisma, input);
-      assertPermission(authorization, ProjectPermission.SubmissionReview);
+      const { actor } = await loadProjectContext(input, 'write');
+      const current = await getRequiredReviewRow(prisma, input);
+      await authorizeProject(prisma, {
+        actor,
+        projectId: input.projectId,
+        permission: ProjectPermission.SubmissionReview,
+        resource: submissionResource(current.id, current.submittedById, 'review'),
+      });
 
       return prisma.$transaction(async (tx) => {
         await lockReview(tx, input.reviewId);
@@ -689,12 +731,17 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     },
 
     async resubmit(input: Input & { reviewId: string; round: number }) {
-      const { authorization } = await loadProjectContext(input, 'write');
+      const { actor } = await loadProjectContext(input, 'write');
 
       return prisma.$transaction(async (tx) => {
         await lockReview(tx, input.reviewId);
         const row = await getRequiredReviewRow(tx, input);
-        assertPermission(authorization, ProjectPermission.SubmissionSubmit);
+        await authorizeProject(tx, {
+          actor,
+          projectId: input.projectId,
+          permission: ProjectPermission.SubmissionSubmit,
+          resource: submissionResource(row.id, row.submittedById, 'submit'),
+        });
 
         if (row.round !== input.round) {
           throw new AppError(409, 'STALE_ROUND', 'The review round has changed', {

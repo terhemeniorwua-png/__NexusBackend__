@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 import type { PrismaClient } from '@prisma/client';
 import {
+  ALL_PROJECT_PERMISSIONS,
   PROJECT_ROLE_PERMISSIONS,
+  WORKSPACE_ADMIN_PROJECT_PERMISSIONS,
   ProjectPermission,
   assertMayManageProjectMember,
   assertNotSelfReview,
@@ -104,6 +106,86 @@ describe('project permission matrix', () => {
   });
 
   test('viewer is read-only for core access', () => {
+    assert.deepEqual([...PROJECT_ROLE_PERMISSIONS.VIEWER], [
+      ProjectPermission.View,
+      ProjectPermission.TaskView,
+      ProjectPermission.ViewReport,
+    ]);
+  });
+
+  test('project permission catalog is exact', () => {
+    const allPermissions = [
+      ProjectPermission.View,
+      ProjectPermission.Update,
+      ProjectPermission.Archive,
+      ProjectPermission.Delete,
+      ProjectPermission.ManageSettings,
+      ProjectPermission.ManageMembers,
+      ProjectPermission.ViewReport,
+      ProjectPermission.TaskView,
+      ProjectPermission.TaskCreate,
+      ProjectPermission.TaskUpdate,
+      ProjectPermission.TaskDelete,
+      ProjectPermission.TaskAssign,
+      ProjectPermission.TaskReassign,
+      ProjectPermission.TaskComplete,
+      ProjectPermission.TaskComment,
+      ProjectPermission.FileUpload,
+      ProjectPermission.FileDeleteOwn,
+      ProjectPermission.FileDeleteAny,
+      ProjectPermission.SubmissionSubmit,
+      ProjectPermission.SubmissionReview,
+      ProjectPermission.SubmissionApprove,
+      ProjectPermission.SubmissionReject,
+      ProjectPermission.SubmissionRequestRevision,
+    ];
+
+    assert.deepEqual([...ALL_PROJECT_PERMISSIONS], allPermissions);
+    assert.deepEqual([...WORKSPACE_ADMIN_PROJECT_PERMISSIONS], allPermissions);
+    assert.deepEqual([...PROJECT_ROLE_PERMISSIONS.PROJECT_MANAGER], [
+      ProjectPermission.View,
+      ProjectPermission.Update,
+      ProjectPermission.Archive,
+      ProjectPermission.ManageSettings,
+      ProjectPermission.ManageMembers,
+      ProjectPermission.ViewReport,
+      ProjectPermission.TaskView,
+      ProjectPermission.TaskCreate,
+      ProjectPermission.TaskUpdate,
+      ProjectPermission.TaskDelete,
+      ProjectPermission.TaskAssign,
+      ProjectPermission.TaskReassign,
+      ProjectPermission.TaskComplete,
+      ProjectPermission.TaskComment,
+      ProjectPermission.FileUpload,
+      ProjectPermission.FileDeleteOwn,
+      ProjectPermission.FileDeleteAny,
+      ProjectPermission.SubmissionSubmit,
+      ProjectPermission.SubmissionReview,
+      ProjectPermission.SubmissionApprove,
+      ProjectPermission.SubmissionReject,
+      ProjectPermission.SubmissionRequestRevision,
+    ]);
+    assert.deepEqual([...PROJECT_ROLE_PERMISSIONS.MEMBER], [
+      ProjectPermission.View,
+      ProjectPermission.TaskView,
+      ProjectPermission.TaskCreate,
+      ProjectPermission.TaskUpdate,
+      ProjectPermission.TaskComplete,
+      ProjectPermission.TaskComment,
+      ProjectPermission.FileUpload,
+      ProjectPermission.FileDeleteOwn,
+      ProjectPermission.SubmissionSubmit,
+    ]);
+    assert.deepEqual([...PROJECT_ROLE_PERMISSIONS.COLLABORATOR], [
+      ProjectPermission.View,
+      ProjectPermission.TaskView,
+      ProjectPermission.TaskComplete,
+      ProjectPermission.TaskComment,
+      ProjectPermission.FileUpload,
+      ProjectPermission.FileDeleteOwn,
+      ProjectPermission.SubmissionSubmit,
+    ]);
     assert.deepEqual([...PROJECT_ROLE_PERMISSIONS.VIEWER], [
       ProjectPermission.View,
       ProjectPermission.TaskView,
