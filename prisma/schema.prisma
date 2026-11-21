@@ -2399,6 +2399,10 @@ model TaskDevLink {
   baseRef             String?
   state               String?
   repositoryFullName  String?
+  reviewState         String?
+  reviewerLogin       String?
+  reviewedAt          DateTime?
+  mergedAt            DateTime?
   linkedById          String
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
