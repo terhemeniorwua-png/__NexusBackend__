@@ -439,6 +439,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           id: 'link-2',
           taskId: 'task-2',
           externalId: '556',
+          linkedById: 'linker-2',
           task: { id: 'task-2', status: 'CHANGES_REQUESTED', key: 'T-2', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
       },
@@ -483,6 +484,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           id: 'link-3',
           taskId: 'task-3',
           externalId: '557',
+          linkedById: 'linker-3',
           task: { id: 'task-3', status: 'ASSIGNED', key: 'T-3', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
       },
@@ -529,6 +531,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           id: 'link-4',
           taskId: 'task-4',
           externalId: '558',
+          linkedById: 'linker-4',
           task: { id: 'task-4', status: 'IN_PROGRESS', key: 'T-4', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
       },
@@ -545,7 +548,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
   });
 
 
-  it('sets submittedAt and clears review fields on webhook merge submit transition', async () => {
+  it('sets submittedById to linkedById and submittedAt on merge; does not null feedback/summary/review fields', async () => {
     const { processGithubWebhook } = await import('./github-webhook.service');
     const { recordAuditEvent } = await import('../../services/audit');
     vi.mocked(recordAuditEvent).mockResolvedValue(undefined);
@@ -574,6 +577,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           id: 'link-5',
           taskId: 'task-5',
           externalId: '559',
+          linkedById: 'user-linker-1',
           task: { id: 'task-5', status: 'IN_PROGRESS', key: 'T-5', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
       },
@@ -587,16 +591,15 @@ describe('GitHub webhook ingestion (Feature C)', () => {
     expect(txTaskUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         status: 'SUBMITTED',
-        submittedById: null,
-        submissionSummary: null,
-        reviewFeedback: null,
-        reviewedAt: null,
-        reviewedById: null,
+        submittedById: 'user-linker-1',
       }),
     }));
-    // submittedAt should be set (a Date)
     const callData = txTaskUpdateMany.mock.calls[0][0].data;
     expect(callData.submittedAt).toBeInstanceOf(Date);
+    expect(callData).not.toHaveProperty('submissionSummary');
+    expect(callData).not.toHaveProperty('reviewFeedback');
+    expect(callData).not.toHaveProperty('reviewedAt');
+    expect(callData).not.toHaveProperty('reviewedById');
   });
 
 describe('GitLab dev-integration provider (Feature D)', () => {

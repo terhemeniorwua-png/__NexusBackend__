@@ -151,11 +151,7 @@ export async function processGithubWebhook(input: {
                       data: {
                         status: 'SUBMITTED',
                         submittedAt: new Date(),
-                        submittedById: null,
-                        submissionSummary: null,
-                        reviewFeedback: null,
-                        reviewedAt: null,
-                        reviewedById: null,
+                        submittedById: link.linkedById,
                       },
                     });
                     if (updatedTask.count > 0) {
@@ -167,6 +163,7 @@ export async function processGithubWebhook(input: {
                         targetId: task.id,
                         metadata: {
                           source: 'GITHUB_WEBHOOK',
+                          submittedVia: 'GITHUB_MERGE',
                           deliveryId,
                           event,
                           prNumber: data.externalNumber ?? null,
