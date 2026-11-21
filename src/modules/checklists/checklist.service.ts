@@ -4,7 +4,10 @@ import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import {
   ProjectPermission,
+  assertNotSelfReview,
   authorizeProject,
+  getProjectAuthorization,
+  type ProjectAuthorization,
   type ProjectPermissionValue,
 } from '../authorization';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
@@ -19,6 +22,10 @@ export const ChecklistAuditAction = {
   ItemUpdated: 'checklist_item.updated',
   ItemDeleted: 'checklist_item.deleted',
   ItemReordered: 'checklist_item.reordered',
+  ItemCompleted: 'checklist_item.completed',
+  ItemUncompleted: 'checklist_item.uncompleted',
+  ItemSignedOff: 'checklist_item.signed_off',
+  ItemSignOffRemoved: 'checklist_item.sign_off_removed',
 } as const;
 
 export const MAX_LIVE_ITEMS = 200;
@@ -98,6 +105,49 @@ function assertItemText(text: string): void {
   }
 }
 
+function isManagerOrAdmin(authorization: ProjectAuthorization): boolean {
+  return authorization.isWorkspaceAdmin || authorization.projectRole === 'PROJECT_MANAGER';
+}
+
+function assertWriteManagerOrActor(
+  actorId: string,
+  subjectId: string | null,
+  authorization: ProjectAuthorization,
+  action: string,
+): void {
+  if (isManagerOrAdmin(authorization) || subjectId === actorId) return;
+  throw new AppError(
+    403,
+    'PERMISSION_DENIED',
+    `You are not allowed to ${action} this checklist item`,
+  );
+}
+
+function assertCanUncomplete(
+  completedById: string | null,
+  actorId: string,
+  authorization: ProjectAuthorization,
+): void {
+  assertWriteManagerOrActor(actorId, completedById, authorization, 'uncomplete');
+}
+
+function assertCanRemoveSignOff(
+  signedOffById: string | null,
+  actorId: string,
+  authorization: ProjectAuthorization,
+): void {
+  assertWriteManagerOrActor(actorId, signedOffById, authorization, 'remove the sign-off of');
+}
+
+type SignOffCandidate = { completed: boolean; completedById: string | null };
+
+function assertCanSignOff(item: SignOffCandidate, actorId: string): void {
+  if (!item.completed || !item.completedById) {
+    throw new AppError(409, 'ITEM_NOT_COMPLETED', 'Only a completed item can be signed off');
+  }
+  assertNotSelfReview({ actorId, subjectUserId: item.completedById, action: 'approve' });
+}
+
 export function createChecklistService(prisma: PrismaClient = getPrismaClient()) {
   async function loadProject(
     input: Input & { projectId: string },
@@ -125,7 +175,7 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
 
   async function loadChecklist(
     input: Input & { projectId: string; checklistId: string },
-    permission: ProjectPermissionValue,
+    permission: ProjectPermissionValue | null,
     mode: 'view' | 'write',
   ) {
     const workspace = await requireWorkspaceAccess(prisma, {
@@ -149,11 +199,9 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
       workspaceId: input.workspaceId,
       workspaceRole: workspace.effectiveRole,
     };
-    const authorization = await authorizeProject(prisma, {
-      actor,
-      projectId: input.projectId,
-      permission,
-    });
+    const authorization: ProjectAuthorization = permission
+      ? await authorizeProject(prisma, { actor, projectId: input.projectId, permission })
+      : await getProjectAuthorization(prisma, actor, input.projectId);
     if (mode === 'write') assertProjectWritable(authorization.project);
     return { workspace, actor, checklist, authorization };
   }
@@ -172,9 +220,19 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
     return updated.revision;
   }
 
+  async function findLiveItem(
+    tx: Prisma.TransactionClient,
+    checklistId: string,
+    itemId: string,
+  ) {
+    return tx.checklistItem.findFirst({
+      where: { id: itemId, checklistId, deletedAt: null },
+    });
+  }
+
   async function loadItem(
     input: Input & { projectId: string; checklistId: string; itemId: string },
-    permission: ProjectPermissionValue,
+    permission: ProjectPermissionValue | null,
     mode: 'view' | 'write',
   ) {
     const loaded = await loadChecklist(input, permission, mode);
@@ -529,6 +587,253 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
           },
         });
         return { items: items.map(toItemSummary), revision };
+      });
+    },
+
+    async complete(input: Input & { projectId: string; checklistId: string; itemId: string }) {
+      await loadItem(input, ProjectPermission.Update, 'write');
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const current = await findLiveItem(tx, input.checklistId, input.itemId);
+        if (!current) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        if (current.completed) {
+          const checklist = await tx.checklist.findUniqueOrThrow({
+            where: { id: input.checklistId },
+            select: { revision: true },
+          });
+          return { item: toItemSummary(current), revision: checklist.revision };
+        }
+        const result = await tx.checklistItem.updateMany({
+          where: {
+            id: current.id,
+            checklistId: input.checklistId,
+            deletedAt: null,
+            completed: false,
+          },
+          data: { completed: true, completedById: input.userId, completedAt: new Date() },
+        });
+        if (result.count === 0) {
+          const latest = await findLiveItem(tx, input.checklistId, input.itemId);
+          if (!latest) {
+            throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+          }
+          if (latest.completed) {
+            const checklist = await tx.checklist.findUniqueOrThrow({
+              where: { id: input.checklistId },
+              select: { revision: true },
+            });
+            return { item: toItemSummary(latest), revision: checklist.revision };
+          }
+          throw new AppError(409, 'CHECKLIST_ITEM_CONFLICT', 'The item state changed concurrently');
+        }
+        const updated = (await findLiveItem(tx, input.checklistId, input.itemId))!;
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemCompleted,
+          targetType: 'ChecklistItem',
+          targetId: updated.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: updated.id,
+            revision,
+            completedById: input.userId,
+          },
+        });
+        return { item: toItemSummary(updated), revision };
+      });
+    },
+
+    async uncomplete(input: Input & { projectId: string; checklistId: string; itemId: string }) {
+      const { item, authorization } = await loadItem(input, null, 'write');
+      assertCanUncomplete(item.completedById, input.userId, authorization);
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const current = await findLiveItem(tx, input.checklistId, input.itemId);
+        if (!current) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        assertCanUncomplete(current.completedById, input.userId, authorization);
+        if (current.signedOffAt) {
+          throw new AppError(409, 'ITEM_SIGNED_OFF', 'A signed-off item cannot be uncompleted');
+        }
+        if (!current.completed) {
+          const checklist = await tx.checklist.findUniqueOrThrow({
+            where: { id: input.checklistId },
+            select: { revision: true },
+          });
+          return { item: toItemSummary(current), revision: checklist.revision };
+        }
+        const result = await tx.checklistItem.updateMany({
+          where: {
+            id: current.id,
+            checklistId: input.checklistId,
+            deletedAt: null,
+            completed: true,
+            signedOffAt: null,
+          },
+          data: { completed: false, completedById: null, completedAt: null },
+        });
+        if (result.count === 0) {
+          const latest = await findLiveItem(tx, input.checklistId, input.itemId);
+          if (!latest) {
+            throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+          }
+          if (latest.signedOffAt) {
+            throw new AppError(409, 'ITEM_SIGNED_OFF', 'A signed-off item cannot be uncompleted');
+          }
+          if (!latest.completed) {
+            const checklist = await tx.checklist.findUniqueOrThrow({
+              where: { id: input.checklistId },
+              select: { revision: true },
+            });
+            return { item: toItemSummary(latest), revision: checklist.revision };
+          }
+          throw new AppError(409, 'CHECKLIST_ITEM_CONFLICT', 'The item state changed concurrently');
+        }
+        const updated = (await findLiveItem(tx, input.checklistId, input.itemId))!;
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemUncompleted,
+          targetType: 'ChecklistItem',
+          targetId: updated.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: updated.id,
+            revision,
+            previousCompletedById: current.completedById,
+          },
+        });
+        return { item: toItemSummary(updated), revision };
+      });
+    },
+
+    async signOff(input: Input & { projectId: string; checklistId: string; itemId: string }) {
+      const { item } = await loadItem(
+        input,
+        ProjectPermission.SubmissionApprove,
+        'write',
+      );
+      assertCanSignOff(item, input.userId);
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const current = await findLiveItem(tx, input.checklistId, input.itemId);
+        if (!current) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        assertCanSignOff(current, input.userId);
+        if (current.signedOffAt) {
+          const checklist = await tx.checklist.findUniqueOrThrow({
+            where: { id: input.checklistId },
+            select: { revision: true },
+          });
+          return { item: toItemSummary(current), revision: checklist.revision };
+        }
+        const result = await tx.checklistItem.updateMany({
+          where: {
+            id: current.id,
+            checklistId: input.checklistId,
+            deletedAt: null,
+            completed: true,
+            signedOffAt: null,
+          },
+          data: { signedOffById: input.userId, signedOffAt: new Date() },
+        });
+        if (result.count === 0) {
+          const latest = await findLiveItem(tx, input.checklistId, input.itemId);
+          if (!latest) {
+            throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+          }
+          assertCanSignOff(latest, input.userId);
+          if (latest.signedOffAt) {
+            const checklist = await tx.checklist.findUniqueOrThrow({
+              where: { id: input.checklistId },
+              select: { revision: true },
+            });
+            return { item: toItemSummary(latest), revision: checklist.revision };
+          }
+          throw new AppError(409, 'CHECKLIST_ITEM_CONFLICT', 'The item state changed concurrently');
+        }
+        const updated = (await findLiveItem(tx, input.checklistId, input.itemId))!;
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemSignedOff,
+          targetType: 'ChecklistItem',
+          targetId: updated.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: updated.id,
+            revision,
+            signedOffById: input.userId,
+          },
+        });
+        return { item: toItemSummary(updated), revision };
+      });
+    },
+
+    async removeSignOff(input: Input & { projectId: string; checklistId: string; itemId: string }) {
+      const { item, authorization } = await loadItem(input, null, 'write');
+      assertCanRemoveSignOff(item.signedOffById, input.userId, authorization);
+      return prisma.$transaction(async (tx) => {
+        await lockChecklist(tx, input.checklistId);
+        const current = await findLiveItem(tx, input.checklistId, input.itemId);
+        if (!current) {
+          throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+        }
+        assertCanRemoveSignOff(current.signedOffById, input.userId, authorization);
+        if (!current.signedOffAt) {
+          const checklist = await tx.checklist.findUniqueOrThrow({
+            where: { id: input.checklistId },
+            select: { revision: true },
+          });
+          return { item: toItemSummary(current), revision: checklist.revision };
+        }
+        const result = await tx.checklistItem.updateMany({
+          where: {
+            id: current.id,
+            checklistId: input.checklistId,
+            deletedAt: null,
+            signedOffAt: { not: null },
+          },
+          data: { signedOffById: null, signedOffAt: null },
+        });
+        if (result.count === 0) {
+          const latest = await findLiveItem(tx, input.checklistId, input.itemId);
+          if (!latest) {
+            throw new AppError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'That checklist item does not exist');
+          }
+          if (!latest.signedOffAt) {
+            const checklist = await tx.checklist.findUniqueOrThrow({
+              where: { id: input.checklistId },
+              select: { revision: true },
+            });
+            return { item: toItemSummary(latest), revision: checklist.revision };
+          }
+          throw new AppError(409, 'CHECKLIST_ITEM_CONFLICT', 'The item state changed concurrently');
+        }
+        const updated = (await findLiveItem(tx, input.checklistId, input.itemId))!;
+        const revision = await bumpRevision(tx, input.checklistId);
+        await recordAuditEvent(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: ChecklistAuditAction.ItemSignOffRemoved,
+          targetType: 'ChecklistItem',
+          targetId: updated.id,
+          metadata: {
+            checklistId: input.checklistId,
+            itemId: updated.id,
+            revision,
+            previousSignedOffById: current.signedOffById,
+          },
+        });
+        return { item: toItemSummary(updated), revision };
       });
     },
   };

@@ -283,5 +283,99 @@ export function createChecklistRouter({
     },
   );
 
+  router.post(
+    '/:checklistId/items/:itemId/complete',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      sendSuccess(
+        res,
+        await service.complete({ userId: userId(req), workspaceId, projectId, checklistId, itemId }),
+      );
+    },
+  );
+
+  router.post(
+    '/:checklistId/items/:itemId/uncomplete',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      sendSuccess(
+        res,
+        await service.uncomplete({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+        }),
+      );
+    },
+  );
+
+  router.post(
+    '/:checklistId/items/:itemId/sign-off',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      sendSuccess(
+        res,
+        await service.signOff({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+        }),
+      );
+    },
+  );
+
+  router.delete(
+    '/:checklistId/items/:itemId/sign-off',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: checklistItemParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, checklistId, itemId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        checklistId: string;
+        itemId: string;
+      };
+      sendSuccess(
+        res,
+        await service.removeSignOff({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          checklistId,
+          itemId,
+        }),
+      );
+    },
+  );
+
   return router;
 }
