@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
+import { recordAuditEvent, TaskAuditAction } from '../../services/audit';
 import { encryptIntegrationToken } from '../integrations/token-crypto';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 
@@ -107,6 +108,7 @@ export async function processGithubWebhook(input: {
         if (externalId) {
           const head = asRecord(pr.head);
           const base = asRecord(pr.base);
+          const prStateVal = prState(root, pr);
           const data = {
             externalNumber: typeof pr.number === 'number' ? pr.number : null,
             title: typeof pr.title === 'string' ? pr.title.slice(0, 500) : null,
@@ -114,20 +116,149 @@ export async function processGithubWebhook(input: {
             ref: head && typeof head.ref === 'string' ? head.ref : null,
             headRef: head && typeof head.ref === 'string' ? head.ref : null,
             baseRef: base && typeof base.ref === 'string' ? base.ref : null,
-            state: prState(root, pr),
+            state: prStateVal,
           };
-          const updated = await prisma.taskDevLink.updateMany({
+          const links = await prisma.taskDevLink.findMany({
             where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
-            data,
+            include: {
+              task: {
+                select: {
+                  id: true,
+                  status: true,
+                  key: true,
+                  projectId: true,
+                  project: { select: { workspaceId: true } },
+                },
+              },
+            },
           });
-          outcome = updated.count > 0 ? 'processed' : 'ignored';
+          if (links.length === 0) {
+            outcome = 'ignored';
+          } else {
+            const isMerged = prStateVal === 'merged';
+            for (const link of links) {
+              await prisma.$transaction(async (tx) => {
+                const linkUpdate: Record<string, unknown> = { ...data };
+                if (isMerged) {
+                  linkUpdate.mergedAt = new Date();
+                }
+                await tx.taskDevLink.update({ where: { id: link.id }, data: linkUpdate });
+                if (isMerged) {
+                  const task = link.task;
+                  if (task.status === 'IN_PROGRESS' || task.status === 'CHANGES_REQUESTED') {
+                    const updatedTask = await tx.task.updateMany({
+                      where: { id: task.id, status: { in: ['IN_PROGRESS', 'CHANGES_REQUESTED'] } },
+                      data: {
+                        status: 'SUBMITTED',
+                        submittedAt: new Date(),
+                        submittedById: null,
+                        submissionSummary: null,
+                        reviewFeedback: null,
+                        reviewedAt: null,
+                        reviewedById: null,
+                      },
+                    });
+                    if (updatedTask.count > 0) {
+                      await recordAuditEvent(tx, {
+                        workspaceId: task.project.workspaceId,
+                        actorId: undefined,
+                        action: TaskAuditAction.TaskGithubPrMerged,
+                        targetType: 'Task',
+                        targetId: task.id,
+                        metadata: {
+                          source: 'GITHUB_WEBHOOK',
+                          deliveryId,
+                          event,
+                          prNumber: data.externalNumber ?? null,
+                          repositoryFullName,
+                          fromStatus: task.status,
+                          toStatus: 'SUBMITTED',
+                          linkId: link.id,
+                          externalId,
+                        },
+                      });
+                    }
+                  }
+                }
+              });
+            }
+            outcome = 'processed';
+          }
         }
+      }
+    } else if (event === 'pull_request_review') {
+      const action = typeof root.action === 'string' ? root.action : '';
+      const review = asRecord(root.review);
+      const pr = asRecord(root.pull_request);
+      if (review && pr) {
+        const externalId = pr.id != null ? String(pr.id) : null;
+        if (externalId) {
+          const links = await prisma.taskDevLink.findMany({
+            where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
+            include: { task: { select: { id: true, projectId: true, project: { select: { workspaceId: true } } } } },
+          });
+          if (links.length === 0) {
+            outcome = 'ignored';
+          } else {
+            const user = asRecord(review.user);
+            const reviewerLogin = user && typeof user.login === 'string' ? user.login.slice(0, 255) : null;
+            const submittedAtStr = typeof review.submitted_at === 'string' ? review.submitted_at : null;
+            const incomingReviewedAt = submittedAtStr ? new Date(submittedAtStr) : new Date();
+            const reviewStateRaw = typeof review.state === 'string' ? review.state.toUpperCase() : null;
+            let newReviewState: string | null = null;
+            if (action === 'dismissed') {
+              newReviewState = null;
+            } else if (reviewStateRaw === 'APPROVED' || reviewStateRaw === 'CHANGES_REQUESTED' || reviewStateRaw === 'COMMENTED') {
+              newReviewState = reviewStateRaw;
+            } else if (reviewStateRaw === 'DISMISSED') {
+              newReviewState = null;
+            } else {
+              newReviewState = null;
+            }
+            for (const link of links) {
+              await prisma.$transaction(async (tx) => {
+                const existing = await tx.taskDevLink.findUnique({ where: { id: link.id }, select: { reviewedAt: true } });
+                if (existing?.reviewedAt && existing.reviewedAt.getTime() > incomingReviewedAt.getTime()) {
+                  // out of order: ignore
+                  return;
+                }
+                await tx.taskDevLink.update({
+                  where: { id: link.id },
+                  data: {
+                    reviewState: newReviewState,
+                    reviewerLogin: newReviewState ? reviewerLogin : null,
+                    reviewedAt: newReviewState ? incomingReviewedAt : null,
+                  },
+                });
+                await recordAuditEvent(tx, {
+                  workspaceId: link.task.project.workspaceId,
+                  actorId: undefined,
+                  action: TaskAuditAction.TaskGithubReviewSynced,
+                  targetType: 'TaskDevLink',
+                  targetId: link.id,
+                  metadata: {
+                    source: 'GITHUB_WEBHOOK',
+                    deliveryId,
+                    event,
+                    action,
+                    prNumber: typeof pr.number === 'number' ? pr.number : null,
+                    repositoryFullName,
+                    reviewState: newReviewState,
+                    reviewerLogin: newReviewState ? reviewerLogin : null,
+                    taskId: link.taskId,
+                  },
+                });
+              });
+            }
+            outcome = 'processed';
+          }
+        }
+      } else {
+        outcome = 'ignored';
       }
     } else if (event === 'installation') {
       const action = typeof root.action === 'string' ? root.action : '';
       if ((action === 'deleted' || action === 'suspend') && installationId) {
-        // Best-effort: mark matching active connections for this installation as disconnected.
-        // We can't query JSON content portably; scan active GITHUB connections and match decrypted payload.
         const { decryptIntegrationToken } = await import('../integrations/token-crypto');
         const connections = await prisma.integrationConnection.findMany({
           where: { provider: 'GITHUB', status: { in: ['ACTIVE', 'PENDING', 'ERROR'] } },
