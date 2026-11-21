@@ -159,6 +159,22 @@ enum TaskStatus {
   CHANGES_REQUESTED
 }
 
+/// BE-2 shared review lifecycle. APPROVED is terminal.
+enum ReviewStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+/// Append-only review decision kinds. REJECTED and CHANGES_REQUESTED both move
+/// the review to ReviewStatus.CHANGES_REQUESTED but remain distinguishable.
+enum ReviewDecisionType {
+  APPROVED
+  CHANGES_REQUESTED
+  REJECTED
+}
+
 enum TaskPriority {
   LOW
   MEDIUM
@@ -340,9 +356,12 @@ model User {
   attachmentVersionsUploaded    AttachmentVersion[]           @relation("AttachmentVersionUploader")
   attachmentVersionFeedback     AttachmentVersionFeedback[]   @relation("AttachmentVersionFeedbackAuthor")
   checklistsCreated             Checklist[]                   @relation("ChecklistCreator")
-  checklistItemsCompleted       ChecklistItem[]              @relation("ChecklistItemCompletedBy")
-  checklistItemsSignedOff       ChecklistItem[]              @relation("ChecklistItemSignedOffBy")
+  checklistItemsCompleted       ChecklistItem[]               @relation("ChecklistItemCompletedBy")
+  checklistItemsSignedOff       ChecklistItem[]               @relation("ChecklistItemSignedOffBy")
   checklistItemFeedback         ChecklistItemFeedback[]       @relation("ChecklistItemFeedbackAuthor")
+  submittedReviews              Review[]                      @relation("ReviewSubmittedBy")
+  assignedReviews               Review[]                      @relation("ReviewAssignee")
+  decidedReviews                ReviewDecision[]              @relation("ReviewDecisionDecidedBy")
   auditLogs                     AuditLog[]
   invitedWorkspaces             Invitation[]                  @relation("InvitedBy")
   pendingInvitations            Invitation[]                  @relation("InvitedUser")
@@ -607,6 +626,7 @@ model Workspace {
   joinRequests           JoinRequest[]
   files                  FileAttachment[]
   checklists             Checklist[]
+  reviews                Review[]
   documents              Document[]
   calendarEvents         CalendarEvent[]
   forms                  Form[]
@@ -1048,6 +1068,7 @@ model Project {
   channels                     Channel[]
   attachments                  FileAttachment[]
   checklists                   Checklist[]
+  reviews                      Review[]
   documents                    Document[]
   calendarEvents               CalendarEvent[]
   meetings                     Meeting[]
@@ -1593,11 +1614,11 @@ model FileAttachment {
   updatedAt       DateTime  @updatedAt
   deletedAt       DateTime?
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project   Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  task      Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  comment   Comment?  @relation(fields: [commentId], references: [id], onDelete: Cascade)
-  uploader  User      @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task      Task?               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  comment   Comment?            @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  uploader  User                @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
   versions  AttachmentVersion[]
 
   @@index([workspaceId])
@@ -1634,6 +1655,7 @@ model AttachmentVersion {
   attachment FileAttachment              @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
   uploader   User                        @relation("AttachmentVersionUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
   feedback   AttachmentVersionFeedback[]
+  reviews    Review[]
 
   @@unique([attachmentId, versionNumber])
   @@index([attachmentId, createdAt])
@@ -1676,10 +1698,11 @@ model Checklist {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy User      @relation("ChecklistCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User            @relation("ChecklistCreator", fields: [createdById], references: [id], onDelete: Restrict)
   items     ChecklistItem[]
+  reviews   Review[]
 
   @@index([workspaceId, projectId])
   @@index([projectId, createdAt, id])
@@ -1727,6 +1750,64 @@ model ChecklistItemFeedback {
 
   @@index([checklistItemId, createdAt])
   @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Shared project submissions and reviews (BE-2)
+// ---------------------------------------------------------------------------
+
+/// A project-scoped review of exactly one typed submission target. Target
+/// identity is carried by concrete nullable FKs, never by a polymorphic id.
+model Review {
+  id                  String       @id @default(uuid())
+  workspaceId         String
+  projectId           String
+  attachmentVersionId String?
+  checklistId         String?
+  /// Immutable snapshot of Checklist.revision captured when this row was
+  /// submitted. Non-null iff checklistId is non-null.
+  checklistRevision   Int?
+  status              ReviewStatus @default(SUBMITTED)
+  round               Int          @default(1)
+  submittedById       String
+  assigneeId          String?
+  submittedAt         DateTime     @default(now())
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  attachmentVersion AttachmentVersion? @relation(fields: [attachmentVersionId], references: [id], onDelete: Cascade)
+  checklist         Checklist?         @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  submittedBy       User               @relation("ReviewSubmittedBy", fields: [submittedById], references: [id], onDelete: Restrict)
+  assignee          User?              @relation("ReviewAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  decisions         ReviewDecision[]
+
+  @@index([workspaceId, projectId])
+  @@index([projectId, createdAt, id])
+  @@index([attachmentVersionId])
+  @@index([checklistId, checklistRevision])
+  @@index([submittedById])
+  @@index([assigneeId])
+  @@index([status, createdAt])
+}
+
+/// Append-only record of one decision in one review round.
+model ReviewDecision {
+  id          String             @id @default(uuid())
+  reviewId    String
+  round       Int
+  decision    ReviewDecisionType
+  note        String?
+  decidedById String
+  decidedAt   DateTime           @default(now())
+
+  review    Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  decidedBy User   @relation("ReviewDecisionDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@unique([reviewId, round])
+  @@index([decidedById])
+  @@index([reviewId, decidedAt])
 }
 
 // ---------------------------------------------------------------------------
