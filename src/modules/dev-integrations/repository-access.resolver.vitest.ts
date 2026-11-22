@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- mocked Prisma/auth client shapes for unit tests */
+/* eslint-disable @typescript-eslint/no-explicit-any -- Prisma client is mocked with partial delegates; `any` keeps tests focused on resolver behavior. */
 // @ts-expect-error vitest types are provided by the vitest runner, not tsconfig.test.json types
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
