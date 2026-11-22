@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- test DB/prisma client shapes */
 import test, { after, before, describe } from 'node:test';
 import { resolveTestDatabaseUrl, connectTestDatabase } from './helpers/test-database';
 import { resolveRepositoryAccess } from '../src/modules/dev-integrations/repository-access.resolver';
