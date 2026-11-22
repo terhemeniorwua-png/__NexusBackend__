@@ -5,7 +5,14 @@ import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
-import { ProjectPermission, authorizeProject, requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import {
+  ProjectPermission,
+  authorizeProject,
+  effectiveWorkspaceRole,
+  requireWorkspaceAccess,
+  resolveProjectAuthorization,
+  WorkspaceCapability,
+} from '../authorization';
 import { resolveRepositoryAccess, type RepositoryAccessLevelValue } from './repository-access.resolver';
 import type { AppConfig } from '../../config/env';
 import { githubAppProvider } from './providers/github-app.provider';
@@ -17,6 +24,7 @@ import type {
   DevPullRequestSummary,
   DevRepositorySummary,
   LinkedProjectRepository,
+  RepositoryAccessMember,
   TaskDevLinkSummary,
 } from './dev-integration.types';
 
@@ -179,6 +187,15 @@ function maskTaskDevLink(link: TaskDevLinkSummary): TaskDevLinkSummary {
     reviewedAt: null,
     mergedAt: null,
   };
+}
+
+function defaultRepositoryAccessLevel(authorization: {
+  projectRole?: string | null;
+  accessSource?: string;
+}): RepositoryAccessLevelValue {
+  if (authorization.projectRole === 'VIEWER') return 'READ';
+  if (authorization.accessSource === 'workspace_member' && authorization.projectRole === null) return 'READ';
+  return 'LINK';
 }
 
 export function createDevIntegrationService(
@@ -565,6 +582,277 @@ export function createDevIntegrationService(
         metadata: { projectId: input.projectId, fullName: repo.fullName },
       });
       return { ok: true };
+    },
+
+    async listRepositoryMembers(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      repositoryId: string;
+    }): Promise<RepositoryAccessMember[]> {
+      await requireProjectRepoManager(input.userId, input.workspaceId, input.projectId);
+      const repo = await prisma.projectRepository.findFirst({
+        where: { id: input.repositoryId, projectId: input.projectId, project: { workspaceId: input.workspaceId } },
+        select: { id: true },
+      });
+      if (!repo) throw new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+
+      const workspaceMembers = await prisma.workspaceMembership.findMany({
+        where: { workspaceId: input.workspaceId, status: 'ACTIVE' },
+        select: {
+          userId: true,
+          role: true,
+          organizationRole: true,
+          workspace: { select: { type: true } },
+          user: { select: { id: true, name: true, email: true } },
+        },
+      });
+
+      const overrides = await prisma.projectRepositoryMember.findMany({
+        where: { projectRepositoryId: input.repositoryId },
+        select: { userId: true, level: true },
+      });
+      const overrideByUser = new Map(overrides.map((o) => [o.userId, o.level as RepositoryAccessLevelValue]));
+
+      const members = await Promise.all(
+        workspaceMembers.map(async (wm) => {
+          const workspaceRole = effectiveWorkspaceRole(wm.workspace.type, wm.role, wm.organizationRole);
+          let authorization;
+          try {
+            authorization = await resolveProjectAuthorization(
+              prisma,
+              { userId: wm.userId, workspaceId: input.workspaceId, workspaceRole },
+              input.projectId,
+            );
+          } catch (error) {
+            if (
+              error instanceof AppError &&
+              ['PROJECT_NOT_FOUND', 'PROJECT_ACCESS_DENIED', 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH'].includes(error.code)
+            ) {
+              return null;
+            }
+            throw error;
+          }
+
+          const defaultLevel = defaultRepositoryAccessLevel(authorization);
+          const overrideLevel = overrideByUser.get(wm.userId) ?? null;
+          const effectiveAccessLevel = overrideLevel ?? defaultLevel;
+          return {
+            userId: wm.userId,
+            effectiveAccessLevel,
+            defaultLevel,
+            isOverride: overrideLevel !== null,
+            overrideLevel,
+            inheritedWorkspaceAccess: authorization.accessSource !== 'project_member',
+            user: wm.user,
+          } satisfies RepositoryAccessMember;
+        }),
+      );
+
+      const eligible: RepositoryAccessMember[] = [];
+      for (const member of members) {
+        if (member) eligible.push(member);
+      }
+      return eligible.sort((a, b) => {
+        const an = (a.user.name ?? a.user.email).toLowerCase();
+        const bn = (b.user.name ?? b.user.email).toLowerCase();
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return a.userId.localeCompare(b.userId);
+      });
+    },
+
+    async setRepositoryMemberOverride(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      repositoryId: string;
+      targetUserId: string;
+      level: RepositoryAccessLevelValue;
+    }): Promise<RepositoryAccessMember> {
+      await requireProjectRepoManager(input.userId, input.workspaceId, input.projectId);
+      const repo = await prisma.projectRepository.findFirst({
+        where: { id: input.repositoryId, projectId: input.projectId, project: { workspaceId: input.workspaceId } },
+        select: { id: true },
+      });
+      if (!repo) throw new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+
+      const targetMembership = await prisma.workspaceMembership.findFirst({
+        where: { workspaceId: input.workspaceId, userId: input.targetUserId, status: 'ACTIVE' },
+        select: {
+          userId: true,
+          role: true,
+          organizationRole: true,
+          workspace: { select: { type: true } },
+          user: { select: { id: true, name: true, email: true } },
+        },
+      });
+      if (!targetMembership) {
+        throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
+      }
+
+      const targetWorkspaceRole = effectiveWorkspaceRole(
+        targetMembership.workspace.type,
+        targetMembership.role,
+        targetMembership.organizationRole,
+      );
+      let targetAuth;
+      try {
+        targetAuth = await resolveProjectAuthorization(
+          prisma,
+          { userId: input.targetUserId, workspaceId: input.workspaceId, workspaceRole: targetWorkspaceRole },
+          input.projectId,
+        );
+      } catch (error) {
+        if (
+          error instanceof AppError &&
+          ['PROJECT_NOT_FOUND', 'PROJECT_ACCESS_DENIED', 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH'].includes(error.code)
+        ) {
+          throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
+        }
+        throw error;
+      }
+
+      const defaultLevel = defaultRepositoryAccessLevel(targetAuth);
+      const existing = await prisma.projectRepositoryMember.findUnique({
+        where: { projectRepositoryId_userId: { projectRepositoryId: input.repositoryId, userId: input.targetUserId } },
+        select: { level: true },
+      });
+      const oldOverrideLevel = (existing?.level as RepositoryAccessLevelValue | undefined) ?? null;
+      const oldEffectiveLevel = oldOverrideLevel ?? defaultLevel;
+
+      await prisma.projectRepositoryMember.upsert({
+        where: { projectRepositoryId_userId: { projectRepositoryId: input.repositoryId, userId: input.targetUserId } },
+        create: {
+          projectRepositoryId: input.repositoryId,
+          projectId: input.projectId,
+          userId: input.targetUserId,
+          level: input.level,
+          grantedById: input.userId,
+        },
+        update: {
+          level: input.level,
+          grantedById: input.userId,
+        },
+      });
+
+      await recordAuditEvent(prisma, {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        action: 'dev_integration.repository_access_override_set',
+        targetType: 'ProjectRepositoryMember',
+        targetId: input.repositoryId,
+        metadata: {
+          projectId: input.projectId,
+          repositoryId: input.repositoryId,
+          targetUserId: input.targetUserId,
+          oldOverrideLevel,
+          newOverrideLevel: input.level,
+          oldEffectiveLevel,
+          newEffectiveLevel: input.level,
+        },
+      });
+
+      return {
+        userId: input.targetUserId,
+        effectiveAccessLevel: input.level,
+        defaultLevel,
+        isOverride: true,
+        overrideLevel: input.level,
+        inheritedWorkspaceAccess: targetAuth.accessSource !== 'project_member',
+        user: targetMembership.user,
+      };
+    },
+
+    async removeRepositoryMemberOverride(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      repositoryId: string;
+      targetUserId: string;
+    }): Promise<RepositoryAccessMember> {
+      await requireProjectRepoManager(input.userId, input.workspaceId, input.projectId);
+      const repo = await prisma.projectRepository.findFirst({
+        where: { id: input.repositoryId, projectId: input.projectId, project: { workspaceId: input.workspaceId } },
+        select: { id: true },
+      });
+      if (!repo) throw new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+
+      const targetMembership = await prisma.workspaceMembership.findFirst({
+        where: { workspaceId: input.workspaceId, userId: input.targetUserId, status: 'ACTIVE' },
+        select: {
+          userId: true,
+          role: true,
+          organizationRole: true,
+          workspace: { select: { type: true } },
+          user: { select: { id: true, name: true, email: true } },
+        },
+      });
+      if (!targetMembership) {
+        throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
+      }
+
+      const targetWorkspaceRole = effectiveWorkspaceRole(
+        targetMembership.workspace.type,
+        targetMembership.role,
+        targetMembership.organizationRole,
+      );
+      let targetAuth;
+      try {
+        targetAuth = await resolveProjectAuthorization(
+          prisma,
+          { userId: input.targetUserId, workspaceId: input.workspaceId, workspaceRole: targetWorkspaceRole },
+          input.projectId,
+        );
+      } catch (error) {
+        if (
+          error instanceof AppError &&
+          ['PROJECT_NOT_FOUND', 'PROJECT_ACCESS_DENIED', 'ORGANIZATION_ROLE_WORKSPACE_MISMATCH'].includes(error.code)
+        ) {
+          throw new AppError(404, 'PROJECT_MEMBER_NOT_FOUND', 'That project member does not exist');
+        }
+        throw error;
+      }
+
+      const defaultLevel = defaultRepositoryAccessLevel(targetAuth);
+      const existing = await prisma.projectRepositoryMember.findUnique({
+        where: { projectRepositoryId_userId: { projectRepositoryId: input.repositoryId, userId: input.targetUserId } },
+        select: { level: true },
+      });
+      const oldOverrideLevel = (existing?.level as RepositoryAccessLevelValue | undefined) ?? null;
+      const oldEffectiveLevel = oldOverrideLevel ?? defaultLevel;
+
+      if (existing) {
+        await prisma.projectRepositoryMember.delete({
+          where: { projectRepositoryId_userId: { projectRepositoryId: input.repositoryId, userId: input.targetUserId } },
+        });
+        await recordAuditEvent(prisma, {
+          workspaceId: input.workspaceId,
+          actorId: input.userId,
+          action: 'dev_integration.repository_access_override_removed',
+          targetType: 'ProjectRepositoryMember',
+          targetId: input.repositoryId,
+          metadata: {
+            projectId: input.projectId,
+            repositoryId: input.repositoryId,
+            targetUserId: input.targetUserId,
+            oldOverrideLevel,
+            newOverrideLevel: null,
+            oldEffectiveLevel,
+            newEffectiveLevel: defaultLevel,
+          },
+        });
+      }
+
+      return {
+        userId: input.targetUserId,
+        effectiveAccessLevel: defaultLevel,
+        defaultLevel,
+        isOverride: false,
+        overrideLevel: null,
+        inheritedWorkspaceAccess: targetAuth.accessSource !== 'project_member',
+        user: targetMembership.user,
+      };
     },
 
     async listRepositoryBranches(input: {

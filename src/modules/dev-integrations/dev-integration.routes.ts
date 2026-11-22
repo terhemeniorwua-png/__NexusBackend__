@@ -13,8 +13,10 @@ import {
   linkRepositorySchema,
   listDevResourceQuerySchema,
   projectParamsSchema,
+  projectRepoMemberParamsSchema,
   projectRepoParamsSchema,
   projectRepoResourceParamsSchema,
+  setRepositoryMemberOverrideSchema,
   taskDevLinkParamsSchema,
   taskParamsSchema,
   workspaceParamsSchema,
@@ -149,6 +151,72 @@ export function createProjectRepositoryRouter({
     async (req, res) => {
       const { workspaceId, projectId, repositoryId } = req.validated!.params as { workspaceId: string; projectId: string; repositoryId: string };
       sendSuccess(res, await service.unlinkRepository({ userId: userId(req), workspaceId, projectId, repositoryId }));
+    },
+  );
+
+  // GET /workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/members
+  router.get(
+    '/:repositoryId/members',
+    requireAuth,
+    requireActive,
+    validate({ params: projectRepoParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, repositoryId } = req.validated!.params as { workspaceId: string; projectId: string; repositoryId: string };
+      sendSuccess(res, await service.listRepositoryMembers({ userId: userId(req), workspaceId, projectId, repositoryId }));
+    },
+  );
+
+  // PUT /workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/members/:userId
+  router.put(
+    '/:repositoryId/members/:userId',
+    requireAuth,
+    requireActive,
+    validate({ params: projectRepoMemberParamsSchema, body: setRepositoryMemberOverrideSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, repositoryId, userId: targetUserId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        repositoryId: string;
+        userId: string;
+      };
+      const { level } = req.validated!.body as { level: 'NONE' | 'METADATA' | 'READ' | 'LINK' };
+      sendSuccess(
+        res,
+        await service.setRepositoryMemberOverride({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          repositoryId,
+          targetUserId,
+          level,
+        }),
+      );
+    },
+  );
+
+  // DELETE /workspaces/:workspaceId/projects/:projectId/repositories/:repositoryId/members/:userId
+  router.delete(
+    '/:repositoryId/members/:userId',
+    requireAuth,
+    requireActive,
+    validate({ params: projectRepoMemberParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, repositoryId, userId: targetUserId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        repositoryId: string;
+        userId: string;
+      };
+      sendSuccess(
+        res,
+        await service.removeRepositoryMemberOverride({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          repositoryId,
+          targetUserId,
+        }),
+      );
     },
   );
 

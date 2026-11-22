@@ -20,6 +20,16 @@ export const projectRepoResourceParamsSchema = projectParamsSchema.extend({
   repositoryId: z.string().uuid(),
 });
 
+export const projectRepoMemberParamsSchema = projectRepoParamsSchema.extend({
+  userId: z.string().uuid(),
+});
+
+export const repositoryAccessLevelSchema = z.enum(['NONE', 'METADATA', 'READ', 'LINK']);
+
+export const setRepositoryMemberOverrideSchema = z.object({
+  level: repositoryAccessLevelSchema,
+});
+
 export const taskParamsSchema = projectParamsSchema.extend({
   taskId: z.string().uuid(),
 });

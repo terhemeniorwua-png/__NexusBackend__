@@ -1,6 +1,6 @@
 # Design Note: Repository-Level Access
 
-**Status:** Stage 1 schema/resolver and Stage 2 enforcement implemented (see PRs #157, #158); later stages (member management, backfill, audit routes) remain design/follow-up.  
+**Status:** Stage 1 schema/resolver and Stage 2 enforcement implemented (see PRs #157, #158). Stage 3 repository access member API implemented (contract: [REPOSITORY_ACCESS_MEMBER_API.md](./REPOSITORY_ACCESS_MEMBER_API.md)); later stages (backfill, broader audit routes) remain design/follow-up.  
 **Base:** `origin/main` (post-#158).  
 **Scope:** Project-linked repositories (`ProjectRepository`), repository browsing, and task dev-links (`TaskDevLink`).
 
@@ -87,6 +87,8 @@ Stage 1 enum is authoritative: `NONE | METADATA | READ | LINK`.
 - Task dev-link delete: require task update + repo level `LINK`; READ/METADATA return 403 forbidden convention; NONE returns 404 missing-repo shape.
 
 **Response field (Stage 2 item 3, authorized exception):** `effectiveAccessLevel` is returned on project repository list items (`LinkedProjectRepository.effectiveAccessLevel: 'NONE' | 'METADATA' | 'READ' | 'LINK'`) and task dev-link list items (`TaskDevLinkSummary.effectiveAccessLevel: RepositoryAccessLevel | null`; `null` only when no `projectRepositoryId` is attached). The frontend uses it to hide link/unlink controls for READ and METADATA. No other response field additions.
+
+**Stage 3 member API contract:** See [REPOSITORY_ACCESS_MEMBER_API.md](./REPOSITORY_ACCESS_MEMBER_API.md) for method/path/request/response/error codes.
 
 **403 vs 404:** Follow existing codebase convention. Stage 2 defaults: NONE behaves as missing (404 missing-repo shape). METADATA browse/content endpoints return 404 missing-repo shape (no leakage). READ/METADATA mutations that are forbidden by level return 403 with existing forbidden convention. Never leak repo name/PR title/URL/branch in errors.
 
