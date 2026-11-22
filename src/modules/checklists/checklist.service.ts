@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
+import { recordFanoutEvent } from '../../services/notification-fanout';
 import { AppError } from '../../utils/errors';
 import {
   ProjectPermission,
@@ -815,6 +816,16 @@ export function createChecklistService(prisma: PrismaClient = getPrismaClient())
             revision,
             signedOffById: input.userId,
           },
+        });
+        await recordFanoutEvent(tx, {
+          action: ChecklistAuditAction.ItemSignedOff,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          actorId: input.userId,
+          targetType: 'ChecklistItem',
+          targetId: updated.id,
+          dedupeKey: `checklist:${updated.id}:signed_off`,
+          context: { checklistId: input.checklistId, itemId: updated.id, revision },
         });
         return { item: toItemSummary(updated), revision };
       });
