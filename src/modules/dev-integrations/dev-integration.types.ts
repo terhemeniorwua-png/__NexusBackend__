@@ -81,6 +81,10 @@ export interface TaskDevLinkSummary {
   baseRef: string | null;
   state: string | null;
   repositoryFullName: string | null;
+  reviewState: string | null;
+  reviewerLogin: string | null;
+  reviewedAt: string | null;
+  mergedAt: string | null;
   linkedById: string;
   createdAt: string;
   updatedAt: string;

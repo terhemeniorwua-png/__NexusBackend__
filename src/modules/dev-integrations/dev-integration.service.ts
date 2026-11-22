@@ -96,6 +96,10 @@ function toTaskDevLink(row: {
   baseRef: string | null;
   state: string | null;
   repositoryFullName: string | null;
+  reviewState?: string | null;
+  reviewerLogin?: string | null;
+  reviewedAt?: Date | null;
+  mergedAt?: Date | null;
   linkedById: string;
   createdAt: Date;
   updatedAt: Date;
@@ -116,6 +120,10 @@ function toTaskDevLink(row: {
     baseRef: row.baseRef,
     state: row.state,
     repositoryFullName: row.repositoryFullName,
+    reviewState: row.reviewState ?? null,
+    reviewerLogin: row.reviewerLogin ?? null,
+    reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
+    mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,
     linkedById: row.linkedById,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
