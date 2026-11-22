@@ -15366,6 +15366,189 @@ paths:
             schema:
               type: object
               additionalProperties: true
+  /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/clarifications:
+    get:
+      tags:
+      - Projects
+      operationId: get_workspaces_workspaceId_projects_projectId_tasks_taskId_clarifications
+      summary: GET /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/clarifications
+      description: Cursor-paginated clarification rounds, newest first. Requires task.view.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Success. Returns { items, nextCursor }.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Invalid cursor
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: taskId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+    post:
+      tags:
+      - Projects
+      operationId: post_workspaces_workspaceId_projects_projectId_tasks_taskId_clarifications
+      summary: POST /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/clarifications
+      description: Ask for clarification from ASSIGNED as a pending assignee. Returns { clarification, task }.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Success. Task status becomes AWAITING_CLARIFICATION.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (not a pending assignee)
+        '404':
+          description: Not found
+        '409':
+          description: Invalid acceptance or clarification state (including concurrent double-ask)
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: taskId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - question
+              properties:
+                question:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+              additionalProperties: false
+  /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/clarifications/{clarificationId}/answer:
+    post:
+      tags:
+      - Projects
+      operationId: post_workspaces_workspaceId_projects_projectId_tasks_taskId_clarifications_clarificationId_answer
+      summary: POST /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/clarifications/{clarificationId}/answer
+      description: Answer an open clarification as creator, reviewer, project manager or inherited workspace authority. The asker cannot answer their own request.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Success. Task returns to ASSIGNED; returns { clarification, task }.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (SELF_CLARIFICATION_FORBIDDEN or PERMISSION_DENIED)
+        '404':
+          description: Not found
+        '409':
+          description: Clarification already resolved (including concurrent double-answer/cancel)
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: taskId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: clarificationId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - answer
+              properties:
+                answer:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+              additionalProperties: false
   /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/review:
     post:
       tags:
@@ -22652,6 +22835,7 @@ components:
                   description: Task workflow status.
                   enum:
                   - ASSIGNED
+                  - AWAITING_CLARIFICATION
                   - IN_PROGRESS
                   - SUBMITTED
                   - UNDER_REVIEW

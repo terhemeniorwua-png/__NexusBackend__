@@ -15,6 +15,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const TASK_STATUS_ORDER: readonly TaskStatus[] = [
   'ASSIGNED',
+  'AWAITING_CLARIFICATION',
   'IN_PROGRESS',
   'SUBMITTED',
   'UNDER_REVIEW',

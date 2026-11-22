@@ -3,6 +3,7 @@ import { AppError } from '../../utils/errors';
 
 const ALLOWED_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   ASSIGNED: ['IN_PROGRESS'],
+  AWAITING_CLARIFICATION: [],
   IN_PROGRESS: ['SUBMITTED', 'ASSIGNED'],
   SUBMITTED: ['UNDER_REVIEW', 'APPROVED', 'CHANGES_REQUESTED', 'IN_PROGRESS'],
   UNDER_REVIEW: ['APPROVED', 'CHANGES_REQUESTED'],
@@ -17,7 +18,10 @@ export type StatusTransitionContext =
   | 'submit'
   | 'review'
   | 'subtask_complete'
-  | 'start';
+  | 'start'
+  | 'clarification_request'
+  | 'clarification_answer'
+  | 'clarification_cancel';
 
 function isAllowedByMatrix(from: TaskStatus, to: TaskStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
@@ -39,9 +43,33 @@ export function assertTaskStatusTransition(
 
   let allowed = isAllowedByMatrix(from, to);
 
+  // BE-7 clarification transitions are only reachable through the dedicated
+  // service, never through generic updates, automation, completion or review.
+  if (
+    !allowed &&
+    from === 'ASSIGNED' &&
+    to === 'AWAITING_CLARIFICATION' &&
+    context === 'clarification_request'
+  ) {
+    allowed = true;
+  }
+  if (
+    !allowed &&
+    from === 'AWAITING_CLARIFICATION' &&
+    to === 'ASSIGNED' &&
+    (context === 'clarification_answer' || context === 'clarification_cancel')
+  ) {
+    allowed = true;
+  }
+
   // Preserve existing behavior: complete() has historically moved tasks to
   // APPROVED from non-approved states.
-  if (!allowed && context === 'complete' && to === 'APPROVED') {
+  if (
+    !allowed &&
+    context === 'complete' &&
+    to === 'APPROVED' &&
+    from !== 'AWAITING_CLARIFICATION'
+  ) {
     allowed = true;
   }
 
@@ -57,8 +85,8 @@ export function assertTaskStatusTransition(
   }
 
   // Preserve existing behavior: review decisions have not been restricted by a
-  // prior-status matrix historically.
-  if (!allowed && context === 'review') {
+  // prior-status matrix historically. A waiting clarification is not reviewable.
+  if (!allowed && context === 'review' && from !== 'AWAITING_CLARIFICATION') {
     allowed = true;
   }
 

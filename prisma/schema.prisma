@@ -152,6 +152,7 @@ enum ProjectRole {
 
 enum TaskStatus {
   ASSIGNED
+  AWAITING_CLARIFICATION
   IN_PROGRESS
   SUBMITTED
   UNDER_REVIEW
@@ -239,6 +240,8 @@ enum NotificationType {
   ATTACHMENT_VERSION_ADDED
   GITHUB_PR_MERGED
   GITHUB_PR_REVIEW_RECEIVED
+  TASK_CLARIFICATION_REQUESTED
+  TASK_CLARIFICATION_ANSWERED
 }
 
 enum AuthTokenPurpose {
@@ -352,6 +355,8 @@ model User {
   submittedTasks                Task[]                        @relation("TaskSubmittedBy")
   reviewedTasks                 Task[]                        @relation("TaskReviewedBy")
   tasksToReview                 Task[]                        @relation("TaskReviewer")
+  askedClarifications           TaskClarification[]           @relation("TaskClarificationAskedBy")
+  answeredClarifications        TaskClarification[]           @relation("TaskClarificationAnsweredBy")
   createdTaskDocuments          TaskDocument[]                @relation("TaskDocumentCreator")
   savedTaskDocumentVersions     TaskDocumentVersion[]         @relation("TaskDocumentVersionSaver")
   reportedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerReporter")
@@ -1202,6 +1207,7 @@ model Task {
   reviewer            User?                  @relation("TaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   assignees           TaskAssignee[]
   progressUpdates     TaskProgressUpdate[]
+  clarifications      TaskClarification[]
   dependencies        TaskDependency[]       @relation("BlockedTask")
   blockers            TaskDependency[]       @relation("BlockingTask")
   reportedBlockers    TaskBlocker[]
@@ -1350,6 +1356,31 @@ model TaskAssignee {
   @@unique([taskId, userId])
   @@index([userId])
   @@index([assignedBy])
+}
+
+/// BE-7 append-only clarification rounds. A row is created with a question,
+/// then optionally receives one answer or one cancellation; it is never edited
+/// or deleted. The one-open-row-per-task constraint is enforced by a partial
+/// unique index in the migration.
+model TaskClarification {
+  id           String    @id @default(uuid())
+  taskId       String
+  round        Int
+  question     String
+  askedById    String
+  askedAt      DateTime  @default(now())
+  answer       String?
+  answeredById String?
+  answeredAt   DateTime?
+  cancelledAt  DateTime?
+
+  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  askedBy    User  @relation("TaskClarificationAskedBy", fields: [askedById], references: [id], onDelete: Restrict)
+  answeredBy User? @relation("TaskClarificationAnsweredBy", fields: [answeredById], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, round])
+  @@index([taskId, askedAt])
+  @@index([taskId, answeredAt])
 }
 
 model TaskDependency {

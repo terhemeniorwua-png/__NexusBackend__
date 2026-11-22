@@ -1169,6 +1169,32 @@ denials return 403 `PERMISSION_DENIED` with `requiredPermission` where applicabl
 | POST | `/{taskId}/submit` | Body: `{ "workSummary": string(1-10000) }` | `200 { success, data: <task summary> }` with `status: SUBMITTED`, submission metadata set, review feedback cleared. Requires task in submittable state and (assignee or authorized updater); tasks with required deliverables must include work summary. | 400 `DELIVERABLES_REQUIRED`, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`, 409 `TASK_SUBMIT_NOT_ALLOWED` | `submission.submit` |
 | POST | `/{taskId}/review` | Body: `{ "decision": "START_REVIEW"|"APPROVE"|"REQUEST_CHANGES", "feedback"?: string }` (`feedback` required for `REQUEST_CHANGES`) | `200 { success, data: <task summary> }` with status `UNDER_REVIEW`/`APPROVED`/`CHANGES_REQUESTED` and review metadata/audit recorded. Self-review of own submission is forbidden. | 400 validation, 403 `PERMISSION_DENIED`/`SELF_REVIEW_NOT_ALLOWED`, 404 `TASK_NOT_FOUND` | `submission.review` (`START_REVIEW`), `submission.approve` (`APPROVE`), `submission.request_revision` (`REQUEST_CHANGES`) |
 
+### Task clarification (BE-7)
+
+A task in `ASSIGNED` with at least one pending assignee may be put into
+`AWAITING_CLARIFICATION` by one of those assignees. Clarification rows are
+append-only: one open row is allowed per task, and answering or cancelling that
+row closes it. `AWAITING_CLARIFICATION` is only reachable through these routes;
+generic updates, automation, completion and review cannot move a waiting task.
+`start` and `accept` are rejected with their existing 409 codes while waiting,
+but `decline` remains allowed and cancels the open clarification in the same
+transaction. Removing the asker as an assignee also cancels it. Progress stays
+`APPROVED`-only, deadlines keep running, and the status is present in analytics,
+resource workload and `taskCountsByStatus` maps.
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| POST | `/{taskId}/clarifications` | Body: `{ "question": string(1-2000) }` (trimmed) | `200 { success, data: { clarification, task } }`; task status becomes `AWAITING_CLARIFICATION`. | 400 validation, 403 `NOT_TASK_ASSIGNEE`/`PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`, 409 `INVALID_ACCEPTANCE_STATE`/`INVALID_CLARIFICATION_STATE` (including concurrent double-ask) | `task.view`, caller must be a pending assignee |
+| GET | `/{taskId}/clarifications` | Query: `cursor?` (clarification id), `limit?` (1-100, default 25) | `200 { success, data: { items, nextCursor } }`, newest-first cursor pagination over all clarification rounds. | 400 `INVALID_CURSOR`, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND` | `task.view` |
+| POST | `/{taskId}/clarifications/{clarificationId}/answer` | Body: `{ "answer": string(1-2000) }` (trimmed) | `200 { success, data: { clarification, task } }`; task returns to `ASSIGNED`. | 400 validation, 403 `SELF_CLARIFICATION_FORBIDDEN`/`PERMISSION_DENIED`, 404 `CLARIFICATION_NOT_FOUND`/`TASK_NOT_FOUND`, 409 `INVALID_CLARIFICATION_STATE` (including concurrent double-answer/cancel) | `task.view`; creator, `reviewerId`, project manager or inherited workspace authority |
+
+Requested notifications go (in-app only, deduped and capped at 25) to the task
+creator, reviewer and project managers, excluding the asker. Answered
+notifications go only to the asker while they remain an active assignee.
+Audit events are `task.clarification_requested`, `task.clarification_answered`
+and `task.clarification_cancelled`; no generic `task.updated` or automation
+event is emitted.
+
 ### Subtask completion (approval-gated)
 
 | Method | Path | Request | Success response | Errors | Required permission |

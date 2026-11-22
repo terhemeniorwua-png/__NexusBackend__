@@ -51,6 +51,16 @@ import { createMentionEmailNotifier } from '../../services/mention-email-notifie
 import { createSlackEventNotifier } from '../integrations/slack.events';
 import { createTaskService } from './task.service';
 import { createTaskAdvancedService } from './task-advanced.service';
+import { createTaskClarificationService } from './task-clarification.service';
+import {
+  answerClarificationSchema,
+  askClarificationSchema,
+  clarificationParamsSchema,
+  listClarificationsQuerySchema,
+  type AnswerClarificationInput,
+  type AskClarificationInput,
+  type ListClarificationsQuery,
+} from './task-clarification.schemas';
 import {
   recurrenceParamsSchema,
   setTaskCustomFieldValuesSchema,
@@ -63,6 +73,7 @@ export interface TaskRouterOptions {
   config: AppConfig;
   service?: ReturnType<typeof createTaskService>;
   advancedService?: ReturnType<typeof createTaskAdvancedService>;
+  clarificationService?: ReturnType<typeof createTaskClarificationService>;
 }
 
 function context(req: Request) {
@@ -84,6 +95,7 @@ export function createTaskRouter({
     slackNotifier: createSlackEventNotifier(),
   }),
   advancedService = createTaskAdvancedService(),
+  clarificationService = createTaskClarificationService(),
 }: TaskRouterOptions): Router {
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);
@@ -573,6 +585,81 @@ export function createTaskRouter({
         res,
         await service.review(
           { userId: userId(req), workspaceId, projectId, taskId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Task clarification (BE-7)
+  // -------------------------------------------------------------------------
+
+  router.post(
+    '/:taskId/clarifications',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: askClarificationSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const body = req.validated!.body as AskClarificationInput;
+      sendSuccess(
+        res,
+        await clarificationService.ask(
+          { userId: userId(req), workspaceId, projectId, taskId, ...body },
+          context(req),
+        ),
+      );
+    },
+  );
+
+  router.get(
+    '/:taskId/clarifications',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, query: listClarificationsQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const query = req.validated!.query as ListClarificationsQuery;
+      sendSuccess(
+        res,
+        await clarificationService.list({ userId: userId(req), workspaceId, projectId, taskId, ...query }),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/clarifications/:clarificationId/answer',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: clarificationParamsSchema, body: answerClarificationSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId, clarificationId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+        clarificationId: string;
+      };
+      const body = req.validated!.body as AnswerClarificationInput;
+      sendSuccess(
+        res,
+        await clarificationService.answer(
+          {
+            userId: userId(req),
+            workspaceId,
+            projectId,
+            taskId,
+            clarificationId,
+            ...body,
+          },
           context(req),
         ),
       );

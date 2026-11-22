@@ -45,7 +45,13 @@ export interface FanoutEvent {
   context?: Record<string, unknown>;
 }
 
-type Audience = 'project' | 'reviewers' | 'submitter' | 'assignee';
+type Audience =
+  | 'project'
+  | 'reviewers'
+  | 'submitter'
+  | 'assignee'
+  | 'clarification_requested'
+  | 'clarification_asker';
 
 interface MessageDraft {
   title: string;
@@ -131,6 +137,30 @@ const REGISTRY: Record<string, RegistryEntry> = {
       body: 'A new version of a project attachment is available.',
     }),
   },
+  'task.clarification_requested': {
+    type: NotificationType.TASK_CLARIFICATION_REQUESTED,
+    audience: 'clarification_requested',
+    message: (event) => {
+      const taskKey = contextString(event, 'taskKey') ?? 'a task';
+      const question = contextString(event, 'question') ?? '';
+      return {
+        title: `Clarification requested on ${taskKey}`,
+        body: question ? `Question: ${question}` : 'An assignee asked for clarification.',
+      };
+    },
+  },
+  'task.clarification_answered': {
+    type: NotificationType.TASK_CLARIFICATION_ANSWERED,
+    audience: 'clarification_asker',
+    message: (event) => {
+      const taskKey = contextString(event, 'taskKey') ?? 'a task';
+      const answer = contextString(event, 'answer') ?? '';
+      return {
+        title: `Clarification answered on ${taskKey}`,
+        body: answer ? `Answer: ${answer}` : 'Your clarification question was answered.',
+      };
+    },
+  },
 };
 
 export function isFanoutAction(action: string): boolean {
@@ -140,6 +170,7 @@ export function isFanoutAction(action: string): boolean {
 interface EligibleMember {
   userId: string;
   canReview: boolean;
+  canManageProject: boolean;
 }
 
 async function eligibleMembers(client: NotificationClient, event: FanoutEvent): Promise<EligibleMember[]> {
@@ -177,6 +208,8 @@ async function eligibleMembers(client: NotificationClient, event: FanoutEvent): 
         canReview:
           authorization.permissions.includes(ProjectPermission.SubmissionReview) ||
           authorization.permissions.includes(ProjectPermission.SubmissionApprove),
+        canManageProject:
+          authorization.isWorkspaceAdmin || authorization.projectRole === 'PROJECT_MANAGER',
       });
     } catch (error) {
       // A member with no access to this project simply is not a recipient.
@@ -191,6 +224,11 @@ async function eligibleMembers(client: NotificationClient, event: FanoutEvent): 
 function contextUserId(event: FanoutEvent, key: string): string | null {
   const value = event.context?.[key];
   return typeof value === 'string' ? value : null;
+}
+
+function contextString(event: FanoutEvent, key: string): string | null {
+  const value = event.context?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 async function resolveRecipients(
@@ -221,6 +259,28 @@ async function resolveRecipients(
     case 'project':
       recipients = members.map((m) => m.userId);
       break;
+    case 'clarification_requested': {
+      // All identifiers come from the task row / authorization resolver, never
+      // from the request body. The actor is excluded by eligibleMembers() and
+      // again here for creator/reviewer ids supplied in DB-derived context.
+      const creatorId = contextUserId(event, 'creatorId');
+      const reviewerId = contextUserId(event, 'reviewerId');
+      const managerIds = members.filter((m) => m.canManageProject).map((m) => m.userId);
+      recipients = [...new Set([creatorId, reviewerId, ...managerIds])].filter(
+        (id): id is string =>
+          typeof id === 'string' &&
+          id.length > 0 &&
+          id !== event.actorId &&
+          memberIds.has(id),
+      );
+      break;
+    }
+    case 'clarification_asker': {
+      const askerId = contextUserId(event, 'askerId');
+      recipients =
+        askerId && askerId !== event.actorId && memberIds.has(askerId) ? [askerId] : [];
+      break;
+    }
   }
 
   return recipients.sort().slice(0, MAX_FANOUT_RECIPIENTS);

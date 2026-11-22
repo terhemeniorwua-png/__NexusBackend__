@@ -215,6 +215,7 @@ export const listTasksQuerySchema = z
     status: z
       .enum([
         'ASSIGNED',
+        'AWAITING_CLARIFICATION',
         'IN_PROGRESS',
         'SUBMITTED',
         'UNDER_REVIEW',
