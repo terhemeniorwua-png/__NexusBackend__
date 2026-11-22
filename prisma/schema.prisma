@@ -418,6 +418,8 @@ model User {
   webhookSubscriptions          WebhookSubscription[]         @relation("WebhookSubscriptionCreatedBy")
   integrationConnectionsCreated IntegrationConnection[]       @relation("IntegrationConnectionsCreatedBy")
   taskDevLinksLinked            TaskDevLink[]                 @relation("TaskDevLinksLinked")
+  repositoryAccess              ProjectRepositoryMember[]    @relation("ProjectRepoMemberUser")
+  grantedRepositoryAccess       ProjectRepositoryMember[]    @relation("ProjectRepoMemberGrantedBy")
   aiConversations               AiConversation[]              @relation("AiConversationOwner")
   aiUsageRecords                AiUsageRecord[]               @relation("AiUsageRecordOwner")
   aiActionProposals             AiActionProposal[]            @relation("AiActionProposalOwner")
@@ -1091,6 +1093,7 @@ model Project {
   meetings                     Meeting[]
   repositories                 ProjectRepository[]           @relation("ProjectRepositories")
   taskDevLinks                 TaskDevLink[]
+  repositoryAccessMembers      ProjectRepositoryMember[]
   customFields                 ProjectCustomField[]
   savedViews                   TaskSavedView[]
   taskTemplates                TaskTemplate[]
@@ -2401,6 +2404,7 @@ model ProjectRepository {
   project      Project               @relation("ProjectRepositories", fields: [projectId], references: [id], onDelete: Cascade)
   connection   IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   taskDevLinks TaskDevLink[]
+  members      ProjectRepositoryMember[]
 
   @@unique([projectId, provider, externalRepoId])
   @@unique([connectionId, externalRepoId])
@@ -2408,10 +2412,37 @@ model ProjectRepository {
   @@index([connectionId])
 }
 
+model ProjectRepositoryMember {
+  id                 String                @id @default(uuid())
+  projectRepositoryId String
+  projectId          String
+  userId             String
+  level              RepositoryAccessLevel
+  grantedById        String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  projectRepository ProjectRepository @relation(fields: [projectRepositoryId], references: [id], onDelete: Cascade)
+  project           Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user              User              @relation("ProjectRepoMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy         User?             @relation("ProjectRepoMemberGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectRepositoryId, userId])
+  @@index([userId, projectId])
+  @@index([projectRepositoryId, level])
+}
+
 enum DevLinkType {
   BRANCH
   PULL_REQUEST
   COMMIT
+}
+
+enum RepositoryAccessLevel {
+  NONE
+  METADATA
+  READ
+  LINK
 }
 
 model TaskDevLink {
