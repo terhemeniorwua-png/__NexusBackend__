@@ -7,6 +7,7 @@ import {
 } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent, ReviewAuditAction } from '../../services/audit';
+import { recordFanoutEvent } from '../../services/notification-fanout';
 import { AppError } from '../../utils/errors';
 import {
   ProjectPermission,
@@ -530,6 +531,18 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
       );
 
       const updated = await getRequiredReviewRow(tx, input);
+
+      await recordFanoutEvent(tx, {
+        action: auditActionForDecision(decision),
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        actorId: input.userId,
+        targetType: 'Review',
+        targetId: input.reviewId,
+        dedupeKey: `review:${input.reviewId}:${decision.toLowerCase()}:${input.round}`,
+        context: { submitterId: updated.submittedById, round: input.round, decision },
+      });
+
       return { review: toReviewView(updated), decision: toDecisionView(createdDecision) };
     });
   }
@@ -633,6 +646,18 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         );
 
         const row = await getRequiredReviewRow(tx, { ...input, reviewId: created.id });
+
+        await recordFanoutEvent(tx, {
+          action: ReviewAuditAction.ReviewCreated,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          actorId: input.userId,
+          targetType: 'Review',
+          targetId: created.id,
+          dedupeKey: `review:${created.id}:submitted`,
+          context: { round: 1, targetKind: scopedTarget.kind, targetId: scopedTarget.id },
+        });
+
         return { review: toReviewView(row) };
       });
     },
@@ -747,6 +772,18 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         );
 
         const updated = await getRequiredReviewRow(tx, input);
+
+        await recordFanoutEvent(tx, {
+          action: ReviewAuditAction.ReviewAssigned,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          actorId: input.userId,
+          targetType: 'Review',
+          targetId: input.reviewId,
+          dedupeKey: `review:${input.reviewId}:assigned:${updated.assigneeId}`,
+          context: { assigneeId: updated.assigneeId, round: updated.round },
+        });
+
         return { review: toReviewView(updated) };
       });
     },
@@ -780,6 +817,18 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         await recordAuditEvent(tx, reviewAudit(input, input.reviewId, ReviewAuditAction.ReviewStarted));
 
         const updated = await getRequiredReviewRow(tx, input);
+
+        await recordFanoutEvent(tx, {
+          action: ReviewAuditAction.ReviewStarted,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          actorId: input.userId,
+          targetType: 'Review',
+          targetId: input.reviewId,
+          dedupeKey: `review:${input.reviewId}:started:${row.round}`,
+          context: { submitterId: updated.submittedById, round: row.round },
+        });
+
         return { review: toReviewView(updated) };
       });
     },
@@ -839,6 +888,18 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         );
 
         const updated = await getRequiredReviewRow(tx, input);
+
+        await recordFanoutEvent(tx, {
+          action: ReviewAuditAction.ReviewResubmitted,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          actorId: input.userId,
+          targetType: 'Review',
+          targetId: input.reviewId,
+          dedupeKey: `review:${input.reviewId}:resubmitted:${row.round + 1}`,
+          context: { submitterId: updated.submittedById, round: row.round + 1 },
+        });
+
         return { review: toReviewView(updated) };
       });
     },

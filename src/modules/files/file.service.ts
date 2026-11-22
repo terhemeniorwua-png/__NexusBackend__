@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
+import { recordFanoutEvent } from '../../services/notification-fanout';
 import type { PrivateObjectStorage } from '../../services/storage/private-object-storage';
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
@@ -375,6 +376,19 @@ export function createFileService(
               storageKey,
             },
           });
+
+          if (file.projectId) {
+            await recordFanoutEvent(tx, {
+              action: FileVersionAuditAction.Created,
+              workspaceId: input.workspaceId,
+              projectId: file.projectId,
+              actorId: actor.userId,
+              targetType: 'AttachmentVersion',
+              targetId: created.id,
+              dedupeKey: `file-version:${created.id}:created`,
+              context: { fileId: file.id, versionNumber, fileName: created.fileName },
+            });
+          }
 
           return created;
         });
