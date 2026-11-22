@@ -17,6 +17,8 @@ import {
   declineTaskSchema,
   dependencyParamsSchema,
   listCommentsQuerySchema,
+  addProgressUpdateSchema,
+  listProgressUpdatesQuerySchema,
   listTasksQuerySchema,
   reviewTaskSchema,
   startTaskSchema,
@@ -30,10 +32,12 @@ import {
   type AcceptTaskInput,
   type AddAssigneeInput,
   type AddDependencyInput,
+  type AddProgressUpdateInput,
   type CompleteSubtaskInput,
   type CreateCommentInput,
   type CreateTaskInput,
   type DeclineTaskInput,
+  type ListProgressUpdatesQuery,
   type ListTaskActivityQuery,
   type ListTasksQuery,
   type ReviewTaskInput,
@@ -503,6 +507,52 @@ export function createTaskRouter({
           { userId: userId(req), workspaceId, projectId, taskId, ...body },
           context(req),
         ),
+      );
+    },
+  );
+
+  router.post(
+    '/:taskId/progress-updates',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, body: addProgressUpdateSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const body = req.validated!.body as AddProgressUpdateInput;
+      const { update, created } = await service.addProgressUpdate(
+        { userId: userId(req), workspaceId, projectId, taskId, ...body },
+        context(req),
+      );
+      sendSuccess(res, { update }, created ? 201 : 200);
+    },
+  );
+
+  router.get(
+    '/:taskId/progress-updates',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: taskParamsSchema, query: listProgressUpdatesQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, taskId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        taskId: string;
+      };
+      const query = req.validated!.query as ListProgressUpdatesQuery;
+      sendSuccess(
+        res,
+        await service.listProgressUpdates({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          taskId,
+          cursor: query.cursor,
+          limit: query.limit,
+        }),
       );
     },
   );

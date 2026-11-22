@@ -4,7 +4,7 @@ import type { SlackEventNotifier } from '../integrations/slack.events';
 import type { AppConfig } from '../../config/env';
 import { Prisma, type PrismaClient, type TaskStatus } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
-import { recordAuditEvent } from '../../services/audit';
+import { recordAuditEvent, TaskAuditAction } from '../../services/audit';
 import { createNotification } from '../../services/notifications';
 import { emitDomainEvent } from '../../realtime/domain-events';
 import { enqueueAutomationRunsSafely } from '../automation/automation.events';
@@ -34,6 +34,7 @@ import { logger as defaultLogger } from '../../utils/logger';
 import type {
   AddAssigneeInput,
   AddDependencyInput,
+  AddProgressUpdateInput,
   CompleteSubtaskInput,
   CreateCommentInput,
   CreateTaskInput,
@@ -2520,6 +2521,128 @@ export function createTaskService(
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: input.limit + 1,
         select: { id: true, action: true, actorId: true, metadata: true, createdAt: true },
+      });
+      const hasMore = rows.length > input.limit;
+      const items = rows.slice(0, input.limit);
+      return { items, nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null };
+    },
+
+    async addProgressUpdate(
+      input: Input & { projectId: string; taskId: string } & AddProgressUpdateInput,
+      context: RequestContext,
+    ) {
+      const access = await authorize(input, ProjectPermission.TaskView, {
+        kind: 'task',
+        taskId: input.taskId,
+      });
+      assertProjectWritable(access.project);
+
+      const existing = await prisma.task.findFirst({
+        where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+        include: { assignees: { select: { userId: true } } },
+      });
+      if (!existing) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      if (existing.archivedAt !== null || existing.deletedAt !== null) {
+        throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+      }
+
+      if (!['IN_PROGRESS', 'CHANGES_REQUESTED'].includes(existing.status)) {
+        throw new AppError(
+          409,
+          'PROGRESS_UPDATE_NOT_ALLOWED',
+          'Progress updates can only be posted while the task is in progress or changes requested',
+        );
+      }
+
+      const isAssignee = existing.assignees.some((a) => a.userId === input.userId);
+      if (!isAssignee) {
+        throw new AppError(403, 'NOT_TASK_ASSIGNEE', 'Only a task assignee can post a progress update', {
+          requiredPermission: ProjectPermission.TaskView,
+        });
+      }
+
+      const existingUpdate = input.clientRequestId
+        ? await prisma.taskProgressUpdate.findFirst({
+            where: {
+              taskId: input.taskId,
+              authorId: input.userId,
+              clientRequestId: input.clientRequestId,
+            },
+          })
+        : null;
+
+      if (existingUpdate) {
+        return { update: existingUpdate, created: false };
+      }
+
+      const update = await prisma.taskProgressUpdate.create({
+        data: {
+          taskId: input.taskId,
+          authorId: input.userId,
+          note: input.note.trim(),
+          percent: input.percent ?? null,
+          clientRequestId: input.clientRequestId ?? null,
+        },
+      });
+
+      await recordAuditEvent(prisma, {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        action: TaskAuditAction.TaskProgressUpdated,
+        targetType: 'TaskProgressUpdate',
+        targetId: update.id,
+        metadata: { taskId: input.taskId, projectId: access.project.id, percent: update.percent },
+        ...context,
+      });
+
+      return { update, created: true };
+    },
+
+    async listProgressUpdates(
+      input: Input & { projectId: string; taskId: string; cursor?: string; limit: number },
+    ) {
+      const access = await authorize(input, ProjectPermission.TaskView, {
+        kind: 'task',
+        taskId: input.taskId,
+      });
+      const task = await prisma.task.findFirst({
+        where: { id: input.taskId, projectId: access.project.id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'That task does not exist');
+
+      let cursorFilter: Prisma.TaskProgressUpdateWhereInput | undefined;
+      if (input.cursor) {
+        const cursorRow = await prisma.taskProgressUpdate.findUnique({
+          where: { id: input.cursor },
+          select: { id: true, createdAt: true },
+        });
+        if (cursorRow) {
+          cursorFilter = {
+            OR: [
+              { createdAt: { lt: cursorRow.createdAt } },
+              { createdAt: cursorRow.createdAt, id: { lt: cursorRow.id } },
+            ],
+          };
+        }
+      }
+
+      const rows = await prisma.taskProgressUpdate.findMany({
+        where: {
+          AND: [{ taskId: input.taskId }, ...(cursorFilter ? [cursorFilter] : [])],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+        select: {
+          id: true,
+          taskId: true,
+          authorId: true,
+          note: true,
+          percent: true,
+          clientRequestId: true,
+          createdAt: true,
+        },
       });
       const hasMore = rows.length > input.limit;
       const items = rows.slice(0, input.limit);
