@@ -238,13 +238,10 @@ function runTests(rawDbUrl: string): void {
     const repeatId = (repeat.body.data as { update: { id: string } }).update.id;
     assert.equal(repeatId, firstId);
 
-    const listed = await jsonRequest(progressUrl(taskId), {
-      headers: auth(member),
-      jar: member.jar,
+    const rows = await db.prisma.taskProgressUpdate.findMany({
+      where: { taskId, authorId: member.id, clientRequestId },
     });
-    assert.equal(listed.status, 200);
-    const items = (listed.body.data as { items: unknown[] }).items;
-    assert.equal(items.length, 1);
+    assert.equal(rows.length, 1);
   });
 
   test('viewer and manager who are not assignees cannot post (403)', async () => {
@@ -396,9 +393,18 @@ function runTests(rawDbUrl: string): void {
   });
 
   test('cursor pagination returns newest first with nextCursor', async () => {
-    // Create several updates on the task.
+    const created = await jsonRequest(tasksUrl(), {
+      method: 'POST',
+      headers: auth(pm),
+      body: JSON.stringify({ title: 'Pagination task', assigneeIds: [member.id] }),
+      jar: pm.jar,
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const paginatedTaskId = (created.body.data as { id: string }).id;
+    await db.prisma.task.update({ where: { id: paginatedTaskId }, data: { status: 'IN_PROGRESS' } });
+
     for (let i = 1; i <= 3; i++) {
-      const res = await jsonRequest(progressUrl(taskId), {
+      const res = await jsonRequest(progressUrl(paginatedTaskId), {
         method: 'POST',
         headers: auth(member),
         body: JSON.stringify({ note: `Page note ${i}`, percent: i * 10 }),
@@ -407,7 +413,7 @@ function runTests(rawDbUrl: string): void {
       assert.equal(res.status, 201, JSON.stringify(res.body));
     }
 
-    const firstPage = await jsonRequest(progressUrl(taskId) + '?limit=2', {
+    const firstPage = await jsonRequest(progressUrl(paginatedTaskId) + '?limit=2', {
       headers: auth(member),
       jar: member.jar,
     });
@@ -418,7 +424,7 @@ function runTests(rawDbUrl: string): void {
     assert.equal(firstData.items[1].note, 'Page note 2');
     assert.ok(typeof firstData.nextCursor === 'string');
 
-    const secondPage = await jsonRequest(`${progressUrl(taskId)}?limit=2&cursor=${encodeURIComponent(firstData.nextCursor)}`, {
+    const secondPage = await jsonRequest(`${progressUrl(paginatedTaskId)}?limit=2&cursor=${encodeURIComponent(firstData.nextCursor)}`, {
       headers: auth(member),
       jar: member.jar,
     });
@@ -498,7 +504,8 @@ function runTests(rawDbUrl: string): void {
       assert.ok(Array.isArray((res.body.data as { items: unknown[] }).items));
     }
 
-    const outsiderRes = await jsonRequest(progressUrl(taskId), { headers: auth(outsider), jar: outsider.jar });
+    const realOutsider = await register('RealOutsider', 'realoutsider-progress');
+    const outsiderRes = await jsonRequest(progressUrl(taskId), { headers: auth(realOutsider), jar: realOutsider.jar });
     assert.ok([403, 404].includes(outsiderRes.status), JSON.stringify(outsiderRes.body));
   });
 

@@ -1236,8 +1236,7 @@ model TaskProgressUpdate {
   task  Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
   author User  @relation("TaskProgressUpdateAuthor", fields: [authorId], references: [id], onDelete: Restrict)
 
-  @@index([taskId, createdAt])
-  @@index([taskId])
+  @@index([taskId, createdAt(sort: Desc)])
 }
 
 model TaskDocument {
