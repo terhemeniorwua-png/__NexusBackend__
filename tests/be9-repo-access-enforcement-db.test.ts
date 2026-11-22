@@ -124,6 +124,7 @@ function runTests(rawDbUrl: string): void {
       const viewerDefault = await svc.listProjectRepositories({ ...base, userId: created.users[1]! });
       assert.equal(viewerDefault.length, 1);
       assert.equal(viewerDefault[0]!.fullName, 'acme/secret-repo');
+      assert.equal(viewerDefault[0]!.effectiveAccessLevel, 'READ');
 
       // Explicit override METADATA -> masked
       const metaRow = await prisma.projectRepositoryMember.create({
@@ -140,6 +141,7 @@ function runTests(rawDbUrl: string): void {
       assert.equal(viewerMeta.length, 1);
       assert.equal(viewerMeta[0]!.fullName, 'Restricted repository');
       assert.equal(viewerMeta[0]!.defaultBranch, null);
+      assert.equal(viewerMeta[0]!.effectiveAccessLevel, 'METADATA');
 
       // Explicit override NONE -> omitted
       await prisma.projectRepositoryMember.update({ where: { id: metaRow.id }, data: { level: 'NONE' } });
@@ -151,6 +153,7 @@ function runTests(rawDbUrl: string): void {
       const viewerLink = await svc.listProjectRepositories({ ...base, userId: created.users[1]! });
       assert.equal(viewerLink.length, 1);
       assert.equal(viewerLink[0]!.fullName, 'acme/secret-repo');
+      assert.equal(viewerLink[0]!.effectiveAccessLevel, 'LINK');
     });
   });
 }
