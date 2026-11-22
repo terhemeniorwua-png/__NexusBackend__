@@ -24,118 +24,73 @@
 | Delete task dev-link | `DELETE .../tasks/:taskId/dev-links/:devLinkId` → `unlinkTaskDevLink` | `requireTaskUpdater` (`project.task.update`) | `{ok:true}` |
 | Inbound webhooks | `POST /api/v1/webhooks/github`, `/gitlab` | Signature/secret verification, delivery idempotency; no user session | Updates existing `TaskDevLink` rows by provider/external id; GitHub merge may move task to SUBMITTED with audit |
 
-**Inventory notes:** Routes are mounted in `src/routes/index.ts`; webhook raw-body routes in `src/app.ts`. No frontend code in this repo; frontend impact is based on these API contracts. Task dev-links are read via the dedicated endpoint; BE-5b also emits `GITHUB_PR_MERGED` / `GITHUB_PR_REVIEW_RECEIVED` notifications with repo/PR metadata in structured notification data.
+**Inventory notes:** Routes are mounted in `src/routes/index.ts`; webhook raw-body routes in `src/app.ts`. No frontend code in this repo; frontend impact is based on these API contracts. No task/search/notification response currently embeds full dev-link lists beyond notification metadata; task dev-links are read via the dedicated endpoint.
 
 ## 2. Proposed Model
 
 Add `ProjectRepositoryMember` (name illustrative) keyed by repository and user:
 
-- **Fields:** `id`, `projectRepositoryId` (FK `ProjectRepository`, cascade), `projectId` (denormalized FK for query/indexing, cascade), `userId` (FK `User`), `level` enum `NONE | METADATA | READ | LINK`, `grantedById` (FK `User`, nullable/set-null for system/audit context), `createdAt`, `updatedAt`.
-- **Constraints:** unique `(projectRepositoryId, userId)`; index `(userId, projectId)`, `(projectRepositoryId, level)`.
-- **Levels:**
-  - `NONE` — no repository visibility or content access.
-  - `METADATA` — may know a restricted repository link exists / see masked metadata as allowed by policy, but no provider content and no linking.
-  - `READ` — may browse repository/provider content (branches, PRs/MRs, commits, files/detail) read-only.
-  - `LINK` — may link repositories to tasks (and implies READ for repo content), subject to task/project permissions.
-- **Role-default resolver (no per-member backfill rows required):** effective default level comes from project role:
-  - viewer = `READ`
-  - contributor and above = `LINK`
-  - managers/admins = implicit `LINK`
-- **`ProjectRepositoryMember` rows are explicit overrides only.** Members added after deploy receive the role-default level and keep today's effective access. No bulk backfill is needed. **Deploy changes no one's access.**
-- **Access rule:** effective repo permission = `min(project/task permission, repository effective level, GitHub/GitLab installation ceiling)`. Project membership is required first; repo grant never elevates project access. Defaults/overrides are resolved server-side, never trusted from client.
+- Fields: `id`, `projectRepositoryId` (FK `ProjectRepository`, cascade), `projectId` (denormalized FK for query/indexing, cascade), `userId` (FK `User`), `level` enum `NONE | METADATA_ONLY | ACCESS | FULL`, `grantedById` (FK `User`, nullable/set-null for system backfill), `createdAt`, `updatedAt`.
+- Constraints: unique `(projectRepositoryId, userId)`; index `(userId, projectId)`, `(projectRepositoryId, level)`.
+- Role defaults: workspace/project admins and project managers get implicit effective `FULL` unless explicitly restricted; contributors/viewers/guests get no implicit repo access beyond project membership and need explicit grants, except migration backfill (see §3). Defaults are resolved in service policy, not trusted from client.
+- Access rule: effective repo permission = `min(project/task permission, repository level, GitHub/GitLab installation ceiling)`. Project membership is required first; repo grant never elevates project access.
 
 ## 3. Migration / Backfill Safety
 
 Current behavior: any project viewer can see all linked repos and browse provider data; any task updater can link any linked repo.
 
-- **Model:** role-default resolver + explicit override rows. No bulk backfill is needed. Existing and newly added project members get the same effective access they have today through project role defaults.
-- **Deploy safety:** deploy changes no one's access. The migration introduces schema and resolver support; enforcement is rolled out by staged plan (§7). Missing override row means "use role default", not "deny".
-- **New restrictions:** after enforcement is enabled, admins/managers can lower levels via explicit override rows; changes apply immediately to read/browse endpoints. Existing dev-links remain stored; visibility is filtered/redacted per §4 and §5.
-- **Idempotency:** override writes keyed by `(projectRepositoryId,userId)` upsert; rerunnable. No backfill job required.
-
-**Migration name:** `20261121600000_repository_access` (must sort after `20261121400000_github_sync`).
+- **Backfill:** On migration, insert `ProjectRepositoryMember` rows for every active project member with effective project access, at `FULL` for members who currently can update/manage linked repos/tasks as applicable, otherwise `ACCESS` for viewers. Alternatively simpler and safer: backfill `FULL` for all current project members who have `project.view` on projects with linked repos, then tighten by admin action post-deploy. Preferred: backfill equivalent to current effective capability so no user loses access at deploy.
+- **Deploy ordering:** expand schema, backfill, deploy code that reads new table but treats missing row as backfilled/default during rollout window only if explicitly chosen; then enforce. Do not drop old behavior before backfill verifies.
+- **New restrictions:** after backfill, admins/managers can lower levels; changes apply immediately to read/browse endpoints. Existing dev-links remain stored; visibility is filtered/redacted per §4.
+- **Idempotency:** backfill job keyed by `(projectRepositoryId,userId)` upsert; rerunnable.
 
 ## 4. Level Semantics
 
 | Level | Linked repo metadata | Branches/commits/PR list/detail/files | Link repo to task | Task dev-links on a repo | Activity/feed |
 |---|---:|---:|---:|---:|---|
-| `NONE` | No | No | No | Hidden/redacted | No repo-detail events |
-| `METADATA` | Masked only (e.g. "Restricted repository"); no `repositoryFullName`, URL, refs, provider IDs | No | No | Redacted placeholder: linked exists, repo identity hidden | No repo-detail entries |
-| `READ` | Yes | Yes, read-only | No | Yes for visible repos | Yes, subject to repo access |
-| `LINK` | Yes | Yes | Yes, if user also has `project.task.update` | Yes | Yes, subject to repo access |
+| `NONE` | No | No | No | Hidden/redacted (see below) | No repo-detail events |
+| `METADATA_ONLY` | Yes: name, provider, default branch, link status | No provider content | No | Redacted placeholder: linked exists, repo name hidden unless separately allowed; prefer “restricted repository link” | Metadata only |
+| `ACCESS` | Yes | Yes, read-only | No | Yes for visible repos | Yes |
+| `FULL` | Yes | Yes | Yes, if user also has `project.task.update` | Yes | Yes |
 
-**Existing dev-link on inaccessible repo:** Do not delete. For repo browsing, `NONE` is hidden. For task dev-links, when viewer can see the task but lacks repo access: `NONE` rows are omitted/hidden as required to avoid existence leaks; `METADATA` returns a redacted placeholder with no `url`, `repositoryFullName`, refs/SHAs, PR title, or provider detail, and includes `accessLevel`/`restricted:true` as needed. Mutations: task dev-link create requires task update + repo level `LINK`; unlink requires `LINK` or manager/admin override (audited). Existing links remain stored/redacted.
+**Existing dev-link on inaccessible repo:** Do not delete. For list/detail responses, filter out `NONE` rows entirely from repo browsing. For task dev-links, return a redacted summary when the viewer can see the task but lacks repo access: omit `url`, `repositoryFullName`, refs/SHAs, provider detail as needed, include `accessLevel`/`restricted:true`. This avoids leaking private repo metadata through tasks. Mutations (unlink) require task update plus `FULL` on the link's repo, or a manager override rule explicitly decided.
 
-**Activity/feed:** repo-linked activity/feed entries must carry `projectRepositoryId` and are filtered by effective repo access. Omit repo-detail entries the viewer cannot access; no “restricted repo activity” placeholder.
+**Activity feed:** repo-linked activity entries must carry `projectRepositoryId`; feed queries filter by effective repo access.
 
-## 5. Notification and Other Leak Surfaces
-
-This section is a decision surface for implementation; no access logic is added in this design-only change.
-
-- **BE-5b notifications:** `GITHUB_PR_MERGED` / `GITHUB_PR_REVIEW_RECEIVED` currently carry repo/PR metadata in structured notification data. Rule: recipients without `READ` on the repo get a generic notification with no repo name, PR title, or URL. Recipients with `READ` may receive the detailed metadata allowed by policy.
-- **Task dev-link responses:** dedicated dev-link endpoints and any future embedded task payloads must apply the same redaction/filtering rules as §4. Do not expose `repositoryFullName`, PR title, URL, refs, SHAs, or provider IDs to users without sufficient repo access.
-- **Search results:** repository-aware search/index entries must include `projectRepositoryId`/access scope. Users without `READ` must not receive repo name, PR title, URL, or content snippets from repo-backed records; exclude or generically redact as appropriate.
-- **Audit entries:** audit logs may retain full internal metadata for authorized audit consumers/admin flows, but user-facing activity/audit views must filter/redact repo details by effective repo access. Security/audit events for access changes are visible only to authorized managers/admins.
-- **Activity feeds:** omit repo-detail entries the viewer cannot access; no placeholder that leaks metadata.
-- **Webhooks/provider sync:** inbound webhooks remain signature/idempotency verified and continue updating existing `TaskDevLink` rows. Webhook processing must not bypass Nexus authorization when emitting user-visible notifications/feed/search projections.
-
-## 6. GitHub Ceiling (Enforceable vs Not)
+## 5. GitHub Ceiling (Enforceable vs Not)
 
 | Area | Enforceable | Not enforceable by Nexus alone |
 |---|---|---|
 | Installation scope | Nexus can only call GitHub APIs allowed by GitHub App installation/repo selection and token scopes. | Cannot grant access to repos outside installation. |
 | Repo visibility to Nexus | Can limit to repos installation can see; can hide repos user lacks Nexus level for. | Cannot prove a Nexus user has GitHub account access to a private repo unless GitHub identity is connected and checked. |
 | GitLab ceiling | Same principle with OAuth token scopes and project visibility to token. | Same identity limitation. |
-| Per-user GitHub identity | Not connected today. | Nexus cannot enforce “user personally has GitHub read access”. Nexus repo access is an application-level authorization layer above project access and below provider installation ceiling. |
+| Per-user GitHub identity | Not connected today. | Nexus cannot enforce “user personally has GitHub read access”. Design must state Nexus repo access is an application-level authorization layer above project access and below provider installation ceiling. |
 
 **Plain rule:** Nexus may deny or hide data it is allowed to fetch; it must never fetch/expose provider data beyond installation/token ceiling; it cannot guarantee GitHub-side per-user permission parity without per-user GitHub OAuth linkage.
 
-## 7. Decisions, Routes, and Audit
+## 6. Routes, 403 vs 404, Audit
 
-### Decisions (recorded)
-- **404 for `NONE`** on repository/content endpoints to avoid repo existence leaks.
-- **403 for `METADATA`** on content endpoints (branches, PRs/MRs, commits, files/detail, and any provider-content endpoint) where the user can know a restricted link exists but lacks `READ`.
-- **No bulk backfill.** Role defaults provide equivalent current access; explicit `ProjectRepositoryMember` rows are overrides only. Deploy changes no one's access.
-- **Migration:** `20261121600000_repository_access` (must sort after `20261121400000_github_sync`).
-
-### Route changes (design)
+**Route changes (design):**
 - Keep existing route shapes. Add repo-member management endpoints under project repositories or a dedicated subresource, e.g. `GET/PUT/DELETE .../repositories/:repositoryId/members` (manager-only).
-- Read routes (`branches`, `pull-requests`, commits, PR detail/files/commits): resolve repo, then require project view + repo level >= `READ` + active connection. Return 404 for `NONE`, 403 for `METADATA`.
-- Task dev-link list: filter/hide `NONE`; return redacted placeholder for `METADATA` when the viewer can see the task; return full allowed details for `READ`/`LINK`.
-- Task dev-link create: require task update + repo level `LINK`.
-- Task dev-link delete: require task update + repo level `LINK`, or explicit manager/admin override (audited).
+- Read routes (`branches`, `pull-requests`, commits, PR detail/files/commits): resolve repo, then require project view + repo level >= `ACCESS` + active connection.
+- Task dev-link list: return only links for repos at `METADATA_ONLY+` as redacted/visible per level; never leak `NONE`.
+- Task dev-link create: require task update + repo level `FULL`.
+- Task dev-link delete: require task update + repo level `FULL` (or explicit admin override).
 
-### Audit events (no extra routes)
-- `dev_integration.repository_access_granted`, `..._changed`, `..._revoked`, `dev_integration.repository_content_access_denied` (rate-limited/security log).
-- Include actor, workspace/project/repository, target user, old/new level, request id. Do not audit routine allowed reads.
+**403 vs 404:** Use `404` when the repository/resource is outside project/workspace or should be hidden from users without any project/repo visibility signal; use `403` when user can know the project/repo exists but lacks required level (e.g. manager viewing member settings, or METADATA_ONLY user hitting branches endpoint). Default for read-content endpoints: `404` for `NONE` to avoid repo existence leak; `403` for `METADATA_ONLY` attempting provider content if metadata is intentionally visible. Document chosen rule in API contract before implementation.
 
-## 8. Staged Plan
+**Audit events (no extra routes):** `dev_integration.repository_access_granted`, `..._changed`, `..._revoked`, `dev_integration.repository_content_access_denied` (rate-limited/security log), include actor, workspace/project/repository, target user, old/new level, request id. Do not audit routine allowed reads.
 
-1. **Stage 1 — Schema and role-default resolver**
-   - Add migration `20261121600000_repository_access` (after `20261121400000_github_sync`).
-   - Introduce `ProjectRepositoryMember` override table and `NONE|METADATA|READ|LINK` enum.
-   - Implement server-side role-default resolver (viewer=READ, contributor and above=LINK, managers/admins implicit LINK). No bulk backfill; missing override row uses role default. Deploy changes no one's access.
+## 7. Frontend Impact, Tests, Open Questions
 
-2. **Stage 2 — Enforcement on repo and task dev-link routes**
-   - Enforce effective repo level on repository browse/content routes and task dev-link list/create/delete.
-   - Apply 404 for `NONE`, 403 for `METADATA` on content endpoints.
-   - Apply dev-link redaction/filtering and BE-5b notification/search/activity/feed leak-surface rules.
+**Frontend impact:** Repository picker/list must handle empty/partial results; task dev-link UI must render restricted placeholders; branch/PR browsers need 403/404 handling; repo settings need member-level management UI; task link creation must filter repos by `FULL`.
 
-3. **Stage 3 — Manager endpoints and audit events**
-   - Add manager-only repo member override endpoints.
-   - Emit audit events for grant/change/revoke/denied-access security logging.
-   - Add UI/API contract support for restricted placeholders and manager override management.
+**Tests plan:** unit policy matrix (project role x repo level x endpoint); integration tests for backfill equivalence, no-access-loss deploy, 404/403 rules, task dev-link redaction, webhook sync unaffected, unlink/link permission checks; security tests for IDOR across projects/workspaces and provider ceiling not exceeded.
 
-## 9. Frontend Impact, Tests, Defaults
-
-**Frontend impact:** Repository picker/list must handle empty/partial results; task dev-link UI must render restricted placeholders; branch/PR browsers need 403/404 handling; repo settings need member-level management UI; task link creation must filter repos by `LINK`; notification UI must handle generic/redacted repo notifications.
-
-**Tests plan:** unit policy matrix (project role x repo level x endpoint); integration tests for role-default equivalence, no-access-loss deploy, 404/403 rules, task dev-link redaction, webhook sync unaffected, unlink/link permission checks; security tests for IDOR across projects/workspaces, provider ceiling not exceeded, and notification/search/activity/feed leak surfaces.
-
-**Defaults (selected):**
-- `METADATA` exposes a masked label (e.g. “Restricted repository”), not `repositoryFullName`, URL, refs, or provider IDs.
-- Project managers/admins can override repo restrictions they did not create; every grant/change/revoke is audited.
-- If a user loses `LINK`, task-dev-link create is denied; unlink requires `LINK` or manager/admin override (audited). Existing links remain stored/redacted.
-- Activity/feed omits repo-detail entries the viewer cannot access; no “restricted repo activity” placeholder (avoids metadata leak).
-- Per-user GitHub identity linking is deferred/future; not required for Nexus-level enforcement. Document parity limitation plainly.
-- Connection-level available-repo listing remains workspace-view scoped and does not expose project-repo grant details; project linking UI filters selectable repos by repos the actor can manage/link.
+**Open questions:**
+- Should `METADATA_ONLY` expose `repositoryFullName` or a masked label?
+- Can project managers override repo restrictions they did not create? (recommended yes, with audit).
+- How should unlink behave when user loses `FULL` after linking? (recommend deny unless manager override).
+- Should activity feed show “restricted repo activity” placeholder or omit?
+- Do we need per-user GitHub identity linking for parity-sensitive orgs? (future; not required for Nexus-level enforcement).
+- Should connection-level available repos be filtered by any project repo grants? (currently workspace-view; likely keep but avoid leaking linked-project details).

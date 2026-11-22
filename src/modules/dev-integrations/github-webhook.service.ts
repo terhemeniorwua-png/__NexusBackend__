@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent, TaskAuditAction } from '../../services/audit';
+import { recordFanoutEventBestEffort, type FanoutEvent } from '../../services/notification-fanout';
 import { encryptIntegrationToken } from '../integrations/token-crypto';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
 
@@ -36,6 +37,17 @@ function prState(payload: Record<string, unknown>, pr: Record<string, unknown>):
   if (pr.draft === true) return 'draft';
   const state = typeof pr.state === 'string' ? pr.state : null;
   return state;
+}
+
+async function loadTaskStakeholders(prisma: PrismaClient, taskId: string) {
+  return prisma.task.findUnique({
+    where: { id: taskId },
+    select: {
+      title: true,
+      creatorId: true,
+      assignees: { select: { userId: true }, orderBy: { userId: 'asc' } },
+    },
+  });
 }
 
 export async function processGithubWebhook(input: {
@@ -144,7 +156,7 @@ export async function processGithubWebhook(input: {
             });
             if (isMerged) {
               for (const link of links) {
-                await prisma.$transaction(async (tx) => {
+                const transitioned = await prisma.$transaction(async (tx) => {
                   const task = link.task;
                   const updatedTask = await tx.task.updateMany({
                     where: { id: task.id, status: { in: ['IN_PROGRESS', 'CHANGES_REQUESTED'] } },
@@ -174,8 +186,48 @@ export async function processGithubWebhook(input: {
                         externalId,
                       },
                     });
+                    return true;
                   }
+                  return false;
                 });
+
+                if (transitioned) {
+                  try {
+                    const task = link.task;
+                    const stakeholders = await loadTaskStakeholders(prisma, task.id);
+                    const fanoutEvent: FanoutEvent = {
+                      action: TaskAuditAction.TaskGithubPrMerged,
+                      workspaceId: task.project.workspaceId,
+                      projectId: task.projectId,
+                      actorId: null,
+                      targetType: 'Task',
+                      targetId: task.id,
+                      dedupeKey: `github_pr_merged:${task.id}:${link.id}`,
+                      context: {
+                        taskTitle: stakeholders?.title ?? task.key,
+                        creatorId: stakeholders?.creatorId ?? null,
+                        assigneeIds: stakeholders?.assignees.map((a) => a.userId) ?? [],
+                        // Structured metadata only - BE-9 will filter per recipient later.
+                        repositoryFullName,
+                        prNumber: data.externalNumber ?? null,
+                        prTitle: data.title ?? null,
+                        prUrl: data.url ?? null,
+                        externalId,
+                        linkId: link.id,
+                      },
+                    };
+                    await recordFanoutEventBestEffort(prisma, fanoutEvent, log);
+                  } catch (error) {
+                    log.warn('github_webhook_notification_failed', {
+                      event,
+                      deliveryId,
+                      action: TaskAuditAction.TaskGithubPrMerged,
+                      taskId: link.task.id,
+                      linkId: link.id,
+                      error: error instanceof Error ? error.message : String(error),
+                    });
+                  }
+                }
               }
             }
           }
@@ -190,7 +242,16 @@ export async function processGithubWebhook(input: {
         if (externalId) {
           const links = await prisma.taskDevLink.findMany({
             where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
-            include: { task: { select: { id: true, projectId: true, project: { select: { workspaceId: true } } } } },
+            include: {
+              task: {
+                select: {
+                  id: true,
+                  key: true,
+                  projectId: true,
+                  project: { select: { workspaceId: true } },
+                },
+              },
+            },
           });
           if (links.length === 0) {
             outcome = 'ignored';
@@ -210,12 +271,13 @@ export async function processGithubWebhook(input: {
             } else {
               newReviewState = null;
             }
+            const externalReviewId = review.id != null ? String(review.id) : null;
             for (const link of links) {
-              await prisma.$transaction(async (tx) => {
+              const recorded = await prisma.$transaction(async (tx) => {
                 const existing = await tx.taskDevLink.findUnique({ where: { id: link.id }, select: { reviewedAt: true } });
                 if (existing?.reviewedAt && existing.reviewedAt.getTime() > incomingReviewedAt.getTime()) {
                   // out of order: ignore
-                  return;
+                  return false;
                 }
                 await tx.taskDevLink.update({
                   where: { id: link.id },
@@ -243,7 +305,50 @@ export async function processGithubWebhook(input: {
                     taskId: link.taskId,
                   },
                 });
+                return true;
               });
+
+              if (recorded) {
+                try {
+                  const stakeholders = await loadTaskStakeholders(prisma, link.taskId);
+                  const reviewKey =
+                    externalReviewId ?? `${incomingReviewedAt.toISOString()}:${newReviewState ?? 'none'}`;
+                  const fanoutEvent: FanoutEvent = {
+                    action: TaskAuditAction.TaskGithubReviewSynced,
+                    workspaceId: link.task.project.workspaceId,
+                    projectId: link.task.projectId,
+                    actorId: null,
+                    targetType: 'TaskDevLink',
+                    targetId: link.id,
+                    dedupeKey: `github_review:${link.id}:${reviewKey}`,
+                    context: {
+                      taskTitle: stakeholders?.title ?? link.task.key,
+                      creatorId: stakeholders?.creatorId ?? null,
+                      assigneeIds: stakeholders?.assignees.map((a) => a.userId) ?? [],
+                      // Structured metadata only - BE-9 will filter per recipient later.
+                      repositoryFullName,
+                      prNumber: typeof pr.number === 'number' ? pr.number : null,
+                      prTitle: typeof pr.title === 'string' ? pr.title.slice(0, 500) : null,
+                      prUrl: typeof pr.html_url === 'string' ? pr.html_url : null,
+                      reviewState: newReviewState,
+                      reviewerLogin: newReviewState ? reviewerLogin : null,
+                      externalReviewId,
+                      linkId: link.id,
+                      taskId: link.taskId,
+                    },
+                  };
+                  await recordFanoutEventBestEffort(prisma, fanoutEvent, log);
+                } catch (error) {
+                  log.warn('github_webhook_notification_failed', {
+                    event,
+                    deliveryId,
+                    action: TaskAuditAction.TaskGithubReviewSynced,
+                    taskId: link.taskId,
+                    linkId: link.id,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              }
             }
             outcome = 'processed';
           }
