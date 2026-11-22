@@ -37,6 +37,7 @@ import { createProjectService } from './project.service';
 import { getProjectAuthorization, projectAssignableRoles } from '../authorization';
 import { getPrismaClient } from '../../db/prisma';
 import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/authorization';
+import { createSprintRouter } from '../sprints/sprint.routes';
 
 export interface ProjectRouterOptions {
   config: AppConfig;
@@ -60,6 +61,8 @@ export function createProjectRouter({
   const router = Router({ mergeParams: true });
   const requireAuth = createRequireAuth(config);
   const requireActiveAccount = createRequireActiveAccount();
+
+  router.use('/:projectId/sprints', createSprintRouter({ config }));
 
   router.get(
     '/',

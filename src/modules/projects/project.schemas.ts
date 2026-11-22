@@ -103,6 +103,8 @@ export const updateProjectSchema = z
     departmentId: uuid.nullable().optional(),
     startDate: dateInput,
     dueDate: dateInput,
+    workflowMode: z.enum(['SPRINTS', 'BACKLOG_ONLY']).optional(),
+    confirmActiveSprintCompletion: z.boolean().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update');

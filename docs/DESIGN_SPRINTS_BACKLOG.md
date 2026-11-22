@@ -4,6 +4,8 @@
 **Base:** `origin/main` @ `05e07d530a0a51c213a06f99d77b9d04cae92f31` (`git rev-parse origin/main`).  
 **Scope:** Project workflow mode, backlog ordering, sprints, task assignment to sprint/backlog, API behavior, migration plan, frontend/tests.
 
+**Stage 2 implementation contract:** See [SPRINTS_API.md](./SPRINTS_API.md) for the implemented Stage 2 route/request/response/error contract (source of truth for Stage 2 code behavior).
+
 ## 1. Current Inventory
 
 **Exists today**

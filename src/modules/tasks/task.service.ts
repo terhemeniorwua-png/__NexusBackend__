@@ -1037,6 +1037,45 @@ export function createTaskService(
           );
         }
 
+        let sprintIdToSet: string | null | undefined = undefined;
+        let sprintPositionToSet: number | null | undefined = undefined;
+        if (input.sprintId !== undefined) {
+          if ((access.project as { workflowMode?: string }).workflowMode !== 'SPRINTS') {
+            throw new AppError(409, 'SPRINTS_DISABLED_FOR_PROJECT', 'Sprints are disabled for this project.', {
+              details: {
+                projectId: access.project.id,
+                workflowMode: (access.project as { workflowMode?: string }).workflowMode,
+              },
+            });
+          }
+          if (input.sprintId === null) {
+            sprintIdToSet = null;
+            sprintPositionToSet = null;
+          } else {
+            const sprint = await tx.sprint.findFirst({
+              where: { id: input.sprintId, projectId: access.project.id },
+              select: { id: true, status: true },
+            });
+            if (!sprint) {
+              throw new AppError(404, 'SPRINT_NOT_FOUND', 'That sprint does not exist', {
+                details: { sprintId: input.sprintId, projectId: access.project.id },
+              });
+            }
+            if (sprint.status === 'COMPLETED' || sprint.status === 'ARCHIVED') {
+              throw new AppError(422, 'SPRINT_NOT_ASSIGNABLE', 'Tasks cannot be assigned to a COMPLETED or ARCHIVED sprint.', {
+                details: { sprintId: sprint.id, status: sprint.status },
+              });
+            }
+            const maxPos = await tx.task.findFirst({
+              where: { sprintId: sprint.id, deletedAt: null },
+              orderBy: [{ sprintPosition: 'desc' }, { id: 'desc' }],
+              select: { sprintPosition: true },
+            });
+            sprintIdToSet = sprint.id;
+            sprintPositionToSet = (maxPos?.sprintPosition ?? 0) + 1;
+          }
+        }
+
         const task = await tx.task.create({
           data: {
             projectId: access.project.id,
@@ -1050,6 +1089,8 @@ export function createTaskService(
             startDate: dateOrNull(input.startDate) ?? null,
             dueDate: dateOrNull(input.dueDate) ?? null,
             position: input.position ?? 0,
+            ...(sprintIdToSet !== undefined ? { sprintId: sprintIdToSet } : {}),
+            ...(sprintPositionToSet !== undefined ? { sprintPosition: sprintPositionToSet } : {}),
             parentTaskId: input.parentTaskId ?? null,
             ...(input.milestoneId !== undefined ? { milestoneId: input.milestoneId } : {}),
             ...(input.weight !== undefined ? { weight: input.weight } : {}),
@@ -1219,6 +1260,7 @@ export function createTaskService(
           parentTaskId: true,
           reviewerId: true,
           startedAt: true,
+          sprintId: true,
           assignees: { select: { userId: true } },
         },
       });
@@ -1381,6 +1423,59 @@ export function createTaskService(
         if (statusChanging && input.status === 'IN_PROGRESS' && !existing.startedAt) {
           submissionFields.startedAt = new Date();
         }
+
+        let sprintData: { sprintId: string | null; sprintPosition?: number | null } | undefined;
+        let backlogPositionAppend: number | undefined;
+        if (input.sprintId !== undefined) {
+          if ((access.project as { workflowMode?: string }).workflowMode !== 'SPRINTS') {
+            throw new AppError(409, 'SPRINTS_DISABLED_FOR_PROJECT', 'Sprints are disabled for this project.', {
+              details: {
+                projectId: access.project.id,
+                workflowMode: (access.project as { workflowMode?: string }).workflowMode,
+              },
+            });
+          }
+          if (input.sprintId === null) {
+            if (existing.sprintId !== null) {
+              const maxBacklogPosRow = await tx.task.findFirst({
+                where: { projectId: access.project.id, deletedAt: null },
+                orderBy: [{ position: 'desc' }, { id: 'desc' }],
+                select: { position: true },
+              });
+              sprintData = { sprintId: null, sprintPosition: null };
+              // Append to backlog when leaving sprint (decision 8 / R8 semantics)
+              backlogPositionAppend = (maxBacklogPosRow?.position ?? 0) + 1;
+            } else {
+              sprintData = { sprintId: null, sprintPosition: null };
+            }
+          } else {
+            const sprint = await tx.sprint.findFirst({
+              where: { id: input.sprintId, projectId: access.project.id },
+              select: { id: true, status: true },
+            });
+            if (!sprint) {
+              throw new AppError(404, 'SPRINT_NOT_FOUND', 'That sprint does not exist', {
+                details: { sprintId: input.sprintId, projectId: access.project.id },
+              });
+            }
+            if (sprint.status === 'COMPLETED' || sprint.status === 'ARCHIVED') {
+              throw new AppError(422, 'SPRINT_NOT_ASSIGNABLE', 'Tasks cannot be assigned to a COMPLETED or ARCHIVED sprint.', {
+                details: { sprintId: sprint.id, status: sprint.status },
+              });
+            }
+            if (existing.sprintId !== sprint.id) {
+              const maxPos = await tx.task.findFirst({
+                where: { sprintId: sprint.id, deletedAt: null },
+                orderBy: [{ sprintPosition: 'desc' }, { id: 'desc' }],
+                select: { sprintPosition: true },
+              });
+              sprintData = { sprintId: sprint.id, sprintPosition: (maxPos?.sprintPosition ?? 0) + 1 };
+            } else {
+              sprintData = { sprintId: sprint.id };
+            }
+          }
+        }
+
         const row = await tx.task.update({
           where: { id: existing.id },
           data: {
@@ -1393,6 +1488,15 @@ export function createTaskService(
             ...(input.startDate !== undefined ? { startDate: dateOrNull(input.startDate) } : {}),
             ...(input.dueDate !== undefined ? { dueDate: dateOrNull(input.dueDate) } : {}),
             ...(input.position !== undefined ? { position: input.position } : {}),
+            ...(sprintData
+              ? {
+                  sprintId: sprintData.sprintId,
+                  ...(sprintData.sprintPosition !== undefined
+                    ? { sprintPosition: sprintData.sprintPosition }
+                    : {}),
+                }
+              : {}),
+            ...(backlogPositionAppend !== undefined ? { position: backlogPositionAppend } : {}),
             ...(input.parentTaskId !== undefined
               ? { parentTaskId: input.parentTaskId }
               : {}),
