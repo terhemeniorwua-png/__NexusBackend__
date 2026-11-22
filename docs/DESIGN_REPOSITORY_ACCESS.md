@@ -30,30 +30,38 @@
 
 Add `ProjectRepositoryMember` (name illustrative) keyed by repository and user:
 
-- Fields: `id`, `projectRepositoryId` (FK `ProjectRepository`, cascade), `projectId` (denormalized FK for query/indexing, cascade), `userId` (FK `User`), `level` enum `NONE | METADATA_ONLY | ACCESS | FULL`, `grantedById` (FK `User`, nullable/set-null for system backfill), `createdAt`, `updatedAt`.
+- Fields: `id`, `projectRepositoryId` (FK `ProjectRepository`, cascade), `projectId` (denormalized FK for query/indexing, cascade), `userId` (FK `User`), `level` enum `NONE | METADATA | READ | LINK`, `grantedById` (FK `User`, nullable/set-null for system backfill), `createdAt`, `updatedAt`.
 - Constraints: unique `(projectRepositoryId, userId)`; index `(userId, projectId)`, `(projectRepositoryId, level)`.
-- Role defaults: workspace/project admins and project managers get implicit effective `FULL` unless explicitly restricted; contributors/viewers/guests get no implicit repo access beyond project membership and need explicit grants, except migration backfill (see §3). Defaults are resolved in service policy, not trusted from client.
+- Role defaults: workspace/project admins and project managers get implicit effective `LINK` unless explicitly restricted; contributors/viewers/guests get no implicit repo access beyond project membership and need explicit grants, except migration backfill (see §3). Defaults are resolved in service policy, not trusted from client.
 - Access rule: effective repo permission = `min(project/task permission, repository level, GitHub/GitLab installation ceiling)`. Project membership is required first; repo grant never elevates project access.
 
 ## 3. Migration / Backfill Safety
 
 Current behavior: any project viewer can see all linked repos and browse provider data; any task updater can link any linked repo.
 
-- **Backfill:** On migration, insert `ProjectRepositoryMember` rows for every active project member with effective project access, at `FULL` for members who currently can update/manage linked repos/tasks as applicable, otherwise `ACCESS` for viewers. Alternatively simpler and safer: backfill `FULL` for all current project members who have `project.view` on projects with linked repos, then tighten by admin action post-deploy. Preferred: backfill equivalent to current effective capability so no user loses access at deploy.
+- **Backfill:** On migration, insert `ProjectRepositoryMember` rows for every active project member with effective project access, at `LINK` for members who currently can update/manage linked repos/tasks as applicable, otherwise `READ` for viewers. Alternatively simpler and safer: backfill `LINK` for all current project members who have `project.view` on projects with linked repos, then tighten by admin action post-deploy. Preferred: backfill equivalent to current effective capability so no user loses access at deploy.
 - **Deploy ordering:** expand schema, backfill, deploy code that reads new table but treats missing row as backfilled/default during rollout window only if explicitly chosen; then enforce. Do not drop old behavior before backfill verifies.
 - **New restrictions:** after backfill, admins/managers can lower levels; changes apply immediately to read/browse endpoints. Existing dev-links remain stored; visibility is filtered/redacted per §4.
 - **Idempotency:** backfill job keyed by `(projectRepositoryId,userId)` upsert; rerunnable.
 
 ## 4. Level Semantics
 
-| Level | Linked repo metadata | Branches/commits/PR list/detail/files | Link repo to task | Task dev-links on a repo | Activity/feed |
-|---|---:|---:|---:|---:|---|
-| `NONE` | No | No | No | Hidden/redacted (see below) | No repo-detail events |
-| `METADATA_ONLY` | Yes: name, provider, default branch, link status | No provider content | No | Redacted placeholder: linked exists, repo name hidden unless separately allowed; prefer “restricted repository link” | Metadata only |
-| `ACCESS` | Yes | Yes, read-only | No | Yes for visible repos | Yes |
-| `FULL` | Yes | Yes | Yes, if user also has `project.task.update` | Yes | Yes |
+Stage 1 enum is authoritative: `NONE | METADATA | READ | LINK`.
 
-**Existing dev-link on inaccessible repo:** Do not delete. For list/detail responses, filter out `NONE` rows entirely from repo browsing. For task dev-links, return a redacted summary when the viewer can see the task but lacks repo access: omit `url`, `repositoryFullName`, refs/SHAs, provider detail as needed, include `accessLevel`/`restricted:true`. This avoids leaking private repo metadata through tasks. Mutations (unlink) require task update plus `FULL` on the link's repo, or a manager override rule explicitly decided.
+| Level | Linked repo metadata | Branches/commits/PR list/detail/files | Link/unlink repo to task | Task dev-links on a repo | Repo-derived notifications |
+|---|---|---|---|---|---|
+| `NONE` | No (behave as missing) | No (404 missing-repo shape) | No (404 missing-repo shape) | Omitted from task dev-link lists | None |
+| `METADATA` | Yes: masked name only (no real `repositoryFullName`), provider/default branch/link status as allowed by masking rule | No; browse endpoints return 404 missing-repo shape | No (403 forbidden convention) | Redacted: masked repo name and state only; omit URL, refs, SHAs, PR title/number detail as needed | None containing repo name/PR title; NONE/METADATA users receive no repo-derived notification |
+| `READ` | Yes (full metadata) | Yes, read-only | No (403 forbidden convention) | Full dev-link fields | Allowed by normal notification rules, no repo name/PR title in title/body |
+| `LINK` | Yes (full metadata) | Yes, read-only | Yes, still requires `project.task.update` | Full dev-link fields | Allowed by normal notification rules, no repo name/PR title in title/body |
+
+**Stage 2 defaults (where the old note is silent):**
+- `NONE`: behave as if the repository does not exist (same 404 shape as a missing repo). Omit from repository lists and task dev-link lists. No repo-derived notifications.
+- `METADATA`: list repository with masked name. No branches, PRs, commits, files, URLs, refs, or PR titles. Task dev-links appear with masked repo name and state only. Browse endpoints return the NONE/missing-repo 404 shape.
+- `READ`: all read endpoints and full dev-link fields. Link and unlink return 403 with existing forbidden convention.
+- `LINK`: READ plus link and unlink, still requiring `project.task.update`.
+
+**Existing dev-link on inaccessible repo:** Do not delete. `NONE` links are omitted from task dev-link list responses. `METADATA` links are returned redacted (masked repo name/state only; no URL/refs/PR title/number leakage). Mutations (unlink) require task update plus `LINK`; READ/METADATA get 403 forbidden, NONE gets missing-repo 404 shape.
 
 **Activity feed:** repo-linked activity entries must carry `projectRepositoryId`; feed queries filter by effective repo access.
 
@@ -70,27 +78,30 @@ Current behavior: any project viewer can see all linked repos and browse provide
 
 ## 6. Routes, 403 vs 404, Audit
 
-**Route changes (design):**
-- Keep existing route shapes. Add repo-member management endpoints under project repositories or a dedicated subresource, e.g. `GET/PUT/DELETE .../repositories/:repositoryId/members` (manager-only).
-- Read routes (`branches`, `pull-requests`, commits, PR detail/files/commits): resolve repo, then require project view + repo level >= `ACCESS` + active connection.
-- Task dev-link list: return only links for repos at `METADATA_ONLY+` as redacted/visible per level; never leak `NONE`.
-- Task dev-link create: require task update + repo level `FULL`.
-- Task dev-link delete: require task update + repo level `FULL` (or explicit admin override).
+**Route changes (design/Stage 2 enforcement):**
+- Keep existing route shapes. Repo-member management endpoints are out of Stage 2 scope.
+- Project repo read routes (`listProjectRepositories`): require project view; omit NONE repos; return METADATA repos with masked name and no provider content.
+- Repository content/browse routes (`branches`, `pull-requests`, PR detail/files/commits, commits, commit detail): resolve repo access; READ/LINK allowed; NONE/METADATA return the same 404 shape as a missing repository. Never leak repo name, PR title, URL, or branch in errors.
+- Task dev-link list: require task view; omit NONE links; return METADATA links redacted (masked repo name/state only).
+- Task dev-link create: require task update + repo level `LINK`; READ/METADATA return 403 forbidden convention; NONE returns 404 missing-repo shape.
+- Task dev-link delete: require task update + repo level `LINK`; READ/METADATA return 403 forbidden convention; NONE returns 404 missing-repo shape.
 
-**403 vs 404:** Use `404` when the repository/resource is outside project/workspace or should be hidden from users without any project/repo visibility signal; use `403` when user can know the project/repo exists but lacks required level (e.g. manager viewing member settings, or METADATA_ONLY user hitting branches endpoint). Default for read-content endpoints: `404` for `NONE` to avoid repo existence leak; `403` for `METADATA_ONLY` attempting provider content if metadata is intentionally visible. Document chosen rule in API contract before implementation.
+**403 vs 404:** Follow existing codebase convention. Stage 2 defaults: NONE behaves as missing (404 missing-repo shape). METADATA browse/content endpoints return 404 missing-repo shape (no leakage). READ/METADATA mutations that are forbidden by level return 403 with existing forbidden convention. Never leak repo name/PR title/URL/branch in errors.
 
-**Audit events (no extra routes):** `dev_integration.repository_access_granted`, `..._changed`, `..._revoked`, `dev_integration.repository_content_access_denied` (rate-limited/security log), include actor, workspace/project/repository, target user, old/new level, request id. Do not audit routine allowed reads.
+**Audit events (no extra routes):** `dev_integration.repository_access_granted`, `..._changed`, `..._revoked`, `dev_integration.repository_content_access_denied` (rate-limited/security log) are future; Stage 2 does not add new audit routes. Existing audit behavior remains.
+
+**Out of scope for Stage 2:** Workspace-level "available repositories" listing (`GET /workspaces/:wid/dev-integrations/connections/:connectionId/repos`) is connection-level, not project-repo access-level. Leave unchanged and flag as follow-up.
 
 ## 7. Frontend Impact, Tests, Open Questions
 
-**Frontend impact:** Repository picker/list must handle empty/partial results; task dev-link UI must render restricted placeholders; branch/PR browsers need 403/404 handling; repo settings need member-level management UI; task link creation must filter repos by `FULL`.
+**Frontend impact:** Repository picker/list must handle empty/partial results; task dev-link UI must render restricted placeholders; branch/PR browsers need 403/404 handling; repo settings need member-level management UI; task link creation must filter repos by `LINK`.
 
 **Tests plan:** unit policy matrix (project role x repo level x endpoint); integration tests for backfill equivalence, no-access-loss deploy, 404/403 rules, task dev-link redaction, webhook sync unaffected, unlink/link permission checks; security tests for IDOR across projects/workspaces and provider ceiling not exceeded.
 
-**Open questions:**
-- Should `METADATA_ONLY` expose `repositoryFullName` or a masked label?
-- Can project managers override repo restrictions they did not create? (recommended yes, with audit).
-- How should unlink behave when user loses `FULL` after linking? (recommend deny unless manager override).
-- Should activity feed show “restricted repo activity” placeholder or omit?
-- Do we need per-user GitHub identity linking for parity-sensitive orgs? (future; not required for Nexus-level enforcement).
-- Should connection-level available repos be filtered by any project repo grants? (currently workspace-view; likely keep but avoid leaking linked-project details).
+**Stage 2 decisions / defaults:**
+- Level names are `NONE | METADATA | READ | LINK` (Stage 1 authoritative). Old note mapping: `METADATA_ONLY->METADATA`, `ACCESS->READ`, `FULL->LINK`.
+- `NONE`: missing-repo 404 shape; omitted from repo/dev-link lists; no repo-derived notifications.
+- `METADATA`: masked repo name only; no branches/PRs/commits/files/URLs/refs/PR titles; task dev-links masked repo name + state only; browse/content endpoints return missing-repo 404 shape; link/unlink return 403 forbidden convention.
+- `READ`: full read/browse/dev-link fields; link/unlink return 403 forbidden convention.
+- `LINK`: READ plus link/unlink, still requires `project.task.update`.
+- Workspace-level available repositories listing remains unchanged (connection-level, out of Stage 2 scope) — follow-up.
