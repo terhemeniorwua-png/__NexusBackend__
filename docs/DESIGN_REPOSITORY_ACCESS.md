@@ -87,10 +87,10 @@ Current behavior: any project viewer can see all linked repos and browse provide
 
 **Tests plan:** unit policy matrix (project role x repo level x endpoint); integration tests for backfill equivalence, no-access-loss deploy, 404/403 rules, task dev-link redaction, webhook sync unaffected, unlink/link permission checks; security tests for IDOR across projects/workspaces and provider ceiling not exceeded.
 
-**Open questions:**
-- Should `METADATA_ONLY` expose `repositoryFullName` or a masked label?
-- Can project managers override repo restrictions they did not create? (recommended yes, with audit).
-- How should unlink behave when user loses `FULL` after linking? (recommend deny unless manager override).
-- Should activity feed show “restricted repo activity” placeholder or omit?
-- Do we need per-user GitHub identity linking for parity-sensitive orgs? (future; not required for Nexus-level enforcement).
-- Should connection-level available repos be filtered by any project repo grants? (currently workspace-view; likely keep but avoid leaking linked-project details).
+**Defaults (selected):**
+- `METADATA_ONLY` exposes a masked label (e.g. “Restricted repository”), not `repositoryFullName`, URL, refs, or provider IDs.
+- Project managers/admins can override repo restrictions they did not create; every grant/change/revoke is audited.
+- If a user loses `FULL`, task-dev-link create is denied; unlink requires `FULL` or manager/admin override (audited). Existing links remain stored/redacted.
+- Activity/feed omits repo-detail entries the viewer cannot access; no “restricted repo activity” placeholder (avoids metadata leak).
+- Per-user GitHub identity linking is deferred/future; not required for Nexus-level enforcement. Document parity limitation plainly.
+- Connection-level available-repo listing remains workspace-view scoped and does not expose project-repo grant details; project linking UI filters selectable repos by repos the actor can manage/link.
