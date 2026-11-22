@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { resolveProjectAuthorization } from '../authorization/project.authorization';
 
 export type RepositoryAccessClient = Pick<
@@ -28,7 +28,7 @@ export type RepositoryAccessLevelValue = 'NONE' | 'METADATA' | 'READ' | 'LINK';
  * Not wired to any route; used by later stages.
  */
 export async function resolveRepositoryAccess(
-  client: PrismaClient,
+  client: PrismaClient | Prisma.TransactionClient,
   params: ResolveRepositoryAccessParams,
 ): Promise<RepositoryAccessLevelValue> {
   const { projectId, repositoryId, userId } = params;
@@ -54,7 +54,7 @@ export async function resolveRepositoryAccess(
   let authorization;
   try {
     authorization = await resolveProjectAuthorization(
-      client,
+      client as unknown as PrismaClient,
       { userId, workspaceId: project.workspaceId, workspaceRole: 'VIEWER' },
       projectId,
     );

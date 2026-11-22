@@ -6,6 +6,7 @@ import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { ProjectPermission, authorizeProject, requireWorkspaceAccess, WorkspaceCapability } from '../authorization';
+import { resolveRepositoryAccess, type RepositoryAccessLevelValue } from './repository-access.resolver';
 import type { AppConfig } from '../../config/env';
 import { githubAppProvider } from './providers/github-app.provider';
 import { gitlabProvider } from './providers/gitlab.provider';
@@ -130,6 +131,48 @@ function toTaskDevLink(row: {
   };
 }
 
+const MASKED_REPOSITORY_NAME = 'Restricted repository';
+
+function missingRepositoryError(): AppError {
+  // Same shape as missing resource; never leak repo identity.
+  return new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+}
+
+function repositoryAccessForbidden(): AppError {
+  return new AppError(
+    403,
+    'PERMISSION_DENIED',
+    'Your repository access does not allow this action',
+  );
+}
+
+function maskLinkedRepo(repo: LinkedProjectRepository): LinkedProjectRepository {
+  return {
+    ...repo,
+    externalRepoId: 'restricted',
+    fullName: MASKED_REPOSITORY_NAME,
+    defaultBranch: null,
+  };
+}
+
+function maskTaskDevLink(link: TaskDevLinkSummary): TaskDevLinkSummary {
+  return {
+    ...link,
+    externalId: 'restricted',
+    externalNumber: null,
+    title: null,
+    url: null,
+    ref: null,
+    headRef: null,
+    baseRef: null,
+    repositoryFullName: MASKED_REPOSITORY_NAME,
+    reviewState: null,
+    reviewerLogin: null,
+    reviewedAt: null,
+    mergedAt: null,
+  };
+}
+
 export function createDevIntegrationService(
   config: AppConfig,
   prisma: PrismaClient = getPrismaClient(),
@@ -219,7 +262,17 @@ export function createDevIntegrationService(
       where: { id: input.repositoryId, projectId: input.projectId, project: { workspaceId: input.workspaceId } },
       include: { connection: true },
     });
-    if (!repo) throw new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+    if (!repo) throw missingRepositoryError();
+
+    const access = await resolveRepositoryAccess(prisma, {
+      projectId: input.projectId,
+      repositoryId: input.repositoryId,
+      userId: input.userId,
+    });
+    if (access === 'NONE' || access === 'METADATA') {
+      throw missingRepositoryError();
+    }
+
     if (repo.connection.status !== 'ACTIVE') {
       throw new AppError(409, 'DEV_INTEGRATION_NOT_ACTIVE', 'Integration connection is not active');
     }
@@ -413,7 +466,21 @@ export function createDevIntegrationService(
         where: { projectId: input.projectId, project: { workspaceId: input.workspaceId } },
         orderBy: { createdAt: 'desc' },
       });
-      return rows.map(toLinkedRepo);
+      const resolved = await Promise.all(
+        rows.map(async (row) => {
+          const access = await resolveRepositoryAccess(prisma, {
+            projectId: input.projectId,
+            repositoryId: row.id,
+            userId: input.userId,
+          });
+          return { row, access };
+        }),
+      );
+      return resolved.flatMap(({ row, access }) => {
+        if (access === 'NONE') return [];
+        const repo = toLinkedRepo(row);
+        return [access === 'METADATA' ? maskLinkedRepo(repo) : repo];
+      });
     },
 
     async linkRepository(input: {
@@ -619,7 +686,28 @@ export function createDevIntegrationService(
         where: { taskId: input.taskId, projectId: input.projectId, task: { project: { workspaceId: input.workspaceId } } },
         orderBy: { createdAt: 'desc' },
       });
-      return rows.map(toTaskDevLink);
+
+      const accessByRepo = new Map<string, RepositoryAccessLevelValue>();
+      const uniqueRepoIds = [...new Set(rows.map((r) => r.projectRepositoryId).filter((id): id is string => !!id))];
+      await Promise.all(
+        uniqueRepoIds.map(async (repositoryId) => {
+          const access = await resolveRepositoryAccess(prisma, {
+            projectId: input.projectId,
+            repositoryId,
+            userId: input.userId,
+          });
+          accessByRepo.set(repositoryId, access);
+        }),
+      );
+
+      return rows.flatMap((row) => {
+        const link = toTaskDevLink(row);
+        if (!row.projectRepositoryId) return [link];
+        const access = accessByRepo.get(row.projectRepositoryId) ?? 'NONE';
+        if (access === 'NONE') return [];
+        if (access === 'METADATA') return [maskTaskDevLink(link)];
+        return [link];
+      });
     },
 
     async linkTaskDevLink(input: {
@@ -643,7 +731,16 @@ export function createDevIntegrationService(
         where: { id: input.projectRepositoryId, projectId: input.projectId, project: { workspaceId: input.workspaceId } },
         include: { connection: true },
       });
-      if (!repo) throw new AppError(404, 'PROJECT_REPOSITORY_NOT_FOUND', 'Linked repository not found');
+      if (!repo) throw missingRepositoryError();
+
+      const access = await resolveRepositoryAccess(prisma, {
+        projectId: input.projectId,
+        repositoryId: repo.id,
+        userId: input.userId,
+      });
+      if (access === 'NONE') throw missingRepositoryError();
+      if (access === 'METADATA' || access === 'READ') throw repositoryAccessForbidden();
+
       if (repo.connection.status !== 'ACTIVE') {
         throw new AppError(409, 'DEV_INTEGRATION_NOT_ACTIVE', 'Integration connection is not active');
       }
@@ -703,6 +800,17 @@ export function createDevIntegrationService(
         where: { id: input.devLinkId, taskId: input.taskId, projectId: input.projectId, task: { project: { workspaceId: input.workspaceId } } },
       });
       if (!link) throw new AppError(404, 'TASK_DEV_LINK_NOT_FOUND', 'Development link not found');
+
+      if (link.projectRepositoryId) {
+        const access = await resolveRepositoryAccess(prisma, {
+          projectId: input.projectId,
+          repositoryId: link.projectRepositoryId,
+          userId: input.userId,
+        });
+        if (access === 'NONE') throw missingRepositoryError();
+        if (access === 'METADATA' || access === 'READ') throw repositoryAccessForbidden();
+      }
+
       await prisma.taskDevLink.delete({ where: { id: link.id } });
       await recordAuditEvent(prisma, {
         workspaceId: input.workspaceId,
