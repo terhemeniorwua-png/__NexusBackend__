@@ -7,6 +7,7 @@ import {
 } from '../modules/authorization';
 import { emitToUser } from '../realtime/io-registry';
 import { AppError } from '../utils/errors';
+import { logger as defaultLogger, type Logger } from '../utils/logger';
 import type { NotificationClient } from './notifications';
 
 /**
@@ -51,7 +52,8 @@ type Audience =
   | 'submitter'
   | 'assignee'
   | 'clarification_requested'
-  | 'clarification_asker';
+  | 'clarification_asker'
+  | 'task_stakeholders';
 
 interface MessageDraft {
   title: string;
@@ -161,6 +163,28 @@ const REGISTRY: Record<string, RegistryEntry> = {
       };
     },
   },
+  'task.github_pr_merged': {
+    type: NotificationType.GITHUB_PR_MERGED,
+    audience: 'task_stakeholders',
+    message: (event) => {
+      const taskTitle = contextString(event, 'taskTitle') ?? 'A task';
+      return {
+        title: `Linked pull request merged for "${taskTitle}"`,
+        body: 'A linked GitHub pull request was merged. Open the task for details.',
+      };
+    },
+  },
+  'task.github_review_synced': {
+    type: NotificationType.GITHUB_PR_REVIEW_RECEIVED,
+    audience: 'task_stakeholders',
+    message: (event) => {
+      const taskTitle = contextString(event, 'taskTitle') ?? 'A task';
+      return {
+        title: `New GitHub review on "${taskTitle}"`,
+        body: 'A linked GitHub pull request received a review. Open the task for details.',
+      };
+    },
+  },
 };
 
 export function isFanoutAction(action: string): boolean {
@@ -226,6 +250,12 @@ function contextUserId(event: FanoutEvent, key: string): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+function contextUserIds(event: FanoutEvent, key: string): string[] {
+  const value = event.context?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
 function contextString(event: FanoutEvent, key: string): string | null {
   const value = event.context?.[key];
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -279,6 +309,20 @@ async function resolveRecipients(
       const askerId = contextUserId(event, 'askerId');
       recipients =
         askerId && askerId !== event.actorId && memberIds.has(askerId) ? [askerId] : [];
+      break;
+    }
+    case 'task_stakeholders': {
+      // DB-derived ids only. GitHub sender is not a Nexus user; exclude actor only
+      // when the event maps to one (event.actorId is null for webhook sync).
+      const creatorId = contextUserId(event, 'creatorId');
+      const assigneeIds = contextUserIds(event, 'assigneeIds');
+      recipients = [...new Set([creatorId, ...assigneeIds])].filter(
+        (id): id is string =>
+          typeof id === 'string' &&
+          id.length > 0 &&
+          id !== event.actorId &&
+          memberIds.has(id),
+      );
       break;
     }
   }
@@ -403,4 +447,29 @@ export async function recordFanoutEvent(
       data,
     })),
   );
+}
+
+/**
+ * Best-effort post-commit fan-out. Use for webhook-driven events where a
+ * notification failure must never fail or roll back the already-committed
+ * state transition. Runs against the base client, never rethrows.
+ */
+export async function recordFanoutEventBestEffort(
+  client: NotificationClient,
+  event: FanoutEvent,
+  logger: Logger = defaultLogger,
+): Promise<void> {
+  try {
+    await recordFanoutEvent(client, event);
+  } catch (error) {
+    logger.warn('notification_fanout_failed', {
+      action: event.action,
+      workspaceId: event.workspaceId,
+      projectId: event.projectId,
+      targetType: event.targetType,
+      targetId: event.targetId,
+      dedupeKey: event.dedupeKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

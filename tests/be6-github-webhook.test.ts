@@ -338,12 +338,19 @@ describe('BE-6 GitHub webhook -> task dev-link sync (ported to node:test)', () =
     assert.strictEqual(captured.auditCreates.length, 0, 'out-of-order review records no audit');
   });
 
-  test('merge transition is informational only: no notification and no BE-2 review mutation', async () => {
+  test('merge transition does not mutate BE-2 review fields and notification failure does not fail webhook', async () => {
     const links = [{
       id: 'link-5', taskId: 'task-5', externalId: '105', linkedById: 'linker-5',
       task: { id: 'task-5', status: 'IN_PROGRESS', key: 'T-5', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
     }];
     const { prisma, captured } = buildPrisma({ links });
+    // Force post-commit notification fanout to fail; webhook must still succeed.
+    prisma.task = {
+      ...(prisma.task ?? {}),
+      findUnique: async () => {
+        throw new Error('simulated notification lookup failure');
+      },
+    };
     const out = await invoke(prisma, 105, 16, 'deliv-merge-5');
     assert.strictEqual(out, 'processed');
     // Only status/submittedAt/submittedById are touched on the task; no review/approval fields.
@@ -353,8 +360,9 @@ describe('BE-6 GitHub webhook -> task dev-link sync (ported to node:test)', () =
     for (const field of ['submissionSummary', 'reviewFeedback', 'reviewedAt', 'reviewedById', 'completedAt']) {
       assert.strictEqual(Object.prototype.hasOwnProperty.call(taskCall.data, field), false, `${field} must not be touched by a merge`);
     }
-    // No notification/email prisma calls are present in the webhook path (mock has none, success proves it).
     assert.strictEqual(captured.deliveryCreate.length, 1);
     assert.strictEqual(captured.deliveryUpdate.length, 1);
+    assert.strictEqual(captured.deliveryUpdate[0].data.status, 'PROCESSED');
+    assert.strictEqual(captured.deliveryUpdate[0].data.error, null);
   });
 });
