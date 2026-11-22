@@ -1505,6 +1505,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
 
       const taskCountsByStatus: Record<string, number> = {
         ASSIGNED: 0,
+        AWAITING_CLARIFICATION: 0,
         IN_PROGRESS: 0,
         SUBMITTED: 0,
         UNDER_REVIEW: 0,

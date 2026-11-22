@@ -22,6 +22,7 @@ import {
 } from '../authorization';
 import type { RequestContext } from '../auth/auth.types';
 import { assertTaskStatusTransition } from './task-status';
+import { cancelOpenClarificationForAssignee } from './task-clarification.service';
 import { isTaskOverdue, taskNotOverdueWhere, taskOverdueWhere } from './task-overdue';
 import {
   buildEmailBrand,
@@ -1913,6 +1914,16 @@ export function createTaskService(
         if (!result.count)
           throw new AppError(404, 'ASSIGNEE_NOT_FOUND', 'That assignee does not exist');
 
+        await cancelOpenClarificationForAssignee(tx, {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: task.id,
+          taskKey: task.key,
+          assigneeUserId: input.targetUserId,
+          actorId: input.userId,
+          context,
+        });
+
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
           actorId: input.userId,
@@ -2877,6 +2888,15 @@ export function createTaskService(
       });
       assertProjectWritable(access.project);
 
+      if (task.status === 'AWAITING_CLARIFICATION') {
+        throw new AppError(
+          409,
+          'INVALID_ACCEPTANCE_STATE',
+          'Accept an assignment only after its clarification is resolved',
+          { details: { status: task.status } },
+        );
+      }
+
       if (assignee.acceptanceStatus !== 'PENDING') {
         throw new AppError(
           409,
@@ -2971,6 +2991,16 @@ export function createTaskService(
             declineReason: reason,
           },
           include: { user: { select: { id: true, name: true, email: true } } },
+        });
+        await cancelOpenClarificationForAssignee(tx, {
+          workspaceId: input.workspaceId,
+          projectId: access.project.id,
+          taskId: task.id,
+          taskKey: task.key,
+          assigneeUserId: input.userId,
+          actorId: input.userId,
+          reason,
+          context,
         });
         await recordAuditEvent(tx, {
           workspaceId: input.workspaceId,
@@ -3161,6 +3191,14 @@ export function createTaskService(
         include: taskInclude,
       });
       if (!subtask) throw new AppError(404, 'SUBTASK_NOT_FOUND', 'That subtask does not exist');
+      if (subtask.status === 'AWAITING_CLARIFICATION') {
+        throw new AppError(
+          409,
+          'INVALID_CLARIFICATION_STATE',
+          'A subtask awaiting clarification cannot be completed',
+          { details: { status: subtask.status } },
+        );
+      }
 
       const isAssignee = subtask.assignees.some((a) => a.userId === input.userId);
       const isAuthorizedCollaborator =

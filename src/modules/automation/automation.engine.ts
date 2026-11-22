@@ -477,7 +477,7 @@ async function executeSetFieldAction(
   const workspaceRole = await assertOwnerCanManage(deps.prisma, automation);
   const task = await deps.prisma.task.findFirst({
     where: { id: taskId, deletedAt: null, project: { workspaceId: automation.workspaceId } },
-    select: { id: true, projectId: true, key: true },
+    select: { id: true, projectId: true, key: true, status: true },
   });
   if (!task) throw new AppError(404, 'TASK_NOT_FOUND', 'Target task not found for automation action');
 
@@ -492,6 +492,14 @@ async function executeSetFieldAction(
   const data: Prisma.TaskUpdateInput = {};
   switch (field) {
     case 'status': {
+      // BE-7: a waiting clarification can only be resolved by answer/cancel.
+      if (task.status === 'AWAITING_CLARIFICATION') {
+        throw new AppError(
+          409,
+          'INVALID_CLARIFICATION_STATE',
+          'A task awaiting clarification cannot be changed by automation',
+        );
+      }
       const status = rawValue.toUpperCase();
       if (!(TASK_STATUSES as readonly string[]).includes(status)) {
         throw new AppError(

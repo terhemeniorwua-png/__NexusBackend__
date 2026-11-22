@@ -28,6 +28,24 @@ type Ctx = RequestContext;
 type JsonValue = Prisma.InputJsonValue;
 type CustomFieldOption = { value: string; label: string; color?: string };
 
+// Templates are JSON and were historically cast straight to TaskStatus. Only
+// pre-BE-7 statuses are valid initial states; AWAITING_CLARIFICATION must be
+// reachable only through the clarification service.
+const TEMPLATE_TASK_STATUSES: readonly TaskStatus[] = [
+  'ASSIGNED',
+  'IN_PROGRESS',
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'APPROVED',
+  'CHANGES_REQUESTED',
+];
+
+function templateTaskStatus(value: unknown): TaskStatus {
+  return typeof value === 'string' && (TEMPLATE_TASK_STATUSES as readonly string[]).includes(value)
+    ? (value as TaskStatus)
+    : 'ASSIGNED';
+}
+
 function slugifyKey(name: string): string {
   return (
     name
@@ -594,7 +612,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
             key,
             title: input.title || (typeof data.title === 'string' ? data.title : tpl.name),
             description: typeof data.description === 'string' ? data.description : null,
-            status: (typeof data.status === 'string' ? data.status : 'ASSIGNED') as TaskStatus,
+            status: templateTaskStatus(data.status),
             priority: (typeof data.priority === 'string' ? data.priority : 'MEDIUM') as TaskPriority,
             category: typeof data.category === 'string' ? data.category : null,
             labels: Array.isArray(data.labels) ? (data.labels as string[]) : [],
@@ -693,7 +711,7 @@ export function createTaskAdvancedService(prisma: PrismaClient = getPrismaClient
                 key: taskKey,
                 title: taskData.title,
                 description: typeof taskData.description === 'string' ? taskData.description : null,
-                status: (typeof taskData.status === 'string' ? taskData.status : 'ASSIGNED') as TaskStatus,
+                status: templateTaskStatus(taskData.status),
                 priority: (typeof taskData.priority === 'string' ? taskData.priority : 'MEDIUM') as TaskPriority,
                 labels: Array.isArray(taskData.labels) ? (taskData.labels as string[]) : [],
                 creatorId: input.userId,
