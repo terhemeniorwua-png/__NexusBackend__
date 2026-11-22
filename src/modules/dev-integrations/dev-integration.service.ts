@@ -57,17 +57,20 @@ function toConnectionSummary(row: {
   };
 }
 
-function toLinkedRepo(row: {
-  id: string;
-  projectId: string;
-  connectionId: string;
-  provider: DevIntegrationProvider;
-  externalRepoId: string;
-  fullName: string;
-  defaultBranch: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): LinkedProjectRepository {
+function toLinkedRepo(
+  row: {
+    id: string;
+    projectId: string;
+    connectionId: string;
+    provider: DevIntegrationProvider;
+    externalRepoId: string;
+    fullName: string;
+    defaultBranch: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+  effectiveAccessLevel: RepositoryAccessLevelValue,
+): LinkedProjectRepository {
   return {
     id: row.id,
     projectId: row.projectId,
@@ -76,35 +79,39 @@ function toLinkedRepo(row: {
     externalRepoId: row.externalRepoId,
     fullName: row.fullName,
     defaultBranch: row.defaultBranch,
+    effectiveAccessLevel,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-function toTaskDevLink(row: {
-  id: string;
-  taskId: string;
-  projectId: string;
-  projectRepositoryId: string | null;
-  provider: DevIntegrationProvider;
-  externalType: string;
-  externalId: string;
-  externalNumber: number | null;
-  title: string | null;
-  url: string | null;
-  ref: string | null;
-  headRef: string | null;
-  baseRef: string | null;
-  state: string | null;
-  repositoryFullName: string | null;
-  reviewState?: string | null;
-  reviewerLogin?: string | null;
-  reviewedAt?: Date | null;
-  mergedAt?: Date | null;
-  linkedById: string;
-  createdAt: Date;
-  updatedAt: Date;
-}): TaskDevLinkSummary {
+function toTaskDevLink(
+  row: {
+    id: string;
+    taskId: string;
+    projectId: string;
+    projectRepositoryId: string | null;
+    provider: DevIntegrationProvider;
+    externalType: string;
+    externalId: string;
+    externalNumber: number | null;
+    title: string | null;
+    url: string | null;
+    ref: string | null;
+    headRef: string | null;
+    baseRef: string | null;
+    state: string | null;
+    repositoryFullName: string | null;
+    reviewState?: string | null;
+    reviewerLogin?: string | null;
+    reviewedAt?: Date | null;
+    mergedAt?: Date | null;
+    linkedById: string;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+  effectiveAccessLevel: RepositoryAccessLevelValue | null,
+): TaskDevLinkSummary {
   return {
     id: row.id,
     taskId: row.taskId,
@@ -125,6 +132,7 @@ function toTaskDevLink(row: {
     reviewerLogin: row.reviewerLogin ?? null,
     reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
     mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,
+    effectiveAccessLevel,
     linkedById: row.linkedById,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -478,7 +486,7 @@ export function createDevIntegrationService(
       );
       return resolved.flatMap(({ row, access }) => {
         if (access === 'NONE') return [];
-        const repo = toLinkedRepo(row);
+        const repo = toLinkedRepo(row, access);
         return [access === 'METADATA' ? maskLinkedRepo(repo) : repo];
       });
     },
@@ -522,7 +530,12 @@ export function createDevIntegrationService(
           targetId: created.id,
           metadata: { projectId: input.projectId, fullName: input.fullName, provider: connection.provider },
         });
-        return toLinkedRepo(created);
+        const effectiveAccessLevel = await resolveRepositoryAccess(prisma, {
+          projectId: input.projectId,
+          repositoryId: created.id,
+          userId: input.userId,
+        });
+        return toLinkedRepo(created, effectiveAccessLevel);
       } catch (error: any) {
         if (error?.code === 'P2002') {
           throw new AppError(409, 'REPOSITORY_ALREADY_LINKED', 'This repository is already linked to the project');
@@ -701,10 +714,10 @@ export function createDevIntegrationService(
       );
 
       return rows.flatMap((row) => {
-        const link = toTaskDevLink(row);
-        if (!row.projectRepositoryId) return [link];
+        if (!row.projectRepositoryId) return [toTaskDevLink(row, null)];
         const access = accessByRepo.get(row.projectRepositoryId) ?? 'NONE';
         if (access === 'NONE') return [];
+        const link = toTaskDevLink(row, access);
         if (access === 'METADATA') return [maskTaskDevLink(link)];
         return [link];
       });
@@ -779,7 +792,7 @@ export function createDevIntegrationService(
             externalId: input.externalId,
           },
         });
-        return toTaskDevLink(created);
+        return toTaskDevLink(created, 'LINK');
       } catch (error: any) {
         if (error?.code === 'P2002') {
           throw new AppError(409, 'TASK_DEV_LINK_ALREADY_EXISTS', 'This development item is already linked to the task');

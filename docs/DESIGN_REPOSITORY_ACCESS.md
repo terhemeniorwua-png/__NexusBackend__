@@ -1,7 +1,7 @@
 # Design Note: Repository-Level Access
 
-**Status:** Design only (no code, no schema).  
-**Base:** `origin/main` @ `cec9b279e9bfaec350fd7412eceaf7f4fa378e3c`.  
+**Status:** Stage 1 schema/resolver and Stage 2 enforcement implemented (see PRs #157, #158); later stages (member management, backfill, audit routes) remain design/follow-up.  
+**Base:** `origin/main` (post-#158).  
 **Scope:** Project-linked repositories (`ProjectRepository`), repository browsing, and task dev-links (`TaskDevLink`).
 
 ## 1. Current Inventory
@@ -86,6 +86,8 @@ Stage 1 enum is authoritative: `NONE | METADATA | READ | LINK`.
 - Task dev-link create: require task update + repo level `LINK`; READ/METADATA return 403 forbidden convention; NONE returns 404 missing-repo shape.
 - Task dev-link delete: require task update + repo level `LINK`; READ/METADATA return 403 forbidden convention; NONE returns 404 missing-repo shape.
 
+**Response field (Stage 2 item 3, authorized exception):** `effectiveAccessLevel` is returned on project repository list items (`LinkedProjectRepository.effectiveAccessLevel: 'NONE' | 'METADATA' | 'READ' | 'LINK'`) and task dev-link list items (`TaskDevLinkSummary.effectiveAccessLevel: RepositoryAccessLevel | null`; `null` only when no `projectRepositoryId` is attached). The frontend uses it to hide link/unlink controls for READ and METADATA. No other response field additions.
+
 **403 vs 404:** Follow existing codebase convention. Stage 2 defaults: NONE behaves as missing (404 missing-repo shape). METADATA browse/content endpoints return 404 missing-repo shape (no leakage). READ/METADATA mutations that are forbidden by level return 403 with existing forbidden convention. Never leak repo name/PR title/URL/branch in errors.
 
 **Audit events (no extra routes):** `dev_integration.repository_access_granted`, `..._changed`, `..._revoked`, `dev_integration.repository_content_access_denied` (rate-limited/security log) are future; Stage 2 does not add new audit routes. Existing audit behavior remains.
@@ -104,4 +106,11 @@ Stage 1 enum is authoritative: `NONE | METADATA | READ | LINK`.
 - `METADATA`: masked repo name only; no branches/PRs/commits/files/URLs/refs/PR titles; task dev-links masked repo name + state only; browse/content endpoints return missing-repo 404 shape; link/unlink return 403 forbidden convention.
 - `READ`: full read/browse/dev-link fields; link/unlink return 403 forbidden convention.
 - `LINK`: READ plus link/unlink, still requires `project.task.update`.
-- Workspace-level available repositories listing remains unchanged (connection-level, out of Stage 2 scope) — follow-up.
+- Response field name: `effectiveAccessLevel` on project repository list and task dev-link list items (see §6).
+
+**Deliberate choices (Stage 2):**
+- **METADATA browse returns 404 (not 403).** METADATA users may see masked repo metadata in the project repo list, but browse/content endpoints return the same 404 `PROJECT_REPOSITORY_NOT_FOUND` shape as NONE to avoid leaking repo existence/content surface through provider-content routes.
+- **NONE dev-links are omitted.** Task dev-links for repositories with effective NONE are omitted from task dev-link list responses (not redacted) as the missing-repo/no-leak behavior.
+
+**Known follow-up:**
+- Workspace-level available repositories listing (`GET /workspaces/:wid/dev-integrations/connections/:connectionId/repos`) is connection-level, not project-repo access-level. It remains unchanged and needs a follow-up decision/implementation.

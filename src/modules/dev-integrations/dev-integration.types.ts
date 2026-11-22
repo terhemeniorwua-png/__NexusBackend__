@@ -32,6 +32,8 @@ export interface DevRepositorySummary {
   htmlUrl?: string | null;
 }
 
+export type RepositoryAccessLevel = 'NONE' | 'METADATA' | 'READ' | 'LINK';
+
 export interface LinkedProjectRepository {
   id: string;
   projectId: string;
@@ -40,6 +42,8 @@ export interface LinkedProjectRepository {
   externalRepoId: string;
   fullName: string;
   defaultBranch: string | null;
+  /** Caller's effective repository access level (BE-9). */
+  effectiveAccessLevel: RepositoryAccessLevel;
   createdAt: string;
   updatedAt: string;
 }
@@ -85,6 +89,8 @@ export interface TaskDevLinkSummary {
   reviewerLogin: string | null;
   reviewedAt: string | null;
   mergedAt: string | null;
+  /** Caller's effective repository access level for the linked repository (BE-9); null when no project repository is attached. */
+  effectiveAccessLevel: RepositoryAccessLevel | null;
   linkedById: string;
   createdAt: string;
   updatedAt: string;

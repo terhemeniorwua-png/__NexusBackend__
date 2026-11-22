@@ -113,6 +113,7 @@ describe('BE-9 stage 2 repository access enforcement', () => {
       expect(repo!.externalRepoId).toBe('restricted');
       expect(repo!.id).toBe('repo-1');
       expect(repo!.provider).toBe('GITHUB');
+      expect(repo!.effectiveAccessLevel).toBe('METADATA');
     });
 
     it('returns full repository for READ', async () => {
@@ -121,6 +122,7 @@ describe('BE-9 stage 2 repository access enforcement', () => {
       const [repo] = await svc.listProjectRepositories({ userId: 'u1', workspaceId: 'w1', projectId: 'proj-1' });
       expect(repo!.fullName).toBe('acme/private-repo');
       expect(repo!.externalRepoId).toBe('123');
+      expect(repo!.effectiveAccessLevel).toBe('READ');
     });
 
     it('returns full repository for LINK', async () => {
@@ -128,6 +130,7 @@ describe('BE-9 stage 2 repository access enforcement', () => {
       const svc = createDevIntegrationService(config, makePrisma());
       const [repo] = await svc.listProjectRepositories({ userId: 'u1', workspaceId: 'w1', projectId: 'proj-1' });
       expect(repo!.fullName).toBe('acme/private-repo');
+      expect(repo!.effectiveAccessLevel).toBe('LINK');
     });
 
     it('explicit override beats default (resolver returns METADATA)', async () => {
@@ -202,6 +205,7 @@ describe('BE-9 stage 2 repository access enforcement', () => {
       const [link] = await svc.listTaskDevLinks({ userId: 'u1', workspaceId: 'w1', projectId: 'proj-1', taskId: 'task-1' });
       expect(link!.repositoryFullName).toBe('Restricted repository');
       expect(link!.state).toBe('open');
+      expect(link!.effectiveAccessLevel).toBe('METADATA');
       expect(link!.title).toBeNull();
       expect(link!.url).toBeNull();
       expect(link!.ref).toBeNull();
@@ -222,6 +226,7 @@ describe('BE-9 stage 2 repository access enforcement', () => {
       expect(link!.repositoryFullName).toBe('acme/private-repo');
       expect(link!.title).toBe('Secret PR title');
       expect(link!.url).toContain('github.com');
+      expect(link!.effectiveAccessLevel).toBe('READ');
     });
 
     it('returns full dev link for LINK', async () => {
