@@ -143,6 +143,18 @@ enum ProjectCommentPolicy {
   ALL_VIEWERS
 }
 
+enum ProjectWorkflowMode {
+  SPRINTS
+  BACKLOG_ONLY
+}
+
+enum SprintStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
 enum ProjectRole {
   PROJECT_MANAGER
   MEMBER
@@ -387,6 +399,8 @@ model User {
   ownedProjects                 Project[]                     @relation("ProjectOwner")
   completedProjects             Project[]                     @relation("ProjectCompletedBy")
   archivedProjects              Project[]                     @relation("ProjectArchivedBy")
+  createdSprints                Sprint[]                      @relation("SprintCreatedBy")
+  completedSprints              Sprint[]                      @relation("SprintCompletedBy")
   ledTeams                      Team[]                        @relation("TeamLead")
   taskAssignments               TaskAssignee[]                @relation("TaskAssigner")
   joinRequests                  JoinRequest[]                 @relation("JoinRequestApplicant")
@@ -1063,6 +1077,7 @@ model Project {
   type          ProjectType          @default(GENERAL)
   visibility    ProjectVisibility    @default(WORKSPACE)
   commentPolicy ProjectCommentPolicy @default(ASSIGNEES_ONLY)
+  workflowMode  ProjectWorkflowMode  @default(BACKLOG_ONLY)
   startDate     DateTime?
   dueDate       DateTime?
   ownerId       String
@@ -1083,6 +1098,7 @@ model Project {
   members                      ProjectMembership[]
   projectTeams                 ProjectTeam[]
   milestones                   ProjectMilestone[]
+  sprints                      Sprint[]
   tasks                        Task[]
   channels                     Channel[]
   attachments                  FileAttachment[]
@@ -1135,6 +1151,31 @@ model ProjectMilestone {
   @@index([projectId, dueDate])
 }
 
+model Sprint {
+  id            String       @id @default(uuid())
+  projectId     String
+  name          String
+  goal          String?
+  startDate     DateTime?
+  endDate       DateTime?
+  status        SprintStatus @default(PLANNED)
+  createdById   String
+  completedAt   DateTime?
+  completedById String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy   User    @relation("SprintCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy User?   @relation("SprintCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  tasks       Task[]
+
+  @@index([projectId])
+  @@index([projectId, status])
+  @@index([createdById])
+  @@index([completedById])
+}
+
 model ProjectTeam {
   id        String   @id @default(uuid())
   projectId String
@@ -1180,6 +1221,8 @@ model Task {
   dueDate              DateTime?
   completedAt          DateTime?
   position             Int          @default(0)
+  sprintId             String?
+  sprintPosition       Int?
   parentTaskId         String?
   weight               Int          @default(1)
   creatorId            String
@@ -1202,6 +1245,7 @@ model Task {
 
   project             Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   milestone           ProjectMilestone?      @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  sprint              Sprint?                @relation(fields: [sprintId], references: [id], onDelete: SetNull)
   parentTask          Task?                  @relation("TaskHierarchy", fields: [parentTaskId], references: [id], onDelete: Cascade)
   subTasks            Task[]                 @relation("TaskHierarchy")
   creator             User                   @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict)
@@ -1230,6 +1274,8 @@ model Task {
   @@index([projectId, status])
   @@index([projectId, priority])
   @@index([projectId, position])
+  @@index([sprintId])
+  @@index([projectId, sprintId])
   @@index([parentTaskId])
   @@index([creatorId])
   @@index([submittedById])
