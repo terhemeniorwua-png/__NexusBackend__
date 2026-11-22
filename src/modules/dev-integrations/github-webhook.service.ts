@@ -136,50 +136,48 @@ export async function processGithubWebhook(input: {
             outcome = 'ignored';
           } else {
             const isMerged = prStateVal === 'merged';
-            for (const link of links) {
-              await prisma.$transaction(async (tx) => {
-                const linkUpdate: Record<string, unknown> = { ...data };
-                if (isMerged) {
-                  linkUpdate.mergedAt = new Date();
-                }
-                await tx.taskDevLink.update({ where: { id: link.id }, data: linkUpdate });
-                if (isMerged) {
+            outcome = 'processed';
+            // Bulk link-state update (preserves the prior updateMany behaviour).
+            await prisma.taskDevLink.updateMany({
+              where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
+              data: { ...data, ...(isMerged ? { mergedAt: new Date() } : {}) },
+            });
+            if (isMerged) {
+              for (const link of links) {
+                await prisma.$transaction(async (tx) => {
                   const task = link.task;
-                  if (task.status === 'IN_PROGRESS' || task.status === 'CHANGES_REQUESTED') {
-                    const updatedTask = await tx.task.updateMany({
-                      where: { id: task.id, status: { in: ['IN_PROGRESS', 'CHANGES_REQUESTED'] } },
-                      data: {
-                        status: 'SUBMITTED',
-                        submittedAt: new Date(),
-                        submittedById: link.linkedById,
+                  const updatedTask = await tx.task.updateMany({
+                    where: { id: task.id, status: { in: ['IN_PROGRESS', 'CHANGES_REQUESTED'] } },
+                    data: {
+                      status: 'SUBMITTED',
+                      submittedAt: new Date(),
+                      submittedById: link.linkedById,
+                    },
+                  });
+                  if (updatedTask.count > 0) {
+                    await recordAuditEvent(tx, {
+                      workspaceId: task.project.workspaceId,
+                      actorId: undefined,
+                      action: TaskAuditAction.TaskGithubPrMerged,
+                      targetType: 'Task',
+                      targetId: task.id,
+                      metadata: {
+                        source: 'GITHUB_WEBHOOK',
+                        submittedVia: 'GITHUB_MERGE',
+                        deliveryId,
+                        event,
+                        prNumber: data.externalNumber ?? null,
+                        repositoryFullName,
+                        fromStatus: task.status,
+                        toStatus: 'SUBMITTED',
+                        linkId: link.id,
+                        externalId,
                       },
                     });
-                    if (updatedTask.count > 0) {
-                      await recordAuditEvent(tx, {
-                        workspaceId: task.project.workspaceId,
-                        actorId: undefined,
-                        action: TaskAuditAction.TaskGithubPrMerged,
-                        targetType: 'Task',
-                        targetId: task.id,
-                        metadata: {
-                          source: 'GITHUB_WEBHOOK',
-                          submittedVia: 'GITHUB_MERGE',
-                          deliveryId,
-                          event,
-                          prNumber: data.externalNumber ?? null,
-                          repositoryFullName,
-                          fromStatus: task.status,
-                          toStatus: 'SUBMITTED',
-                          linkId: link.id,
-                          externalId,
-                        },
-                      });
-                    }
                   }
-                }
-              });
+                });
+              }
             }
-            outcome = 'processed';
           }
         }
       }

@@ -16,7 +16,13 @@ vi.mock('node:crypto', async (importOriginal) => {
 
 vi.mock('../../db/prisma', () => ({ getPrismaClient: vi.fn() }));
 vi.mock('../../db/redis', () => ({ getRedisClient: vi.fn() }));
-vi.mock('../../services/audit', () => ({ recordAuditEvent: vi.fn(async () => undefined) }));
+vi.mock('../../services/audit', () => ({
+  recordAuditEvent: vi.fn(async () => undefined),
+  TaskAuditAction: {
+    TaskGithubPrMerged: 'task.github_pr_merged',
+    TaskGithubReviewSynced: 'task.github_review_synced',
+  },
+}));
 vi.mock('../authorization', () => ({
   requireWorkspaceAccess: vi.fn(async () => ({ effectiveRole: 'ADMIN', workspace: { id: 'ws' }, membership: { id: 'm' } })),
   authorizeProject: vi.fn(async () => ({})),
@@ -370,6 +376,13 @@ describe('GitHub webhook ingestion (Feature C)', () => {
         update: vi.fn(async () => ({})),
       },
       taskDevLink: {
+        findMany: vi.fn(async () => ([{
+          id: 'link-1',
+          taskId: 'task-1',
+          externalId: '99',
+          linkedById: 'user-linker-1',
+          task: { id: 'task-1', status: 'IN_PROGRESS', key: 'T-1', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
+        }])),
         updateMany: vi.fn(async () => ({ count: 2 })),
       },
     };
@@ -442,6 +455,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           linkedById: 'linker-2',
           task: { id: 'task-2', status: 'CHANGES_REQUESTED', key: 'T-2', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
+        updateMany: vi.fn(async () => ({ count: 1 })),
       },
       $transaction: vi.fn(async (fn: any) => fn({
         taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
@@ -487,6 +501,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           linkedById: 'linker-3',
           task: { id: 'task-3', status: 'ASSIGNED', key: 'T-3', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
+        updateMany: vi.fn(async () => ({ count: 0 })),
       },
       $transaction: vi.fn(async (fn: any) => fn({
         taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
@@ -534,6 +549,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           linkedById: 'linker-4',
           task: { id: 'task-4', status: 'IN_PROGRESS', key: 'T-4', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
+        updateMany: vi.fn(async () => ({ count: 1 })),
       },
       $transaction: vi.fn(async (fn: any) => fn({
         taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
@@ -580,6 +596,7 @@ describe('GitHub webhook ingestion (Feature C)', () => {
           linkedById: 'user-linker-1',
           task: { id: 'task-5', status: 'IN_PROGRESS', key: 'T-5', projectId: 'proj-1', project: { workspaceId: 'ws-1' } },
         }])),
+        updateMany: vi.fn(async () => ({ count: 1 })),
       },
       $transaction: vi.fn(async (fn: any) => fn({
         taskDevLink: { update: vi.fn(async () => ({})), findUnique: vi.fn() },
