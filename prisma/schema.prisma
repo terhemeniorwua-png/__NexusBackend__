@@ -356,6 +356,7 @@ model User {
   savedTaskDocumentVersions     TaskDocumentVersion[]         @relation("TaskDocumentVersionSaver")
   reportedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerReporter")
   notifiedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerNotifyUser")
+  taskProgressUpdates           TaskProgressUpdate[]          @relation("TaskProgressUpdateAuthor")
   resolvedTaskBlockers          TaskBlocker[]                 @relation("TaskBlockerResolver")
   timeEntries                   TaskTimeEntry[]
   assignedTasks                 TaskAssignee[]
@@ -1200,6 +1201,7 @@ model Task {
   reviewedBy          User?                  @relation("TaskReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewer            User?                  @relation("TaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   assignees           TaskAssignee[]
+  progressUpdates     TaskProgressUpdate[]
   dependencies        TaskDependency[]       @relation("BlockedTask")
   blockers            TaskDependency[]       @relation("BlockingTask")
   reportedBlockers    TaskBlocker[]
@@ -1231,6 +1233,21 @@ model Task {
   @@index([recurrenceSourceId])
   @@index([milestoneId])
   @@index([projectId, milestoneId])
+}
+
+model TaskProgressUpdate {
+  id             String   @id @default(uuid())
+  taskId         String
+  authorId       String
+  note           String
+  percent        Int?
+  clientRequestId String?
+  createdAt      DateTime @default(now())
+
+  task  Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User  @relation("TaskProgressUpdateAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([taskId, createdAt(sort: Desc)])
 }
 
 model TaskDocument {

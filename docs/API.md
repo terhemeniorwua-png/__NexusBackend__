@@ -1175,6 +1175,13 @@ denials return 403 `PERMISSION_DENIED` with `requiredPermission` where applicabl
 | --- | --- | --- | --- | --- | --- |
 | POST | `/{taskId}/subtasks/{subtaskId}/complete` | Body: `{ "workSummary"?: string }` | `200 { success, data: { subtask, progress, requiresApproval, submissionCreated } }`. If subtask or parent task `requiresApproval=true`, creates submission for review instead of immediate approval: subtask becomes `SUBMITTED` with submission metadata (`submissionCreated: true`); otherwise subtask becomes `APPROVED`/completed (`submissionCreated: false`). `progress` is recomputed server-side for the parent from subtasks as `{ percent, completed, total }` using weighted approved progress: `percent = round((sum of weights of APPROVED subtasks / sum of weights of all subtasks) * 100)` (0% when none; only `APPROVED` counts as completed). Allowed for assigned member or authorized collaborator (collaborators only for subtasks assigned to them). | 401, 403 `PERMISSION_DENIED`, 404 `TASK_NOT_FOUND`/`SUBTASK_NOT_FOUND` | `task.complete` (on subtask context) |
 
+### Task progress updates (BE-8)
+
+| Method | Path | Request | Success response | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| POST | `/{taskId}/progress-updates` | Body: `{ "note": string(1-2000 trimmed), "percent"?: number(0-100), "clientRequestId"?: string(<=64) }` | `201 { success, data: { update } }` where `update: { id, taskId, authorId, note, percent, clientRequestId, createdAt }`. Repeating the same `clientRequestId` by the same author on the same task returns the existing row with `200` instead of duplicating (idempotent no-op). Only a live task assignee may post, only while `task.status` is `IN_PROGRESS` or `CHANGES_REQUESTED`; archived or deleted tasks return 404. Audit-only (`task.progress_updated`): the self-reported `percent` never changes `computeProgress`, project progress, analytics, or task status. | 400 validation (`note` length, `percent` range), 403 `NOT_TASK_ASSIGNEE`, 404 `TASK_NOT_FOUND`, 409 `PROGRESS_UPDATE_NOT_ALLOWED` | `task.view` + live assignee |
+| GET | `/{taskId}/progress-updates` | Query: `cursor?` (update id), `limit?` (1-100, default 25) | `200 { success, data: { items, nextCursor } }` newest-first, cursor-paginated. Each item: `{ id, taskId, authorId, note, percent, clientRequestId, createdAt }`. | 401, 403/404 access or not found | `task.view` |
+
 ### Task model additions (additive)
 
 Tasks may include: `weight` (positive integer, default 1), `requiresApproval` (boolean, default false), `expectedDeliverables` (JSON array of `{id?,label,required?}` or null), `submissionSummary`, `submittedAt`, `submittedById`, `submittedBy`, `reviewFeedback`, `reviewedAt`, `reviewedById`, `reviewedBy`.

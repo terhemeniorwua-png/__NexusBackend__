@@ -140,6 +140,33 @@ export const submitTaskSchema = z
 
 export type SubmitTaskInput = z.infer<typeof submitTaskSchema>;
 
+export const addProgressUpdateSchema = z
+  .object({
+    note: z.string().trim().min(1).max(2000),
+    percent: z.number().int().min(0).max(100).optional().nullable(),
+    clientRequestId: z.string().trim().max(64).optional().nullable(),
+  })
+  .strict();
+
+export type AddProgressUpdateInput = z.infer<typeof addProgressUpdateSchema>;
+
+export const listProgressUpdatesQuerySchema = z.object({
+  cursor: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export type ListProgressUpdatesQuery = z.infer<typeof listProgressUpdatesQuerySchema>;
+
+export type TaskProgressUpdate = {
+  id: string;
+  taskId: string;
+  authorId: string;
+  note: string;
+  percent: number | null;
+  clientRequestId: string | null;
+  createdAt: Date;
+};
+
 export const reviewTaskSchema = z
   .object({
     decision: z.enum(['START_REVIEW', 'APPROVE', 'REQUEST_CHANGES']),

@@ -92,6 +92,7 @@ export const TaskAuditAction = {
   CommentCreated: 'task.comment_created',
   CommentUpdated: 'task.comment_updated',
   CommentDeleted: 'task.comment_deleted',
+  TaskProgressUpdated: 'task.progress_updated',
 } as const;
 
 export type TaskAuditActionValue = (typeof TaskAuditAction)[keyof typeof TaskAuditAction];
