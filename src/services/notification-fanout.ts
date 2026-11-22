@@ -5,6 +5,7 @@ import {
   effectiveWorkspaceRole,
   resolveProjectAuthorization,
 } from '../modules/authorization';
+import { resolveRepositoryAccess } from '../modules/dev-integrations/repository-access.resolver';
 import { emitToUser } from '../realtime/io-registry';
 import { AppError } from '../utils/errors';
 import { logger as defaultLogger, type Logger } from '../utils/logger';
@@ -411,6 +412,39 @@ export async function writeNotificationDrafts(
   }
 }
 
+const REPO_DERIVED_ACTIONS = new Set(['task.github_pr_merged', 'task.github_review_synced']);
+
+async function filterRepoDerivedRecipients(
+  client: NotificationClient,
+  event: FanoutEvent,
+  recipients: string[],
+): Promise<string[]> {
+  if (!REPO_DERIVED_ACTIONS.has(event.action) || recipients.length === 0) return recipients;
+
+  const contextLinkId = contextString(event, 'linkId');
+  const linkId =
+    contextLinkId ??
+    (event.targetType === 'TaskDevLink' && typeof event.targetId === 'string' ? event.targetId : null);
+  if (!linkId) return recipients;
+
+  const link = await client.taskDevLink.findUnique({
+    where: { id: linkId },
+    select: { projectRepositoryId: true, projectId: true },
+  });
+  if (!link?.projectRepositoryId) return recipients;
+
+  const filtered: string[] = [];
+  for (const userId of recipients) {
+    const access = await resolveRepositoryAccess(client, {
+      projectId: link.projectId,
+      repositoryId: link.projectRepositoryId,
+      userId,
+    });
+    if (access !== 'NONE') filtered.push(userId);
+  }
+  return filtered;
+}
+
 /**
  * Records the in-app rows for one audited change. Must be called with the same
  * transaction client that writes the change, so a notification failure rolls
@@ -423,7 +457,11 @@ export async function recordFanoutEvent(
   const entry = REGISTRY[event.action];
   if (!entry) return;
 
-  const recipients = await resolveRecipients(client, event, entry.audience);
+  const recipients = await filterRepoDerivedRecipients(
+    client,
+    event,
+    await resolveRecipients(client, event, entry.audience),
+  );
   if (recipients.length === 0) return;
 
   const message = entry.message(event);
