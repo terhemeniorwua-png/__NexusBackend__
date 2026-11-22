@@ -1,9 +1,9 @@
-import type { PrismaClient, WorkspaceRole } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { resolveProjectAuthorization } from '../authorization/project.authorization';
 
 export type RepositoryAccessClient = Pick<
   PrismaClient,
-  'projectRepository' | 'projectRepositoryMember' | 'project' | 'workspaceMembership' | 'organizationMembership'
+  'projectRepository' | 'projectRepositoryMember' | 'project' | 'workspaceMembership'
 >;
 
 export type ResolveRepositoryAccessParams = {
@@ -50,23 +50,12 @@ export async function resolveRepositoryAccess(
     return 'NONE';
   }
 
-  // Determine workspace membership role for authorization context.
-  const membership = await client.workspaceMembership.findFirst({
-    where: { workspaceId: project.workspaceId, userId, status: 'ACTIVE' },
-    select: { role: true },
-  });
-  const orgMembership = await client.organizationMembership.findFirst({
-    where: { workspaceId: project.workspaceId, userId, status: 'ACTIVE' },
-    select: { role: true },
-  });
-  const workspaceRole: WorkspaceRole =
-    (orgMembership?.role as WorkspaceRole | undefined) ?? membership?.role ?? 'VIEWER';
-
+  // Resolve project authorization (handles membership, effective role, and access).
   let authorization;
   try {
     authorization = await resolveProjectAuthorization(
       client,
-      { userId, workspaceId: project.workspaceId, workspaceRole },
+      { userId, workspaceId: project.workspaceId, workspaceRole: 'VIEWER' },
       projectId,
     );
   } catch {

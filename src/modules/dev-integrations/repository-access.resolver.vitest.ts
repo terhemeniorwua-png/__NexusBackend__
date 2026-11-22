@@ -1,4 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any -- mocked Prisma/auth client shapes for unit tests */
+// @ts-expect-error vitest types are provided by the vitest runner, not tsconfig.test.json types
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../authorization/project.authorization', () => ({
@@ -13,8 +14,6 @@ describe('resolveRepositoryAccess (stage 1)', () => {
     return {
       projectRepository: { findFirst: vi.fn() },
       project: { findFirst: vi.fn() },
-      workspaceMembership: { findFirst: vi.fn() },
-      organizationMembership: { findFirst: vi.fn() },
       projectRepositoryMember: { findUnique: vi.fn() },
     } as any;
   };
@@ -34,8 +33,6 @@ describe('resolveRepositoryAccess (stage 1)', () => {
     const client = baseClient();
     client.projectRepository.findFirst.mockResolvedValue({ id: 'r1' });
     client.project.findFirst.mockResolvedValue({ workspaceId: 'w1' });
-    client.workspaceMembership.findFirst.mockResolvedValue({ role: 'MEMBER' });
-    client.organizationMembership.findFirst.mockResolvedValue(null);
     (resolveProjectAuthorization as any).mockRejectedValue(new Error('no access'));
     const res = await resolveRepositoryAccess(client, { projectId: 'p1', repositoryId: 'r1', userId: 'u1' });
     expect(res).toBe('NONE');
@@ -45,8 +42,6 @@ describe('resolveRepositoryAccess (stage 1)', () => {
     const client = baseClient();
     client.projectRepository.findFirst.mockResolvedValue({ id: 'r1' });
     client.project.findFirst.mockResolvedValue({ workspaceId: 'w1' });
-    client.workspaceMembership.findFirst.mockResolvedValue({ role: 'MEMBER' });
-    client.organizationMembership.findFirst.mockResolvedValue(null);
     (resolveProjectAuthorization as any).mockResolvedValue({ projectRole: 'VIEWER', accessSource: 'project_role', permissions: [] });
     client.projectRepositoryMember.findUnique.mockResolvedValue(null);
     const res = await resolveRepositoryAccess(client, { projectId: 'p1', repositoryId: 'r1', userId: 'u1' });
@@ -57,8 +52,6 @@ describe('resolveRepositoryAccess (stage 1)', () => {
     const client = baseClient();
     client.projectRepository.findFirst.mockResolvedValue({ id: 'r1' });
     client.project.findFirst.mockResolvedValue({ workspaceId: 'w1' });
-    client.workspaceMembership.findFirst.mockResolvedValue({ role: 'MEMBER' });
-    client.organizationMembership.findFirst.mockResolvedValue(null);
     (resolveProjectAuthorization as any).mockResolvedValue({ projectRole: 'MEMBER', accessSource: 'project_role', permissions: [] });
     client.projectRepositoryMember.findUnique.mockResolvedValue(null);
     const res = await resolveRepositoryAccess(client, { projectId: 'p1', repositoryId: 'r1', userId: 'u1' });
@@ -69,8 +62,6 @@ describe('resolveRepositoryAccess (stage 1)', () => {
     const client = baseClient();
     client.projectRepository.findFirst.mockResolvedValue({ id: 'r1' });
     client.project.findFirst.mockResolvedValue({ workspaceId: 'w1' });
-    client.workspaceMembership.findFirst.mockResolvedValue({ role: 'MEMBER' });
-    client.organizationMembership.findFirst.mockResolvedValue(null);
     (resolveProjectAuthorization as any).mockResolvedValue({ projectRole: 'VIEWER', accessSource: 'project_role', permissions: [] });
     client.projectRepositoryMember.findUnique.mockResolvedValue({ level: 'LINK' });
     const res = await resolveRepositoryAccess(client, { projectId: 'p1', repositoryId: 'r1', userId: 'u1' });
@@ -81,8 +72,6 @@ describe('resolveRepositoryAccess (stage 1)', () => {
     const client = baseClient();
     client.projectRepository.findFirst.mockResolvedValue({ id: 'r1' });
     client.project.findFirst.mockResolvedValue({ workspaceId: 'w1' });
-    client.workspaceMembership.findFirst.mockResolvedValue({ role: 'MEMBER' });
-    client.organizationMembership.findFirst.mockResolvedValue(null);
     (resolveProjectAuthorization as any).mockResolvedValue({ projectRole: 'MEMBER', accessSource: 'project_role', permissions: [] });
     client.projectRepositoryMember.findUnique.mockResolvedValue({ level: 'NONE' });
     const res = await resolveRepositoryAccess(client, { projectId: 'p1', repositoryId: 'r1', userId: 'u1' });
@@ -93,8 +82,6 @@ describe('resolveRepositoryAccess (stage 1)', () => {
     const client = baseClient();
     client.projectRepository.findFirst.mockResolvedValue({ id: 'r1' });
     client.project.findFirst.mockResolvedValue({ workspaceId: 'w1' });
-    client.workspaceMembership.findFirst.mockResolvedValue({ role: 'MEMBER' });
-    client.organizationMembership.findFirst.mockResolvedValue(null);
     (resolveProjectAuthorization as any).mockResolvedValue({ projectRole: null, accessSource: 'workspace_member', permissions: [] });
     client.projectRepositoryMember.findUnique.mockResolvedValue(null);
     const res = await resolveRepositoryAccess(client, { projectId: 'p1', repositoryId: 'r1', userId: 'u1' });
