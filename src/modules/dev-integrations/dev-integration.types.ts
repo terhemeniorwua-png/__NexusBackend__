@@ -69,6 +69,21 @@ export interface DevPullRequestSummary {
 
 export type TaskDevLinkExternalType = 'BRANCH' | 'PULL_REQUEST' | 'COMMIT';
 
+export interface RepositoryAccessMember {
+  userId: string;
+  effectiveAccessLevel: RepositoryAccessLevel;
+  defaultLevel: RepositoryAccessLevel;
+  isOverride: boolean;
+  overrideLevel: RepositoryAccessLevel | null;
+  /** True when the user has project access through inherited workspace access (not a direct ProjectMembership row). */
+  inheritedWorkspaceAccess: boolean;
+  user: {
+    id: string;
+    name: string | null;
+    email: string;
+  };
+}
+
 export interface TaskDevLinkSummary {
   id: string;
   taskId: string;
