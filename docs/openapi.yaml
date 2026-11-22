@@ -8599,6 +8599,11 @@ paths:
       - Notifications
       operationId: get_notifications
       summary: List general notifications (cursor-paginated) with unreadCount (separate from message unread counts)
+      description: >-
+        The optional `type` query parameter accepts every value of
+        `NotificationType`, including the BE-5 review, checklist and attachment
+        version types. Message unread state is tracked separately and never
+        appears in this list.
       security:
       - bearerAuth: []
       responses:
@@ -8683,6 +8688,10 @@ paths:
       - Notifications
       operationId: put_notifications_preferences_workspaceId
       summary: PUT /notifications/preferences/{workspaceId} (registered route; contract aligned to implementation)
+      description: >-
+        Accepts every `NotificationType` value, including `SECURITY_ALERT`.
+        Setting `inAppEnabled` to false suppresses BE-5 in-app fan-out rows for
+        that workspace and type; email delivery is out of scope for BE-5.
       security:
       - bearerAuth: []
       responses:
@@ -22688,7 +22697,20 @@ components:
       - TASK_BLOCKER_RESOLVED
       - TASK_DUE_SOON
       - TASK_OVERDUE
+      - TASK_DECLINED
       - INTEGRATION_RECONNECT_REQUIRED
+      - SECURITY_ALERT
+      - REVIEW_SUBMITTED
+      - REVIEW_ASSIGNED
+      - REVIEW_STARTED
+      - REVIEW_APPROVED
+      - REVIEW_REJECTED
+      - REVIEW_CHANGES_REQUESTED
+      - REVIEW_RESUBMITTED
+      - CHECKLIST_SIGNED_OFF
+      - ATTACHMENT_VERSION_ADDED
+      - GITHUB_PR_MERGED
+      - GITHUB_PR_REVIEW_RECEIVED
     InstitutionGroup:
       type: object
       required:

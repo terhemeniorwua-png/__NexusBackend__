@@ -715,7 +715,8 @@ attachment removes only the objects referenced by version rows, best effort.
 Audit events are written in the same transaction as the mutation:
 `file.version.created`, `file.version.made_current`, `file.version.deleted`,
 `file.feedback.created`, `file.feedback.updated`, `file.feedback.deleted`.
-No notifications or `NotificationType` values are created by BE-3.
+BE-3 writes the audit events only; the `ATTACHMENT_VERSION_ADDED` in-app row
+for a new project version is created by BE-5 in the same transaction.
 
 Known limitations: a crash between object put and commit leaves an orphaned
 object; soft-deleted objects are retained until a separate retention task;
@@ -807,8 +808,8 @@ Audit events are written in the same transaction as the mutation:
 `checklist_item.uncompleted`, `checklist_item.signed_off`,
 `checklist_item.sign_off_removed`, `checklist_item.feedback_created`,
 `checklist_item.feedback_updated`, `checklist_item.feedback_deleted`. BE-4
-emits audit events only: it creates no notifications and changes no
-`NotificationType` values (BE-5 owns those).
+writes the audit events only; the `CHECKLIST_SIGNED_OFF` in-app row is created
+by BE-5 in the same transaction.
 
 Owner-confirmed amendments that override the earlier design note on conflict:
 (1) complete and sign-off use conditional `updateMany` only, with no separate
@@ -832,7 +833,8 @@ start in `SUBMITTED` at round 1. `SUBMITTED` and `UNDER_REVIEW` are open states;
 `APPROVED` is terminal. `reject` and `request-changes` both set
 `CHANGES_REQUESTED`, distinguishable by the decision log. Assignment is
 optional/advisory: any holder of the decision permission may decide. BE-2
-creates no notifications; it writes audit events only.
+writes the audit events; BE-5 creates the review in-app rows in the same
+transaction as each lifecycle change.
 
 All routes below are under `/api/v1`, require authentication and an active
 account, and return `{ "success": true, "data": ... }` on success. Listing uses
@@ -1468,6 +1470,56 @@ Raw-body endpoint (mounted before JSON parsing) for GitLab webhooks. Verifies au
 - Other events: acknowledged idempotently (`ignored`).
 
 **Env/config:** `GITLAB_WEBHOOK_SECRET` required; configure webhook URL to `https://<backend>/api/v1/webhooks/gitlab` with the same secret token and subscribe to merge request events (minimum scope/events).
+
+## BE-5 in-app notification fan-out (current contract)
+
+BE-5 adds in-app `Notification` rows for review, checklist, attachment-version
+and (when BE-6 is present) GitHub pull-request events. It adds **no HTTP
+routes**: existing review, checklist and file endpoints keep their contracts,
+and the notification list/preference routes accept the new types automatically.
+
+**New `NotificationType` values:** `REVIEW_SUBMITTED`, `REVIEW_ASSIGNED`,
+`REVIEW_STARTED`, `REVIEW_APPROVED`, `REVIEW_REJECTED`,
+`REVIEW_CHANGES_REQUESTED`, `REVIEW_RESUBMITTED`, `CHECKLIST_SIGNED_OFF`,
+`ATTACHMENT_VERSION_ADDED`, `GITHUB_PR_MERGED`, `GITHUB_PR_REVIEW_RECEIVED`.
+`TASK_APPROVED` and `CHANGES_REQUESTED` remain dormant and are not used by this
+feature. Clarification has its own future types and audit events.
+
+| Trigger (server-side audit action) | Notification type | Default recipients |
+| --- | --- | --- |
+| `review.created` | `REVIEW_SUBMITTED` | Active project members who can `submission.review` or `submission.approve` |
+| `review.assigned` | `REVIEW_ASSIGNED` | The stored assignee, if they are an eligible reviewer |
+| `review.started` | `REVIEW_STARTED` | The stored submitter |
+| `review.approved` / `rejected` / `changes_requested` | `REVIEW_APPROVED` / `REVIEW_REJECTED` / `REVIEW_CHANGES_REQUESTED` | The stored submitter |
+| `review.resubmitted` | `REVIEW_RESUBMITTED` | Active project members who can `submission.review` or `submission.approve` |
+| `checklist_item.signed_off` | `CHECKLIST_SIGNED_OFF` | Active project members |
+| `file.version.created` | `ATTACHMENT_VERSION_ADDED` | Active project members (project-scoped files only) |
+| GitHub PR merged / review received | `GITHUB_PR_MERGED` / `GITHUB_PR_REVIEW_RECEIVED` | Task creator plus task assignees (BE-6) |
+
+**Recipient rules.** Candidates are read from `WorkspaceMembership`: status
+`ACTIVE`, linked user not soft-deleted and status `ACTIVE`, and effective access
+to the project resolved by the central project authorization module. The actor
+is always excluded; recipients are capped at 25. No user id from a request body
+or webhook payload is used as a recipient. Every row includes `workspaceId`,
+`projectId`, the target identifiers and a `dedupeKey` in `data`, so the in-app
+preference check is always applied.
+
+**Transactions and dedupe.** Review, checklist and attachment-version rows are
+written with `createMany({ skipDuplicates: true })` inside the same transaction
+as the audited change; a notification failure rolls the change back. The
+migration `20261121100000_be5_notifications` adds the enum values and a partial
+unique index on `("userId", (data->>'dedupeKey'))` where the key is present.
+Repeated delivery of the same key therefore produces one row without catching
+unique-constraint errors. GitHub notifications are best-effort, written after
+the webhook commit, and never fail the webhook; their key is
+`github:<deliveryId>:<linkId>:<action>`.
+
+**Channels.** In-app only. BE-5 adds no email templates and no Slack kinds.
+Message unread counts remain independent from general notifications.
+
+**Schema drift fix.** Both notification list and preference `type` validators
+now use `z.nativeEnum(NotificationType)`, so `SECURITY_ALERT` is accepted rather
+than returning 400. Dormant review-like types remain unaffected.
 
 ## Updating this API reference
 
