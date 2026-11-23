@@ -20,7 +20,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U nexus"
+          --health-cmd "pg_isready -U nexus -d nexus_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -96,7 +96,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U nexus"
+          --health-cmd "pg_isready -U nexus -d nexus_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -178,74 +178,43 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
-      - name: Apply migrations to the test database
-        run: npx prisma migrate deploy
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Run DB-gated test files
+      - name: Run DB-gated test files (fresh DB per file)
+        env:
+          PGPASSWORD: nexus_test_pw
         run: |
-          echo "Running DB-gated test suites..."
-          npx tsx --test --test-concurrency=1 \
-            tests/auth-phase3.test.ts \
-            tests/avatar-upload.test.ts \
-            tests/be2-reviews-db.test.ts \
-            tests/be3-attachment-versions-db.test.ts \
-            tests/be4-checklists-db.test.ts \
-            tests/be5b-github-notifications-db.test.ts \
-            tests/be5-notifications-db.test.ts \
-            tests/be6-github-sync-db.test.ts \
-            tests/be8-progress-updates-db.test.ts \
-            tests/be9-repo-access-db.test.ts \
-            tests/be9-repo-access-enforcement-db.test.ts \
-            tests/be9-repo-access-member-api-db.test.ts \
-            tests/billing-seat-sync-db.test.ts \
-            tests/calendar-project-access.test.ts \
-            tests/collaboration-email-phase4-db.test.ts \
-            tests/database-phase2.test.ts \
-            tests/email-phase4-db.test.ts \
-            tests/google-oauth-db.test.ts \
-            tests/integrations-imports-feat.test.ts \
-            tests/meeting-email-phase4-db.test.ts \
-            tests/meeting-project-access.test.ts \
-            tests/mention-email-phase4-db.test.ts \
-            tests/overview-project-docs-db.test.ts \
-            tests/phase10-messaging-db.test.ts \
-            tests/phase18-search-db.test.ts \
-            tests/phase19-integrations-db.test.ts \
-            tests/phase19-routes.test.ts \
-            tests/phase19-webhooks-db.test.ts \
-            tests/phase20-automation-db.test.ts \
-            tests/phase21-ai-db.test.ts \
-            tests/phase25-email-db.test.ts \
-            tests/phase26-audit-db.test.ts \
-            tests/phase27-analytics-db.test.ts \
-            tests/phase30-performance.test.ts \
-            tests/phase3-task-workspace-db.test.ts \
-            tests/phase4-task-blockers-db.test.ts \
-            tests/phase4-task-subtask-weights-db.test.ts \
-            tests/phase4-task-time-entries-db.test.ts \
-            tests/phase4-task-work-documents-db.test.ts \
-            tests/phase5-join-requests-db.test.ts \
-            tests/phase5-task-reassignment-db.test.ts \
-            tests/phase5-workspaces-db.test.ts \
-            tests/phase6-authorization-db.test.ts \
-            tests/phase7-teams-db.test.ts \
-            tests/phase8-projects-db.test.ts \
-            tests/phase9-tasks-db.test.ts \
-            tests/project-type-db.test.ts \
-            tests/search-project-visibility.test.ts \
-            tests/slack-default-connect.test.ts \
-            tests/slack-oauth-security.test.ts \
-            tests/sprints-stage1-db.test.ts \
-            tests/sprints-stage2-db.test.ts \
-            tests/sso-enforcement-db.test.ts \
-            tests/task-accept-reviewer-db.test.ts \
-            tests/task-assignee-eligibility-db.test.ts \
-            tests/task-assignment-phase4-db.test.ts \
-            tests/task-clarification-db.test.ts \
-            tests/task-date-overdue-filters-db.test.ts \
-            tests/task-deadline-notification-worker-db.test.ts \
-            tests/task-dependency-gate-db.test.ts \
-            tests/task-recurrence-worker-db.test.ts \
-            tests/tasks-advanced-saved-views-db.test.ts \
-            tests/task-status-transition-db.test.ts \
-            tests/task-subtask-integrity-db.test.ts
+          set +e
+          echo "file,exit_code,tests,pass,fail" > /tmp/db_results.csv
+          FILES="tests/auth-phase3.test.ts tests/avatar-upload.test.ts tests/be2-reviews-db.test.ts tests/be3-attachment-versions-db.test.ts tests/be4-checklists-db.test.ts tests/be5b-github-notifications-db.test.ts tests/be5-notifications-db.test.ts tests/be6-github-sync-db.test.ts tests/be8-progress-updates-db.test.ts tests/be9-repo-access-db.test.ts tests/be9-repo-access-enforcement-db.test.ts tests/be9-repo-access-member-api-db.test.ts tests/billing-seat-sync-db.test.ts tests/calendar-project-access.test.ts tests/collaboration-email-phase4-db.test.ts tests/database-phase2.test.ts tests/email-phase4-db.test.ts tests/google-oauth-db.test.ts tests/integrations-imports-feat.test.ts tests/meeting-email-phase4-db.test.ts tests/meeting-project-access.test.ts tests/mention-email-phase4-db.test.ts tests/overview-project-docs-db.test.ts tests/phase10-messaging-db.test.ts tests/phase18-search-db.test.ts tests/phase19-integrations-db.test.ts tests/phase19-routes.test.ts tests/phase19-webhooks-db.test.ts tests/phase20-automation-db.test.ts tests/phase21-ai-db.test.ts tests/phase25-email-db.test.ts tests/phase26-audit-db.test.ts tests/phase27-analytics-db.test.ts tests/phase30-performance.test.ts tests/phase3-task-workspace-db.test.ts tests/phase4-task-blockers-db.test.ts tests/phase4-task-subtask-weights-db.test.ts tests/phase4-task-time-entries-db.test.ts tests/phase4-task-work-documents-db.test.ts tests/phase5-join-requests-db.test.ts tests/phase5-task-reassignment-db.test.ts tests/phase5-workspaces-db.test.ts tests/phase6-authorization-db.test.ts tests/phase7-teams-db.test.ts tests/phase8-projects-db.test.ts tests/phase9-tasks-db.test.ts tests/project-type-db.test.ts tests/search-project-visibility.test.ts tests/slack-default-connect.test.ts tests/slack-oauth-security.test.ts tests/sprints-stage1-db.test.ts tests/sprints-stage2-db.test.ts tests/sso-enforcement-db.test.ts tests/task-accept-reviewer-db.test.ts tests/task-assignee-eligibility-db.test.ts tests/task-assignment-phase4-db.test.ts tests/task-clarification-db.test.ts tests/task-date-overdue-filters-db.test.ts tests/task-deadline-notification-worker-db.test.ts tests/task-dependency-gate-db.test.ts tests/task-recurrence-worker-db.test.ts tests/tasks-advanced-saved-views-db.test.ts tests/task-status-transition-db.test.ts tests/task-subtask-integrity-db.test.ts"
+          for f in $FILES; do
+            safe=$(echo "$f" | sed 's#[/.]#_#g')
+            dbname="nxc_${safe}_$(date +%s%N | tail -c 6)"
+            echo "--- Running $f (db: $dbname) ---"
+            psql -h localhost -U nexus -d postgres -c "CREATE DATABASE \"$dbname\";"
+            if [ $? -ne 0 ]; then
+              echo "$f,CREATE_DB_FAILED,0,0,0" >> /tmp/db_results.csv
+              continue
+            fi
+            export DATABASE_URL="postgresql://nexus:nexus_test_pw@localhost:5432/$dbname?connection_limit=10&pool_timeout=30"
+            export TEST_DATABASE_URL="$DATABASE_URL"
+            npx prisma migrate deploy
+            if [ $? -ne 0 ]; then
+              echo "$f,MIGRATE_FAILED,0,0,0" >> /tmp/db_results.csv
+              psql -h localhost -U nexus -d postgres -c "DROP DATABASE IF EXISTS \"$dbname\" WITH (FORCE);" || true
+              continue
+            fi
+            npx tsx --test --test-concurrency=1 "$f" 2>&1 | tee /tmp/last_test.log
+            code=${PIPESTATUS[0]}
+            tests=$(grep -E '^# tests ' /tmp/last_test.log | tail -1 | awk '{print $3}')
+            pass=$(grep -E '^# pass ' /tmp/last_test.log | tail -1 | awk '{print $3}')
+            fail=$(grep -E '^# fail ' /tmp/last_test.log | tail -1 | awk '{print $3}')
+            echo "$f,$code,${tests:-0},${pass:-0},${fail:-0}" >> /tmp/db_results.csv
+            psql -h localhost -U nexus -d postgres -c "DROP DATABASE IF EXISTS \"$dbname\" WITH (FORCE);" || true
+          done
+          echo ""
+          echo "===== DB-GATED TESTS EXIT-CODE TABLE ====="
+          cat /tmp/db_results.csv
+          echo "=========================================="
+          awk -F, 'NR>1 && $2!="0" && $2!="CREATE_DB_FAILED" && $2!="MIGRATE_FAILED" {bad=1} END{exit bad?1:0}' /tmp/db_results.csv
