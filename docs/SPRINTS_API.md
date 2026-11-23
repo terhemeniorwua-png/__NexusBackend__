@@ -162,3 +162,77 @@ Notes:
 - **Legacy limitation**: sprint memberships changed through task create/update before this audit-trail change have no sprint membership audit rows. `sprint.completed` rows emitted before this change may lack `carriedOverTaskIds`/`retainedTaskIds`.
 
 No notification types were added in Stage 2.
+
+## Stage 3 — Board and Reports (read-only)
+
+All Stage 3 routes are read-only. No audit writes. No notification types. No migrations.
+
+### R11 - Sprint board
+- **Method/Path:** `GET /workspaces/:workspaceId/projects/:projectId/sprints/:sprintId/board`
+- **Permission:** `ProjectPermission.View` (same auth behavior as R1 for non-members/missing permission/cross-project sprints)
+- **Response 200:**
+```json
+{
+  "sprint": { "...Sprint" },
+  "columns": [
+    { "status": "ASSIGNED|AWAITING_CLARIFICATION|IN_PROGRESS|SUBMITTED|UNDER_REVIEW|CHANGES_REQUESTED|APPROVED", "count": 0, "tasks": [{ "id", "key", "title", "status", "priority", "sprintId", "sprintPosition", "assignees": [{ "userId", "name" }], "dueDate", "archivedAt" }] }
+  ],
+  "totals": { "taskCount": 0, "doneCount": 0 }
+}
+```
+- **Behavior:** Columns from ordered constant `SPRINT_BOARD_COLUMN_ORDER` (TaskStatus lifecycle order). Tasks in sprint where `deletedAt=null`, ordered by `sprintPosition asc, id asc`. Archived tasks included with `archivedAt`. Counts only (no weight). Board always uses current state and is never affected by legacy scope reconstructability.
+- **Errors:** 403 `PERMISSION_DENIED`, 404 `PROJECT_NOT_FOUND`/`SPRINT_NOT_FOUND`, 409 `SPRINTS_DISABLED_FOR_PROJECT`
+
+### R12 - Sprint report summary
+- **Method/Path:** `GET /workspaces/:workspaceId/projects/:projectId/sprints/:sprintId/reports/summary`
+- **Permission:** `ProjectPermission.View` (same auth behavior as R1)
+- **Response 200 (ACTIVE/PLANNED, exact current state):**
+```json
+{
+  "sprint": { "...Sprint" },
+  "scopeReconstructable": true,
+  "summary": { "metric": "TASK_COUNT", "totalTasks": 0, "doneTasks": 0, "remainingTasks": 0, "completionRate": 0.0 },
+  "generatedAt": "ISO datetime"
+}
+```
+- **Response 200 (COMPLETED, reconstructable):** same shape with `summary` populated from final scope (`retainedTaskIds + carriedOverTaskIds` from own `sprint.completed` row, excluding tasks deleted since).
+- **Response 200 (COMPLETED, not reconstructable):** `{ "sprint", "scopeReconstructable": false, "reason": "string", "summary": null, "generatedAt" }` — **never partial counts**.
+- **Errors:** 403, 404, 409 `SPRINTS_DISABLED_FOR_PROJECT`
+
+### R13 - Sprint burndown
+- **Method/Path:** `GET /workspaces/:workspaceId/projects/:projectId/sprints/:sprintId/reports/burndown`
+- **Permission:** `ProjectPermission.View` (same auth behavior as R1)
+- **Response 200 (reconstructable):**
+```json
+{
+  "sprint": { "...Sprint" },
+  "scopeReconstructable": true,
+  "metric": "TASK_COUNT",
+  "startAt": "ISO datetime",
+  "endAt": "ISO datetime",
+  "series": [{ "date": "YYYY-MM-DD", "remaining": 0, "ideal": 0, "scope": 0, "completed": 0 }],
+  "totals": { "initialScope": 0, "completed": 0, "remaining": 0 },
+  "generatedAt": "ISO datetime"
+}
+```
+- **Response 200 (not reconstructable):** `{ "sprint", "scopeReconstructable": false, "reason": "string", "series": [], "generatedAt" }` — **never partial counts**.
+- **Errors:** 403, 404, 409 `SPRINTS_DISABLED_FOR_PROJECT`
+
+## Stage 3 rules
+
+- **Done:** `status === APPROVED`. Counts only; no weight. Metric `TASK_COUNT`.
+- **Done time:** `Task.completedAt` (primary). Fallback: latest `task.approved` or `task.completed` AuditLog `createdAt` when task is APPROVED but `completedAt` is null. Limitation: reopen followed by re-approve shows only the latest completion time.
+- **Subtasks:** same as Stage 2 sprint/task membership behavior - tasks with `sprintId` in sprint are included regardless of parent/child relationship (membership is by `sprintId`); no special exclusion.
+- **Archived tasks:** included in board/report scope where present (with `archivedAt` on board); deleted tasks (`deletedAt != null`) excluded and documented.
+- **Board size:** no explicit pagination in Stage 3; returns all non-deleted sprint tasks (same membership filter as sprint task queries; Stage 2 did not impose a board limit). Column counts reflect returned tasks.
+- **Burndown days:** UTC calendar days. Weekends count.
+  - ACTIVE: start day (`startDate ?? createdAt`) through today (UTC). Ideal clamps to 0 after `endDate`.
+  - COMPLETED: start day through `completedAt` day (UTC).
+  - PLANNED: 200 with empty `series`, totals from current sprint members.
+  - Ideal linear from `initialScope` to 0 across sprint days; single-day series has `ideal = initialScope`.
+- **Scope reconstruction (audit-only):** membership history from audit rows only: `sprint.task_added`, `sprint.task_removed` (task IDs in metadata), `sprint.completed` (`carriedOverTaskIds`, `retainedTaskIds`, `nextSprintId`). 
+  - Scope at time T = (task IDs from `sprint.task_added` up to T) + (`carriedOverTaskIds` from `sprint.completed` rows whose `nextSprintId` is this sprint, counted at that row's `createdAt`) - (task IDs from `sprint.task_removed` up to T).
+  - COMPLETED final scope = `retainedTaskIds + carriedOverTaskIds` from its own `sprint.completed` row.
+  - `AUDIT_TRAIL_EPOCH` is hard-coded from PR #166 mergeAt (`2026-11-23T18:52:26Z`).
+- **Legacy/not reconstructable:** if sprint.createdAt < AUDIT_TRAIL_EPOCH, or COMPLETED and own `sprint.completed` lacks carried/retained IDs, or depends on carry-in from completion missing IDs: R13 returns 200 `scopeReconstructable:false, reason, series:[]`; R12 COMPLETED returns 200 `scopeReconstructable:false, reason, summary:null`. ACTIVE/PLANNED R12 uses current state and returns exact summary with `scopeReconstructable:true`; burndown is unavailable. Never partial counts.
+- **Invariants:** ACTIVE last burndown point equals R12 summary (remaining, completed). COMPLETED final scope equals R12 total.
