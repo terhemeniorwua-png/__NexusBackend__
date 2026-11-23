@@ -444,9 +444,21 @@ export class SprintService {
         orderBy: [{ sprintPosition: 'asc' }, { id: 'asc' }],
         select: { id: true, archivedAt: true },
       });
+      const retainedTasks = await tx.task.findMany({
+        where: {
+          projectId: input.projectId,
+          sprintId: current.id,
+          deletedAt: null,
+          status: 'APPROVED',
+        },
+        orderBy: [{ sprintPosition: 'asc' }, { id: 'asc' }],
+        select: { id: true },
+      });
 
       const archivedUnfinishedMovedCount = unfinishedTasks.filter((t) => t.archivedAt !== null).length;
       const movedTaskCount = unfinishedTasks.length;
+      const carriedOverTaskIds = unfinishedTasks.map((t) => t.id);
+      const retainedTaskIds = retainedTasks.map((t) => t.id);
 
       if (input.target === 'BACKLOG') {
         let pos = await getMaxBacklogPosition(tx, input.projectId);
@@ -490,6 +502,8 @@ export class SprintService {
           archivedUnfinishedMovedCount,
           destinationType: input.target,
           ...(input.target === 'NEXT_SPRINT' ? { nextSprintId: input.nextSprintId } : {}),
+          carriedOverTaskIds,
+          retainedTaskIds,
         },
         ...context,
       });

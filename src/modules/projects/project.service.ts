@@ -882,6 +882,17 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
                     );
                   }
 
+                  const retainedTasks = await tx.task.findMany({
+                    where: {
+                      projectId: access.project.id,
+                      sprintId: activeSprint.id,
+                      deletedAt: null,
+                      status: 'APPROVED',
+                    },
+                    orderBy: [{ sprintPosition: 'asc' }, { id: 'asc' }],
+                    select: { id: true },
+                  });
+
                   const maxPosRow = await tx.task.findFirst({
                     where: { projectId: access.project.id, deletedAt: null },
                     orderBy: [{ position: 'desc' }, { id: 'desc' }],
@@ -897,6 +908,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
                     });
                   }
                   movedTaskCount = unfinished.length;
+                  const carriedOverTaskIds = unfinished.map((t) => t.id);
+                  const retainedTaskIds = retainedTasks.map((t) => t.id);
 
                   await tx.sprint.update({
                     where: { id: activeSprint.id },
@@ -921,6 +934,8 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
                       archivedUnfinishedMovedCount,
                       destinationType: 'BACKLOG',
                       reason: 'WORKFLOW_MODE_SWITCH',
+                      carriedOverTaskIds,
+                      retainedTaskIds,
                     },
                     ...context,
                   });

@@ -89,6 +89,7 @@ Notes:
   "destination": { "type": "BACKLOG" | "NEXT_SPRINT", "nextSprintId": "uuid?" }
 }
 ```
+- **Audit metadata (`sprint.completed`):** includes existing fields (`projectId, sprintId, movedTaskCount, archivedUnfinishedMovedCount, destinationType, nextSprintId?`, and `reason=WORKFLOW_MODE_SWITCH` when applicable) plus `carriedOverTaskIds: string[]` (unfinished task IDs moved out, both BACKLOG and NEXT_SPRINT, including archived unfinished) and `retainedTaskIds: string[]` (APPROVED task IDs retained in the completed sprint).
 - **Behavior:** Unfinished tasks = task status not `APPROVED` and not deleted (includes `ASSIGNED, AWAITING_CLARIFICATION, IN_PROGRESS, SUBMITTED, UNDER_REVIEW, CHANGES_REQUESTED`). Archived non-APPROVED tasks count as unfinished and are moved; `archivedUnfinishedMovedCount` reported separately. APPROVED tasks retain sprint membership. BACKLOG moves set `sprintId=null, sprintPosition=null` and append backlog `position` after max in deterministic order `sprintPosition asc, id asc`. NEXT_SPRINT moves unfinished tasks to target sprint with sprintPosition append; target must be same project and `PLANNED`.
 - **Errors:** 403, 404 `SPRINT_NOT_FOUND`, 409 `SPRINTS_DISABLED_FOR_PROJECT`, 409 `SPRINT_NOT_ACTIVE`, 422 `SPRINT_NOT_ASSIGNABLE` (NEXT_SPRINT not PLANNED), 422 validation
 
@@ -148,10 +149,16 @@ Notes:
 - `sprint.created`
 - `sprint.updated`
 - `sprint.started`
-- `sprint.completed` (`reason: WORKFLOW_MODE_SWITCH` when applicable)
+- `sprint.completed` (`reason: WORKFLOW_MODE_SWITCH` when applicable; metadata includes `carriedOverTaskIds` and `retainedTaskIds`)
 - `sprint.restored`
-- `sprint.task_added`
-- `sprint.task_removed`
+- `sprint.task_added` (sprint routes; also emitted by task create/update sprint membership changes with `source: 'task.create'|'task.update'`)
+- `sprint.task_removed` (sprint routes; also emitted by task update sprint membership changes with `source: 'task.update'`)
 - `project.workflow_mode_changed`
+
+### Sprint membership audit rows (Step 2 scope-audit trail)
+
+- **Task create with `sprintId`**: writes `sprint.task_added` in the same transaction as task creation. Metadata: `{ projectId, sprintId, taskIds: [taskId], count: 1, source: 'task.create' }`.
+- **Task update changing `sprintId`**: in the same transaction, writes `sprint.task_removed` for old sprint (if any) and/or `sprint.task_added` for new sprint (if any). Metadata: `{ projectId, sprintId, taskIds: [taskId], count: 1, source: 'task.update' }`. Moving A->B writes both. No row if `sprintId` is unchanged.
+- **Legacy limitation**: sprint memberships changed through task create/update before this audit-trail change have no sprint membership audit rows. `sprint.completed` rows emitted before this change may lack `carriedOverTaskIds`/`retainedTaskIds`.
 
 No notification types were added in Stage 2.
