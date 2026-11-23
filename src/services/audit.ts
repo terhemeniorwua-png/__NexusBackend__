@@ -120,10 +120,23 @@ export const ProjectAuditAction = {
   MilestoneUpdated: 'project.milestone_updated',
   MilestoneDeleted: 'project.milestone_deleted',
   OrganizationAccessUpdated: 'project.organization_access_updated',
+  WorkflowModeChanged: 'project.workflow_mode_changed',
 } as const;
 
 export type ProjectAuditActionValue =
   (typeof ProjectAuditAction)[keyof typeof ProjectAuditAction];
+
+export const SprintAuditAction = {
+  SprintCreated: 'sprint.created',
+  SprintUpdated: 'sprint.updated',
+  SprintStarted: 'sprint.started',
+  SprintCompleted: 'sprint.completed',
+  SprintRestored: 'sprint.restored',
+  SprintTaskAdded: 'sprint.task_added',
+  SprintTaskRemoved: 'sprint.task_removed',
+} as const;
+
+export type SprintAuditActionValue = (typeof SprintAuditAction)[keyof typeof SprintAuditAction];
 
 /**
  * BE-2 submission review lifecycle. Review changes are recorded in the audit

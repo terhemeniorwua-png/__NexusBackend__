@@ -57,6 +57,7 @@ type ProjectSummary = Pick<
   | 'type'
   | 'visibility'
   | 'commentPolicy'
+  | 'workflowMode'
   | 'startDate'
   | 'dueDate'
   | 'ownerId'
@@ -817,9 +818,133 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
       const completing = statusChanging && input.status === 'COMPLETED';
       const uncompleting = statusChanging && access.project.status === 'COMPLETED' && input.status !== 'COMPLETED';
       const now = new Date();
+      const workflowModeChanging =
+        input.workflowMode !== undefined && input.workflowMode !== (access.project as { workflowMode?: string }).workflowMode;
+      const confirmActiveSprintCompletion = input.confirmActiveSprintCompletion === true;
 
       try {
         return await prisma.$transaction(async (tx) => {
+          let workflowSwitchAudit: {
+            from: string;
+            to: string;
+            completedSprintId?: string;
+            movedTaskCount?: number;
+            archivedUnfinishedMovedCount?: number;
+            archivedPlannedSprintCount?: number;
+          } | null = null;
+
+          if (workflowModeChanging) {
+            await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${access.project.id} FOR UPDATE`;
+            const lockedProject = await tx.project.findUniqueOrThrow({
+              where: { id: access.project.id },
+              select: { id: true, workflowMode: true },
+            });
+            const fromMode = lockedProject.workflowMode;
+            const toMode = input.workflowMode as 'SPRINTS' | 'BACKLOG_ONLY';
+
+            if (fromMode !== toMode) {
+              if (fromMode === 'SPRINTS' && toMode === 'BACKLOG_ONLY') {
+                const activeSprint = await tx.sprint.findFirst({
+                  where: { projectId: access.project.id, status: 'ACTIVE' },
+                  select: { id: true },
+                });
+                let completedSprintId: string | undefined;
+                let movedTaskCount = 0;
+                let archivedUnfinishedMovedCount = 0;
+
+                if (activeSprint) {
+                  const unfinished = await tx.task.findMany({
+                    where: {
+                      projectId: access.project.id,
+                      sprintId: activeSprint.id,
+                      deletedAt: null,
+                      status: {
+                        in: [
+                          'ASSIGNED',
+                          'AWAITING_CLARIFICATION',
+                          'IN_PROGRESS',
+                          'SUBMITTED',
+                          'UNDER_REVIEW',
+                          'CHANGES_REQUESTED',
+                        ],
+                      },
+                    },
+                    select: { id: true, archivedAt: true, sprintPosition: true },
+                    orderBy: [{ sprintPosition: 'asc' }, { id: 'asc' }],
+                  });
+                  const openTaskCount = unfinished.length;
+                  if (!confirmActiveSprintCompletion) {
+                    throw new AppError(
+                      409,
+                      'ACTIVE_SPRINT_EXISTS',
+                      'An active sprint exists; confirm completion before switching to BACKLOG_ONLY.',
+                      { details: { sprintId: activeSprint.id, openTaskCount } },
+                    );
+                  }
+
+                  const maxPosRow = await tx.task.findFirst({
+                    where: { projectId: access.project.id, deletedAt: null },
+                    orderBy: [{ position: 'desc' }, { id: 'desc' }],
+                    select: { position: true },
+                  });
+                  let pos = maxPosRow?.position ?? 0;
+                  for (const task of unfinished) {
+                    pos += 1;
+                    if (task.archivedAt) archivedUnfinishedMovedCount += 1;
+                    await tx.task.update({
+                      where: { id: task.id },
+                      data: { sprintId: null, sprintPosition: null, position: pos },
+                    });
+                  }
+                  movedTaskCount = unfinished.length;
+
+                  await tx.sprint.update({
+                    where: { id: activeSprint.id },
+                    data: {
+                      status: 'COMPLETED',
+                      completedAt: now,
+                      completedById: input.userId,
+                    },
+                  });
+                  completedSprintId = activeSprint.id;
+
+                  await recordAuditEvent(tx, {
+                    workspaceId: input.workspaceId,
+                    actorId: input.userId,
+                    action: 'sprint.completed',
+                    targetType: 'Sprint',
+                    targetId: activeSprint.id,
+                    metadata: {
+                      projectId: access.project.id,
+                      sprintId: activeSprint.id,
+                      movedTaskCount,
+                      archivedUnfinishedMovedCount,
+                      destinationType: 'BACKLOG',
+                      reason: 'WORKFLOW_MODE_SWITCH',
+                    },
+                    ...context,
+                  });
+                }
+
+                const archivedPlanned = await tx.sprint.updateMany({
+                  where: { projectId: access.project.id, status: 'PLANNED' },
+                  data: { status: 'ARCHIVED' },
+                });
+
+                workflowSwitchAudit = {
+                  from: fromMode,
+                  to: toMode,
+                  ...(completedSprintId ? { completedSprintId } : {}),
+                  movedTaskCount,
+                  archivedUnfinishedMovedCount,
+                  archivedPlannedSprintCount: archivedPlanned.count,
+                };
+              } else if (fromMode === 'BACKLOG_ONLY' && toMode === 'SPRINTS') {
+                workflowSwitchAudit = { from: fromMode, to: toMode };
+              }
+            }
+          }
+
           const row = await tx.project.update({
             where: { id: access.project.id },
             data: {
@@ -844,6 +969,7 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
               ...(hasTeamInput || input.departmentId !== undefined ? { departmentId } : {}),
               ...(input.startDate !== undefined ? { startDate: dateOrNull(input.startDate) } : {}),
               ...(input.dueDate !== undefined ? { dueDate: dateOrNull(input.dueDate) } : {}),
+              ...(input.workflowMode !== undefined ? { workflowMode: input.workflowMode } : {}),
               ...(completing
                 ? { completedAt: (access.project as { completedAt?: Date | null }).completedAt ?? now, completedById: input.userId }
                 : {}),
@@ -878,6 +1004,37 @@ export function createProjectService(prisma: PrismaClient = getPrismaClient()) {
             },
             ...context,
           });
+
+          if (workflowSwitchAudit) {
+            await recordAuditEvent(tx, {
+              workspaceId: input.workspaceId,
+              actorId: input.userId,
+              action: 'project.workflow_mode_changed',
+              targetType: 'Project',
+              targetId: row.id,
+              metadata: {
+                projectId: row.id,
+                from: workflowSwitchAudit.from,
+                to: workflowSwitchAudit.to,
+                ...(workflowSwitchAudit.completedSprintId
+                  ? { completedSprintId: workflowSwitchAudit.completedSprintId }
+                  : {}),
+                ...(workflowSwitchAudit.movedTaskCount !== undefined
+                  ? { movedTaskCount: workflowSwitchAudit.movedTaskCount }
+                  : {}),
+                ...(workflowSwitchAudit.archivedUnfinishedMovedCount !== undefined
+                  ? {
+                      archivedUnfinishedMovedCount:
+                        workflowSwitchAudit.archivedUnfinishedMovedCount,
+                    }
+                  : {}),
+                ...(workflowSwitchAudit.archivedPlannedSprintCount !== undefined
+                  ? { archivedPlannedSprintCount: workflowSwitchAudit.archivedPlannedSprintCount }
+                  : {}),
+              },
+              ...context,
+            });
+          }
 
           if (completing) {
             await notifyProjectMembers(
