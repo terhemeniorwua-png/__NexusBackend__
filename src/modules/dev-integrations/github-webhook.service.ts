@@ -5,6 +5,11 @@ import { recordAuditEvent, TaskAuditAction } from '../../services/audit';
 import { recordFanoutEventBestEffort, type FanoutEvent } from '../../services/notification-fanout';
 import { encryptIntegrationToken } from '../integrations/token-crypto';
 import { logger as defaultLogger, type Logger } from '../../utils/logger';
+import {
+  ingestGithubPullRequestEvent,
+  ingestGithubPushCommits,
+  ingestGithubReviewEvent,
+} from './dev-activity-ingest';
 
 export type GithubWebhookOutcome = 'processed' | 'duplicate' | 'ignored' | 'unverified' | 'invalid';
 
@@ -130,6 +135,7 @@ export async function processGithubWebhook(input: {
             baseRef: base && typeof base.ref === 'string' ? base.ref : null,
             state: prStateVal,
           };
+          const prIngest = await ingestGithubPullRequestEvent({ prisma, payload: root, deliveryId });
           const links = await prisma.taskDevLink.findMany({
             where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
             include: {
@@ -145,7 +151,7 @@ export async function processGithubWebhook(input: {
             },
           });
           if (links.length === 0) {
-            outcome = 'ignored';
+            outcome = prIngest.ingested ? 'processed' : 'ignored';
           } else {
             const isMerged = prStateVal === 'merged';
             outcome = 'processed';
@@ -240,6 +246,7 @@ export async function processGithubWebhook(input: {
       if (review && pr) {
         const externalId = pr.id != null ? String(pr.id) : null;
         if (externalId) {
+          const reviewIngest = await ingestGithubReviewEvent({ prisma, payload: root, deliveryId });
           const links = await prisma.taskDevLink.findMany({
             where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
             include: {
@@ -254,7 +261,7 @@ export async function processGithubWebhook(input: {
             },
           });
           if (links.length === 0) {
-            outcome = 'ignored';
+            outcome = reviewIngest.ingested ? 'processed' : 'ignored';
           } else {
             const user = asRecord(review.user);
             const reviewerLogin = user && typeof user.login === 'string' ? user.login.slice(0, 255) : null;
@@ -356,6 +363,20 @@ export async function processGithubWebhook(input: {
       } else {
         outcome = 'ignored';
       }
+    } else if (event === 'push') {
+      const pushResult = await ingestGithubPushCommits({ prisma, payload: root, deliveryId });
+      if (pushResult.truncated) {
+        log.warn('github_push_truncated_commits_lost', {
+          deliveryId,
+          repository: typeof (root.repository as Record<string, unknown> | undefined)?.full_name === 'string'
+            ? (root.repository as Record<string, unknown>).full_name
+            : null,
+          ref: typeof root.ref === 'string' ? root.ref : null,
+          after: typeof root.after === 'string' ? root.after : null,
+          note: 'Individual commit mirror rows not present in payload were lost; no backfill performed.',
+        });
+      }
+      outcome = pushResult.ingestedCommits > 0 || pushResult.truncated ? 'processed' : 'ignored';
     } else if (event === 'installation') {
       const action = typeof root.action === 'string' ? root.action : '';
       if ((action === 'deleted' || action === 'suspend') && installationId) {

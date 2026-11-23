@@ -2562,6 +2562,80 @@ model GitLabWebhookDelivery {
 }
 
 // ---------------------------------------------------------------------------
+// Dev activity ingestion (BE-10a, GitHub only)
+// ---------------------------------------------------------------------------
+// Mirrors are stored from GitHub webhooks. GitHub is the source of truth;
+// Nexus mirrors for feed/report queries. No author email is stored.
+
+enum DevActivityPrEventAction {
+  OPENED
+  MERGED
+}
+
+model RepositoryCommit {
+  id                 String                @id @default(uuid())
+  provider           DevIntegrationProvider
+  repositoryFullName String
+  sha                String                @db.VarChar(40)
+  message            String                @db.VarChar(4096)
+  authorName         String?
+  authorLogin        String?
+  committedAt        DateTime
+  url                String?
+  branch             String?
+  isDefaultBranch    Boolean               @default(false)
+  ingestedAt         DateTime              @default(now())
+  sourceDeliveryId   String?
+
+  @@unique([provider, repositoryFullName, sha])
+  @@index([provider, repositoryFullName, committedAt(sort: Desc), id(sort: Desc)])
+  @@index([provider, repositoryFullName, authorLogin])
+  @@index([authorLogin])
+}
+
+model RepositoryPullRequestEvent {
+  id                 String                   @id @default(uuid())
+  provider           DevIntegrationProvider
+  repositoryFullName String
+  externalPrId       String
+  prNumber           Int?
+  action             DevActivityPrEventAction
+  title              String?                  @db.VarChar(500)
+  authorLogin        String?
+  authorName         String?
+  url                String?
+  occurredAt         DateTime
+  ingestedAt         DateTime                 @default(now())
+  sourceDeliveryId   String?
+
+  @@unique([provider, repositoryFullName, externalPrId, action])
+  @@index([provider, repositoryFullName, occurredAt(sort: Desc), id(sort: Desc)])
+  @@index([provider, repositoryFullName, authorLogin])
+  @@index([authorLogin])
+}
+
+model RepositoryReviewEvent {
+  id                 String                @id @default(uuid())
+  provider           DevIntegrationProvider
+  repositoryFullName String
+  externalReviewId   String
+  externalPrId       String?
+  prNumber           Int?
+  reviewState        String?
+  reviewerLogin      String?
+  reviewerName       String?
+  submittedAt        DateTime
+  url                String?
+  ingestedAt         DateTime              @default(now())
+  sourceDeliveryId   String?
+
+  @@unique([provider, repositoryFullName, externalReviewId])
+  @@index([provider, repositoryFullName, submittedAt(sort: Desc), id(sort: Desc)])
+  @@index([provider, repositoryFullName, reviewerLogin])
+  @@index([reviewerLogin])
+}
+
+// ---------------------------------------------------------------------------
 // Automation (Phase 20)
 // ---------------------------------------------------------------------------
 
