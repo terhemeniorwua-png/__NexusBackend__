@@ -236,10 +236,6 @@ function runTests(rawDbUrl: string): void {
     });
   }
 
-  async function notificationCount(): Promise<number> {
-    return withDb(async (prisma) => prisma.notification.count({ where: { userId: { in: userIds } } }));
-  }
-
   async function reviewAuditActions(reviewId: string): Promise<string[]> {
     return withDb(async (prisma) =>
       (await prisma.auditLog.findMany({
@@ -782,8 +778,7 @@ function runTests(rawDbUrl: string): void {
     assert.equal(secondData.items.some((r) => firstIds.has(r.id)), false, 'pages must not overlap');
   });
 
-  test('full lifecycle records only review audit actions and creates no notifications', async () => {
-    const before = await notificationCount();
+  test('full lifecycle records review audit actions and expected review notifications for this review', async () => {
     const checklistId = await createChecklist([{ text: 'done', completed: true }]);
     const { review } = await createReviewFor({ checklistId });
     const assigned = await api(reviewer, actionUrl(review!.id, 'assign'), 'POST', {
@@ -811,8 +806,41 @@ function runTests(rawDbUrl: string): void {
       'review.approved',
     ]);
 
-    const after = await notificationCount();
-    assert.equal(after, before, 'BE-2 must not create notification rows');
+    const reviewNotifications = await withDb(async (prisma) => {
+      const rows = await prisma.notification.findMany({
+        where: { type: { in: ['REVIEW_SUBMITTED', 'REVIEW_ASSIGNED', 'REVIEW_STARTED', 'REVIEW_CHANGES_REQUESTED', 'REVIEW_RESUBMITTED', 'REVIEW_APPROVED'] } },
+        select: { type: true, data: true },
+      });
+      return rows.filter((r) => (r.data as { targetId?: string } | null)?.targetId === review!.id);
+    });
+
+    const counts = reviewNotifications.reduce<Record<string, number>>((acc, r) => {
+      acc[r.type] = (acc[r.type] ?? 0) + 1;
+      return acc;
+    }, {});
+    assert.deepEqual(counts, {
+      REVIEW_SUBMITTED: 3,
+      REVIEW_ASSIGNED: 1,
+      REVIEW_STARTED: 1,
+      REVIEW_CHANGES_REQUESTED: 1,
+      REVIEW_RESUBMITTED: 3,
+      REVIEW_APPROVED: 1,
+    });
+    assert.equal(reviewNotifications.length, 10, 'expected 10 review notifications for this review only');
+
+    const dedupeKeys = reviewNotifications.map((r) => (r.data as { dedupeKey?: string } | null)?.dedupeKey).sort();
+    assert.deepEqual(dedupeKeys, [
+      `review:${review!.id}:approved:2`,
+      `review:${review!.id}:assigned:${reviewer2.id}`,
+      `review:${review!.id}:changes_requested:1`,
+      `review:${review!.id}:resubmitted:2`,
+      `review:${review!.id}:resubmitted:2`,
+      `review:${review!.id}:resubmitted:2`,
+      `review:${review!.id}:started:1`,
+      `review:${review!.id}:submitted`,
+      `review:${review!.id}:submitted`,
+      `review:${review!.id}:submitted`,
+    ].sort());
 
     const decisions = await withDb(async (prisma) =>
       prisma.reviewDecision.findMany({

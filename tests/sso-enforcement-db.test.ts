@@ -2,6 +2,7 @@ import type { AppConfig } from '../src/config/env';
 import assert from 'node:assert/strict';
 import test, { after, before, describe } from 'node:test';
 import { getPrismaClient } from '../src/db/prisma';
+import { connectRedis, disconnectRedis, getRedisClient } from '../src/db/redis';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { loadTestConfig } from './helpers/test-config';
 import { createApp } from '../src/app';
@@ -39,11 +40,27 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
       JWT_REFRESH_SECRET: 'test-refresh-secret-0123456789abcdef0123456789abcdef',
     });
     process.env.SSO_ENABLED = 'true';
+    await connectRedis({
+      redisUrl: process.env.REDIS_URL?.trim() || 'redis://localhost:6379/15',
+    });
+    // CI db-tests loop shares one Redis service across files; clear only rate-limit keys
+    // (rl:*) to avoid collisions (same IP/endpoint patterns) without flushing unrelated data.
+    // rl: prefix quoted from src/services/cache/rate-limit-store.ts: `rl:${namespace}:${key}`
+    const redis = getRedisClient();
+    const rlKeys: string[] = [];
+    for await (const batch of redis.scanIterator({ MATCH: 'rl:*', COUNT: 200 })) {
+      const keys = Array.isArray(batch) ? batch : [batch];
+      for (const key of keys) rlKeys.push(String(key));
+    }
+    if (rlKeys.length > 0) {
+      await redis.del(rlKeys);
+    }
     server = await startServer(createApp({ config }));
   });
 
   after(async () => {
     if (server) await server.close();
+    await disconnectRedis().catch(() => {});
     if (prisma) {
       for (const wid of cleanup.workspaceIds) {
         await prisma.session.deleteMany({ where: { user: { memberships: { some: { workspaceId: wid } } } } }).catch(() => {});
@@ -110,7 +127,7 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
 
   test('password login is refused when user email domain belongs to a require-SSO workspace', async () => {
     const { member, password } = await seedRequireSsoWorkspace();
-    const res = await jsonRequest(`${server!.baseUrl}/api/auth/login`, {
+    const res = await jsonRequest(`${server!.baseUrl}${config.apiPrefix}/auth/login`, {
       method: 'POST',
       body: JSON.stringify({ email: member.email, password }),
     });
@@ -120,7 +137,7 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
 
   test('password reset request is refused when user belongs to a require-SSO domain/workspace', async () => {
     const { member } = await seedRequireSsoWorkspace();
-    const res = await jsonRequest(`${server!.baseUrl}/api/auth/password/reset`, {
+    const res = await jsonRequest(`${server!.baseUrl}${config.apiPrefix}/auth/password/forgot`, {
       method: 'POST',
       body: JSON.stringify({ email: member.email }),
     });
@@ -144,16 +161,16 @@ describe('SSO enforcement (DB-gated)', { skip: skipReason || false }, () => {
       data: { breakGlassCodeHashes: [hashSecret(code)], breakGlassEnabled: true },
     });
 
-    const res = await jsonRequest(`${server!.baseUrl}/api/sso/workspaces/${seeded.workspace.id}/break-glass/login`, {
+    const res = await jsonRequest(`${server!.baseUrl}${config.apiPrefix}/sso/workspaces/${seeded.workspace.id}/break-glass/login`, {
       method: 'POST',
       body: JSON.stringify({ email: seeded.owner.email, password: seeded.password, code }),
     });
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    assert.equal(res.body.data?.status, 'authenticated');
-    assert.equal(res.body.data?.session?.authMethod, 'break_glass');
-    assert.ok(res.body.data?.session?.authMethodExpiresAt);
+    assert.equal(res.body.status, 'authenticated');
+    assert.equal(res.body.session?.authMethod, 'break_glass');
+    assert.ok(res.body.session?.authMethodExpiresAt);
 
-    const sessionId = res.body.data?.session?.id;
+    const sessionId = res.body.session?.id;
     const session = await db.session.findUnique({ where: { id: sessionId } });
     assert.equal(session?.authMethod, 'BREAK_GLASS');
     assert.ok(session?.authMethodExpiresAt);
