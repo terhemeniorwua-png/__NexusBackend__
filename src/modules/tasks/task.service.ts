@@ -1128,6 +1128,24 @@ export function createTaskService(
           ...context,
         });
 
+        if (typeof sprintIdToSet === 'string') {
+          await recordAuditEvent(tx, {
+            workspaceId: input.workspaceId,
+            actorId: input.userId,
+            action: 'sprint.task_added',
+            targetType: 'Sprint',
+            targetId: sprintIdToSet,
+            metadata: {
+              projectId: access.project.id,
+              sprintId: sprintIdToSet,
+              taskIds: [task.id],
+              count: 1,
+              source: 'task.create',
+            },
+            ...context,
+          });
+        }
+
         // Create notifications for each assignee (other than the creator).
         if (assigneeIds.length) {
           for (const assigneeId of assigneeIds) {
@@ -1534,6 +1552,47 @@ export function createTaskService(
           },
           ...context,
         });
+
+        if (sprintData !== undefined) {
+          const oldSprintId = existing.sprintId;
+          const newSprintId = sprintData.sprintId;
+          if (oldSprintId !== newSprintId) {
+            if (typeof oldSprintId === 'string') {
+              await recordAuditEvent(tx, {
+                workspaceId: input.workspaceId,
+                actorId: input.userId,
+                action: 'sprint.task_removed',
+                targetType: 'Sprint',
+                targetId: oldSprintId,
+                metadata: {
+                  projectId: access.project.id,
+                  sprintId: oldSprintId,
+                  taskIds: [row.id],
+                  count: 1,
+                  source: 'task.update',
+                },
+                ...context,
+              });
+            }
+            if (typeof newSprintId === 'string') {
+              await recordAuditEvent(tx, {
+                workspaceId: input.workspaceId,
+                actorId: input.userId,
+                action: 'sprint.task_added',
+                targetType: 'Sprint',
+                targetId: newSprintId,
+                metadata: {
+                  projectId: access.project.id,
+                  sprintId: newSprintId,
+                  taskIds: [row.id],
+                  count: 1,
+                  source: 'task.update',
+                },
+                ...context,
+              });
+            }
+          }
+        }
         if (submissionAction === 'approve' || submissionAction === 'request_revision') {
           await recordAuditEvent(tx, {
             workspaceId: input.workspaceId,

@@ -4,6 +4,7 @@ import test, { after, before, describe } from 'node:test';
 import { connectTestDatabase, resolveTestDatabaseUrl } from './helpers/test-database';
 import { SprintService } from '../src/modules/sprints/sprint.service';
 import { createProjectService } from '../src/modules/projects/project.service';
+import { createTaskService } from '../src/modules/tasks/task.service';
 import { AppError } from '../src/utils/errors';
 
 const DB_FLAG = 'RUN_S2_SPRINTS_DB_TESTS';
@@ -21,6 +22,7 @@ function runTests(rawDbUrl: string): void {
     let prisma: any;
     let sprints: SprintService;
     let projects: ReturnType<typeof createProjectService>;
+    let tasks: ReturnType<typeof createTaskService>;
 
     const ids = {} as {
       admin: string;
@@ -106,6 +108,7 @@ function runTests(rawDbUrl: string): void {
       prisma = db.prisma;
       sprints = new SprintService(prisma);
       projects = createProjectService(prisma);
+      tasks = createTaskService(prisma);
 
       const admin = await createUser('admin');
       const member = await createUser('member');
@@ -249,10 +252,27 @@ function runTests(rawDbUrl: string): void {
       assert.ok(t1After.sprintPosition > 0);
       assert.equal(tApprovedAfter.sprintId, s1.id); // retains membership
 
+      const completeAudit1 = await prisma.auditLog.findFirst({
+        where: { targetType: 'Sprint', targetId: s1.id, action: 'sprint.completed' },
+        orderBy: { createdAt: 'desc' },
+      });
+      assert.ok(completeAudit1);
+      const m1 = completeAudit1.metadata as any;
+      assert.deepEqual(m1.carriedOverTaskIds?.slice().sort(), [t1.id, tArchived.id].sort());
+      assert.deepEqual(m1.retainedTaskIds, [tApproved.id]);
+
       // complete s2 to BACKLOG
       await sprints.start({ ...base, sprintId: s2.id }, reqCtx);
       const r2 = await sprints.complete({ ...base, sprintId: s2.id, target: 'BACKLOG' }, reqCtx);
       assert.equal(r2.destination.type, 'BACKLOG');
+      const completeAudit2 = await prisma.auditLog.findFirst({
+        where: { targetType: 'Sprint', targetId: s2.id, action: 'sprint.completed' },
+        orderBy: { createdAt: 'desc' },
+      });
+      assert.ok(completeAudit2);
+      const m2 = completeAudit2.metadata as any;
+      assert.deepEqual(m2.carriedOverTaskIds?.slice().sort(), [t1.id, tArchived.id].sort());
+      assert.deepEqual(m2.retainedTaskIds, []);
       const t1Backlog = await prisma.task.findUnique({ where: { id: t1.id } });
       assert.equal(t1Backlog.sprintId, null);
       assert.equal(t1Backlog.sprintPosition, null);
@@ -350,6 +370,82 @@ function runTests(rawDbUrl: string): void {
       assert.ok(err instanceof AppError);
       assert.equal(err.statusCode, 409);
       assert.ok(['ACTIVE_SPRINT_EXISTS', 'SPRINT_ALREADY_ACTIVE'].includes(err.code));
+    });
+
+    test('task create/update sprint audit rows (Step 2 scope-audit trail)', async () => {
+      const p = await createProject(ids.ws, ids.admin, 'SPRINTS');
+      await addProjectMember(p.id, ids.admin, 'PROJECT_MANAGER');
+      const base = { workspaceId: ids.ws, projectId: p.id, actorUserId: ids.admin };
+      const sA = await sprints.create({ ...base, name: 'A' }, reqCtx);
+      const sB = await sprints.create({ ...base, name: 'B' }, reqCtx);
+
+      // create with sprintId -> sprint.task_added source task.create
+      const created = await tasks.create(
+        { userId: ids.admin, workspaceId: ids.ws, projectId: p.id, title: 'T1', sprintId: sA.id } as any,
+        reqCtx,
+      );
+      const addedOnCreate = await prisma.auditLog.findMany({
+        where: { targetType: 'Sprint', targetId: sA.id, action: 'sprint.task_added' },
+        orderBy: { createdAt: 'asc' },
+      });
+      const createRow = addedOnCreate.find((r: any) => r.metadata?.source === 'task.create' && (r.metadata?.taskIds || []).includes(created.id));
+      assert.ok(createRow);
+      assert.deepEqual((createRow.metadata as any).taskIds, [created.id]);
+      assert.equal((createRow.metadata as any).count, 1);
+
+      // update A -> B writes removed(old)+added(new), source task.update
+      await tasks.update(
+        { userId: ids.admin, workspaceId: ids.ws, projectId: p.id, taskId: created.id, sprintId: sB.id } as any,
+        reqCtx,
+      );
+      const removedA = await prisma.auditLog.findMany({
+        where: { targetType: 'Sprint', targetId: sA.id, action: 'sprint.task_removed' },
+        orderBy: { createdAt: 'asc' },
+      });
+      const removeRow = removedA.find((r: any) => r.metadata?.source === 'task.update' && (r.metadata?.taskIds || []).includes(created.id));
+      assert.ok(removeRow);
+      assert.deepEqual((removeRow.metadata as any).taskIds, [created.id]);
+      const addedB = await prisma.auditLog.findMany({
+        where: { targetType: 'Sprint', targetId: sB.id, action: 'sprint.task_added' },
+        orderBy: { createdAt: 'asc' },
+      });
+      const addRow = addedB.find((r: any) => r.metadata?.source === 'task.update' && (r.metadata?.taskIds || []).includes(created.id));
+      assert.ok(addRow);
+      assert.deepEqual((addRow.metadata as any).taskIds, [created.id]);
+
+      // update to backlog -> sprint.task_removed for B, no added
+      const beforeBacklogRemoved = await prisma.auditLog.count({
+        where: { targetType: 'Sprint', action: 'sprint.task_removed', metadata: { path: ['source'], equals: 'task.update' } } as any,
+      });
+      await tasks.update(
+        { userId: ids.admin, workspaceId: ids.ws, projectId: p.id, taskId: created.id, sprintId: null } as any,
+        reqCtx,
+      );
+      const removedBAfter = await prisma.auditLog.findMany({
+        where: { targetType: 'Sprint', targetId: sB.id, action: 'sprint.task_removed' },
+        orderBy: { createdAt: 'desc' },
+      });
+      const backRow = removedBAfter.find((r: any) => r.metadata?.source === 'task.update' && (r.metadata?.taskIds || []).includes(created.id));
+      assert.ok(backRow);
+      // no sprint.task_added for null target
+      const addedNull = await prisma.auditLog.findMany({
+        where: { targetType: 'Sprint', action: 'sprint.task_added', metadata: { path: ['source'], equals: 'task.update' } } as any,
+      });
+      const addedForThis = addedNull.filter((r: any) => (r.metadata?.taskIds || []).includes(created.id));
+      // only the A->B add should exist for this task
+      assert.equal(addedForThis.length, 1);
+
+      // unchanged sprintId -> no new rows
+      await tasks.update(
+        { userId: ids.admin, workspaceId: ids.ws, projectId: p.id, taskId: created.id, sprintId: null } as any,
+        reqCtx,
+      );
+      const removedBAfterNoop = await prisma.auditLog.findMany({
+        where: { targetType: 'Sprint', targetId: sB.id, action: 'sprint.task_removed', metadata: { path: ['source'], equals: 'task.update' } } as any,
+      });
+      const noopRows = removedBAfterNoop.filter((r: any) => (r.metadata?.taskIds || []).includes(created.id));
+      assert.equal(noopRows.length, 1); // still only the backlog removal
+      assert.ok(beforeBacklogRemoved >= 0);
     });
   });
 }
