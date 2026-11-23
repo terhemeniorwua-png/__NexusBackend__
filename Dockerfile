@@ -11,7 +11,7 @@ RUN npm ci --include=dev
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npx prisma generate && npm run build
+RUN npx prisma generate && NODE_OPTIONS=--max-old-space-size=3072 npm run build
 
 FROM base AS runtime
 ENV NODE_ENV=production
