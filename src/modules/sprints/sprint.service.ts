@@ -12,9 +12,20 @@ import {
   type ProjectPermissionValue,
 } from '../authorization/project.permissions';
 import { resolveProjectAuthorization, type ProjectActor } from '../authorization/project.authorization';
+import { resolveSprintAuthorization } from './sprint.authorization';
 import { recordAuditEvent, SprintAuditAction } from '../../services/audit';
 import { AppError } from '../../utils/errors';
 import { requireSprintsEnabled } from './sprint.guards';
+import {
+  SPRINT_BOARD_COLUMN_ORDER,
+  DONE_STATUS,
+  calculateBurndown,
+  evaluateScopeReconstructability,
+  getOwnCompletionEvent,
+  reconstructCompletedFinalScope,
+  reconstructScopeAt,
+  type SprintAuditEvent,
+} from './sprint-report';
 import type {
   CompleteSprintInput,
   CreateSprintInput,
@@ -712,6 +723,280 @@ export class SprintService {
       return { sprint: toSummary(sprint), taskId: task.id };
     });
 
+    return result;
+  }
+
+  private async authorizeSprintView(input: { workspaceId: string; projectId: string; sprintId: string; actorUserId: string }) {
+    const actor = await this.actor(input.actorUserId, input.workspaceId);
+    const { sprint, authorization } = await resolveSprintAuthorization(
+      this.prisma,
+      actor,
+      input.workspaceId,
+      input.projectId,
+      input.sprintId,
+    );
+    if (!authorization.permissions.includes(ProjectPermission.View)) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'You do not have permission to perform this action.', {
+        details: { permission: ProjectPermission.View },
+      });
+    }
+    assertProjectNotArchived(authorization.project);
+    requireSprintsEnabled({ id: authorization.project.id, workflowMode: authorization.project.workflowMode });
+    return { sprint, authorization };
+  }
+
+  private async loadSprintScopeEvents(sprintId: string): Promise<SprintAuditEvent[]> {
+    const rows = await this.prisma.auditLog.findMany({
+      where: {
+        targetType: 'Sprint',
+        OR: [
+          { targetId: sprintId, action: { in: ['sprint.task_added', 'sprint.task_removed', 'sprint.completed'] } },
+          {
+            action: 'sprint.completed',
+            metadata: { path: ['nextSprintId'], equals: sprintId } as unknown as Prisma.JsonNullableFilter,
+          },
+        ],
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { action: true, createdAt: true, targetId: true, metadata: true },
+    });
+
+    return rows.map((r) => {
+      const meta = (r.metadata ?? {}) as Record<string, unknown>;
+      const toIds = (v: unknown) => (Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string') : undefined);
+      return {
+        action: r.action as SprintAuditEvent['action'],
+        createdAt: r.createdAt,
+        sprintId: r.targetId,
+        taskIds: toIds(meta.taskIds),
+        carriedOverTaskIds: toIds(meta.carriedOverTaskIds),
+        retainedTaskIds: toIds(meta.retainedTaskIds),
+        nextSprintId: typeof meta.nextSprintId === 'string' ? meta.nextSprintId : null,
+      };
+    });
+  }
+
+  private async filterDeletedTaskIds(taskIds: string[]): Promise<string[]> {
+    if (taskIds.length === 0) return [];
+    const existing = await this.prisma.task.findMany({
+      where: { id: { in: taskIds }, deletedAt: null },
+      select: { id: true },
+    });
+    const ok = new Set(existing.map((t: { id: string }) => t.id));
+    return taskIds.filter((id) => ok.has(id));
+  }
+
+  async board(input: { workspaceId: string; projectId: string; sprintId: string; actorUserId: string }) {
+    const { sprint } = await this.authorizeSprintView(input);
+    const tasks = await this.prisma.task.findMany({
+      where: { sprintId: sprint.id, deletedAt: null },
+      orderBy: [{ sprintPosition: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        key: true,
+        title: true,
+        status: true,
+        priority: true,
+        sprintId: true,
+        sprintPosition: true,
+        dueDate: true,
+        archivedAt: true,
+        assignees: { select: { user: { select: { id: true, name: true } } } },
+      },
+    });
+
+    const columns = SPRINT_BOARD_COLUMN_ORDER.map((status) => {
+      const columnTasks = tasks
+        .filter((t) => t.status === status)
+        .map((t) => ({
+          id: t.id,
+          key: t.key,
+          title: t.title,
+          status: t.status,
+          priority: t.priority,
+          sprintId: t.sprintId,
+          sprintPosition: t.sprintPosition,
+          assignees: (t.assignees ?? []).map((a) => ({ userId: a.user.id, name: a.user.name })),
+          dueDate: t.dueDate,
+          archivedAt: t.archivedAt,
+        }));
+      return { status, count: columnTasks.length, tasks: columnTasks };
+    });
+
+    const doneCount = tasks.filter((t) => t.status === DONE_STATUS).length;
+    return {
+      sprint: toSummary(sprint),
+      columns,
+      totals: { taskCount: tasks.length, doneCount },
+    };
+  }
+
+  async reportSummary(input: { workspaceId: string; projectId: string; sprintId: string; actorUserId: string }) {
+    const { sprint } = await this.authorizeSprintView(input);
+    const now = new Date();
+
+    if (sprint.status === 'ACTIVE' || sprint.status === 'PLANNED') {
+      const tasks = await this.prisma.task.findMany({
+        where: { sprintId: sprint.id, deletedAt: null },
+        select: { id: true, status: true },
+      });
+      const doneTasks = tasks.filter((t) => t.status === DONE_STATUS).length;
+      const totalTasks = tasks.length;
+      const remainingTasks = totalTasks - doneTasks;
+      return {
+        sprint: toSummary(sprint),
+        scopeReconstructable: true,
+        summary: {
+          metric: 'TASK_COUNT',
+          totalTasks,
+          doneTasks,
+          remainingTasks,
+          completionRate: totalTasks === 0 ? 0 : doneTasks / totalTasks,
+        },
+        generatedAt: now.toISOString(),
+      };
+    }
+
+    // COMPLETED
+    const events = await this.loadSprintScopeEvents(sprint.id);
+    const scopeInput = {
+      sprintId: sprint.id,
+      sprintCreatedAt: sprint.createdAt,
+      sprintStatus: sprint.status as "PLANNED" | "ACTIVE" | "COMPLETED" | "ARCHIVED",
+      events,
+    };
+    const check = evaluateScopeReconstructability(scopeInput);
+    if (!check.reconstructable) {
+      return {
+        sprint: toSummary(sprint),
+        scopeReconstructable: false,
+        reason: check.reason,
+        summary: null,
+        generatedAt: now.toISOString(),
+      };
+    }
+    // COMPLETED final scope = retainedTaskIds + carriedOverTaskIds from own sprint.completed row.
+    const own = getOwnCompletionEvent(scopeInput)!;
+    const toIds = (v: unknown): string[] => (Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string') : []);
+    const retainedIds = await this.filterDeletedTaskIds(toIds(own.retainedTaskIds));
+    const carriedIds = await this.filterDeletedTaskIds(toIds(own.carriedOverTaskIds));
+    const totalTasks = new Set([...retainedIds, ...carriedIds]).size;
+    const doneTasks = new Set(retainedIds).size;
+    const remainingTasks = Math.max(0, totalTasks - doneTasks);
+    return {
+      sprint: toSummary(sprint),
+      scopeReconstructable: true,
+      summary: {
+        metric: 'TASK_COUNT',
+        totalTasks,
+        doneTasks,
+        remainingTasks,
+        completionRate: totalTasks === 0 ? 0 : doneTasks / totalTasks,
+      },
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  async reportBurndown(input: { workspaceId: string; projectId: string; sprintId: string; actorUserId: string }) {
+    const { sprint } = await this.authorizeSprintView(input);
+    const now = new Date();
+    const events = await this.loadSprintScopeEvents(sprint.id);
+    const scopeInput = {
+      sprintId: sprint.id,
+      sprintCreatedAt: sprint.createdAt,
+      sprintStatus: sprint.status as "PLANNED" | "ACTIVE" | "COMPLETED" | "ARCHIVED",
+      events,
+    };
+    const check = evaluateScopeReconstructability(scopeInput);
+    if (!check.reconstructable) {
+      return {
+        sprint: toSummary(sprint),
+        scopeReconstructable: false,
+        reason: check.reason,
+        series: [],
+        generatedAt: now.toISOString(),
+      };
+    }
+
+    let scope = reconstructScopeAt(scopeInput, now);
+    scope = { ...scope, taskIds: await this.filterDeletedTaskIds(scope.taskIds) };
+
+    const completionEvents = await this.loadCompletionEvents(scope.taskIds);
+    const burndown = calculateBurndown({
+      sprint: {
+        id: sprint.id,
+        status: sprint.status as "PLANNED" | "ACTIVE" | "COMPLETED" | "ARCHIVED",
+        startDate: sprint.startDate,
+        endDate: sprint.endDate,
+        createdAt: sprint.createdAt,
+        completedAt: sprint.completedAt,
+      },
+      scope,
+      completionEvents,
+      now,
+    });
+
+    // For COMPLETED sprints, total/remaining/completed should be based on final scope.
+    let finalBurndown = burndown;
+    if (sprint.status === 'COMPLETED') {
+      const finalScope = reconstructCompletedFinalScope(scopeInput);
+      const finalIds = await this.filterDeletedTaskIds(finalScope.taskIds);
+      const finalCompletionEvents = await this.loadCompletionEvents(finalIds);
+      finalBurndown = calculateBurndown({
+        sprint: {
+          id: sprint.id,
+          status: sprint.status as "PLANNED" | "ACTIVE" | "COMPLETED" | "ARCHIVED",
+          startDate: sprint.startDate,
+          endDate: sprint.endDate,
+          createdAt: sprint.createdAt,
+          completedAt: sprint.completedAt,
+        },
+        scope: { reconstructable: true, taskIds: finalIds },
+        completionEvents: finalCompletionEvents,
+        now,
+      });
+    }
+
+    return {
+      sprint: toSummary(sprint),
+      scopeReconstructable: true,
+      ...finalBurndown,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  private async loadCompletionEvents(taskIds: string[]): Promise<{ taskId: string; completedAt: Date | string }[]> {
+    if (taskIds.length === 0) return [];
+    const tasks = await this.prisma.task.findMany({
+      where: { id: { in: taskIds } },
+      select: { id: true, completedAt: true, status: true },
+    });
+    const result: { taskId: string; completedAt: Date | string }[] = [];
+    const missing: string[] = [];
+    for (const t of tasks) {
+      if (t.status === DONE_STATUS && t.completedAt) {
+        result.push({ taskId: t.id, completedAt: t.completedAt });
+      } else if (t.status === DONE_STATUS && !t.completedAt) {
+        missing.push(t.id);
+      }
+    }
+    if (missing.length > 0) {
+      const audits = await this.prisma.auditLog.findMany({
+        where: {
+          targetType: 'Task',
+          targetId: { in: missing },
+          action: { in: ['task.approved', 'task.completed'] },
+        },
+        orderBy: [{ createdAt: 'desc' }],
+        select: { targetId: true, createdAt: true },
+      });
+      const seen = new Set<string>();
+      for (const a of audits) {
+        if (seen.has(a.targetId)) continue;
+        seen.add(a.targetId);
+        result.push({ taskId: a.targetId, completedAt: a.createdAt });
+      }
+    }
     return result;
   }
 

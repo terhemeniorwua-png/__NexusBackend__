@@ -235,5 +235,59 @@ export function createSprintRouter({
     },
   );
 
+  router.get(
+    '/:sprintId/board',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: sprintParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, sprintId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        sprintId: string;
+      };
+      sendSuccess(
+        res,
+        await service.board({ workspaceId, projectId, sprintId, actorUserId: userId(req) }),
+      );
+    },
+  );
+
+  router.get(
+    '/:sprintId/reports/summary',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: sprintParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, sprintId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        sprintId: string;
+      };
+      sendSuccess(
+        res,
+        await service.reportSummary({ workspaceId, projectId, sprintId, actorUserId: userId(req) }),
+      );
+    },
+  );
+
+  router.get(
+    '/:sprintId/reports/burndown',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: sprintParamsSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, sprintId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        sprintId: string;
+      };
+      sendSuccess(
+        res,
+        await service.reportBurndown({ workspaceId, projectId, sprintId, actorUserId: userId(req) }),
+      );
+    },
+  );
+
   return router;
 }
