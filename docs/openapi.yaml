@@ -13507,6 +13507,203 @@ paths:
         required: true
         schema:
           type: string
+  /workspaces/{workspaceId}/projects/{projectId}/dev-activity/commits:
+    get:
+      tags:
+      - Projects
+      operationId: get_project_dev_activity_commits
+      summary: List stored default-branch commits for linked readable project repositories (GitHub mirrors)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        description: Opaque base64url cursor returned by nextCursor.
+      - in: query
+        name: limit
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - in: query
+        name: repositoryId
+        required: false
+        schema:
+          type: string
+          format: uuid
+        description: Linked project repository id. Unreadable or unlinked returns 404.
+      - in: query
+        name: authorLogin
+        required: false
+        schema:
+          type: string
+      - in: query
+        name: from
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: to
+        required: false
+        schema:
+          type: string
+          format: date-time
+      responses:
+        '200':
+          description: Commit feed page.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    additionalProperties: true
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          additionalProperties: true
+                          properties:
+                            id: { type: string }
+                            repositoryId: { type: string }
+                            repositoryFullName: { type: string }
+                            sha: { type: string }
+                            message: { type: string }
+                            authorName: { type: [string, 'null'] }
+                            authorLogin: { type: [string, 'null'] }
+                            authorUser:
+                              type: [object, 'null']
+                              additionalProperties: true
+                              properties:
+                                id: { type: string }
+                                name: { type: [string, 'null'] }
+                            committedAt: { type: string, format: date-time }
+                            url: { type: [string, 'null'] }
+                            branch: { type: [string, 'null'] }
+                      nextCursor:
+                        type: [string, 'null']
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: Unauthorized
+        '403':
+          description: PERMISSION_DENIED
+        '404':
+          description: Project/workspace or repository not found
+  /workspaces/{workspaceId}/projects/{projectId}/dev-activity/developers:
+    get:
+      tags:
+      - Projects
+      operationId: get_project_dev_activity_developers
+      summary: List developer activity report for linked readable project repositories (GitHub mirrors)
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: workspaceId
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: projectId
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: from
+        required: true
+        schema:
+          type: string
+          format: date-time
+        description: Required. ISO datetime with offset. Must be before to.
+      - in: query
+        name: to
+        required: true
+        schema:
+          type: string
+          format: date-time
+        description: Required. ISO datetime with offset. to-from must be <= 90 days.
+      - in: query
+        name: repositoryId
+        required: false
+        schema:
+          type: string
+          format: uuid
+        description: Linked project repository id. Unreadable or unlinked returns 404.
+      responses:
+        '200':
+          description: Developer activity report.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    additionalProperties: true
+                    properties:
+                      range:
+                        type: object
+                        additionalProperties: true
+                        properties:
+                          from: { type: string, format: date-time }
+                          to: { type: string, format: date-time }
+                      coverageStartedAt:
+                        type: [string, 'null']
+                        format: date-time
+                      developers:
+                        type: array
+                        items:
+                          type: object
+                          additionalProperties: true
+                          properties:
+                            type:
+                              type: string
+                              enum: [workspace_user, unmapped]
+                            user:
+                              type: [object, 'null']
+                              additionalProperties: true
+                              properties:
+                                id: { type: string }
+                                name: { type: [string, 'null'] }
+                            providerLogin: { type: [string, 'null'] }
+                            displayName: { type: string }
+                            commits: { type: integer }
+                            pullRequestsOpened: { type: integer }
+                            pullRequestsMerged: { type: integer }
+                            reviewsGiven: { type: integer }
+        '400':
+          description: VALIDATION_ERROR
+        '401':
+          description: Unauthorized
+        '403':
+          description: PERMISSION_DENIED (requires project.update)
+        '404':
+          description: Project/workspace or repository not found
   /workspaces/{workspaceId}/projects/{projectId}/repositories/connections:
     get:
       tags:
