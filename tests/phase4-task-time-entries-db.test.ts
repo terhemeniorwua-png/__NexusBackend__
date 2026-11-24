@@ -102,7 +102,7 @@ function runTests(rawDbUrl: string): void {
     await addWorkspaceMember(memberAssignee);
     await addWorkspaceMember(memberOther);
     await addWorkspaceMember(viewer);
-    await addWorkspaceMember(outsider);
+    // outsider is intentionally NOT a workspace member (true outsider)
 
     const projectResponse = await jsonRequest(`${baseUrl}/api/v1/workspaces/${workspaceId}/projects`, {
       method: 'POST', headers: auth(pm), body: JSON.stringify({ name: 'Phase 4C Project', key: `P4C${String(tag).slice(-4)}`, visibility: 'WORKSPACE' }), jar: pm.jar,
@@ -168,6 +168,7 @@ function runTests(rawDbUrl: string): void {
     assert.equal(empty.items.length, 0);
 
     const outsiderList = await jsonRequest(timeUrl(), { headers: auth(outsider), jar: outsider.jar });
+    console.log(`OUTSIDER_TIME_ENTRIES status=${outsiderList.status} body=${JSON.stringify(outsiderList.body)}`);
     assert.ok([403, 404].includes(outsiderList.status), JSON.stringify(outsiderList.body));
 
     // viewer cannot log (not assignee, no task update)

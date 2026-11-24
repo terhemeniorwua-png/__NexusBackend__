@@ -520,6 +520,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+            ...(input.timeTrackingEnabled !== undefined
+              ? { timeTrackingEnabled: input.timeTrackingEnabled }
+              : {}),
           },
         });
 
@@ -533,6 +536,9 @@ export function createWorkspaceService(config: AppConfig, prisma?: PrismaClient)
             ...(input.name !== undefined ? { name: input.name } : {}),
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+            ...(input.timeTrackingEnabled !== undefined
+              ? { timeTrackingEnabled: input.timeTrackingEnabled }
+              : {}),
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
