@@ -1202,21 +1202,27 @@ export function createDevIntegrationService(
       let cursorCommittedAt: Date | null = null;
       let cursorId: string | null = null;
       if (input.cursor) {
+        let decoded: unknown;
         try {
-          const decoded = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8')) as {
-            c?: string;
-            i?: string;
-          };
-          if (typeof decoded.c === 'string' && typeof decoded.i === 'string') {
-            const c = new Date(decoded.c);
-            if (!Number.isNaN(c.getTime())) {
-              cursorCommittedAt = c;
-              cursorId = decoded.i;
-            }
-          }
+          decoded = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'));
         } catch {
           throw new AppError(400, 'VALIDATION_ERROR', 'Invalid cursor');
         }
+        if (!decoded || typeof decoded !== 'object') {
+          throw new AppError(400, 'VALIDATION_ERROR', 'Invalid cursor');
+        }
+        const { c, i } = decoded as { c?: unknown; i?: unknown };
+        const committedAt = typeof c === 'string' ? new Date(c) : null;
+        if (
+          !committedAt ||
+          Number.isNaN(committedAt.getTime()) ||
+          typeof i !== 'string' ||
+          i.trim().length === 0
+        ) {
+          throw new AppError(400, 'VALIDATION_ERROR', 'Invalid cursor');
+        }
+        cursorCommittedAt = committedAt;
+        cursorId = i;
       }
 
       // Read-time case-insensitive match and dedupe by lower(repositoryFullName)+sha.
@@ -1295,7 +1301,7 @@ export function createDevIntegrationService(
         const resolved = resolveDevActivityDeveloper({ providerLogin: row.authorLogin, candidates });
         return {
           id: row.id,
-          repositoryId: repo?.id ?? '',
+          repositoryId: repo?.id ?? selectedRepos[0]?.id ?? '',
           repositoryFullName: row.repositoryFullName,
           sha: row.sha,
           message: row.message,
