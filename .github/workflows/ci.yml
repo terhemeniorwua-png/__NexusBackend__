@@ -219,4 +219,4 @@ jobs:
           echo "===== DB-GATED TESTS EXIT-CODE TABLE ====="
           cat /tmp/db_results.csv
           echo "=========================================="
-          awk -F, 'NR>1 && $2!="0" && $2!="CREATE_DB_FAILED" && $2!="MIGRATE_FAILED" {bad=1} END{exit bad?1:0}' /tmp/db_results.csv
+          awk -F, 'NR>1 {ec=$2; tests=$3+0; fail=$5+0; if (ec != "0" || fail > 0 || tests == 0) bad=1} END{exit bad?1:0}' /tmp/db_results.csv
