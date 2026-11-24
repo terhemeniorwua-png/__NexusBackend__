@@ -25,6 +25,7 @@ function runTests(rawDbUrl: string): void {
       projectId?: string;
       taskId?: string;
       connectionId?: string;
+      projectRepositoryId?: string;
       deliveryIds: string[];
     } = { deliveryIds: [] };
 
@@ -73,6 +74,16 @@ function runTests(rawDbUrl: string): void {
           status: 'IN_PROGRESS',
         },
       });
+      const projectRepository = await prisma.projectRepository.create({
+        data: {
+          projectId: project.id,
+          connectionId: connection.id,
+          provider: 'GITHUB',
+          externalRepoId: 'repo-acme-repo',
+          fullName: 'acme/repo',
+          defaultBranch: 'main',
+        },
+      });
 
       created.userId = user.id;
       created.mappedUserId = mappedUser.id;
@@ -80,6 +91,7 @@ function runTests(rawDbUrl: string): void {
       created.projectId = project.id;
       created.taskId = task.id;
       created.connectionId = connection.id;
+      created.projectRepositoryId = projectRepository.id;
     });
 
     after(async () => {
@@ -90,6 +102,8 @@ function runTests(rawDbUrl: string): void {
       await prisma.gitHubWebhookDelivery.deleteMany({ where: { deliveryId: { in: created.deliveryIds } } }).catch(() => undefined);
       await prisma.taskDevLink.deleteMany({ where: { taskId: created.taskId } }).catch(() => undefined);
       if (created.taskId) await prisma.task.delete({ where: { id: created.taskId } }).catch(() => undefined);
+      if (created.projectRepositoryId)
+        await prisma.projectRepository.delete({ where: { id: created.projectRepositoryId } }).catch(() => undefined);
       if (created.projectId) await prisma.project.delete({ where: { id: created.projectId } }).catch(() => undefined);
       if (created.connectionId) await prisma.integrationConnection.delete({ where: { id: created.connectionId } }).catch(() => undefined);
       if (created.workspaceId) await prisma.workspace.delete({ where: { id: created.workspaceId } }).catch(() => undefined);
@@ -393,6 +407,172 @@ function runTests(rawDbUrl: string): void {
       assert.ok(review);
       assert.equal(review.reviewState, 'APPROVED');
       assert.equal(review.reviewerLogin, 'reviewer1');
+    });
+
+    test('oversized commit message and PR title are truncated before insert', async () => {
+      const repo = 'acme/repo';
+      const longMessage = 'm'.repeat(5000);
+      const longTitle = 't'.repeat(600);
+      const push = await send('push', 'del-be10a-oversized-push', {
+        ref: 'refs/heads/main',
+        after: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        repository: { full_name: repo, default_branch: 'main' },
+        commits: [
+          {
+            id: '4444444444444444444444444444444444444444',
+            message: longMessage,
+            timestamp: '2026-11-23T14:00:00Z',
+            author: { username: 'mappeddev' },
+          },
+        ],
+      });
+      assert.equal(push, 'processed');
+      const commit = await prisma.repositoryCommit.findUnique({
+        where: {
+          provider_repositoryFullName_sha: {
+            provider: 'GITHUB',
+            repositoryFullName: repo,
+            sha: '4444444444444444444444444444444444444444',
+          },
+        },
+      });
+      assert.ok(commit);
+      assert.equal(commit.message.length, 4096);
+
+      const pr = await send('pull_request', 'del-be10a-oversized-pr', {
+        action: 'opened',
+        repository: { full_name: repo, default_branch: 'main' },
+        pull_request: {
+          id: 88888,
+          number: 88,
+          title: longTitle,
+          html_url: 'https://github.com/acme/repo/pull/88',
+          state: 'open',
+          merged: false,
+          created_at: '2026-11-23T14:05:00Z',
+          updated_at: '2026-11-23T14:05:00Z',
+          user: { login: 'mappeddev' },
+        },
+      });
+      assert.equal(pr, 'processed');
+      const prEvent = await prisma.repositoryPullRequestEvent.findUnique({
+        where: {
+          provider_repositoryFullName_externalPrId_action: {
+            provider: 'GITHUB',
+            repositoryFullName: repo,
+            externalPrId: '88888',
+            action: 'OPENED',
+          },
+        },
+      });
+      assert.ok(prEvent);
+      assert.equal(prEvent.title?.length, 500);
+    });
+
+    test('mirror ingestion failure does not block TaskDevLink/PR-merge handling', async () => {
+      const repo = 'acme/repo';
+      const prId = 66666;
+      const link = await prisma.taskDevLink.create({
+        data: {
+          taskId: created.taskId!,
+          projectId: created.projectId!,
+          provider: 'GITHUB',
+          externalType: 'PULL_REQUEST',
+          externalId: String(prId),
+          linkedById: created.userId!,
+          state: 'open',
+        },
+      });
+
+      const failingPrisma = new Proxy(prisma, {
+        get(target: any, prop: string) {
+          if (prop === 'repositoryPullRequestEvent') {
+            return {
+              ...target.repositoryPullRequestEvent,
+              upsert: async () => {
+                throw new Error('simulated mirror failure');
+              },
+            };
+          }
+          return target[prop];
+        },
+      });
+
+      const warnings: any[] = [];
+      const logger = {
+        warn: (...args: any[]) => warnings.push(args),
+        info: () => undefined,
+        error: () => undefined,
+        debug: () => undefined,
+        child: () => logger,
+      };
+
+      const rawBody = Buffer.from(
+        JSON.stringify({
+          action: 'closed',
+          repository: { full_name: repo, default_branch: 'main' },
+          pull_request: {
+            id: prId,
+            number: 66,
+            title: 'Merge despite mirror failure',
+            html_url: 'https://github.com/acme/repo/pull/66',
+            state: 'closed',
+            merged: true,
+            merged_at: '2026-11-23T15:00:00Z',
+            closed_at: '2026-11-23T15:00:00Z',
+            updated_at: '2026-11-23T15:00:00Z',
+            user: { login: 'mappeddev' },
+            head: { ref: 'feature/x' },
+            base: { ref: 'main' },
+          },
+        }),
+        'utf8',
+      );
+      created.deliveryIds.push('del-be10a-mirror-fail');
+      const outcome = await processGithubWebhook({
+        prisma: failingPrisma,
+        rawBody,
+        signature: sign(rawBody),
+        secret: WEBHOOK_SECRET,
+        deliveryId: 'del-be10a-mirror-fail',
+        event: 'pull_request',
+        logger,
+      });
+
+      assert.equal(outcome, 'processed');
+      const updated = await prisma.taskDevLink.findUnique({ where: { id: link.id } });
+      assert.ok(updated);
+      assert.equal(updated.state, 'merged');
+      assert.ok(
+        warnings.some((w) => String(w[0]).includes('github_pr_mirror_ingest_failed')),
+        'mirror ingestion failure should be logged',
+      );
+
+      await prisma.taskDevLink.delete({ where: { id: link.id } }).catch(() => undefined);
+    });
+
+    test('unlinked repositories are ignored (no mirror rows written)', async () => {
+      const beforeCommits = await prisma.repositoryCommit.count({
+        where: { repositoryFullName: 'acme/unlinked-repo' },
+      });
+      const outcome = await send('push', 'del-be10a-unlinked', {
+        ref: 'refs/heads/main',
+        after: 'ffffffffffffffffffffffffffffffffffffffff',
+        repository: { full_name: 'acme/unlinked-repo', default_branch: 'main' },
+        commits: [
+          {
+            id: '9999999999999999999999999999999999999999',
+            message: 'should not be stored',
+            timestamp: '2026-11-23T16:00:00Z',
+            author: { username: 'someone' },
+          },
+        ],
+      });
+      assert.equal(outcome, 'ignored');
+      const afterCommits = await prisma.repositoryCommit.count({
+        where: { repositoryFullName: 'acme/unlinked-repo' },
+      });
+      assert.equal(afterCommits, beforeCommits);
     });
   });
 }
