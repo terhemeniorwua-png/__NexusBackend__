@@ -9,6 +9,8 @@ import { sendSuccess } from '../../utils/http';
 import { logger } from '../../utils/logger';
 import {
   connectionParamsSchema,
+  devActivityCommitsQuerySchema,
+  devActivityDevelopersQuerySchema,
   githubCallbackQuerySchema,
   linkRepositorySchema,
   listDevResourceQuerySchema,
@@ -412,6 +414,65 @@ export function createDevIntegrationCallbackRouter({
       return res.redirect(302, resultRedirectUrl(config, 'error', 'gitlab'));
     }
   });
+
+  return router;
+}
+export function createDevActivityRouter({
+  config,
+  service = createDevIntegrationService(config),
+}: DevIntegrationRouterOptions): Router {
+  const router = Router({ mergeParams: true });
+  const requireAuth = createRequireAuth(config);
+  const requireActive = createRequireActiveAccount();
+
+  // GET /workspaces/:workspaceId/projects/:projectId/dev-activity/commits
+  router.get(
+    '/commits',
+    requireAuth,
+    requireActive,
+    validate({ params: projectParamsSchema, query: devActivityCommitsQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as { workspaceId: string; projectId: string };
+      const query = (req.validated!.query ?? {}) as {
+        cursor?: string;
+        limit?: number;
+        repositoryId?: string;
+        authorLogin?: string;
+        from?: string;
+        to?: string;
+      };
+      sendSuccess(
+        res,
+        await service.listDevActivityCommits({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          ...query,
+        }),
+      );
+    },
+  );
+
+  // GET /workspaces/:workspaceId/projects/:projectId/dev-activity/developers
+  router.get(
+    '/developers',
+    requireAuth,
+    requireActive,
+    validate({ params: projectParamsSchema, query: devActivityDevelopersQuerySchema }),
+    async (req, res) => {
+      const { workspaceId, projectId } = req.validated!.params as { workspaceId: string; projectId: string };
+      const query = req.validated!.query as { from: string; to: string; repositoryId?: string };
+      sendSuccess(
+        res,
+        await service.listDevActivityDevelopers({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          ...query,
+        }),
+      );
+    },
+  );
 
   return router;
 }

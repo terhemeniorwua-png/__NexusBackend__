@@ -79,3 +79,38 @@ export const linkTaskDevLinkSchema = z.object({
   baseRef: z.string().max(500).nullable().optional(),
   state: z.string().max(100).nullable().optional(),
 });
+
+export const devActivityCommitsQuerySchema = z.object({
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20).optional(),
+  repositoryId: z.string().uuid().optional(),
+  authorLogin: z.string().trim().min(1).max(200).optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+});
+
+export const devActivityDevelopersQuerySchema = z
+  .object({
+    from: z.string().datetime(),
+    to: z.string().datetime(),
+    repositoryId: z.string().uuid().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const from = new Date(value.from);
+    const to = new Date(value.to);
+    if (!(from < to)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'from must be before to',
+        path: ['from'],
+      });
+    }
+    const maxRangeMs = 90 * 24 * 60 * 60 * 1000;
+    if (to.getTime() - from.getTime() > maxRangeMs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'range must be 90 days or less',
+        path: ['to'],
+      });
+    }
+  });
