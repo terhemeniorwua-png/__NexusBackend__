@@ -63,6 +63,7 @@ import { createIntegrationRouter } from '../modules/integrations/integration.rou
 import { createWorkspaceIntegrationRouter } from '../modules/integrations/integration-picker.routes';
 import type { IntegrationPickerService } from '../modules/integrations/integration-picker.service';
 import {
+  createDevActivityRouter,
   createDevIntegrationCallbackRouter,
   createProjectRepositoryRouter,
   createTaskDevLinkRouter,
@@ -175,6 +176,7 @@ export function createApiRouter({
   router.use('/dev-integrations', createDevIntegrationCallbackRouter({ config }));
   router.use('/workspaces/:workspaceId/dev-integrations', createWorkspaceDevIntegrationRouter({ config }));
   router.use('/workspaces/:workspaceId/projects/:projectId/repositories', createProjectRepositoryRouter({ config }));
+  router.use('/workspaces/:workspaceId/projects/:projectId/dev-activity', createDevActivityRouter({ config }));
   router.use('/workspaces/:workspaceId/projects/:projectId/tasks/:taskId/dev-links', createTaskDevLinkRouter({ config }));
   // Automations are workspace-scoped
   router.use('/workspaces/:workspaceId/automations', createAutomationRouter({ config }));

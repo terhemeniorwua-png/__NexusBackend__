@@ -1,6 +1,6 @@
 import type { DevChangedFile, DevCommitSummary, DevPullRequestDetail } from './dev-integration.types';
 /* eslint-disable @typescript-eslint/no-explicit-any */ // TODO(types): replace any with real types
-import type { DevIntegrationProvider, PrismaClient } from '@prisma/client';
+import { Prisma, type DevIntegrationProvider, type PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../../db/prisma';
 import { recordAuditEvent } from '../../services/audit';
 import { AppError } from '../../utils/errors';
@@ -14,6 +14,7 @@ import {
   WorkspaceCapability,
 } from '../authorization';
 import { resolveRepositoryAccess, type RepositoryAccessLevelValue } from './repository-access.resolver';
+import { resolveDevActivityDeveloper } from './dev-activity-identity';
 import type { AppConfig } from '../../config/env';
 import { githubAppProvider } from './providers/github-app.provider';
 import { gitlabProvider } from './providers/gitlab.provider';
@@ -1122,6 +1123,483 @@ export function createDevIntegrationService(
         metadata: { taskId: input.taskId, externalType: link.externalType, externalId: link.externalId },
       });
       return { ok: true };
+    },
+
+    async listDevActivityCommits(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      cursor?: string;
+      limit?: number;
+      repositoryId?: string;
+      authorLogin?: string;
+      from?: string;
+      to?: string;
+    }): Promise<{
+      items: Array<{
+        id: string;
+        repositoryId: string;
+        repositoryFullName: string;
+        sha: string;
+        message: string;
+        authorName: string | null;
+        authorLogin: string | null;
+        authorUser: { id: string; name: string | null } | null;
+        committedAt: string;
+        url: string | null;
+        branch: string | null;
+      }>;
+      nextCursor: string | null;
+    }> {
+      await requireProjectViewer(input.userId, input.workspaceId, input.projectId);
+
+      const linkedRepos = await prisma.projectRepository.findMany({
+        where: { projectId: input.projectId, provider: 'GITHUB', project: { workspaceId: input.workspaceId } },
+        select: { id: true, fullName: true, provider: true },
+      });
+
+      const readableRepos: Array<{ id: string; fullName: string; provider: 'GITHUB'; lowerFullName: string }> = [];
+      for (const repo of linkedRepos) {
+        const access = await resolveRepositoryAccess(prisma, {
+          projectId: input.projectId,
+          repositoryId: repo.id,
+          userId: input.userId,
+        });
+        if (access === 'READ' || access === 'LINK') {
+          readableRepos.push({
+            id: repo.id,
+            fullName: repo.fullName,
+            provider: 'GITHUB',
+            lowerFullName: repo.fullName.toLowerCase(),
+          });
+        }
+      }
+
+      if (input.repositoryId) {
+        const target = linkedRepos.find((r) => r.id === input.repositoryId);
+        const targetReadable = readableRepos.find((r) => r.id === input.repositoryId);
+        if (!target || !targetReadable) {
+          throw missingRepositoryError();
+        }
+      }
+
+      const selectedRepos = input.repositoryId
+        ? readableRepos.filter((r) => r.id === input.repositoryId)
+        : readableRepos;
+
+      const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+      if (selectedRepos.length === 0) {
+        return { items: [], nextCursor: null };
+      }
+
+      const repoNames = selectedRepos.map((r) => r.lowerFullName);
+      const repoByLower = new Map(selectedRepos.map((r) => [r.lowerFullName, r]));
+
+      const fromDate = input.from ? new Date(input.from) : null;
+      const toDate = input.to ? new Date(input.to) : null;
+      const authorLoginFilter = input.authorLogin?.trim() ? input.authorLogin.trim().toLowerCase() : null;
+
+      let cursorCommittedAt: Date | null = null;
+      let cursorId: string | null = null;
+      if (input.cursor) {
+        try {
+          const decoded = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8')) as {
+            c?: string;
+            i?: string;
+          };
+          if (typeof decoded.c === 'string' && typeof decoded.i === 'string') {
+            const c = new Date(decoded.c);
+            if (!Number.isNaN(c.getTime())) {
+              cursorCommittedAt = c;
+              cursorId = decoded.i;
+            }
+          }
+        } catch {
+          throw new AppError(400, 'VALIDATION_ERROR', 'Invalid cursor');
+        }
+      }
+
+      // Read-time case-insensitive match and dedupe by lower(repositoryFullName)+sha.
+      // Access filter is applied before pagination by restricting to readable repos only.
+      const conditions: Prisma.Sql[] = [
+        Prisma.sql`"provider" = 'GITHUB'`,
+        Prisma.sql`"isDefaultBranch" = true`,
+        Prisma.sql`LOWER("repositoryFullName") = ANY(${repoNames}::text[])`,
+      ];
+      if (fromDate) conditions.push(Prisma.sql`"committedAt" >= ${fromDate}`);
+      if (toDate) conditions.push(Prisma.sql`"committedAt" <= ${toDate}`);
+      if (authorLoginFilter) conditions.push(Prisma.sql`LOWER("authorLogin") = ${authorLoginFilter}`);
+      if (cursorCommittedAt && cursorId) {
+        conditions.push(
+          Prisma.sql`("committedAt" < ${cursorCommittedAt} OR ("committedAt" = ${cursorCommittedAt} AND "id" < ${cursorId}))`,
+        );
+      }
+      const where = Prisma.join(conditions, ' AND ');
+
+      const rows = await prisma.$queryRaw<
+        Array<{
+          id: string;
+          repositoryFullName: string;
+          sha: string;
+          message: string;
+          authorName: string | null;
+          authorLogin: string | null;
+          committedAt: Date;
+          url: string | null;
+          branch: string | null;
+        }>
+      >(Prisma.sql`
+        SELECT "id", "repositoryFullName", "sha", "message", "authorName", "authorLogin",
+               "committedAt", "url", "branch"
+        FROM (
+          SELECT DISTINCT ON (LOWER("repositoryFullName"), "sha")
+            "id", "repositoryFullName", "sha", "message", "authorName", "authorLogin",
+            "committedAt", "url", "branch"
+          FROM "RepositoryCommit"
+          WHERE ${where}
+          ORDER BY LOWER("repositoryFullName"), "sha", "committedAt" DESC, "id" DESC
+        ) t
+        ORDER BY "committedAt" DESC, "id" DESC
+        LIMIT ${limit + 1}
+      `);
+
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+
+      // Identity resolved at read time from verified workspace member connections only.
+      const identityCandidates = await prisma.integrationConnection.findMany({
+        where: {
+          workspaceId: input.workspaceId,
+          provider: 'GITHUB',
+          status: 'ACTIVE',
+          externalAccountLogin: { not: null },
+          createdBy: {
+            workspaceMemberships: {
+              some: { workspaceId: input.workspaceId, status: 'ACTIVE' },
+            },
+          },
+        },
+        select: {
+          externalAccountLogin: true,
+          createdBy: { select: { id: true, name: true } },
+        },
+      });
+      const candidates = identityCandidates.map((c) => ({
+        userId: c.createdBy.id,
+        name: c.createdBy.name,
+        externalAccountLogin: c.externalAccountLogin,
+      }));
+
+      const items = page.map((row) => {
+        const repo = repoByLower.get(row.repositoryFullName.toLowerCase());
+        const resolved = resolveDevActivityDeveloper({ providerLogin: row.authorLogin, candidates });
+        return {
+          id: row.id,
+          repositoryId: repo?.id ?? '',
+          repositoryFullName: row.repositoryFullName,
+          sha: row.sha,
+          message: row.message,
+          authorName: row.authorName,
+          authorLogin: row.authorLogin,
+          authorUser: resolved.type === 'workspace_user' ? resolved.user : null,
+          committedAt: row.committedAt.toISOString(),
+          url: row.url,
+          branch: row.branch,
+        };
+      });
+
+      const last = page.at(-1);
+      const nextCursor =
+        hasMore && last
+          ? Buffer.from(
+              JSON.stringify({ c: last.committedAt.toISOString(), i: last.id }),
+              'utf8',
+            ).toString('base64url')
+          : null;
+
+      return { items, nextCursor };
+    },
+
+    async listDevActivityDevelopers(input: {
+      userId: string;
+      workspaceId: string;
+      projectId: string;
+      from: string;
+      to: string;
+      repositoryId?: string;
+    }): Promise<{
+      range: { from: string; to: string };
+      coverageStartedAt: string | null;
+      developers: Array<{
+        type: 'workspace_user' | 'unmapped';
+        user: { id: string; name: string | null } | null;
+        providerLogin: string | null;
+        displayName: string;
+        commits: number;
+        pullRequestsOpened: number;
+        pullRequestsMerged: number;
+        reviewsGiven: number;
+      }>;
+    }> {
+      // Manager-level permission (not plain View). ProjectPermission.Update = 'project.update'.
+      const workspace = await requireWorkspaceAccess(prisma, {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        capability: WorkspaceCapability.ViewWorkspace,
+      });
+      await authorizeProject(prisma, {
+        actor: { userId: input.userId, workspaceId: input.workspaceId, workspaceRole: workspace.effectiveRole },
+        projectId: input.projectId,
+        permission: ProjectPermission.Update,
+      });
+
+      const from = new Date(input.from);
+      const to = new Date(input.to);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+        throw new AppError(400, 'VALIDATION_ERROR', 'Invalid from/to');
+      }
+      if (!(from < to)) {
+        throw new AppError(400, 'VALIDATION_ERROR', 'from must be before to');
+      }
+      const maxRangeMs = 90 * 24 * 60 * 60 * 1000;
+      if (to.getTime() - from.getTime() > maxRangeMs) {
+        throw new AppError(400, 'VALIDATION_ERROR', 'range must be 90 days or less');
+      }
+
+      const linkedRepos = await prisma.projectRepository.findMany({
+        where: { projectId: input.projectId, provider: 'GITHUB', project: { workspaceId: input.workspaceId } },
+        select: { id: true, fullName: true, provider: true },
+      });
+
+      const readableRepos: Array<{ id: string; fullName: string; lowerFullName: string }> = [];
+      for (const repo of linkedRepos) {
+        const access = await resolveRepositoryAccess(prisma, {
+          projectId: input.projectId,
+          repositoryId: repo.id,
+          userId: input.userId,
+        });
+        if (access === 'READ' || access === 'LINK') {
+          readableRepos.push({ id: repo.id, fullName: repo.fullName, lowerFullName: repo.fullName.toLowerCase() });
+        }
+      }
+
+      if (input.repositoryId) {
+        const target = linkedRepos.find((r) => r.id === input.repositoryId);
+        const targetReadable = readableRepos.find((r) => r.id === input.repositoryId);
+        if (!target || !targetReadable) {
+          throw missingRepositoryError();
+        }
+      }
+
+      const selectedRepos = input.repositoryId
+        ? readableRepos.filter((r) => r.id === input.repositoryId)
+        : readableRepos;
+
+      if (selectedRepos.length === 0) {
+        return {
+          range: { from: from.toISOString(), to: to.toISOString() },
+          coverageStartedAt: null,
+          developers: [],
+        };
+      }
+
+      const repoNames = selectedRepos.map((r) => r.lowerFullName);
+
+      // coverageStartedAt: earliest ingestedAt among mirror rows of INCLUDED repos only.
+      const [commitCov, prCov, reviewCov] = await Promise.all([
+        prisma.$queryRaw<Array<{ min: Date | null }>>(Prisma.sql`
+          SELECT MIN("ingestedAt") AS "min" FROM "RepositoryCommit"
+          WHERE "provider" = 'GITHUB' AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+        `),
+        prisma.$queryRaw<Array<{ min: Date | null }>>(Prisma.sql`
+          SELECT MIN("ingestedAt") AS "min" FROM "RepositoryPullRequestEvent"
+          WHERE "provider" = 'GITHUB' AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+        `),
+        prisma.$queryRaw<Array<{ min: Date | null }>>(Prisma.sql`
+          SELECT MIN("ingestedAt") AS "min" FROM "RepositoryReviewEvent"
+          WHERE "provider" = 'GITHUB' AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+        `),
+      ]);
+      const covDates = [commitCov[0]?.min, prCov[0]?.min, reviewCov[0]?.min].filter(
+        (d): d is Date => d instanceof Date,
+      );
+      const coverageStartedAt =
+        covDates.length > 0 ? new Date(Math.min(...covDates.map((d) => d.getTime()))).toISOString() : null;
+
+      // Counting caveats (documented in code and PR body):
+      // - merge commits are counted because parents are not stored
+      // - force-push can leave rewritten history in counts
+      // - partial push truncation is not detected
+      // - history starts at ingestion, no backfill
+
+      const [commitRows, prOpenedRows, prMergedRows, reviewRows, prAuthors] = await Promise.all([
+        prisma.$queryRaw<Array<{ authorLogin: string | null; commits: bigint }>>(Prisma.sql`
+          SELECT "authorLogin", COUNT(*)::bigint AS "commits"
+          FROM (
+            SELECT DISTINCT ON (LOWER("repositoryFullName"), "sha") "authorLogin"
+            FROM "RepositoryCommit"
+            WHERE "provider" = 'GITHUB'
+              AND "isDefaultBranch" = true
+              AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+              AND "committedAt" >= ${from}
+              AND "committedAt" <= ${to}
+            ORDER BY LOWER("repositoryFullName"), "sha", "committedAt" DESC, "id" DESC
+          ) t
+          GROUP BY "authorLogin"
+        `),
+        prisma.$queryRaw<Array<{ authorLogin: string | null; count: bigint }>>(Prisma.sql`
+          SELECT "authorLogin", COUNT(*)::bigint AS "count"
+          FROM "RepositoryPullRequestEvent"
+          WHERE "provider" = 'GITHUB'
+            AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+            AND "action" = 'OPENED'
+            AND "occurredAt" >= ${from}
+            AND "occurredAt" <= ${to}
+          GROUP BY "authorLogin"
+        `),
+        prisma.$queryRaw<Array<{ authorLogin: string | null; count: bigint }>>(Prisma.sql`
+          SELECT "authorLogin", COUNT(*)::bigint AS "count"
+          FROM "RepositoryPullRequestEvent"
+          WHERE "provider" = 'GITHUB'
+            AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+            AND "action" = 'MERGED'
+            AND "occurredAt" >= ${from}
+            AND "occurredAt" <= ${to}
+          GROUP BY "authorLogin"
+        `),
+        prisma.$queryRaw<Array<{ reviewerLogin: string | null; externalPrId: string | null; repositoryFullName: string }>>(Prisma.sql`
+          SELECT "reviewerLogin", "externalPrId", "repositoryFullName"
+          FROM "RepositoryReviewEvent"
+          WHERE "provider" = 'GITHUB'
+            AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+            AND "submittedAt" >= ${from}
+            AND "submittedAt" <= ${to}
+        `),
+        prisma.$queryRaw<Array<{ externalPrId: string | null; repositoryFullName: string; authorLogin: string | null }>>(Prisma.sql`
+          SELECT "externalPrId", "repositoryFullName", "authorLogin"
+          FROM "RepositoryPullRequestEvent"
+          WHERE "provider" = 'GITHUB'
+            AND LOWER("repositoryFullName") = ANY(${repoNames}::text[])
+            AND "action" = 'OPENED'
+        `),
+      ]);
+
+      const prAuthorByKey = new Map<string, string>();
+      for (const pr of prAuthors) {
+        if (pr.authorLogin && pr.externalPrId) {
+          prAuthorByKey.set(`${pr.repositoryFullName.toLowerCase()}::${pr.externalPrId}`, pr.authorLogin.toLowerCase());
+        }
+      }
+
+      type DevAgg = { commits: number; prsOpened: number; prsMerged: number; reviewsGiven: number };
+      const byLogin = new Map<string, DevAgg>();
+      const ensure = (login: string | null | undefined): DevAgg | null => {
+        const key = (login ?? '').trim().toLowerCase();
+        if (!key) return null;
+        const existing = byLogin.get(key);
+        if (existing) return existing;
+        const created: DevAgg = { commits: 0, prsOpened: 0, prsMerged: 0, reviewsGiven: 0 };
+        byLogin.set(key, created);
+        return created;
+      };
+
+      for (const row of commitRows) {
+        const agg = ensure(row.authorLogin);
+        if (agg) agg.commits += Number(row.commits);
+      }
+      for (const row of prOpenedRows) {
+        const agg = ensure(row.authorLogin);
+        if (agg) agg.prsOpened += Number(row.count);
+      }
+      for (const row of prMergedRows) {
+        const agg = ensure(row.authorLogin);
+        if (agg) agg.prsMerged += Number(row.count);
+      }
+      for (const row of reviewRows) {
+        const reviewer = (row.reviewerLogin ?? '').trim().toLowerCase();
+        if (!reviewer) continue;
+        const prKey = row.externalPrId ? `${row.repositoryFullName.toLowerCase()}::${row.externalPrId}` : null;
+        const prAuthor = prKey ? prAuthorByKey.get(prKey) : undefined;
+        // Exclude self-reviews when PR author is known from a mirrored OPENED event; otherwise count.
+        if (prAuthor && prAuthor === reviewer) continue;
+        const agg = ensure(row.reviewerLogin);
+        if (agg) agg.reviewsGiven += 1;
+      }
+
+      // Read-time identity resolution (verified IntegrationConnection.externalAccountLogin of workspace members).
+      const identityCandidates = await prisma.integrationConnection.findMany({
+        where: {
+          workspaceId: input.workspaceId,
+          provider: 'GITHUB',
+          status: 'ACTIVE',
+          externalAccountLogin: { not: null },
+          createdBy: {
+            workspaceMemberships: {
+              some: { workspaceId: input.workspaceId, status: 'ACTIVE' },
+            },
+          },
+        },
+        select: {
+          externalAccountLogin: true,
+          createdBy: { select: { id: true, name: true } },
+        },
+      });
+      const candidates = identityCandidates.map((c) => ({
+        userId: c.createdBy.id,
+        name: c.createdBy.name,
+        externalAccountLogin: c.externalAccountLogin,
+      }));
+
+      const displayLoginByLower = new Map<string, string>();
+      for (const row of [...commitRows, ...prOpenedRows, ...prMergedRows]) {
+        const raw = (row.authorLogin ?? '').trim();
+        if (raw) displayLoginByLower.set(raw.toLowerCase(), raw);
+      }
+      for (const row of reviewRows) {
+        const raw = (row.reviewerLogin ?? '').trim();
+        if (raw && !displayLoginByLower.has(raw.toLowerCase())) displayLoginByLower.set(raw.toLowerCase(), raw);
+      }
+
+      const developers = Array.from(byLogin.entries())
+        .map(([lowerLogin, agg]) => {
+          const providerLogin = displayLoginByLower.get(lowerLogin) ?? lowerLogin;
+          const resolved = resolveDevActivityDeveloper({ providerLogin, candidates });
+          if (resolved.type === 'workspace_user') {
+            return {
+              type: 'workspace_user' as const,
+              user: resolved.user,
+              providerLogin,
+              displayName: resolved.user.name ?? providerLogin,
+              commits: agg.commits,
+              pullRequestsOpened: agg.prsOpened,
+              pullRequestsMerged: agg.prsMerged,
+              reviewsGiven: agg.reviewsGiven,
+            };
+          }
+          return {
+            type: 'unmapped' as const,
+            user: null,
+            providerLogin,
+            displayName: providerLogin,
+            commits: agg.commits,
+            pullRequestsOpened: agg.prsOpened,
+            pullRequestsMerged: agg.prsMerged,
+            reviewsGiven: agg.reviewsGiven,
+          };
+        })
+        .filter((d) => d.providerLogin)
+        .sort((a, b) => {
+          const totalA = a.commits + a.pullRequestsOpened + a.pullRequestsMerged + a.reviewsGiven;
+          const totalB = b.commits + b.pullRequestsOpened + b.pullRequestsMerged + b.reviewsGiven;
+          if (totalB !== totalA) return totalB - totalA;
+          return a.displayName.localeCompare(b.displayName);
+        });
+
+      return {
+        range: { from: from.toISOString(), to: to.toISOString() },
+        coverageStartedAt,
+        developers,
+      };
     },
   };
 }
