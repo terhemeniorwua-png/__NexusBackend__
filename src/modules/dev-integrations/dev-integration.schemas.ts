@@ -81,18 +81,19 @@ export const linkTaskDevLinkSchema = z.object({
 });
 
 export const devActivityCommitsQuerySchema = z.object({
-  cursor: z.string().uuid().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(20).optional(),
+  // Opaque base64url cursor produced by listDevActivityCommits, not a UUID.
+  cursor: z.string().trim().min(1).max(1000).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
   repositoryId: z.string().uuid().optional(),
   authorLogin: z.string().trim().min(1).max(200).optional(),
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
+  from: z.string().datetime({ offset: true }).optional(),
+  to: z.string().datetime({ offset: true }).optional(),
 });
 
 export const devActivityDevelopersQuerySchema = z
   .object({
-    from: z.string().datetime(),
-    to: z.string().datetime(),
+    from: z.string().datetime({ offset: true }),
+    to: z.string().datetime({ offset: true }),
     repositoryId: z.string().uuid().optional(),
   })
   .superRefine((value, ctx) => {
