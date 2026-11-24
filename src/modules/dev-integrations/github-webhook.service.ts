@@ -135,7 +135,18 @@ export async function processGithubWebhook(input: {
             baseRef: base && typeof base.ref === 'string' ? base.ref : null,
             state: prStateVal,
           };
-          const prIngest = await ingestGithubPullRequestEvent({ prisma, payload: root, deliveryId });
+          let prIngest: { ingested: boolean; action?: 'OPENED' | 'MERGED' } = { ingested: false };
+          try {
+            prIngest = await ingestGithubPullRequestEvent({ prisma, payload: root, deliveryId });
+          } catch (error) {
+            log.warn('github_pr_mirror_ingest_failed', {
+              deliveryId,
+              event,
+              repositoryFullName,
+              externalPrId: externalId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           const links = await prisma.taskDevLink.findMany({
             where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
             include: {
@@ -246,7 +257,18 @@ export async function processGithubWebhook(input: {
       if (review && pr) {
         const externalId = pr.id != null ? String(pr.id) : null;
         if (externalId) {
-          const reviewIngest = await ingestGithubReviewEvent({ prisma, payload: root, deliveryId });
+          let reviewIngest: { ingested: boolean } = { ingested: false };
+          try {
+            reviewIngest = await ingestGithubReviewEvent({ prisma, payload: root, deliveryId });
+          } catch (error) {
+            log.warn('github_review_mirror_ingest_failed', {
+              deliveryId,
+              event,
+              repositoryFullName,
+              externalPrId: externalId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           const links = await prisma.taskDevLink.findMany({
             where: { provider: 'GITHUB', externalType: 'PULL_REQUEST', externalId },
             include: {

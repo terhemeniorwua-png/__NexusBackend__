@@ -3,6 +3,13 @@ import type { PrismaClient } from '@prisma/client';
 export const REPOSITORY_COMMIT_MESSAGE_CAP = 4096;
 export const REPOSITORY_PR_TITLE_CAP = 500;
 
+// Mirrors are ingested only for repositories linked to at least one Nexus
+// ProjectRepository (provider+fullName, case-insensitive). Repo rename/transfer:
+// webhooks use repository.full_name; mirrors are keyed by normalized
+// repositoryFullName, so activity after rename/transfer is stored under the new
+// name while prior mirror rows remain under the old name. No automatic rewrite/
+// backfill is performed; follow-up can reconcile on ProjectRepository rename.
+
 export type PushIngestResult = {
   ingestedCommits: number;
   ignoredReason?: string;
@@ -28,6 +35,21 @@ function capMessage(value: unknown): string {
 function normalizeRepoFullName(value: unknown): string | null {
   const name = safeString(value, 200);
   return name ? name.toLowerCase() : null;
+}
+
+async function isLinkedRepository(
+  prisma: PrismaClient,
+  provider: 'GITHUB',
+  repositoryFullName: string,
+): Promise<boolean> {
+  const linked = await prisma.projectRepository.findFirst({
+    where: {
+      provider,
+      fullName: { equals: repositoryFullName, mode: 'insensitive' },
+    },
+    select: { id: true },
+  });
+  return linked !== null;
 }
 
 function parseDate(value: unknown): Date | null {
@@ -89,6 +111,10 @@ export async function ingestGithubPushCommits(input: {
   const repositoryFullName = normalizeRepoFullName(repository?.full_name);
   if (!repositoryFullName) {
     return { ingestedCommits: 0, ignoredReason: 'missing_repository', truncated: false };
+  }
+
+  if (!(await isLinkedRepository(prisma, 'GITHUB', repositoryFullName))) {
+    return { ingestedCommits: 0, ignoredReason: 'repository_not_linked', truncated: false };
   }
 
   if (!isDefaultBranchPush(payload)) {
@@ -179,6 +205,10 @@ export async function ingestGithubPullRequestEvent(input: {
 
   if (!repositoryFullName || !pr) return { ingested: false };
 
+  if (!(await isLinkedRepository(prisma, 'GITHUB', repositoryFullName))) {
+    return { ingested: false };
+  }
+
   const externalPrId = pr.id != null ? String(pr.id) : null;
   if (!externalPrId) return { ingested: false };
 
@@ -253,6 +283,10 @@ export async function ingestGithubReviewEvent(input: {
   const review = asRecord(payload.review);
   const pr = asRecord(payload.pull_request);
   if (!repositoryFullName || !review) return { ingested: false };
+
+  if (!(await isLinkedRepository(prisma, 'GITHUB', repositoryFullName))) {
+    return { ingested: false };
+  }
 
   const externalReviewId = review.id != null ? String(review.id) : null;
   if (!externalReviewId) return { ingested: false };
