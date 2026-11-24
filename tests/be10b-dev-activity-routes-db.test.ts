@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- test DB/prisma client shapes */
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test, { after, before, describe } from 'node:test';
 import { resolveTestDatabaseUrl, connectTestDatabase } from './helpers/test-database';
 import { createDevIntegrationService } from '../src/modules/dev-integrations/dev-integration.service';
+import { devActivityCommitsQuerySchema } from '../src/modules/dev-integrations/dev-integration.schemas';
 
 const DB_FLAG = 'RUN_BE10B_DEV_ACTIVITY_DB_TESTS';
 const databaseUrl = resolveTestDatabaseUrl(DB_FLAG);
@@ -103,18 +105,18 @@ function runTests(rawDbUrl: string): void {
       await override(repoOtherProjectId, project2Id, ownerId, 'READ');
       await override(repoWs2Id, otherProjectId, outsiderId, 'READ');
 
-      async function mkCommit(repoFullName: string, sha: string, authorLogin: string | null, committedAt: string, msg = 'msg', branch = 'main', isDefault = true) {
-        const c = await prisma.repositoryCommit.create({ data: { provider: 'GITHUB', repositoryFullName: repoFullName, sha, message: msg, authorName: authorLogin, authorLogin, committedAt: new Date(committedAt), url: `https://ex/${sha}`, branch, isDefaultBranch: isDefault, ingestedAt: new Date('2026-11-01T00:00:00.000Z') } });
+      async function mkCommit(repoFullName: string, sha: string, authorLogin: string | null, committedAt: string, msg = 'msg', branch = 'main', isDefault = true, ingestedAt = '2026-11-01T00:00:00.000Z') {
+        const c = await prisma.repositoryCommit.create({ data: { provider: 'GITHUB', repositoryFullName: repoFullName, sha, message: msg, authorName: authorLogin, authorLogin, committedAt: new Date(committedAt), url: `https://ex/${sha}`, branch, isDefaultBranch: isDefault, ingestedAt: new Date(ingestedAt) } });
         created.commits.push(c.id);
         return c;
       }
-      async function mkPR(repoFullName: string, externalPrId: string, action: 'OPENED'|'MERGED', authorLogin: string|null, occurredAt: string) {
-        const p = await prisma.repositoryPullRequestEvent.create({ data: { provider: 'GITHUB', repositoryFullName: repoFullName, externalPrId, action, authorLogin, authorName: authorLogin, occurredAt: new Date(occurredAt), ingestedAt: new Date('2026-11-01T00:00:00.000Z') } });
+      async function mkPR(repoFullName: string, externalPrId: string, action: 'OPENED'|'MERGED', authorLogin: string|null, occurredAt: string, ingestedAt = '2026-11-01T00:00:00.000Z') {
+        const p = await prisma.repositoryPullRequestEvent.create({ data: { provider: 'GITHUB', repositoryFullName: repoFullName, externalPrId, action, authorLogin, authorName: authorLogin, occurredAt: new Date(occurredAt), ingestedAt: new Date(ingestedAt) } });
         created.prs.push(p.id);
         return p;
       }
-      async function mkReview(repoFullName: string, externalReviewId: string, externalPrId: string|null, reviewerLogin: string|null, submittedAt: string) {
-        const r = await prisma.repositoryReviewEvent.create({ data: { provider: 'GITHUB', repositoryFullName: repoFullName, externalReviewId, externalPrId, reviewerLogin, reviewerName: reviewerLogin, submittedAt: new Date(submittedAt), ingestedAt: new Date('2026-11-01T00:00:00.000Z') } });
+      async function mkReview(repoFullName: string, externalReviewId: string, externalPrId: string|null, reviewerLogin: string|null, submittedAt: string, ingestedAt = '2026-11-01T00:00:00.000Z', reviewState: string | null = null) {
+        const r = await prisma.repositoryReviewEvent.create({ data: { provider: 'GITHUB', repositoryFullName: repoFullName, externalReviewId, externalPrId, reviewState, reviewerLogin, reviewerName: reviewerLogin, submittedAt: new Date(submittedAt), ingestedAt: new Date(ingestedAt) } });
         created.reviews.push(r.id);
         return r;
       }
@@ -124,10 +126,13 @@ function runTests(rawDbUrl: string): void {
       await mkCommit('acme/reporead', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'unmapped', '2026-11-11T10:00:00.000Z', 'read-2');
       await mkCommit('acme/reporead', 'cccccccccccccccccccccccccccccccccccccccc', 'mappeddev', '2026-11-12T10:00:00.000Z', 'read-3');
       await mkCommit('acme/repolink', 'dddddddddddddddddddddddddddddddddddddddd', 'mappeddev', '2026-11-13T10:00:00.000Z', 'link-1');
-      await mkCommit('acme/reponone', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 'secret', '2026-11-14T10:00:00.000Z', 'none-1');
-      await mkCommit('acme/repometa', 'ffffffffffffffffffffffffffffffffffffffff', 'secret', '2026-11-15T10:00:00.000Z', 'meta-1');
+      await mkCommit('acme/reponone', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 'secret', '2026-11-14T10:00:00.000Z', 'none-1', 'main', true, '2026-10-01T00:00:00.000Z');
+      await mkCommit('acme/repometa', 'ffffffffffffffffffffffffffffffffffffffff', 'secret', '2026-11-15T10:00:00.000Z', 'meta-1', 'main', true, '2026-10-01T00:00:00.000Z');
       // casing variant dedupe: same sha different casing repo name
       await mkCommit('Acme/RepoRead', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'mappeddev', '2026-11-09T10:00:00.000Z', 'dupe-casing');
+      // dedicated casing-dedupe developer: two mirror rows, same repo+sha, different casing
+      await mkCommit('acme/reporead', 'cafebabecafebabecafebabecafebabecafebabe', 'casedev', '2026-11-08T10:00:00.000Z', 'case-lower');
+      await mkCommit('Acme/RepoRead', 'cafebabecafebabecafebabecafebabecafebabe', 'casedev', '2026-11-07T10:00:00.000Z', 'case-upper');
       // other project same repo name
       await mkCommit('acme/reporead', '1111111111111111111111111111111111111111', 'otherproj', '2026-11-16T10:00:00.000Z', 'other-proj');
       // other workspace same repo name
@@ -137,12 +142,13 @@ function runTests(rawDbUrl: string): void {
       await mkPR('acme/reporead', 'pr-1', 'OPENED', 'mappeddev', '2026-11-10T11:00:00.000Z');
       await mkPR('acme/reporead', 'pr-1', 'MERGED', 'mappeddev', '2026-11-10T12:00:00.000Z');
       await mkPR('acme/repolink', 'pr-2', 'OPENED', 'unmapped', '2026-11-11T11:00:00.000Z');
-      await mkPR('acme/reponone', 'pr-secret', 'OPENED', 'secret', '2026-11-11T11:00:00.000Z');
+      await mkPR('acme/reponone', 'pr-secret', 'OPENED', 'secret', '2026-11-11T11:00:00.000Z', '2026-10-01T00:00:00.000Z');
 
       // Reviews: reviewer2 reviews pr-1 (mappeddev author) -> counts; mappeddev self-review pr-1 -> excluded
       await mkReview('acme/reporead', 'rev-1', 'pr-1', 'reviewer2', '2026-11-10T13:00:00.000Z');
       await mkReview('acme/reporead', 'rev-2', 'pr-1', 'mappeddev', '2026-11-10T14:00:00.000Z'); // self-review
-      await mkReview('acme/reponone', 'rev-secret', 'pr-secret', 'secret', '2026-11-10T14:00:00.000Z');
+      await mkReview('acme/repolink', 'rev-3', 'pr-2', 'reviewer3', '2026-11-11T14:00:00.000Z', '2026-11-01T00:00:00.000Z', 'CHANGES_REQUESTED');
+      await mkReview('acme/reponone', 'rev-secret', 'pr-secret', 'secret', '2026-11-10T14:00:00.000Z', '2026-10-01T00:00:00.000Z');
     });
 
     after(async () => {
@@ -218,6 +224,71 @@ function runTests(rawDbUrl: string): void {
       noEmail(page2);
     });
 
+    test('commits: opaque cursor passes route validation and malformed cursors are rejected', async () => {
+      const page = await svc.listDevActivityCommits({ userId: ownerId, workspaceId: wsId, projectId, limit: 2 });
+      assert.ok(page.nextCursor);
+      const parsed = devActivityCommitsQuerySchema.parse({ cursor: page.nextCursor, limit: '2' });
+      assert.equal(parsed.cursor, page.nextCursor);
+      assert.equal(parsed.limit, 2);
+      await assert.rejects(
+        () => svc.listDevActivityCommits({ userId: ownerId, workspaceId: wsId, projectId, cursor: 'not-a-cursor' }),
+        (e: any) => (e?.statusCode ?? e?.status) === 400,
+      );
+    });
+
+    test('commits: READ and LINK repos contribute; NONE and METADATA are hidden', async () => {
+      const read = await svc.listDevActivityCommits({ userId: ownerId, workspaceId: wsId, projectId, repositoryId: repoReadId, limit: 100 });
+      const link = await svc.listDevActivityCommits({ userId: ownerId, workspaceId: wsId, projectId, repositoryId: repoLinkId, limit: 100 });
+      assert.ok(read.items.length > 0);
+      assert.ok(link.items.length > 0);
+      assert.ok(read.items.every((item: any) => item.repositoryId === repoReadId));
+      assert.ok(link.items.every((item: any) => item.repositoryId === repoLinkId));
+      noEmail(read);
+      noEmail(link);
+      for (const repoId of [repoNoneId, repoMetaId]) {
+        await assert.rejects(
+          () => svc.listDevActivityCommits({ userId: ownerId, workspaceId: wsId, projectId, repositoryId: repoId }),
+          (e: any) => (e?.statusCode ?? e?.status) === 404,
+        );
+      }
+    });
+
+    test('developers: READ and LINK repos contribute; NONE and METADATA are hidden', async () => {
+      const read = await svc.listDevActivityDevelopers({ userId: ownerId, workspaceId: wsId, projectId, from, to, repositoryId: repoReadId });
+      const link = await svc.listDevActivityDevelopers({ userId: ownerId, workspaceId: wsId, projectId, from, to, repositoryId: repoLinkId });
+      assert.ok(read.developers.length > 0);
+      assert.ok(link.developers.length > 0);
+      assert.ok(!read.developers.some((d: any) => d.providerLogin === 'secret'));
+      assert.ok(!link.developers.some((d: any) => d.providerLogin === 'secret'));
+      noEmail(read);
+      noEmail(link);
+      for (const repoId of [repoNoneId, repoMetaId]) {
+        await assert.rejects(
+          () => svc.listDevActivityDevelopers({ userId: ownerId, workspaceId: wsId, projectId, from, to, repositoryId: repoId }),
+          (e: any) => (e?.statusCode ?? e?.status) === 404,
+        );
+      }
+    });
+
+    test('repositoryId filter for an unlinked repository returns 404 on both routes', async () => {
+      const unlinkedId = randomUUID();
+      await assert.rejects(
+        () => svc.listDevActivityCommits({ userId: ownerId, workspaceId: wsId, projectId, repositoryId: unlinkedId }),
+        (e: any) => (e?.statusCode ?? e?.status) === 404,
+      );
+      await assert.rejects(
+        () => svc.listDevActivityDevelopers({ userId: ownerId, workspaceId: wsId, projectId, from, to, repositoryId: unlinkedId }),
+        (e: any) => (e?.statusCode ?? e?.status) === 404,
+      );
+    });
+
+    test('developers: casing variants dedupe by repository+sha', async () => {
+      const res = await svc.listDevActivityDevelopers({ userId: ownerId, workspaceId: wsId, projectId, from, to });
+      const cased = res.developers.find((d: any) => d.providerLogin === 'casedev');
+      assert.ok(cased);
+      assert.equal(cased.commits, 1);
+    });
+
     test('commits: page boundaries unaffected by hidden rows', async () => {
       // NONE/METADATA repos have commits in same time window; they must not affect page size/cursor.
       const res = await svc.listDevActivityCommits({ userId: ownerId, workspaceId: wsId, projectId, limit: 10 });
@@ -235,7 +306,9 @@ function runTests(rawDbUrl: string): void {
     test('developers: READ/LINK contribute, NONE/METADATA never change totals or coverageStartedAt; mapped/unmapped; self-review excluded; no email', async () => {
       const res = await svc.listDevActivityDevelopers({ userId: ownerId, workspaceId: wsId, projectId, from, to });
       noEmail(res);
-      assert.ok(res.coverageStartedAt);
+      // Hidden NONE/METADATA repositories were ingested earlier (2026-10-01),
+      // but coverage must reflect only READ/LINK repositories (2026-11-01).
+      assert.equal(res.coverageStartedAt, '2026-11-01T00:00:00.000Z');
       assert.ok(Array.isArray(res.developers));
 
       const mapped = res.developers.find((d: any) => d.providerLogin === 'mappeddev');
@@ -257,6 +330,10 @@ function runTests(rawDbUrl: string): void {
       assert.equal(reviewer2.reviewsGiven, 1);
       // mappeddev should not get self-review counted
       assert.equal(mapped.reviewsGiven, 0);
+      // all submitted states count, including CHANGES_REQUESTED
+      const reviewer3 = res.developers.find((d: any) => d.providerLogin === 'reviewer3');
+      assert.ok(reviewer3);
+      assert.equal(reviewer3.reviewsGiven, 1);
 
       // no secret/none/meta authors
       assert.ok(!res.developers.some((d: any) => d.providerLogin === 'secret'));
