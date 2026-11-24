@@ -1507,6 +1507,44 @@ Raw-body endpoint (mounted before JSON parsing) for GitLab webhooks. Verifies au
 
 **Env/config:** `GITLAB_WEBHOOK_SECRET` required; configure webhook URL to `https://<backend>/api/v1/webhooks/gitlab` with the same secret token and subscribe to merge request events (minimum scope/events).
 
+### Feature E — Dev activity read routes (GitHub mirrors, read-only)
+
+Read-only project endpoints over stored GitHub dev-activity mirror rows (`RepositoryCommit`, `RepositoryPullRequestEvent`, `RepositoryReviewEvent`). No ingestion changes, no new tables, no auto-linking. GitHub only.
+
+**Common behavior**
+- Project-scoped, authenticated, active account (`requireAuth`, `requireActive`).
+- Source is limited to repositories linked to the project through `ProjectRepository` (provider `GITHUB`, case-insensitive full-name match). Mirror rows are never read by repository name alone.
+- Effective repository access is resolved per linked repository (`resolveRepositoryAccess`). Only `READ` and `LINK` repositories are included. `NONE` and `METADATA` are omitted entirely. Access filter is applied before pagination/counting so hidden rows do not affect `nextCursor`, page size, totals, or `coverageStartedAt`.
+- A `repositoryId` filter naming a repository not linked to the project, or linked but not readable by the caller (`NONE`/`METADATA`), returns the same `404 PROJECT_REPOSITORY_NOT_FOUND` as a missing repository.
+- Read-time identity mapping: provider logins are mapped to workspace users only through verified `IntegrationConnection.externalAccountLogin` of active workspace members (case-normalized). No name/email matching. Responses return user `id` and `name` only; no email field.
+
+| Method | Path | Request | Success (data) | Errors | Required permission |
+| --- | --- | --- | --- | --- | --- |
+| GET | `/workspaces/:workspaceId/projects/:projectId/dev-activity/commits` | Query `cursor?` (opaque base64url string, max 1000), `limit?` (int 1..100, default 20), `repositoryId?` (uuid), `authorLogin?` (string 1..200), `from?` (ISO datetime with offset), `to?` (ISO datetime with offset) | `200 { success, data: { items, nextCursor } }` | 400 `VALIDATION_ERROR`, 401, 403 `PERMISSION_DENIED`, 404 project/workspace or repository not found | Project view (`project.view`) |
+| GET | `/workspaces/:workspaceId/projects/:projectId/dev-activity/developers` | Query `from` (required ISO datetime with offset), `to` (required ISO datetime with offset), `repositoryId?` (uuid). Validation: `from < to`, `to - from <= 90 days` | `200 { success, data: { range, coverageStartedAt, developers } }` | 400 `VALIDATION_ERROR`, 401, 403 `PERMISSION_DENIED`, 404 project/workspace or repository not found | Manager-level project permission (`project.update`) |
+
+**Commits response**
+- `items[]`: `{ id, repositoryId, repositoryFullName, sha, message, authorName, authorLogin, authorUser, committedAt, url, branch }`
+- `authorUser`: `{ id, name } | null` (resolved at read time; null when unmapped)
+- `authorName`: string|null; `authorLogin`: string|null; `committedAt`: ISO datetime; `url`: string|null; `branch`: string|null
+- `nextCursor`: string|null (opaque base64url JSON cursor `{c,i}` over `committedAt desc, id desc`)
+- Source: `RepositoryCommit` rows where `provider=GITHUB`, `isDefaultBranch=true`, repository is linked to this project and readable (`READ`/`LINK`). Case-insensitive repository match; deduped by `lower(repositoryFullName)+sha`.
+
+**Developers response**
+- `range`: `{ from, to }` (ISO datetimes)
+- `coverageStartedAt`: string|null — earliest `ingestedAt` among mirror rows of included `READ`/`LINK` repositories only; null when no included mirror rows exist. Never computed from repositories the caller cannot read.
+- `developers[]`: `{ type, user, providerLogin, displayName, commits, pullRequestsOpened, pullRequestsMerged, reviewsGiven }`
+- `type`: `"workspace_user" | "unmapped"`
+- `user`: `{ id, name } | null` (`id` and `name` only; null for unmapped)
+- `providerLogin`: string|null; `displayName`: string
+- Counts: `commits` (default-branch commits, unique per `repo+sha`), `pullRequestsOpened` (OPENED events attributed to PR author), `pullRequestsMerged` (MERGED events attributed to PR author), `reviewsGiven` (submitted reviews; self-reviews excluded when PR author is known from a mirrored OPENED event, otherwise counted). Rows with no login and no mapping are excluded. No per-repository breakdown.
+
+**Counting caveats**
+- Merge commits are counted because parents are not stored.
+- Force-push can leave rewritten history in counts.
+- Partial push truncation is not detected.
+- History starts at ingestion; no backfill.
+
 ## BE-5 in-app notification fan-out (current contract)
 
 BE-5 adds in-app `Notification` rows for review, checklist, attachment-version
