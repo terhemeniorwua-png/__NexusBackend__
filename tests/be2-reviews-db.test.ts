@@ -878,7 +878,6 @@ function runTests(rawDbUrl: string): void {
 
   test('task review: target validation, fields, and lifecycle rules', async () => {
     const taskId = await createTask();
-    const taskId2 = await createTask();
     const attachmentVersionId = await createAttachmentVersion();
     const checklistId = await createChecklist([{ text: 'done', completed: true }]);
 
@@ -1099,8 +1098,7 @@ function runTests(rawDbUrl: string): void {
 
     // review.updated audit event written and no notification created for it
     const updateReviewId = (afterApproved.body.data as { review: ReviewView }).review.id;
-    const audits = await reviewAuditActions(updateReviewId);
-    // no review.updated yet for this one; patch it
+    // patch it and confirm review.updated is recorded
     const patchForAudit = await api(submitter, reviewUrl(updateReviewId), 'PATCH', {
       round: 1,
       decisions: [{ text: 'Audit check' }],
