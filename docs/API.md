@@ -858,21 +858,36 @@ a soft-deleted target hides its reviews with 404.
 **Request shapes.** The list query accepts `targetKind` (`attachmentVersion` or
 `checklist`), `targetId` (uuid), `status` (`SUBMITTED`, `UNDER_REVIEW`,
 `APPROVED`, `CHANGES_REQUESTED`), `assigneeId` (uuid), `cursor` (uuid) and
-`limit` (1-100, default 25). Create takes exactly one of `attachmentVersionId`
-or `checklistId` (uuid) and an optional `assigneeId` (uuid). `assign` takes
-`{ assigneeId: uuid }`; `start` takes no body. `resubmit`, `approve`, `reject`
-and `request-changes` take a positive integer `round`; `approve` allows an
-optional `note` (1-2000 non-blank characters) while `reject` and
-`request-changes` require it.
+`limit` (1-100, default 25). `targetKind` also accepts `task`.
+
+Create takes exactly one of `attachmentVersionId`, `checklistId`, or `taskId`
+(uuid) and an optional `assigneeId` (uuid). For `taskId` targets, `artworkUrl`
+is required and `decisions` is optional (may be omitted or an empty array).
+`artworkUrl` and `decisions` are rejected for non-task targets. `artworkUrl`
+must be a trimmed string, max 2048 characters, contain no whitespace, and parse
+as an `http:` or `https:` URL. `decisions` is an array of 0-20 objects with
+`text` (trimmed, 1-500 non-blank characters).
+
+`assign` takes `{ assigneeId: uuid }`; `start` takes no body. `resubmit`,
+`approve`, `reject` and `request-changes` take a positive integer `round`;
+`approve` allows an optional `note` (1-2000 non-blank characters) while
+`reject` and `request-changes` require it. `PATCH /:reviewId` takes
+`{ round: positive int, artworkUrl?, decisions? }` with at least one of
+`artworkUrl` or `decisions`; it uses the same URL/decisions validation as
+create and is only allowed for task-target reviews by the submitter with
+`submission.submit` while status is `SUBMITTED`, `UNDER_REVIEW`, or
+`CHANGES_REQUESTED`.
 
 **Response shapes.** `ReviewView`: `id`, `workspaceId`, `projectId`, `resource`
-(`{ kind: "attachmentVersion"|"checklist", id, revision? }`, where `revision`
-appears only for checklists), `status`, `round`, `assigneeId` (uuid or `null`),
-`submittedById`, `submittedAt`, `checklistRevision` (integer or `null`),
-`lastDecision` (`ReviewDecisionView` or `null`), `stale` (boolean), `createdAt`,
-`updatedAt` (timestamps ISO-8601). `ReviewDecisionView`: `id`, `reviewId`,
-`round`, `decision` (`APPROVED`|`REJECTED`|`CHANGES_REQUESTED`), `note` (string
-or `null`), `decidedById`, `decidedAt` (ISO-8601).
+(`{ kind: "attachmentVersion"|"checklist"|"task", id, revision? }`, where
+`revision` appears only for checklists), `status`, `round`, `assigneeId`
+(uuid or `null`), `submittedById`, `submittedAt`, `checklistRevision`
+(integer or `null`), `taskId` (uuid or `null`), `artworkUrl` (string or
+`null`), `decisions` (array of `{ text }` or `null`), `lastDecision`
+(`ReviewDecisionView` or `null`), `stale` (boolean), `createdAt`, `updatedAt`
+(timestamps ISO-8601). `ReviewDecisionView`: `id`, `reviewId`, `round`,
+`decision` (`APPROVED`|`REJECTED`|`CHANGES_REQUESTED`), `note` (string or
+`null`), `decidedById`, `decidedAt` (ISO-8601).
 
 **Rules and concurrency.** Decision and resubmit bodies must carry the current
 `round`; a mismatch returns 409 `STALE_ROUND`, and a decided round returns 409
@@ -880,36 +895,44 @@ or `null`), `decidedById`, `decidedAt` (ISO-8601).
 with every live item completed, otherwise 409 `CHECKLIST_NOT_READY` (create and
 resubmit). The checklist revision is pinned on the review; deciding or
 resubmitting against a newer revision returns 409 `CHECKLIST_REVISION_STALE`.
-Resubmit reopens the same `Review` row (it never creates a new one). An existing
+Task-target reviews never become stale from task or artwork edits. Resubmit
+reopens the same `Review` row (it never creates a new one). An existing
 `APPROVED` review for the same attachment version, or the same checklist at the
-same revision, returns 409 `REVIEW_ALREADY_APPROVED`; an open review for the same
-target returns 409 `REVIEW_ALREADY_OPEN`. Assigning the same assignee and
-starting an already `UNDER_REVIEW` review are 200 no-ops. Soft-deleted targets
-hide their reviews with 404 `REVIEW_TARGET_NOT_FOUND` (or `REVIEW_NOT_FOUND`
-when addressed by review id).
+same revision, returns 409 `REVIEW_ALREADY_APPROVED`; task targets are not
+blocked by this rule and may receive a new review after `APPROVED`. An open
+review for the same target returns 409 `REVIEW_ALREADY_OPEN`. Assigning the
+same assignee and starting an already `UNDER_REVIEW` review are 200 no-ops.
+Soft-deleted targets hide their reviews with 404 `REVIEW_TARGET_NOT_FOUND`
+(or `REVIEW_NOT_FOUND` when addressed by review id).
+
+PATCH updates only task-target reviews. A wrong `round` returns 409
+`STALE_ROUND`; `APPROVED` reviews and non-task targets are refused.
 
 Audit events are written in the same transaction as the mutation:
 `review.created`, `review.assigned`, `review.started`, `review.resubmitted`,
-`review.approved`, `review.rejected`, `review.changes_requested`. BE-2 adds no
-`NotificationType` values and creates no notifications.
+`review.approved`, `review.rejected`, `review.changes_requested`,
+`review.updated`. `review.updated` includes `changedFields` metadata and creates
+no notification. BE-2 review mutations otherwise create no notifications beyond
+the existing notification fan-out registry.
 
 | Error code | HTTP | Meaning |
 | --- | --- | --- |
-| `VALIDATION_ERROR` | 400 | Malformed target/assignee ids, body or query; invalid round or note. |
+| `VALIDATION_ERROR` | 400 | Malformed target/assignee ids, body or query; invalid round/note; invalid task review artworkUrl/decisions. |
+| `REVIEW_TARGET_INVALID` | 400 | PATCH attempted on a non-task review. |
 | `AUTHENTICATION_REQUIRED` | 401 | No valid bearer access token. |
-| `PERMISSION_DENIED` | 403 | Caller lacks the required project/submission permission. |
+| `PERMISSION_DENIED` | 403 | Caller lacks the required project/submission permission, or a non-submitter attempted PATCH. |
 | `SELF_REVIEW_FORBIDDEN` | 403 | Assignee or decision maker is the submitter. |
 | `WORKSPACE_ACCESS_DENIED` | 403 | Caller is not an active member of the workspace. |
 | `REVIEW_NOT_FOUND` | 404 | Review id is unknown or its target is soft-deleted. |
-| `REVIEW_TARGET_NOT_FOUND` | 404 | The referenced attachment version or checklist does not exist in the project or is soft-deleted. |
+| `REVIEW_TARGET_NOT_FOUND` | 404 | The referenced attachment version, checklist, or task does not exist in the project/workspace or is soft-deleted. |
 | `PROJECT_NOT_FOUND` | 404 | Project is missing or invisible to the caller. |
 | `REVIEW_ALREADY_OPEN` | 409 | An open review already exists for this target. |
-| `REVIEW_ALREADY_APPROVED` | 409 | This target already has an approved review (checklist: same pinned revision). |
+| `REVIEW_ALREADY_APPROVED` | 409 | This attachment/checklist target already has an approved review (checklist: same pinned revision). |
 | `CHECKLIST_NOT_READY` | 409 | Checklist has no live items or some live item is incomplete. |
 | `CHECKLIST_REVISION_STALE` | 409 | Checklist revision advanced past the pinned revision. |
 | `STALE_ROUND` | 409 | Body `round` does not match the review's current round. |
 | `REVIEW_ALREADY_DECIDED` | 409 | This review round was already decided. |
-| `REVIEW_NOT_OPEN` | 409 | Assignment requires an open (`SUBMITTED`/`UNDER_REVIEW`) review. |
+| `REVIEW_NOT_OPEN` | 409 | Assignment requires an open (`SUBMITTED`/`UNDER_REVIEW`) review, or PATCH is not allowed in the current state. |
 | `INVALID_STATUS_TRANSITION` | 409 | Resubmit is not allowed from the review's current status. |
 
 ## Projects and project visibility (Phase 8 — in progress)
