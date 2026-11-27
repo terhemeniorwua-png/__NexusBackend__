@@ -14,6 +14,7 @@ import {
   resubmitReviewSchema,
   reviewParamsSchema,
   reviewProjectParamsSchema,
+  updateReviewSchema,
   type ApproveReviewInput,
   type AssignReviewInput,
   type CreateReviewInput,
@@ -21,6 +22,7 @@ import {
   type RejectReviewInput,
   type RequestChangesReviewInput,
   type ResubmitReviewInput,
+  type UpdateReviewInput,
 } from './review.schemas';
 import { createReviewService } from './review.service';
 
@@ -89,6 +91,9 @@ export function createReviewRouter({ config, service: injectedService }: ReviewR
           projectId,
           attachmentVersionId: body.attachmentVersionId,
           checklistId: body.checklistId,
+          taskId: body.taskId,
+          artworkUrl: body.artworkUrl,
+          decisions: body.decisions,
           assigneeId: body.assigneeId,
         }),
         201,
@@ -263,6 +268,34 @@ export function createReviewRouter({ config, service: injectedService }: ReviewR
       sendSuccess(
         res,
         await service.get({ userId: userId(req), workspaceId, projectId, reviewId }),
+      );
+    },
+  );
+
+  // PATCH /workspaces/:workspaceId/projects/:projectId/reviews/:reviewId
+  router.patch(
+    '/:reviewId',
+    requireAuth,
+    requireActiveAccount,
+    validate({ params: reviewParamsSchema, body: updateReviewSchema }),
+    async (req, res) => {
+      const { workspaceId, projectId, reviewId } = req.validated!.params as {
+        workspaceId: string;
+        projectId: string;
+        reviewId: string;
+      };
+      const body = req.validated!.body as UpdateReviewInput;
+      sendSuccess(
+        res,
+        await service.update({
+          userId: userId(req),
+          workspaceId,
+          projectId,
+          reviewId,
+          round: body.round,
+          artworkUrl: body.artworkUrl,
+          decisions: body.decisions,
+        }),
       );
     },
   );

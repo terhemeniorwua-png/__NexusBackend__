@@ -12,7 +12,7 @@ export const reviewStatusSchema = z.enum([
   'CHANGES_REQUESTED',
 ]);
 
-export const targetKindSchema = z.enum(['attachmentVersion', 'checklist']);
+export const targetKindSchema = z.enum(['attachmentVersion', 'checklist', 'task']);
 
 export const listReviewsQuerySchema = z.object({
   targetKind: targetKindSchema.optional(),
@@ -23,14 +23,78 @@ export const listReviewsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
+const artworkUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((value) => !/\s/.test(value), { message: 'Artwork URL must not contain whitespace' })
+  .refine(
+    (value) => {
+      try {
+        const url = new URL(value);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+      } catch {
+        return false;
+      }
+    },
+    { message: 'Artwork URL must be a valid http or https URL' },
+  );
+
+const decisionItemSchema = z.object({
+  text: z
+    .string()
+    .trim()
+    .min(1, { message: 'Decision text cannot be blank' })
+    .max(500, { message: 'Decision text must be at most 500 characters' }),
+});
+
+const decisionsSchema = z.array(decisionItemSchema).max(20);
+
 export const createReviewSchema = z
   .object({
     attachmentVersionId: uuid.optional(),
     checklistId: uuid.optional(),
+    taskId: uuid.optional(),
+    artworkUrl: artworkUrlSchema.optional(),
+    decisions: decisionsSchema.optional(),
     assigneeId: uuid.optional(),
   })
-  .refine((value) => Boolean(value.attachmentVersionId) !== Boolean(value.checklistId), {
-    message: 'Exactly one review target must be provided',
+  .superRefine((value, ctx) => {
+    const targets = [value.attachmentVersionId, value.checklistId, value.taskId].filter(Boolean);
+    if (targets.length !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Exactly one review target must be provided',
+        path: ['taskId'],
+      });
+      return;
+    }
+
+    if (value.taskId) {
+      if (!value.artworkUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Artwork URL is required for task reviews',
+          path: ['artworkUrl'],
+        });
+      }
+      return;
+    }
+
+    if (value.artworkUrl !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Artwork URL is only valid for task reviews',
+        path: ['artworkUrl'],
+      });
+    }
+    if (value.decisions !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Decisions are only valid for task reviews',
+        path: ['decisions'],
+      });
+    }
   });
 
 export const assignReviewSchema = z.object({ assigneeId: uuid });
@@ -62,6 +126,16 @@ export const requestChangesReviewSchema = z.object({
   note: decisionNote,
 });
 
+export const updateReviewSchema = z
+  .object({
+    round: decisionRound,
+    artworkUrl: artworkUrlSchema.optional(),
+    decisions: decisionsSchema.optional(),
+  })
+  .refine((value) => value.artworkUrl !== undefined || value.decisions !== undefined, {
+    message: 'At least one of artworkUrl or decisions must be provided',
+  });
+
 export type ListReviewsQuery = z.infer<typeof listReviewsQuerySchema>;
 export type CreateReviewInput = z.infer<typeof createReviewSchema>;
 export type AssignReviewInput = z.infer<typeof assignReviewSchema>;
@@ -69,3 +143,4 @@ export type ResubmitReviewInput = z.infer<typeof resubmitReviewSchema>;
 export type ApproveReviewInput = z.infer<typeof approveReviewSchema>;
 export type RejectReviewInput = z.infer<typeof rejectReviewSchema>;
 export type RequestChangesReviewInput = z.infer<typeof requestChangesReviewSchema>;
+export type UpdateReviewInput = z.infer<typeof updateReviewSchema>;

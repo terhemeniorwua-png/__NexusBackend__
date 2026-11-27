@@ -67,10 +67,11 @@ type ReviewRow = Prisma.ReviewGetPayload<{ include: typeof reviewInclude }>;
 type Input = { userId: string; workspaceId: string; projectId: string };
 type Target =
   | { kind: 'attachmentVersion'; id: string }
-  | { kind: 'checklist'; id: string };
+  | { kind: 'checklist'; id: string }
+  | { kind: 'task'; id: string };
 
 export interface ReviewResourceView {
-  kind: 'attachmentVersion' | 'checklist';
+  kind: 'attachmentVersion' | 'checklist' | 'task';
   id: string;
   revision?: number;
 }
@@ -96,6 +97,9 @@ export interface ReviewView {
   submittedById: string;
   submittedAt: string;
   checklistRevision: number | null;
+  taskId: string | null;
+  artworkUrl: string | null;
+  decisions: Array<{ text: string }> | null;
   lastDecision: ReviewDecisionView | null;
   stale: boolean;
   createdAt: string;
@@ -196,7 +200,39 @@ function reviewAudit(
   };
 }
 
+function normaliseReviewDecisions(value: unknown): Array<{ text: string }> | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  const items = value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+    const text = (entry as { text?: unknown }).text;
+    if (typeof text !== 'string') return [];
+    const trimmed = text.trim();
+    return trimmed.length > 0 ? [{ text: trimmed }] : [];
+  });
+  return items;
+}
+
 function toReviewView(row: ReviewRow): ReviewView {
+  const decisions = normaliseReviewDecisions(row.decisions);
+  const base = {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    projectId: row.projectId,
+    status: row.status,
+    round: row.round,
+    assigneeId: row.assigneeId,
+    submittedById: row.submittedById,
+    submittedAt: row.submittedAt.toISOString(),
+    checklistRevision: row.checklistRevision,
+    taskId: row.taskId,
+    artworkUrl: row.artworkUrl,
+    decisions,
+    lastDecision: row.decisionRecords[0] ? toDecisionView(row.decisionRecords[0]) : null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+
   if (row.checklistId) {
     if (row.checklistRevision === null) {
       throw new AppError(500, 'REVIEW_TARGET_INVALID', 'Checklist review is missing its revision');
@@ -205,24 +241,17 @@ function toReviewView(row: ReviewRow): ReviewView {
       ? true
       : row.checklist.revision !== row.checklistRevision;
     return {
-      id: row.id,
-      workspaceId: row.workspaceId,
-      projectId: row.projectId,
-      resource: {
-        kind: 'checklist',
-        id: row.checklistId,
-        revision: row.checklistRevision,
-      },
-      status: row.status,
-      round: row.round,
-      assigneeId: row.assigneeId,
-      submittedById: row.submittedById,
-      submittedAt: row.submittedAt.toISOString(),
-      checklistRevision: row.checklistRevision,
-      lastDecision: row.decisionRecords[0] ? toDecisionView(row.decisionRecords[0]) : null,
+      ...base,
+      resource: { kind: 'checklist', id: row.checklistId, revision: row.checklistRevision },
       stale,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  if (row.taskId) {
+    return {
+      ...base,
+      resource: { kind: 'task', id: row.taskId },
+      stale: false,
     };
   }
 
@@ -231,20 +260,9 @@ function toReviewView(row: ReviewRow): ReviewView {
   }
 
   return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    projectId: row.projectId,
+    ...base,
     resource: { kind: 'attachmentVersion', id: row.attachmentVersionId },
-    status: row.status,
-    round: row.round,
-    assigneeId: row.assigneeId,
-    submittedById: row.submittedById,
-    submittedAt: row.submittedAt.toISOString(),
-    checklistRevision: null,
-    lastDecision: row.decisionRecords[0] ? toDecisionView(row.decisionRecords[0]) : null,
     stale: false,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -296,6 +314,19 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
       return;
     }
 
+    if (row.taskId) {
+      const task = row.task;
+      if (
+        !task ||
+        task.deletedAt !== null ||
+        task.projectId !== input.projectId ||
+        task.project.workspaceId !== input.workspaceId
+      ) {
+        throw new AppError(404, 'REVIEW_TARGET_NOT_FOUND', 'That review target does not exist');
+      }
+      return;
+    }
+
     const version = row.attachmentVersion;
     if (
       !row.attachmentVersionId ||
@@ -327,6 +358,22 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         throw new AppError(404, 'REVIEW_TARGET_NOT_FOUND', 'That review target does not exist');
       }
       return { kind: 'attachmentVersion', id: version.id };
+    }
+
+    if (target.kind === 'task') {
+      const task = await prisma.task.findFirst({
+        where: {
+          id: target.id,
+          projectId: input.projectId,
+          deletedAt: null,
+          project: { workspaceId: input.workspaceId },
+        },
+        select: { id: true },
+      });
+      if (!task) {
+        throw new AppError(404, 'REVIEW_TARGET_NOT_FOUND', 'That review target does not exist');
+      }
+      return { kind: 'task', id: task.id };
     }
 
     const checklist = await prisma.checklist.findFirst({
@@ -396,6 +443,8 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
     target: Target,
     checklistRevision: number | null,
   ): Promise<void> {
+    if (target.kind === 'task') return;
+
     const existing = await tx.review.findFirst({
       where:
         target.kind === 'checklist'
@@ -564,12 +613,17 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
       input: Input & {
         attachmentVersionId?: string;
         checklistId?: string;
+        taskId?: string;
+        artworkUrl?: string;
+        decisions?: Array<{ text: string }>;
         assigneeId?: string;
       },
     ) {
       const target: Target = input.attachmentVersionId
         ? { kind: 'attachmentVersion', id: input.attachmentVersionId }
-        : { kind: 'checklist', id: input.checklistId as string };
+        : input.taskId
+          ? { kind: 'task', id: input.taskId }
+          : { kind: 'checklist', id: input.checklistId as string };
       const { actor, authorization } = await loadProjectContext(input, 'write');
       const scopedTarget = await resolveTarget(input, target);
       await authorizeProject(prisma, {
@@ -601,7 +655,7 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
           }
           checklistRevision = checklist.revision;
           await assertChecklistReady(tx, scopedTarget.id);
-        } else {
+        } else if (scopedTarget.kind === 'attachmentVersion') {
           const version = await tx.attachmentVersion.findFirst({
             where: {
               id: scopedTarget.id,
@@ -617,6 +671,19 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
           if (!version) {
             throw new AppError(404, 'REVIEW_TARGET_NOT_FOUND', 'That review target does not exist');
           }
+        } else {
+          const task = await tx.task.findFirst({
+            where: {
+              id: scopedTarget.id,
+              projectId: input.projectId,
+              deletedAt: null,
+              project: { workspaceId: input.workspaceId },
+            },
+            select: { id: true },
+          });
+          if (!task) {
+            throw new AppError(404, 'REVIEW_TARGET_NOT_FOUND', 'That review target does not exist');
+          }
         }
 
         await assertNoApprovedTarget(tx, scopedTarget, checklistRevision);
@@ -630,7 +697,13 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
               attachmentVersionId:
                 scopedTarget.kind === 'attachmentVersion' ? scopedTarget.id : null,
               checklistId: scopedTarget.kind === 'checklist' ? scopedTarget.id : null,
+              taskId: scopedTarget.kind === 'task' ? scopedTarget.id : null,
               checklistRevision,
+              artworkUrl: scopedTarget.kind === 'task' ? (input.artworkUrl ?? null) : null,
+              decisions:
+                scopedTarget.kind === 'task' && input.decisions !== undefined
+                  ? (input.decisions as Prisma.InputJsonValue)
+                  : Prisma.JsonNull,
               submittedById: input.userId,
               assigneeId: input.assigneeId ?? null,
               status: 'SUBMITTED',
@@ -676,7 +749,7 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
 
     async list(
       input: Input & {
-        targetKind?: 'attachmentVersion' | 'checklist';
+        targetKind?: 'attachmentVersion' | 'checklist' | 'task';
         targetId?: string;
         status?: ReviewStatus;
         assigneeId?: string;
@@ -700,6 +773,7 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
           ? { attachmentVersionId: input.targetId ?? undefined }
           : {}),
         ...(input.targetKind === 'checklist' ? { checklistId: input.targetId ?? undefined } : {}),
+        ...(input.targetKind === 'task' ? { taskId: input.targetId ?? undefined } : {}),
         OR: [
           {
             attachmentVersion: {
@@ -716,6 +790,13 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
               workspaceId: input.workspaceId,
               projectId: input.projectId,
               deletedAt: null,
+            },
+          },
+          {
+            task: {
+              deletedAt: null,
+              projectId: input.projectId,
+              project: { workspaceId: input.workspaceId },
             },
           },
         ],
@@ -742,6 +823,83 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
         permission: ProjectPermission.View,
       });
       return { review: toReviewView(row) };
+    },
+
+    async update(
+      input: Input & {
+        reviewId: string;
+        round: number;
+        artworkUrl?: string;
+        decisions?: Array<{ text: string }>;
+      },
+    ) {
+      const { actor } = await loadProjectContext(input, 'write');
+      const current = await getRequiredReviewRow(prisma, input);
+      await authorizeProject(prisma, {
+        actor,
+        projectId: input.projectId,
+        permission: ProjectPermission.SubmissionSubmit,
+        resource: submissionResource(current.id, current.submittedById, 'submit'),
+      });
+
+      if (current.submittedById !== input.userId) {
+        throw new AppError(403, 'PERMISSION_DENIED', 'Only the submitter can update this review');
+      }
+      if (!current.taskId) {
+        throw new AppError(400, 'REVIEW_TARGET_INVALID', 'Only task reviews can be updated');
+      }
+      if (current.status === 'APPROVED') {
+        throw new AppError(409, 'REVIEW_NOT_OPEN', 'Approved reviews cannot be updated');
+      }
+      if (!['SUBMITTED', 'UNDER_REVIEW', 'CHANGES_REQUESTED'].includes(current.status)) {
+        throw new AppError(409, 'REVIEW_NOT_OPEN', 'This review cannot be updated in its current state');
+      }
+
+      return prisma.$transaction(async (tx) => {
+        await lockReview(tx, input.reviewId);
+        const row = await getRequiredReviewRow(tx, input);
+
+        if (row.submittedById !== input.userId) {
+          throw new AppError(403, 'PERMISSION_DENIED', 'Only the submitter can update this review');
+        }
+        if (!row.taskId) {
+          throw new AppError(400, 'REVIEW_TARGET_INVALID', 'Only task reviews can be updated');
+        }
+        if (row.status === 'APPROVED') {
+          throw new AppError(409, 'REVIEW_NOT_OPEN', 'Approved reviews cannot be updated');
+        }
+        if (!['SUBMITTED', 'UNDER_REVIEW', 'CHANGES_REQUESTED'].includes(row.status)) {
+          throw new AppError(409, 'REVIEW_NOT_OPEN', 'This review cannot be updated in its current state');
+        }
+        if (row.round !== input.round) {
+          throw new AppError(409, 'STALE_ROUND', 'The review round has changed', {
+            details: { expected: input.round, actual: row.round },
+          });
+        }
+
+        const changedFields: string[] = [];
+        const data: Prisma.ReviewUpdateInput = {};
+        if (input.artworkUrl !== undefined) {
+          data.artworkUrl = input.artworkUrl;
+          changedFields.push('artworkUrl');
+        }
+        if (input.decisions !== undefined) {
+          data.decisions = input.decisions as Prisma.InputJsonValue;
+          changedFields.push('decisions');
+        }
+
+        await tx.review.update({ where: { id: input.reviewId }, data });
+        await recordAuditEvent(
+          tx,
+          reviewAudit(input, input.reviewId, ReviewAuditAction.ReviewUpdated, {
+            round: row.round,
+            changedFields,
+          }),
+        );
+
+        const updated = await getRequiredReviewRow(tx, input);
+        return { review: toReviewView(updated) };
+      });
     },
 
     async assign(input: Input & { reviewId: string; assigneeId: string }) {
