@@ -38,7 +38,11 @@ interface ReviewView {
   assigneeId: string | null;
   submittedById: string;
   checklistRevision: number | null;
+  taskId: string | null;
+  artworkUrl: string | null;
+  decisions: Array<{ text: string }> | null;
   stale: boolean;
+  resource?: { kind: string; id: string; revision?: number };
   lastDecision: { decision: string; round: number; note: string | null } | null;
 }
 
@@ -226,6 +230,22 @@ function runTests(rawDbUrl: string): void {
         });
       }
       return checklist.id;
+    });
+  }
+
+  async function createTask(opts: { projectId?: string; deletedAt?: Date | null } = {}): Promise<string> {
+    const pid = opts.projectId ?? projectId;
+    return withDb(async (prisma) => {
+      const task = await prisma.task.create({
+        data: {
+          projectId: pid,
+          key: `T${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1000)}`.slice(0, 20),
+          title: `BE2 task ${tag}-${Math.random().toString(36).slice(2)}`,
+          creatorId: submitter.id,
+          ...(opts.deletedAt !== undefined ? { deletedAt: opts.deletedAt } : {}),
+        },
+      });
+      return task.id;
     });
   }
 
@@ -850,5 +870,255 @@ function runTests(rawDbUrl: string): void {
     );
     assert.deepEqual(decisions.map((d) => d.decision), ['CHANGES_REQUESTED', 'APPROVED']);
     assert.deepEqual(decisions.map((d) => d.round), [1, 2]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Task-target reviews (BE task-reviews)
+  // -------------------------------------------------------------------------
+
+  test('task review: target validation, fields, and lifecycle rules', async () => {
+    const taskId = await createTask();
+    const attachmentVersionId = await createAttachmentVersion();
+    const checklistId = await createChecklist([{ text: 'done', completed: true }]);
+
+    // Exactly one target combos
+    const none = await api(submitter, reviewsUrl(), 'POST', {});
+    assert.equal(none.status, 400);
+    const two = await api(submitter, reviewsUrl(), 'POST', { taskId, checklistId });
+    assert.equal(two.status, 400);
+    const three = await api(submitter, reviewsUrl(), 'POST', {
+      taskId, checklistId, attachmentVersionId, artworkUrl: 'https://example.com/a.png',
+    });
+    assert.equal(three.status, 400);
+
+    // artworkUrl and decisions rejected on non-task targets
+    const artOnChecklist = await api(submitter, reviewsUrl(), 'POST', {
+      checklistId, artworkUrl: 'https://example.com/a.png',
+    });
+    assert.equal(artOnChecklist.status, 400);
+    const decisionsOnAttachment = await api(submitter, reviewsUrl(), 'POST', {
+      attachmentVersionId, decisions: [{ text: 'Check' }],
+    });
+    assert.equal(decisionsOnAttachment.status, 400);
+
+    // artworkUrl required for task target
+    const missingArt = await api(submitter, reviewsUrl(), 'POST', { taskId });
+    assert.equal(missingArt.status, 400);
+
+    // invalid artwork URLs
+    for (const badUrl of ['javascript:alert(1)', 'data:text/html,x', 'ftp://example.com/a.png', 'not-a-url']) {
+      const bad = await api(submitter, reviewsUrl(), 'POST', { taskId, artworkUrl: badUrl });
+      assert.equal(bad.status, 400, badUrl);
+    }
+
+    // invalid decisions
+    const tooMany = await api(submitter, reviewsUrl(), 'POST', {
+      taskId,
+      artworkUrl: 'https://example.com/a.png',
+      decisions: Array.from({ length: 21 }, (_, i) => ({ text: `d${i}` })),
+    });
+    assert.equal(tooMany.status, 400);
+    const blankDecision = await api(submitter, reviewsUrl(), 'POST', {
+      taskId,
+      artworkUrl: 'https://example.com/a.png',
+      decisions: [{ text: '   ' }],
+    });
+    assert.equal(blankDecision.status, 400);
+    const longDecision = await api(submitter, reviewsUrl(), 'POST', {
+      taskId,
+      artworkUrl: 'https://example.com/a.png',
+      decisions: [{ text: 'a'.repeat(501) }],
+    });
+    assert.equal(longDecision.status, 400);
+
+    // create task review (round-trips artworkUrl and decisions)
+    const created = await api<{ review: ReviewView }>(submitter, reviewsUrl(), 'POST', {
+      taskId,
+      artworkUrl: 'https://example.com/art.png',
+      decisions: [{ text: '  Approve hero  ' }, { text: 'Check spacing' }],
+      assigneeId: reviewer.id,
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const review = (created.body.data as { review: ReviewView }).review;
+    assert.equal(review.resource?.kind, 'task');
+    assert.equal(review.taskId, taskId);
+    assert.equal(review.artworkUrl, 'https://example.com/art.png');
+    assert.deepEqual(review.decisions, [{ text: 'Approve hero' }, { text: 'Check spacing' }]);
+
+    // list filter targetKind=task
+    const listed = await api<{ items: ReviewView[] }>(submitter, `${reviewsUrl()}?targetKind=task&targetId=${taskId}`);
+    assert.equal(listed.status, 200);
+    const items = (listed.body.data as { items: ReviewView[] }).items;
+    assert.ok(items.some((r) => r.id === review.id));
+
+    // submitter cannot assign themselves nor decide
+    const selfAssign = await api(submitter, actionUrl(review.id, 'assign'), 'POST', { assigneeId: submitter.id });
+    assert.equal(selfAssign.status, 403);
+    const selfApprove = await api(submitter, actionUrl(review.id, 'approve'), 'POST', { round: 1 });
+    assert.equal(selfApprove.status, 403);
+
+    // second open review on same task rejected
+    const secondOpen = await api(submitter, reviewsUrl(), 'POST', {
+      taskId,
+      artworkUrl: 'https://example.com/other.png',
+    });
+    assert.equal(secondOpen.status, 409);
+
+    // PATCH by submitter works in SUBMITTED, UNDER_REVIEW and CHANGES_REQUESTED
+    const patchSubmitted = await api<{ review: ReviewView }>(submitter, reviewUrl(review.id), 'PATCH', {
+      round: 1,
+      artworkUrl: 'https://example.com/art-v2.png',
+      decisions: [{ text: 'Updated decision' }],
+    });
+    assert.equal(patchSubmitted.status, 200, JSON.stringify(patchSubmitted.body));
+    assert.equal((patchSubmitted.body.data as { review: ReviewView }).review.artworkUrl, 'https://example.com/art-v2.png');
+
+    // wrong round refused
+    const wrongRound = await api(submitter, reviewUrl(review.id), 'PATCH', {
+      round: 99,
+      artworkUrl: 'https://example.com/nope.png',
+    });
+    assert.equal(wrongRound.status, 409);
+
+    // non-submitter refused
+    const nonSubmitterPatch = await api(reviewer, reviewUrl(review.id), 'PATCH', {
+      round: 1,
+      artworkUrl: 'https://example.com/nope.png',
+    });
+    assert.equal(nonSubmitterPatch.status, 403);
+
+    // PATCH refused for non-task target
+    const checklistReview = await createReviewFor({ checklistId, assigneeId: reviewer.id });
+    assert.equal(checklistReview.response.status, 201);
+    const patchChecklist = await api(submitter, reviewUrl(checklistReview.review!.id), 'PATCH', {
+      round: 1,
+      artworkUrl: 'https://example.com/nope.png',
+    });
+    assert.equal(patchChecklist.status, 400);
+
+    // move to UNDER_REVIEW then patch
+    const start = await api(reviewer, actionUrl(review.id, 'start'), 'POST');
+    assert.equal(start.status, 200);
+    const patchUnderReview = await api(submitter, reviewUrl(review.id), 'PATCH', {
+      round: 1,
+      decisions: [{ text: 'Under review update' }],
+    });
+    assert.equal(patchUnderReview.status, 200);
+
+    // request changes, then patch in CHANGES_REQUESTED and resubmit
+    const reqChanges = await api(reviewer, actionUrl(review.id, 'request-changes'), 'POST', {
+      round: 1,
+      note: 'Please change',
+    });
+    assert.equal(reqChanges.status, 200);
+    const patchChangesRequested = await api(submitter, reviewUrl(review.id), 'PATCH', {
+      round: 1,
+      artworkUrl: 'https://example.com/art-v3.png',
+    });
+    assert.equal(patchChangesRequested.status, 200);
+
+    const resubmit = await api<{ review: ReviewView }>(submitter, actionUrl(review.id, 'resubmit'), 'POST', { round: 1 });
+    assert.equal(resubmit.status, 200, JSON.stringify(resubmit.body));
+    assert.equal((resubmit.body.data as { review: ReviewView }).review.status, 'SUBMITTED');
+    assert.equal((resubmit.body.data as { review: ReviewView }).review.round, 2);
+
+    // approve, then PATCH refused when APPROVED
+    const start2 = await api(reviewer, actionUrl(review.id, 'start'), 'POST');
+    assert.equal(start2.status, 200);
+    const approve = await api(reviewer, actionUrl(review.id, 'approve'), 'POST', { round: 2 });
+    assert.equal(approve.status, 200);
+    const patchApproved = await api(submitter, reviewUrl(review.id), 'PATCH', {
+      round: 2,
+      artworkUrl: 'https://example.com/approved.png',
+    });
+    assert.equal(patchApproved.status, 409);
+
+    // new review after APPROVED accepted for a task
+    const afterApproved = await api<{ review: ReviewView }>(submitter, reviewsUrl(), 'POST', {
+      taskId,
+      artworkUrl: 'https://example.com/new-round.png',
+    });
+    assert.equal(afterApproved.status, 201, JSON.stringify(afterApproved.body));
+
+    // attachment-version approved rule unchanged
+    const versionId = await createAttachmentVersion();
+    const v1 = await createReviewFor({ attachmentVersionId: versionId, assigneeId: reviewer.id });
+    assert.equal(v1.response.status, 201);
+    await api(reviewer, actionUrl(v1.review!.id, 'approve'), 'POST', { round: 1 });
+    const v2 = await createReviewFor({ attachmentVersionId: versionId });
+    assert.equal(v2.response.status, 409);
+
+    // task from another project/workspace and deleted task rejected
+    const otherProjectId = await withDb(async (prisma) => {
+      const p = await prisma.project.create({
+        data: {
+          workspaceId: otherWorkspaceId,
+          name: `BE2 other ${tag}`,
+          key: `BO${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
+          visibility: 'WORKSPACE',
+          ownerId: owner.id,
+          status: 'ACTIVE',
+        },
+      });
+      return p.id;
+    });
+    const taskOtherWs = await createTask({ projectId: otherProjectId });
+    const crossWs = await api(submitter, reviewsUrl(), 'POST', {
+      taskId: taskOtherWs,
+      artworkUrl: 'https://example.com/x.png',
+    });
+    assert.equal(crossWs.status, 404);
+
+    const otherProjectSameWs = await withDb(async (prisma) => {
+      const p = await prisma.project.create({
+        data: {
+          workspaceId,
+          name: `BE2 other same ${tag}`,
+          key: `BS${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
+          visibility: 'WORKSPACE',
+          ownerId: owner.id,
+          status: 'ACTIVE',
+        },
+      });
+      return p.id;
+    });
+    const taskOtherProject = await createTask({ projectId: otherProjectSameWs });
+    const crossProject = await api(submitter, reviewsUrl(), 'POST', {
+      taskId: taskOtherProject,
+      artworkUrl: 'https://example.com/x.png',
+    });
+    assert.equal(crossProject.status, 404);
+
+    const deletedTask = await createTask({ deletedAt: new Date() });
+    const deleted = await api(submitter, reviewsUrl(), 'POST', {
+      taskId: deletedTask,
+      artworkUrl: 'https://example.com/x.png',
+    });
+    assert.equal(deleted.status, 404);
+
+    // review.updated audit event written and no notification created for it
+    const updateReviewId = (afterApproved.body.data as { review: ReviewView }).review.id;
+    // patch it and confirm review.updated is recorded
+    const patchForAudit = await api(submitter, reviewUrl(updateReviewId), 'PATCH', {
+      round: 1,
+      decisions: [{ text: 'Audit check' }],
+    });
+    assert.equal(patchForAudit.status, 200);
+    const auditsAfter = await reviewAuditActions(updateReviewId);
+    assert.ok(auditsAfter.includes('review.updated'));
+
+    const updatedNotifs = await withDb(async (prisma) =>
+      prisma.notification.findMany({
+        where: {
+          userId: { in: [owner.id, submitter.id, reviewer.id, reviewer2.id, viewer.id] },
+        },
+        select: { data: true },
+      }),
+    );
+    const hasUpdatedNotification = updatedNotifs.some((n) => {
+      const data = n.data as { action?: string } | null;
+      return data?.action === 'review.updated';
+    });
+    assert.equal(hasUpdatedNotification, false);
   });
 }
