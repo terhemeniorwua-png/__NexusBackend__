@@ -150,6 +150,7 @@ export const ReviewAuditAction = {
   ReviewApproved: 'review.approved',
   ReviewRejected: 'review.rejected',
   ReviewChangesRequested: 'review.changes_requested',
+  ReviewUpdated: 'review.updated',
 } as const;
 
 export type ReviewAuditActionValue =

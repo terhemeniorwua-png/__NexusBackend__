@@ -24,7 +24,7 @@ import { requireWorkspaceAccess, WorkspaceCapability } from '../workspaces/autho
 import { assertReviewTransition, isOpenReviewStatus } from './review-status';
 
 const reviewInclude = {
-  decisions: { orderBy: { round: 'desc' }, take: 1 },
+  decisionRecords: { orderBy: { round: 'desc' }, take: 1 },
   checklist: {
     select: {
       id: true,
@@ -43,6 +43,18 @@ const reviewInclude = {
           workspaceId: true,
           projectId: true,
           deletedAt: true,
+        },
+      },
+    },
+  },
+  task: {
+    select: {
+      id: true,
+      projectId: true,
+      deletedAt: true,
+      project: {
+        select: {
+          workspaceId: true,
         },
       },
     },
@@ -207,7 +219,7 @@ function toReviewView(row: ReviewRow): ReviewView {
       submittedById: row.submittedById,
       submittedAt: row.submittedAt.toISOString(),
       checklistRevision: row.checklistRevision,
-      lastDecision: row.decisions[0] ? toDecisionView(row.decisions[0]) : null,
+      lastDecision: row.decisionRecords[0] ? toDecisionView(row.decisionRecords[0]) : null,
       stale,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
@@ -229,7 +241,7 @@ function toReviewView(row: ReviewRow): ReviewView {
     submittedById: row.submittedById,
     submittedAt: row.submittedAt.toISOString(),
     checklistRevision: null,
-    lastDecision: row.decisions[0] ? toDecisionView(row.decisions[0]) : null,
+    lastDecision: row.decisionRecords[0] ? toDecisionView(row.decisionRecords[0]) : null,
     stale: false,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
