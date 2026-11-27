@@ -703,7 +703,7 @@ export function createReviewService(prisma: PrismaClient = getPrismaClient()) {
               decisions:
                 scopedTarget.kind === 'task' && input.decisions !== undefined
                   ? (input.decisions as Prisma.InputJsonValue)
-                  : Prisma.JsonNull,
+                  : Prisma.DbNull,
               submittedById: input.userId,
               assigneeId: input.assigneeId ?? null,
               status: 'SUBMITTED',
