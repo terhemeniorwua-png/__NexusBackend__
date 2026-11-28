@@ -221,7 +221,7 @@ export function createStreamService(options: StreamServiceOptions = {}): StreamS
     millisElapsedFromDelivery?: number;
     deliveriesCounter?: number;
   }): StreamMessage {
-    let fields: Record<string, string> = {};
+    const fields: Record<string, string> = {};
     const msg = raw.message;
     if (msg instanceof Map) {
       msg.forEach((v, k) => {
