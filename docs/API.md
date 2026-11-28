@@ -46,6 +46,45 @@ Cache reads and writes degrade to cache misses when Redis is unavailable; the
 cache never makes a request fail. Invalidation of an entity prefix uses
 `SCAN`, not `KEYS`, so it cannot block the Redis server.
 
+### Redis Streams — automation run queue
+
+The automation run queue uses Redis Streams (XADD / XREADGROUP) instead of
+the previous list-based `BRPOP` approach.
+
+**Key names** (default namespace `nexus`; controlled by `RATE_LIMIT_NAMESPACE`
+/ `CACHE_NAMESPACE` defaults):
+
+| Key | Purpose |
+|-----|---------|
+| `nexus:stream:automation:runs` | Main stream — producers XADD run IDs here |
+| `nexus:stream:automation:runs:dead` | Dead-letter stream — exhausted entries land here |
+| `nexus:automation:runs` | Legacy list key — drained once on startup, then unused |
+
+**Consumer group:** `automation-workers`
+
+**Consumer name:** `<hostname>:<pid>` — stable per process instance, allowing
+multiple worker processes to share the group safely.
+
+**Blocking reads** use a dedicated duplicate connection so the shared Redis
+client used by rate-limiting and caching is never blocked.
+
+**Retry and dead-letter behaviour:**
+
+- On processing failure the stream entry is left in the PEL (un-ACKed).
+- Every 30 seconds (`reclaimIntervalMs`) XAUTOCLAIM reclaims entries idle for
+  more than 60 seconds (`reclaimIdleMs`), so entries from a crashed instance
+  are retried by a live one.
+- After 5 failed deliveries (`maxDeliveries`) the entry is moved to the
+  dead-letter stream and ACKed. The dead-letter entry records `runId`,
+  `originalId`, `deliveries`, `reason`, and `deadLetteredAt`.
+- PostgreSQL remains the durable source of truth for run state; the stream is
+  a dispatch mechanism only.
+
+**Legacy migration:** on the first startup after deployment the worker drains
+any items from the legacy Redis list key `nexus:automation:runs` into the
+stream. The drain is idempotent — if the list is empty it is a no-op. At most
+1 000 items are drained per startup to bound the duration.
+
 ## Authentication and account lifecycle
 
 | Method | Path                         | Access                              | Purpose                                                                                                                                |
